@@ -1,0 +1,13 @@
+{
+  "name": "the-hexagon",
+  "version": "1.0.0",
+  "description": "Six-agent prediction-market trading desk (Polymarket x Kalshi) with a live dashboard. Zero dependencies.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "demo": "DEMO=1 DATA_DIR=./data-demo node server.js",
+    "reset": "rm -f data/state.json && echo 'paper account reset'"
+  },
+  "engines": { "node": ">=20" },
+  "license": "MIT"
+}

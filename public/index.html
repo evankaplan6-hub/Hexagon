@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Hexagon</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="brand">
+      <svg viewBox="0 0 40 40" width="34" height="34" aria-hidden="true">
+        <polygon points="20,3 35,11.5 35,28.5 20,37 5,28.5 5,11.5" fill="none" stroke="#8b93a3" stroke-width="2"/>
+        <polygon points="20,10 29,15 29,25 20,30 11,25 11,15" fill="none" stroke="#8b93a3" stroke-width="1.5"/>
+        <polygon points="20,15.5 24.5,18 24.5,22 20,24.5 15.5,22 15.5,18" fill="#8b93a3"/>
+      </svg>
+      <h1>The Hexagon</h1>
+    </div>
+    <div class="meta" id="meta"></div>
+  </header>
+
+  <section class="tiles">
+    <div class="tile"><div class="tl">Current Balance</div><div class="tv" id="t-bal">—</div><div class="ts" id="t-bal-s"></div></div>
+    <div class="tile pnl" id="tile-pnl"><div class="tl">Total P&amp;L</div><div class="tv" id="t-pnl">—</div><div class="ts" id="t-pnl-s"></div></div>
+    <div class="tile"><div class="tl">Deployed</div><div class="tv" id="t-dep">—</div><div class="ts" id="t-dep-s"></div></div>
+    <div class="tile"><div class="tl">Win Rate</div><div class="tv" id="t-win">—</div><div class="ts" id="t-win-s"></div></div>
+  </section>
+
+  <section class="row2">
+    <div class="panel" id="balance-panel">
+      <div class="ph"><span><i>◆</i> Balance History</span><span id="bal-meta"></span></div>
+      <div class="chartwrap"><canvas id="balance"></canvas><canvas id="bars"></canvas></div>
+    </div>
+    <div class="panel" id="log-panel">
+      <div class="ph"><span><i>◆</i> Activity Log</span><span id="log-meta"></span></div>
+      <div id="log" class="log"></div>
+    </div>
+  </section>
+
+  <section class="panel" id="feed">
+    <div class="ph"><span><i>◆</i> Venue Feed</span><span id="feed-meta"></span></div>
+    <div class="feed3">
+      <div class="feedcol"><div class="fh"><b>■</b> Polymarket · top volume</div><div id="feed-pm"></div></div>
+      <div class="feedcol"><div class="fh"><b>■</b> Kalshi · top volume</div><div id="feed-ks"></div></div>
+      <div class="feedcol"><div class="fh"><b>■</b> Matched pairs · venue gap</div><div id="feed-pairs"></div></div>
+    </div>
+  </section>
+
+  <section class="panel" id="floor">
+    <div class="ph"><span><i>◆</i> Trading Floor</span><span id="floor-meta"></span></div>
+    <canvas id="floorc" width="480" height="200"></canvas>
+  </section>
+
+  <section class="agents" id="agents"></section>
+
+  <section class="panel" id="positions-panel">
+    <div class="ph"><span><i>◆</i> Open Positions</span><span id="pos-meta"></span></div>
+    <div id="positions" class="positions"></div>
+  </section>
+
+  <footer>Paper account by default. Live mode trades only Kalshi legs and requires API keys plus an explicit confirmation flag. Market data: Polymarket Gamma/CLOB and Kalshi public APIs.</footer>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

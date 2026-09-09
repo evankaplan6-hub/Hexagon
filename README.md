@@ -1,0 +1,95 @@
+# The Hexagon
+
+A six-agent prediction-market trading desk that prices the same events across **Polymarket** and **Kalshi**, trades the disagreements, and streams everything to a live dashboard. Zero npm dependencies; Node 20+.
+
+```bash
+cd hexagon
+node server.js            # paper account on live market data  →  http://localhost:8787
+DEMO=1 DATA_DIR=./data-demo node server.js   # synthetic Kalshi noise so you can watch fills/settles (separate account file)
+```
+
+Copy `.env.example` to `.env` to change anything. State persists in `data/state.json`; `npm run reset` wipes the paper account.
+
+## What it actually does
+
+Every 15 seconds the engine pulls the top 300 Polymarket markets by volume and every open market in 11 Kalshi series (Fed decisions, ATP/WTA, MLB, NFL, NBA, NCAAF, MLS, EPL, UCL, La Liga), then runs the desks in order:
+
+| # | Agent | Desk | Job |
+|---|-------|------|-----|
+| 05 | **HOLT** | Scanner | Matches the same outcome on both venues (Fed brackets by month/code; games and matches by team/player name plus US/Eastern date). Rejects any match where the venues disagree by 30c+, which means the match is wrong. |
+| 06 | **ILSA** | Sentiment | Tracks each pair's price drift and whether the venue gap is narrowing or widening. Execution skips trades ILSA reads as diverging and sizes up ones it reads as converging. |
+| 04 | **TESS** | Ops | Health and risk: halts new risk on stale quotes, API error storms, or a daily drawdown past the limit. Sets the per-trade budget. |
+| 03 | **RIGO** | Settlement | Marks positions, exits convergence trades (gap closed, stop, max hold, or event going in-play), settles resolved markets at $1/$0, realizes P&L, scores wins/losses. |
+| 01 | **BRAM** | Pricing | Two signal types. **Locked arb**: YES on one venue + NO on the other costs under $1 after fees, so it pays $1 at resolution regardless of outcome. **Convergence**: venues disagree by ≥ `MIN_GAP` (3c) on a pre-game or macro market. Fair value is the volume-weighted mid (the thin book is usually the wrong one), and the trade is whichever side of the off-fair venue is cheap relative to fair, YES or NO. The signal fires only if the **round trip** clears `MIN_EDGE` — see below. Exits when the venues agree again. |
+| 02 | **KETT** | Execution | Pulls the real order books on both venues, re-verifies the gap from live books (listings lag), sizes to depth and budget, fills, and unwinds the first leg if the second leg fails. |
+
+Fees are modeled: Kalshi's `ceil(0.07 × contracts × P × (1−P))` and a configurable Polymarket taker fee (0 by default). Fills walk the ask ladder, so size is limited by real depth.
+
+### The gap is not the edge
+
+A venue gap of *G* does not hand you *G*. Fair value sits **between** the two venues, so the cheap
+venue is only part of the way from it; you buy the ask and later sell the bid, so the spread is a
+cost; and Kalshi charges a taker fee on the way in **and** the way out. Per contract:
+
+```
+edge = (fair − spread/2) − ask − fee(entry) − fee(exit)
+```
+
+Kalshi's fee is `0.07 × P × (1−P)` per contract — **1.75c each way at P=0.50**, so a 3.5c round trip
+at mid prices, falling to 0.6c each way at P=0.90. That is why `MIN_GAP` (the disagreement that makes
+a pair *interesting*) and `MIN_EDGE` (the profit that makes it *worth trading*) are separate knobs.
+Testing the edge against `MIN_GAP`, as this code originally did, demanded a 6–10c gap to clear a
+nominal "3c" bar and meant the convergence book never opened a position.
+
+Practical consequence: on Kalshi legs at mid prices this strategy needs a genuinely wide gap (~8c) to
+pay. It gets much cheaper near the tails, and cheapest of all on Polymarket legs, where
+`PM_TAKER_FEE` is 0. **Live mode is Kalshi-only**, so live has the least favourable fee profile of
+the three — read that section before funding anything.
+
+### Guardrails baked in
+- Game pairs become untradeable 2 minutes before start. In-play prices move faster than any listing refresh, and the biggest "gaps" you'll see are exactly those.
+- Convergence trades are never opened on markets priced under 3c or over 97c (tick noise), or where the cheap venue's spread is over 5c.
+- Max 2% of equity per position, 12 open positions, 3% daily drawdown halt, 90-second stale-data halt. All in `.env`.
+- The daily drawdown window rolls at midnight **US/Eastern**, matching the dates the matcher pairs games on (a UTC roll would reset the limit at 8pm ET, mid-slate).
+
+## Dashboard
+Balance history with settlement bars, activity log with per-agent color and P&L, venue feed (top Polymarket, top Kalshi, matched pairs with live gap), a pixel trading floor whose six agents animate when their desk is running, agent cards, and an open-positions table. It updates over Server-Sent Events every 2 seconds.
+
+## Live mode (read this)
+Live mode is **Kalshi only**. In live mode the desk only takes convergence trades whose leg is on Kalshi; locked arbs (which need both venues) are disabled.
+
+To enable it you must set all of these in `.env`:
+
+```
+MODE=live
+KALSHI_API_KEY_ID=...
+KALSHI_PRIVATE_KEY_PATH=./kalshi-private-key.pem
+LIVE_CONFIRM=I_UNDERSTAND_REAL_MONEY
+```
+
+The server refuses to start otherwise. Orders are RSA-PSS signed limit orders, immediate-or-cancel, at the observed ask plus 1c. The live path is written against Kalshi's documented v2 order API but has **not** been exercised with a funded account here; run it with a small balance first and watch the log.
+
+### Polymarket US (`polymarket.us`)
+This is the separate, CFTC-regulated Polymarket product for US persons — not the international site the rest of this project reads from (`polymarket.com`'s Gamma/CLOB APIs), and not reachable at all without geofencing/KYC. It has its own market catalog, its own slugs, and its own Ed25519-signed REST API.
+
+`src/venues/polymarket-us.js` is a verified, standalone client for it — the signing scheme (`X-PM-Access-Key` / `X-PM-Timestamp` / `X-PM-Signature`, Ed25519 over `timestamp+method+pathname`) was confirmed against six real authenticated calls on a live account, not copied blind from docs. **It is not wired into the trading engine.** As of 2026-09-09 Polymarket US's entire open catalog is season-long futures (championship winners, election winners) — no daily games, no Fed-decision brackets — so it carries none of the markets this desk's 45 pairs already match against Kalshi. There is nothing for KETT to execute there yet. Order creation (`createOrder`) matches the published schema but has never been exercised — build and test that separately, on a funded account, before trusting it with size.
+
+Credentials for it live in `.env` as `POLYMARKET_US_KEY_ID` / `POLYMARKET_US_SECRET_KEY`, unused by the running app.
+
+## Honest notes
+- Paper results are not predictive. Cross-venue gaps on liquid pre-game and macro markets are usually 0 to 1c, so expect the desk to spend most of its time researching and to trade rarely. That is correct behavior, not a bug.
+- The viral desk this is modeled on made most of its money trading a memecoin overnight, with prediction-market books as the smaller line. This project is the books side only. It does not trade tokens.
+- Resolution rules differ subtly between venues on some events. A locked arb is only locked if both venues resolve the same way; the matcher is conservative but read both rulebooks before trusting a large one.
+
+## Layout
+```
+server.js              HTTP + SSE server, .env loader, live-mode gate
+src/config.js          all tunables
+src/engine.js          state, cash, positions, cycle loop, snapshot
+src/agents.js          the six desks
+src/matcher.js         cross-venue matching
+src/broker.js          paper broker + live Kalshi adapter
+src/venues/            Polymarket (Gamma + CLOB) and Kalshi public data
+public/                dashboard (index.html, style.css, app.js)
+data/state.json        persisted account (created on first run)
+```
