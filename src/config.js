@@ -9,6 +9,7 @@ module.exports = {
   demo: env('DEMO', '0') === '1',
   initialBalance: num('INITIAL_BALANCE', 10000),
   dataDir: env('DATA_DIR', path.join(__dirname, '..', 'data')),
+  record: env('RECORD', '1') !== '0', // append a tick line per priced pair per cycle under dataDir
 
   // risk
   maxPositionPct: num('MAX_POSITION_PCT', 0.02),

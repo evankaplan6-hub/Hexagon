@@ -196,20 +196,25 @@ function BRAM(E) {
     if (!widest || Math.abs(gap) > Math.abs(widest.gap)) widest = { p, gap, q };
     const fair = fairValue(q);
     p.fair = fair;
-    if (fair > E.cfg.minMid && fair < E.cfg.maxMid && Math.abs(gap) >= E.cfg.minGap) {
-      let best = null;
-      for (const v of ['PM', 'KS']) {
-        const bid = v === 'PM' ? q.pmBid : q.ksBid, ask = v === 'PM' ? q.pmAsk : q.ksAsk;
-        if (ask - bid > E.cfg.maxSpread + 1e-9) continue; // epsilon: 0.05 - 0.00 lands at 0.05000000000000004
-        for (const side of ['yes', 'no']) {
-          const { px, edge } = convEdge(v, side, q, fair, E.cfg);
-          // minEdge, not minGap: fair value sits between the two venues, so the realisable
-          // edge is a fraction of the gap. Testing it against minGap needed a 6-10c gap to
-          // clear a nominal 3c bar, which is why this book never opened a position.
-          if (edge >= E.cfg.minEdge && (!best || edge > best.edge)) best = { type: 'converge', pair: p, edge, gap, fair, legs: [{ venue: v, side, px }] };
-        }
+    // Price every candidate first and gate afterwards. Picking the max and then testing it is
+    // the same signal as testing each candidate and keeping the max, but it leaves p.best set
+    // on pairs that miss the gates too — the tick tape needs the near-misses to show how close
+    // the desk ever came, and the gated version left no trace of them at all.
+    let best = null;
+    for (const v of ['PM', 'KS']) {
+      const bid = v === 'PM' ? q.pmBid : q.ksBid, ask = v === 'PM' ? q.pmAsk : q.ksAsk;
+      if (ask - bid > E.cfg.maxSpread + 1e-9) continue; // epsilon: 0.05 - 0.00 lands at 0.05000000000000004
+      for (const side of ['yes', 'no']) {
+        const { px, edge } = convEdge(v, side, q, fair, E.cfg);
+        if (!best || edge > best.edge) best = { venue: v, side, px, edge };
       }
-      if (best) sig.push(best);
+    }
+    p.best = best; // recorded, not traded
+    // minEdge, not minGap: fair value sits between the two venues, so the realisable edge is a
+    // fraction of the gap. Testing it against minGap needed a 6-10c gap to clear a nominal 3c
+    // bar, which is why this book never opened a position.
+    if (best && best.edge >= E.cfg.minEdge && fair > E.cfg.minMid && fair < E.cfg.maxMid && Math.abs(gap) >= E.cfg.minGap) {
+      sig.push({ type: 'converge', pair: p, edge: best.edge, gap, fair, legs: [{ venue: best.venue, side: best.side, px: best.px }] });
     }
   }
   sig.sort((a, b) => b.edge - a.edge);

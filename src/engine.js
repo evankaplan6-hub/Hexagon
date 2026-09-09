@@ -5,6 +5,7 @@ const pm = require('./venues/polymarket');
 const ks = require('./venues/kalshi');
 const http = require('./http');
 const { makeBroker } = require('./broker');
+const { makeRecorder } = require('./recorder');
 const agents = require('./agents');
 
 const AGENTS = [
@@ -25,6 +26,7 @@ class Engine {
     this.file = path.join(cfg.dataDir, 'state.json');
     this.state = this.load();
     this.broker = makeBroker(cfg, this);
+    this.recordTick = makeRecorder(cfg);
     this.quotes = { pm: new Map(), ks: new Map() };
     this.pairs = [];
     this.rejected = [];
@@ -272,6 +274,7 @@ class Engine {
       agents.TESS(this);
       await agents.RIGO(this);
       agents.BRAM(this);
+      this.recordTick(this); // durable tape of what BRAM just saw; never throws
       await agents.KETT(this);
       this.pushBalance();
     } catch (e) {

@@ -52,6 +52,34 @@ the three — read that section before funding anything.
 - Max 2% of equity per position, 12 open positions, 3% daily drawdown halt, 90-second stale-data halt. All in `.env`.
 - The daily drawdown window rolls at midnight **US/Eastern**, matching the dates the matcher pairs games on (a UTC roll would reset the limit at 8pm ET, mid-slate).
 
+## The tick tape
+
+Every cycle the desk appends one JSON line per priced pair to `DATA_DIR/ticks-YYYY-MM-DD.jsonl`
+(Eastern day, the same day boundary TESS rolls the drawdown limit on). `E.history` keeps 240 mids
+per pair in memory and dies with the process; this file is the durable version, and the only way to
+answer whether a tradeable gap ever actually existed.
+
+```json
+{"t":"2026-09-09T22:24:56.865Z","qt":"2026-09-09T22:24:56.701Z","cycle":1,
+ "pair":"2252244:0|KXFEDDECISION-26SEP-H0","label":"Fed SEP 26 · Fed maintains rate","kind":"fed",
+ "series":"KXFEDDECISION","inPlay":false,"pmBid":0.45,"pmAsk":0.46,"pmVol":1289128,
+ "ksBid":0.44,"ksAsk":0.45,"ksVol":896841,"fair":0.4509,"edge":-0.0059,"venue":"PM","side":"no"}
+```
+
+- `fair`, `edge`, `venue`, `side` are BRAM's fair value and the **best net edge it found on that
+  pair**, after the exit spread and a taker fee both ways — recorded whether or not it cleared
+  `MIN_GAP`/`MIN_EDGE`, so the near-misses are visible too. A negative `edge` means the round trip
+  loses money; that is the normal reading. These four fields are **absent**, not null, on in-play
+  pairs, which BRAM does not price at all — treat a missing field as "not priced", not as zero.
+- `t` is when the line was written; `qt` is when the quote itself was observed. The engine keeps a
+  pair's last good quote when it fails to reprice, so **a line whose `qt` lags `t` by more than the
+  cycle's own few hundred milliseconds is a carried-over quote, not a fresh observation** — without
+  `qt` a stale price and a flat market look identical.
+- Append-only, never rewritten, rotating by filename at Eastern midnight. A failed write logs once
+  (rate-limited) and the cycle continues; the tape can never halt the desk.
+- Roughly 60–80 MB per day at 19–45 pairs. **Nothing prunes these files.** `data/` is gitignored, so
+  they stay local. Set `RECORD=0` in `.env` to turn the recorder off.
+
 ## Dashboard
 Balance history with settlement bars, activity log with per-agent color and P&L, venue feed (top Polymarket, top Kalshi, matched pairs with live gap), a pixel trading floor whose six agents animate when their desk is running, agent cards, and an open-positions table. It updates over Server-Sent Events every 2 seconds.
 
@@ -92,4 +120,5 @@ src/broker.js          paper broker + live Kalshi adapter
 src/venues/            Polymarket (Gamma + CLOB) and Kalshi public data
 public/                dashboard (index.html, style.css, app.js)
 data/state.json        persisted account (created on first run)
+data/ticks-*.jsonl     tick tape, one line per priced pair per cycle (RECORD=1)
 ```
