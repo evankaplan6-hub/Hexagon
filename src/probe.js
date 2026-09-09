@@ -45,6 +45,16 @@ function makeProbe(cfg) {
   return async (E) => {
     const now = Date.now();
     const due = E.pairs
+      // In-play games are excluded, and this is the whole point of the filter rather than a
+      // detail. The first four probes ever taken all landed on live MLB games, where Kalshi's
+      // LISTING quote lagged its own order book by 13-22c: the listing said 0.425 while the book
+      // said 0.63/0.65, and both venues actually agreed. Those are not opportunities, they are
+      // listing lag on markets the desk already refuses to trade -- and because probes are ranked
+      // by gap size and capped per cycle, they crowded out the pre-game thin-market cases the
+      // probe was built to catch. Measured on the tradeable book, listing and order book agree
+      // to 0.00c median and 0.00c max, which is also why there is no Kalshi equivalent of
+      // refreshPairPrices: it would spend an API call per pair per cycle correcting nothing.
+      .filter((p) => !p.inPlay)
       .filter((p) => p.q && Math.abs(p.q.ksMid - p.q.pmMid) >= cfg.probeGap)
       .filter((p) => now - (last.get(p.id) || 0) >= cfg.probeEverySec * 1000)
       .sort((a, b) => Math.abs(b.q.ksMid - b.q.pmMid) - Math.abs(a.q.ksMid - a.q.pmMid))
