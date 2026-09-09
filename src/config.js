@@ -10,6 +10,12 @@ module.exports = {
   initialBalance: num('INITIAL_BALANCE', 10000),
   dataDir: env('DATA_DIR', path.join(__dirname, '..', 'data')),
   record: env('RECORD', '1') !== '0', // append a tick line per priced pair per cycle under dataDir
+  // Thin-market probe (src/probe.js): when the venues disagree by this much, dump BOTH full order
+  // books. A gap this wide is either a real opportunity or a price with no size behind it, and
+  // only the book can tell the difference. Read-only: probing never signals or trades.
+  probeGap: num('PROBE_GAP', 0.10),
+  probeEverySec: num('PROBE_EVERY_SEC', 600),   // per-pair cooldown, so one wide pair cannot spam
+  probesPerCycle: num('PROBES_PER_CYCLE', 2),   // bound the extra API calls per cycle
 
   // risk
   maxPositionPct: num('MAX_POSITION_PCT', 0.02),

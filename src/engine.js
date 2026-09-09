@@ -6,6 +6,7 @@ const ks = require('./venues/kalshi');
 const http = require('./http');
 const { makeBroker } = require('./broker');
 const { makeRecorder } = require('./recorder');
+const { makeProbe } = require('./probe');
 const agents = require('./agents');
 
 const AGENTS = [
@@ -27,6 +28,8 @@ class Engine {
     this.state = this.load();
     this.broker = makeBroker(cfg, this);
     this.recordTick = makeRecorder(cfg);
+    this.probe = makeProbe(cfg);
+    this.pinned = new Map(); // positions' markets, kept alive when they drop out of the universe
     this.quotes = { pm: new Map(), ks: new Map() };
     this.pairs = [];
     this.rejected = [];
@@ -49,10 +52,16 @@ class Engine {
 
   // ---------------------------------------------------------------- persistence
   load() {
-    try {
-      const s = JSON.parse(fs.readFileSync(this.file, 'utf8'));
-      if (s && s.version === 1) return s;
-    } catch { /* fresh start */ }
+    // A ledger that exists but will not parse is a CORRUPT BOOK, not a new account. Silently
+    // returning a fresh balance here would erase real positions and P&L on the next save, so a
+    // missing file starts fresh and a broken one refuses to start.
+    if (fs.existsSync(this.file)) {
+      let s;
+      try { s = JSON.parse(fs.readFileSync(this.file, 'utf8')); }
+      catch (e) { throw new Error(`state file ${this.file} is unreadable (${e.message}). Refusing to start and overwrite it \u2014 move it aside to begin a fresh account.`); }
+      if (!s || s.version !== 1) throw new Error(`state file ${this.file} has unexpected version ${s && s.version}. Refusing to start.`);
+      return s;
+    }
     return {
       version: 1, startedAt: Date.now(), mode: this.cfg.mode,
       initial: this.cfg.initialBalance, cash: this.cfg.initialBalance,
@@ -62,8 +71,15 @@ class Engine {
     };
   }
   save() {
-    try { fs.mkdirSync(this.cfg.dataDir, { recursive: true }); fs.writeFileSync(this.file, JSON.stringify(this.state)); this.dirty = false; }
-    catch (e) { console.error('save failed', e.message); }
+    // temp-then-rename: a crash mid-write leaves the previous ledger intact instead of a
+    // truncated file that load() would now refuse to start from
+    try {
+      fs.mkdirSync(this.cfg.dataDir, { recursive: true });
+      const tmp = `${this.file}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(this.state));
+      fs.renameSync(tmp, this.file);
+      this.dirty = false;
+    } catch (e) { console.error('save failed', e.message); }
   }
 
   // ---------------------------------------------------------------- helpers
@@ -100,7 +116,9 @@ class Engine {
       pmBid, pmAsk, ksBid, ksAsk,
       pmMid: (pmBid + pmAsk) / 2, ksMid: (ksBid + ksAsk) / 2,
       pmSpread: pmAsk - pmBid, ksSpread: ksAsk - ksBid,
-      pmVol: m.vol24, ksVol: k.vol24, t: this.lastQuoteAt,
+      pmVol: m.vol24, ksVol: k.vol24,
+      // this pair's OWN observation time, not the global clock: see refreshQuotes
+      t: Math.min(m.at || this.lastQuoteAt, k.at || this.lastQuoteAt),
     };
   }
   markPrice(pos, q) {
@@ -200,14 +218,45 @@ class Engine {
   // ---------------------------------------------------------------- data
   async refreshQuotes() {
     const [pmRes, ksRes] = await Promise.allSettled([pm.fetchUniverse(this.cfg.pmUniverse), ks.fetchAll(this.cfg.ksSeries)]);
-    if (pmRes.status === 'fulfilled') this.quotes.pm = new Map(pmRes.value.map((m) => [m.id, m]));
-    if (ksRes.status === 'fulfilled') this.quotes.ks = new Map(ksRes.value.map((m) => [m.ticker, m]));
+    // Stamp each market with when IT was fetched. lastQuoteAt only advances when BOTH venues
+    // succeed, so it cannot tell "everything is fresh" from "this one market stopped updating" \u2014
+    // and quote() carries a pair's last good quote forward indefinitely when it cannot reprice.
+    const at = Date.now();
+    if (pmRes.status === 'fulfilled') this.quotes.pm = new Map(pmRes.value.map((m) => [m.id, Object.assign(m, { at })]));
+    if (ksRes.status === 'fulfilled') this.quotes.ks = new Map(ksRes.value.map((m) => [m.ticker, Object.assign(m, { at })]));
     if (pmRes.status === 'fulfilled' && ksRes.status === 'fulfilled') this.lastQuoteAt = Date.now();
     else if (this.due('quote-err', 60)) {
       const why = [pmRes, ksRes].filter((r) => r.status === 'rejected').map((r) => r.reason && r.reason.message).join(' | ');
       this.log('TESS', 'OPS', null, `quote refresh failed: ${String(why).slice(0, 140)}`);
     }
   }
+  // A market holding an open position must stay in the quote map even after it falls out of the
+  // top-N universe listing. Without this HOLT stops rebuilding its pair, RIGO's `E.pairs.find`
+  // returns undefined, and the position is never marked, stopped, max-held or flattened again \u2014
+  // it simply sits until resolution with nothing watching it. Polymarket listings are ranked by
+  // 24h volume, so a pre-game market drifting below rank 300 during a normal 4-hour hold hits
+  // exactly this. refreshQuotes replaces the whole map each cycle, so re-pin every cycle.
+  async pinPositions() {
+    for (const pos of this.state.positions) {
+      const map = pos.venue === 'KS' ? this.quotes.ks : this.quotes.pm;
+      const key = pos.venue === 'KS' ? pos.ref : pos.pmId;
+      if (map.has(key)) continue;
+      if (!this.due(`pin-${pos.id}`, 60)) {          // at most one refetch a minute per position
+        const cached = this.pinned.get(pos.id);
+        if (cached) map.set(key, cached);            // stale, but honestly timestamped via cached.at
+        continue;
+      }
+      try {
+        const m = pos.venue === 'KS' ? await ks.fetchMarket(pos.ref) : await pm.fetchMarket(pos.pmId);
+        if (!m || m.closed || m.status === 'closed') continue; // settled: resolution() handles it
+        m.at = Date.now();
+        this.pinned.set(pos.id, m);
+        map.set(key, m);
+      } catch { /* never block the cycle; resolution() is the backstop */ }
+    }
+    for (const id of [...this.pinned.keys()]) if (!this.state.positions.some((p) => p.id === id)) this.pinned.delete(id);
+  }
+
   // The Gamma listing can lag the CLOB by minutes; overwrite pair quotes with live CLOB top-of-book.
   async refreshPairPrices() {
     const toks = [...new Set(this.pairs.map((p) => p.pm.tokenId).filter(Boolean))];
@@ -265,6 +314,7 @@ class Engine {
     try {
       this.cycle++;
       await this.refreshQuotes();
+      await this.pinPositions(); // before HOLT: it rebuilds pairs from whatever is in the map
       agents.HOLT(this);
       await this.refreshPairPrices();
       if (this.cfg.demo) this.perturbDemo();
@@ -275,6 +325,7 @@ class Engine {
       await agents.RIGO(this);
       agents.BRAM(this);
       this.recordTick(this); // durable tape of what BRAM just saw; never throws
+      await this.probe(this);  // full order books whenever a gap looks too good; never throws
       await agents.KETT(this);
       this.pushBalance();
     } catch (e) {
@@ -295,6 +346,7 @@ class Engine {
     const pairs = this.pairs.filter((p) => p.q).map((p) => ({
       id: p.id, label: p.label, kind: p.kind, series: p.series, inPlay: !!p.inPlay, startsAt: p.startsAt || null,
       pmMid: r3(p.q.pmMid), ksMid: r3(p.q.ksMid), gap: r3(p.q.ksMid - p.q.pmMid),
+      age: p.q.t ? Math.round((now - p.q.t) / 1000) : null,
       pmVol: Math.round(p.q.pmVol), ksVol: Math.round(p.q.ksVol), pmUrl: p.pm.url, ksUrl: p.ks.url,
       bias: this.bias.get(p.id) ? r2(this.bias.get(p.id).score) : null,
       hist: (this.history.get(p.id) || []).slice(-60).map((h) => [r3(h.pmMid), r3(h.ksMid)]),

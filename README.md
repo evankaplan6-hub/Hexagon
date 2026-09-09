@@ -104,6 +104,32 @@ This is the separate, CFTC-regulated Polymarket product for US persons — not t
 
 Credentials for it live in `.env` as `POLYMARKET_US_KEY_ID` / `POLYMARKET_US_SECRET_KEY`, unused by the running app.
 
+## Does the trade actually exist?
+
+Short answer, measured rather than assumed: **on liquid pairs, no.**
+
+`tools/history-scan.js` pulls ~7 days of hourly prices for every matched pair from both venues and
+computes what a Kalshi leg would have netted after spread and round-trip fees. Over 1,846 pair-hours
+on properly-priced markets it found a **median venue gap of 0.50c against a median net edge of
+-3.99c**, and **zero** hours where a trade cleared `MIN_EDGE`. Costs run about 4c round trip; the
+venues disagree by about half a cent. That is not a threshold that needs tuning, it is an eight-fold
+shortfall — which is why the desk correctly declines to trade, and why lowering `MIN_GAP` would only
+buy the same answer with real money.
+
+```bash
+node tools/history-scan.js            # pairs from the running desk
+node tools/history-scan.js data/ticks-2026-09-09.jsonl
+```
+
+The one unresolved case: three thin NCAAF markets where Polymarket sat near 50c while Kalshi priced
+the same outcome at 1-2c, **for 51 to 89 hours**. Nominally a 20c+ edge. A real 20c edge on a binary
+market is gone in seconds, so the overwhelmingly likely explanation is that there was no resting
+size behind the Polymarket price. Neither venue publishes historical order books, so that cannot be
+settled after the fact — the scanner flags such pairs `!` as **suspect** and reports totals with and
+without them rather than pretending to know. `src/probe.js` settles it going forward: any live gap
+over `PROBE_GAP` dumps both full ladders to `data/probes-*.jsonl`. Real depth means a strategy (a
+different one than this desk trades). An empty book closes the thread.
+
 ## Honest notes
 - Paper results are not predictive. Cross-venue gaps on liquid pre-game and macro markets are usually 0 to 1c, so expect the desk to spend most of its time researching and to trade rarely. That is correct behavior, not a bug.
 - The viral desk this is modeled on made most of its money trading a memecoin overnight, with prediction-market books as the smaller line. This project is the books side only. It does not trade tokens.

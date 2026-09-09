@@ -144,17 +144,26 @@ async function RIGO(E) {
     }
     const pair = E.pairs.find((p) => p.id === pos.pairId);
     const q = pair && pair.q;
-    if (!q) continue;
-    pos.mark = E.markPrice(pos, q);
-    marked++;
+    if (q) { pos.mark = E.markPrice(pos, q); marked++; }
     if (pos.strategy !== 'converge') continue;
+    const heldMin = (Date.now() - pos.openedAt) / 60000;
+    const mark = pos.mark ?? pos.entry;
+    // Clock-driven exits run whether or not a price arrived this cycle. Nested under the old
+    // `if (!q) continue`, a position whose pair stopped being rebuilt was never stopped out and
+    // never timed out \u2014 it was carried to resolution unmanaged. Time is always available.
+    if (heldMin >= E.cfg.maxHoldMin) {
+      await E.close(pos, mark, `max hold ${E.cfg.maxHoldMin}m reached${q ? `, gap still ${c(Math.abs(q.ksMid - q.pmMid))}` : ' (no live quote)'}`);
+      continue;
+    }
+    if (pair && pair.inPlay) { await E.close(pos, mark, `event going live, flattening directional risk`); continue; }
+    if (!q) {
+      if (E.due(`rigo-blind-${pos.id}`, 300)) E.log('RIGO', 'OPS', null, `${pos.label}: no live quote, holding at last mark ${mark.toFixed(3)} \u00b7 time exits still armed`);
+      continue;
+    }
     const gap = Math.abs(q.ksMid - q.pmMid);
     const perContract = pos.mark - pos.entry;
-    const heldMin = (Date.now() - pos.openedAt) / 60000;
-    if (pair.inPlay) await E.close(pos, pos.mark, `event going live, flattening directional risk (gap ${c(gap)})`);
-    else if (gap <= E.cfg.exitGap) await E.close(pos, pos.mark, `gap closed to ${c(gap)}, held ${Math.round(heldMin)}m`);
+    if (gap <= E.cfg.exitGap) await E.close(pos, pos.mark, `gap closed to ${c(gap)}, held ${Math.round(heldMin)}m`);
     else if (perContract <= -E.cfg.stopLoss) await E.close(pos, pos.mark, `stop: mark ${c(perContract)} vs entry`);
-    else if (heldMin >= E.cfg.maxHoldMin) await E.close(pos, pos.mark, `max hold ${E.cfg.maxHoldMin}m reached, gap still ${c(gap)}`);
   }
   // locked arbs: if both legs' bids ever sum past $1, take the free exit
   const groups = new Map();
@@ -177,9 +186,16 @@ function BRAM(E) {
   let widest = null;
   let inPlayN = 0;
   const pmFee = E.cfg.pmTakerFee;
+  const now = Date.now();
+  let staleN = 0;
   for (const p of E.pairs) {
     const q = p.q;
     if (!q) continue;
+    // Per-instrument staleness. TESS only watches the global clock, which keeps advancing as long
+    // as the venue calls succeed \u2014 so a single pair that quietly stopped repricing stayed
+    // tradeable while the dashboard read "data age 0s". quote() carries the last good q forward,
+    // so trust the quote's own timestamp, not the desk-wide one.
+    if (q.t && now - q.t > E.cfg.maxDataAgeSec * 1000) { staleN++; continue; }
     // games are untradeable from 2 minutes before start (flagged in HOLT, which runs before
     // RIGO): listings lag live play by far more than any gap
     if (p.inPlay) { inPlayN++; continue; }
@@ -220,6 +236,7 @@ function BRAM(E) {
   sig.sort((a, b) => b.edge - a.edge);
   E.signals = sig;
   E.touch('BRAM', widest ? `widest ${c(Math.abs(widest.gap))} ${widest.p.label}` : inPlayN ? `${inPlayN} pairs in-play, none tradeable` : 'no pairs');
+  if (staleN && E.due('bram-stale', 300)) E.log('BRAM', 'RESEARCH', null, `${staleN} pair${staleN > 1 ? 's' : ''} skipped on stale quotes (older than ${E.cfg.maxDataAgeSec}s) \u00b7 desk-wide data age is fine, these instruments individually are not`);
   if (!widest && inPlayN && E.due('bram-inplay', 600)) E.log('BRAM', 'RESEARCH', null, `${inPlayN} matched pairs are all in-play right now · not pricing live games`);
   if (widest) {
     const key = `${widest.p.id}:${Math.round(widest.gap * 100)}`;
