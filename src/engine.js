@@ -357,6 +357,9 @@ class Engine {
 
   // ---------------------------------------------------------------- loop
   async start() {
+    // per-series taker multipliers before anything prices: MLB bills at half, fourteen series at
+    // zero, and a flat rate made the desk decline trades that were cheaper than it believed
+    await ks.loadFeeMultipliers(this.cfg.ksSeries).catch(() => {});
     if (this.cfg.mode === 'live') await this.broker.init();
     this.log('TESS', 'OPS', null, `desk online · ${this.cfg.mode.toUpperCase()} mode${this.cfg.demo ? ' with DEMO quote noise' : ''} · equity $${this.equity().toFixed(2)} · ${this.cfg.ksSeries.length} Kalshi series vs top ${this.cfg.pmUniverse} Polymarket markets`);
     await this.step();

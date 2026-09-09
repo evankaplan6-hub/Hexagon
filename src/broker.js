@@ -22,16 +22,16 @@ function walk(asks, qty, limit) {
 class PaperBroker {
   constructor(cfg, engine) { this.cfg = cfg; this.E = engine; this.kind = 'paper'; }
   async init() {}
-  feeFor(venue, qty, px) { return venue === 'KS' ? ks.fee(qty, px, this.cfg.ksFeeRate) : r2(this.cfg.pmTakerFee * qty * px); }
+  feeFor(venue, qty, px, ref) { return venue === 'KS' ? ks.fee(qty, px, this.cfg.ksFeeRate, ref) : r2(this.cfg.pmTakerFee * qty * px); }
   // book: asks for the side being bought (already oriented: YES asks or NO asks)
-  async buy({ venue, qty, limit, book }) { // `key` accepted and ignored: paper fills cannot double-send
+  async buy({ venue, ref, qty, limit, book }) { // `key` accepted and ignored: paper fills cannot double-send
     const { filled, avg } = walk(book, qty, limit);
     if (filled < 1) return { filled: 0, reason: 'no depth inside limit' };
-    const fee = this.feeFor(venue, filled, avg);
+    const fee = this.feeFor(venue, filled, avg, ref);
     return { filled, avg: r4(avg), fee, cost: r2(filled * avg + fee) };
   }
-  async sell({ venue, qty, px }) {
-    const fee = this.feeFor(venue, qty, px);
+  async sell({ venue, ref, qty, px }) {
+    const fee = this.feeFor(venue, qty, px, ref);
     return { filled: qty, avg: r4(px), fee, proceeds: r2(qty * px - fee) };
   }
 }

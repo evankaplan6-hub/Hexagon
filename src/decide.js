@@ -28,15 +28,17 @@ function fairValue(q) {
 //   - and a second taker fee on that exit
 // On Kalshi at mid prices the fee alone is ~1.75c each way; ignoring the exit leg flattered every
 // convergence signal by roughly spread/2 plus one full fee.
-function convEdge(v, side, q, fair, cfg) {
+function convEdge(v, side, q, fair, cfg, ref) {
   const bid = v === 'PM' ? q.pmBid : q.ksBid;
   const ask = v === 'PM' ? q.pmAsk : q.ksAsk;
   const spread = Math.max(0, ask - bid);
   const px = side === 'yes' ? ask : r2(1 - bid);
   const target = side === 'yes' ? fair : 1 - fair; // where the mid should land
   const exit = target - spread / 2;                // ...but we sell into the bid
-  const feeIn = v === 'PM' ? cfg.pmTakerFee * px : ks.feePerContract(px, cfg.ksFeeRate);
-  const feeOut = v === 'PM' ? cfg.pmTakerFee * exit : ks.feePerContract(exit, cfg.ksFeeRate);
+  // `ref` is the Kalshi ticker: the taker multiplier is per-series, not global (MLB is 0.5,
+  // fourteen series are 0). Omitting it bills at full rate, which is the safe direction.
+  const feeIn = v === 'PM' ? cfg.pmTakerFee * px : ks.feePerContract(px, cfg.ksFeeRate, ref);
+  const feeOut = v === 'PM' ? cfg.pmTakerFee * exit : ks.feePerContract(exit, cfg.ksFeeRate, ref);
   return { px, edge: exit - px - feeIn - feeOut };
 }
 
@@ -49,8 +51,9 @@ function convEdge(v, side, q, fair, cfg) {
 function pairSignals(p, cfg) {
   const q = p.q;
   const out = { fair: null, best: null, signals: [] };
-  const ksFeeYes = ks.feePerContract(q.ksAsk, cfg.ksFeeRate);
-  const ksFeeNo = ks.feePerContract(1 - q.ksBid, cfg.ksFeeRate);
+  const ref = p.ks && p.ks.ticker;
+  const ksFeeYes = ks.feePerContract(q.ksAsk, cfg.ksFeeRate, ref);
+  const ksFeeNo = ks.feePerContract(1 - q.ksBid, cfg.ksFeeRate, ref);
   const pmFee = cfg.pmTakerFee;
   // locked arbs: YES here + NO there must cost < $1 after fees
   const edgeA = 1 - (q.pmAsk + (1 - q.ksBid) + pmFee * q.pmAsk + ksFeeNo);
@@ -68,7 +71,7 @@ function pairSignals(p, cfg) {
     const bid = v === 'PM' ? q.pmBid : q.ksBid, ask = v === 'PM' ? q.pmAsk : q.ksAsk;
     if (ask - bid > cfg.maxSpread + 1e-9) continue; // epsilon: 0.05 - 0.00 lands at 0.05000000000000004
     for (const side of ['yes', 'no']) {
-      const { px, edge } = convEdge(v, side, q, fair, cfg);
+      const { px, edge } = convEdge(v, side, q, fair, cfg, ref);
       if (!best || edge > best.edge) best = { venue: v, side, px, edge };
     }
   }
@@ -156,8 +159,9 @@ function biasFor(history, cfg) {
 
 // How many contracts, given a budget and the depth actually resting inside the limit.
 function sizePlan(signal, { budget, sizeMult, books, cfg }) {
+  const ref = signal.pair && signal.pair.ks && signal.pair.ks.ticker;
   const unitCost = signal.legs.reduce((a, l) => a + l.px, 0)
-    + signal.legs.reduce((a, l) => a + (l.venue === 'KS' ? ks.fee(1, l.px, cfg.ksFeeRate) : cfg.pmTakerFee * l.px), 0);
+    + signal.legs.reduce((a, l) => a + (l.venue === 'KS' ? ks.fee(1, l.px, cfg.ksFeeRate, ref) : cfg.pmTakerFee * l.px), 0);
   let qty = Math.floor((budget * sizeMult) / unitCost);
   for (let i = 0; i < signal.legs.length; i++) {
     const limit = signal.legs[i].px + 0.01;

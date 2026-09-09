@@ -214,7 +214,7 @@ async function KETT(E) {
         ksBid: isPM ? far.yesBid : near.yesBid, ksAsk: isPM ? far.yesAsk : near.yesAsk,
       };
       const fairLive = fairValue(liveQ);
-      const { px: pxLive, edge: edgeLive } = convEdge(leg.venue, leg.side, liveQ, fairLive, E.cfg);
+      const { px: pxLive, edge: edgeLive } = convEdge(leg.venue, leg.side, liveQ, fairLive, E.cfg, s.pair.ks.ticker);
       if (edgeLive < E.cfg.minEdge) {
         if (E.due(`kett-stale-${s.pair.id}`, 300)) E.log('KETT', 'PASS', null, `${s.pair.label}: listing showed ${c(s.edge)} edge but live books show ${c(edgeLive)}, listing was stale`);
         continue;

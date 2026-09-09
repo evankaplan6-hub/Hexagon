@@ -60,19 +60,41 @@ async function fetchBook(ticker) {
   };
 }
 
-// Kalshi taker fee schedule: ceil(rate * contracts * P * (1 - P)), in dollars.
-function fee(qty, price, rate = 0.07) {
+// Per-series taker fee multiplier. Kalshi's published taker fee is
+//   ceil(0.07 * multiplier * contracts * P * (1 - P))
+// and `multiplier` is NOT 1 everywhere: MLB game markets carry 0.5 (half price), and fourteen
+// series -- mostly Politics, Elections and Crypto -- carry 0, i.e. no taker fee at all. Charging
+// a flat 0.07 everywhere overstated MLB's round trip by roughly 1.6c per contract, which made the
+// desk decline MLB trades that were cheaper than it believed. Fetched once per series and cached;
+// an unknown series falls back to 1, the conservative direction.
+const feeMult = new Map();
+async function loadFeeMultipliers(seriesList) {
+  for (const s of seriesList) {
+    if (feeMult.has(s)) continue;
+    try {
+      const d = await http.getJSON(`${BASE}/series/${s}`);
+      const m = d.series && d.series.fee_multiplier;
+      feeMult.set(s, Number.isFinite(+m) ? +m : 1);
+    } catch { feeMult.set(s, 1); }
+  }
+  return feeMult;
+}
+// `ref` is a ticker or a bare series; anything unseen bills at full rate.
+const multFor = (ref) => feeMult.get(String(ref).split('-')[0]) ?? 1;
+
+// Kalshi taker fee schedule: ceil(rate * multiplier * contracts * P * (1 - P)), in dollars.
+function fee(qty, price, rate = 0.07, ref) {
   if (!(price > 0 && price < 1) || qty <= 0) return 0;
-  return Math.ceil(rate * qty * price * (1 - price) * 100) / 100;
+  return Math.ceil(rate * (ref === undefined ? 1 : multFor(ref)) * qty * price * (1 - price) * 100) / 100;
 }
 
 // Marginal per-contract fee, for signal math only. `fee` ceils to the cent for the whole
 // ORDER, so calling it with qty=1 overstates the true marginal cost by up to a full cent
 // (at P=0.5 it reports 2.00c against a real 1.75c). Use `fee` to charge an order,
 // `feePerContract` to decide whether an order is worth placing.
-function feePerContract(price, rate = 0.07) {
+function feePerContract(price, rate = 0.07, ref) {
   if (!(price > 0 && price < 1)) return 0;
-  return rate * price * (1 - price);
+  return rate * (ref === undefined ? 1 : multFor(ref)) * price * (1 - price);
 }
 
-module.exports = { fetchSeries, fetchAll, fetchMarket, fetchBook, fee, feePerContract, BASE };
+module.exports = { fetchSeries, fetchAll, fetchMarket, fetchBook, fee, feePerContract, loadFeeMultipliers, multFor, BASE };
