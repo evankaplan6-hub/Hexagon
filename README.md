@@ -149,6 +149,25 @@ without them rather than pretending to know. `src/probe.js` settles it going for
 over `PROBE_GAP` dumps both full ladders to `data/probes-*.jsonl`. Real depth means a strategy (a
 different one than this desk trades). An empty book closes the thread.
 
+## What else was tried
+
+Before building anything new, three other locked-arbitrage structures were measured live.
+`tools/edge-scan.js` re-runs all of them in one command:
+
+| structure | risk | result |
+|---|---|---|
+| Kalshi NO-basket across a mutually-exclusive event (pays ≥ N−1 whatever happens) | single venue | **0 of 190 profitable**, best −$0.024/basket |
+| Polymarket ask(YES)+ask(NO) < $1 — the structure the IMDEA paper measured | venue-internal | **0 of 551** |
+| Polymarket bid(YES)+bid(NO) > $1 (sell side) | needs inventory | **0 of 551** |
+
+The shape of the Polymarket answer is the informative part: the modal book is
+`askSum 1.0010 / bidSum 0.9990` — **one tick wide on each side, the tightest quote the venue
+permits.** The arbitrage is not slightly too small here, it is structurally absent.
+
+That is not a contradiction of the $40M finding. That paper measured profit *already extracted*,
+across 86 million bets over a year, in windows that closed in seconds. It is evidence the
+opportunity existed and was taken by faster infrastructure — not that it is sitting there waiting.
+
 ## Operating it
 
 The dashboard is read-only. Two control endpoints exist, both POST, both requiring `FLATTEN_TOKEN`
