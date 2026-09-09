@@ -17,6 +17,13 @@ module.exports = {
   probeEverySec: num('PROBE_EVERY_SEC', 600),   // per-pair cooldown, so one wide pair cannot spam
   probesPerCycle: num('PROBES_PER_CYCLE', 2),   // bound the extra API calls per cycle
 
+  // serving. Default to loopback: /api/positions and the full activity log are unauthenticated,
+  // and on a live account that is not something to expose to the local network by default.
+  bindHost: env('BIND_HOST', '127.0.0.1'),
+  // Shared secret for POST /api/flatten, the manual kill switch. Empty disables the endpoint
+  // entirely -- there is no default token, because a guessable one is worse than no switch.
+  flattenToken: env('FLATTEN_TOKEN', ''),
+
   // risk
   maxPositionPct: num('MAX_POSITION_PCT', 0.02),
   maxOpenPositions: num('MAX_OPEN_POSITIONS', 12),

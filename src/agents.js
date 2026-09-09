@@ -115,7 +115,9 @@ function TESS(E) {
   const dd = (E.state.dayStartEquity - eq) / Math.max(1, E.state.dayStartEquity);
   const errs = http.recentErrors();
   let halt = null;
-  if (!Number.isFinite(age)) halt = 'no quotes yet';
+  // the operator's halt wins over every automatic check, and only a human clears it
+  if (E.operatorHalt) halt = E.operatorHalt;
+  else if (!Number.isFinite(age)) halt = 'no quotes yet';
   else if (age > E.cfg.maxDataAgeSec) halt = `stale data (${Math.round(age)}s old)`;
   else if (dd >= E.cfg.maxDailyDrawdownPct) halt = `daily drawdown ${(dd * 100).toFixed(1)}% hit the ${(E.cfg.maxDailyDrawdownPct * 100).toFixed(0)}% limit`;
   else if (errs >= 25) halt = `${errs} API errors in 5m`;
@@ -145,6 +147,13 @@ async function RIGO(E) {
     const pair = E.pairs.find((p) => p.id === pos.pairId);
     const q = pair && pair.q;
     if (q) { pos.mark = E.markPrice(pos, q); marked++; }
+    // A stuck leg -- one whose exit failed or went unfilled -- is naked directional risk sitting
+    // in the book. Retry it every cycle at the current mark, ahead of any strategy logic, until
+    // it clears. Nothing here waits for a signal or a threshold.
+    if (pos.orphan) {
+      await E.close(pos, q ? E.markPrice(pos, q) : (pos.mark ?? pos.entry), `retry flatten of stuck leg (attempt ${(pos.exitSeq || 0) + 1})`);
+      continue;
+    }
     if (pos.strategy !== 'converge') continue;
     const heldMin = (Date.now() - pos.openedAt) / 60000;
     const mark = pos.mark ?? pos.entry;
@@ -199,8 +208,12 @@ function BRAM(E) {
     // games are untradeable from 2 minutes before start (flagged in HOLT, which runs before
     // RIGO): listings lag live play by far more than any gap
     if (p.inPlay) { inPlayN++; continue; }
-    const ksFeeYes = ks.fee(1, q.ksAsk, E.cfg.ksFeeRate);
-    const ksFeeNo = ks.fee(1, 1 - q.ksBid, E.cfg.ksFeeRate);
+    // feePerContract, not fee(1, ...). fee() ceils to the cent for a whole ORDER, so pricing a
+    // single contract with it overstates the marginal cost by up to a full cent -- 2.00c against
+    // a true 1.75c at P=0.50. convEdge already used the marginal form, so the arb book was being
+    // held to a quietly stricter bar than the convergence book. One function, used everywhere.
+    const ksFeeYes = ks.feePerContract(q.ksAsk, E.cfg.ksFeeRate);
+    const ksFeeNo = ks.feePerContract(1 - q.ksBid, E.cfg.ksFeeRate);
     // locked arbs: YES here + NO there must cost < $1 after fees
     const edgeA = 1 - (q.pmAsk + (1 - q.ksBid) + pmFee * q.pmAsk + ksFeeNo);
     const edgeB = 1 - (q.ksAsk + (1 - q.pmBid) + pmFee * (1 - q.pmBid) + ksFeeYes);
@@ -315,6 +328,13 @@ async function KETT(E) {
     }
     if (qty < 5) { if (E.due(`kett-depth-${s.pair.id}`, 300)) E.log('KETT', 'PASS', null, `${s.pair.label}: only ${qty} contracts inside limit, below 5-lot floor`); continue; }
 
+    // Resolve every leg's exchange reference up front. A Polymarket NO leg needs the OTHER
+    // token, and if it cannot be resolved the whole signal must abort here -- not halfway
+    // through, with one leg already filled against the wrong instrument.
+    let refs;
+    try { refs = s.legs.map((l) => E.legRef(s.pair, l)); }
+    catch (e) { E.log('KETT', 'PASS', null, `${s.pair.label}: ${String(e.message).slice(0, 90)}`); continue; }
+
     // execute legs; unwind on partial failure
     const group = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
     const fills = [];
@@ -322,9 +342,10 @@ async function KETT(E) {
     let spent = 0; // legs are only booked (and cash debited) once ALL of them fill
     for (let i = 0; i < s.legs.length; i++) {
       const l = s.legs[i];
-      const ref = l.venue === 'KS' ? s.pair.ks.ticker : s.pair.pm.tokenId;
       let f;
-      try { f = await E.broker.buy({ venue: l.venue, ref, side: l.side, qty, limit: l.px + 0.01, book: books[i].asks }); }
+      // deterministic idempotency key: a retried request for THIS leg of THIS group dedupes at
+      // the exchange instead of opening a second position
+      try { f = await E.broker.buy({ venue: l.venue, ref: refs[i], side: l.side, qty, limit: l.px + 0.01, book: books[i].asks, key: `${group}-${l.venue}${l.side[0]}-in` }); }
       catch (e) { f = { filled: 0, reason: e.message.slice(0, 80) }; }
       if (!f.filled || f.cost > E.state.cash - spent) { failed = f.reason || 'insufficient cash'; break; }
       spent += f.cost;

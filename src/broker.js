@@ -24,7 +24,7 @@ class PaperBroker {
   async init() {}
   feeFor(venue, qty, px) { return venue === 'KS' ? ks.fee(qty, px, this.cfg.ksFeeRate) : r2(this.cfg.pmTakerFee * qty * px); }
   // book: asks for the side being bought (already oriented: YES asks or NO asks)
-  async buy({ venue, qty, limit, book }) {
+  async buy({ venue, qty, limit, book }) { // `key` accepted and ignored: paper fills cannot double-send
     const { filled, avg } = walk(book, qty, limit);
     if (filled < 1) return { filled: 0, reason: 'no depth inside limit' };
     const fee = this.feeFor(venue, filled, avg);
@@ -64,11 +64,52 @@ class LiveKalshiBroker extends PaperBroker {
     const b = await this.request('GET', '/portfolio/balance');
     const dollars = (b.balance_dollars != null) ? +b.balance_dollars : (+b.balance || 0) / 100;
     this.E.liveBalance = dollars;
-    this.E.liveReady = true;
     this.E.log('TESS', 'OPS', null, `Kalshi live session authenticated · exchange balance $${dollars.toFixed(2)} · Polymarket legs disabled (read-only)`);
+    await this.reconcile();
   }
-  async place({ ref, action, side, qty, limit }) {
-    const body = { ticker: ref, action, side, type: 'limit', count: qty, time_in_force: 'immediate_or_cancel', client_order_id: crypto.randomUUID() };
+
+  // The local ledger is a file saved every 10s. Kill the process between a fill and a save and
+  // there are real contracts at the exchange this desk does not know it owns -- invisible to
+  // every risk control, marked at nothing, exited never. Trading resumes only once what the
+  // exchange reports matches what the book says, so a mismatch surfaces before it costs money
+  // rather than after.
+  async reconcile() {
+    let remote;
+    try {
+      const r = await this.request('GET', '/portfolio/positions');
+      remote = new Map();
+      for (const p of (r.market_positions || [])) {
+        const n = Math.round(+(p.position_fp ?? p.position ?? 0));
+        if (n !== 0) remote.set(p.ticker, n);
+      }
+    } catch (e) {
+      this.E.log('TESS', 'OPS', null, `reconciliation failed (${String(e.message).slice(0, 90)}) · staying halted rather than trading against an unverified book`);
+      return; // liveReady stays false: TESS halts on 'live venue not authenticated'
+    }
+    // local view, signed the way Kalshi reports it: YES positive, NO negative
+    const local = new Map();
+    for (const p of this.E.state.positions) {
+      if (p.venue !== 'KS') continue;
+      local.set(p.ref, (local.get(p.ref) || 0) + (p.side === 'yes' ? p.qty : -p.qty));
+    }
+    const diffs = [];
+    for (const t of new Set([...remote.keys(), ...local.keys()])) {
+      const r = remote.get(t) || 0, l = local.get(t) || 0;
+      if (r !== l) diffs.push(`${t}: exchange ${r}, book ${l}`);
+    }
+    if (diffs.length) {
+      this.E.log('TESS', 'OPS', null, `RECONCILIATION MISMATCH · ${diffs.length} ticker(s) · ${diffs.slice(0, 3).join(' | ')}${diffs.length > 3 ? ' | …' : ''} · refusing to trade until the book matches the exchange`);
+      return; // liveReady stays false
+    }
+    this.E.liveReady = true;
+    this.E.log('TESS', 'OPS', null, `reconciled · exchange and local book agree on ${remote.size} open Kalshi position(s)`);
+  }
+  // `key` is the caller's idempotency key, derived from the group and leg rather than random.
+  // A fresh UUID per attempt -- the old behaviour -- means a request retried after a timeout
+  // opens a SECOND position, because the exchange has no way to recognise it as the same order.
+  async place({ ref, action, side, qty, limit, key }) {
+    const clientId = key ? crypto.createHash('sha256').update(String(key)).digest('hex').replace(/(.{8})(.{4})(.{4})(.{4})(.{12}).*/, '$1-$2-$3-$4-$5') : crypto.randomUUID();
+    const body = { ticker: ref, action, side, type: 'limit', count: qty, time_in_force: 'immediate_or_cancel', client_order_id: clientId };
     body[side === 'yes' ? 'yes_price' : 'no_price'] = Math.max(1, Math.min(99, Math.round(limit * 100)));
     const res = await this.request('POST', '/portfolio/orders', body);
     const o = res.order || {};
@@ -77,17 +118,17 @@ class LiveKalshiBroker extends PaperBroker {
     const fee = o.taker_fees_dollars != null ? +o.taker_fees_dollars : null;
     return { o, filled, fillCost, fee };
   }
-  async buy({ venue, ref, side, qty, limit }) {
+  async buy({ venue, ref, side, qty, limit, key }) {
     if (venue !== 'KS') return { filled: 0, reason: 'Polymarket live execution not implemented' };
-    const { o, filled, fillCost, fee } = await this.place({ ref, action: 'buy', side, qty, limit });
+    const { o, filled, fillCost, fee } = await this.place({ ref, action: 'buy', side, qty, limit, key });
     if (filled < 1) return { filled: 0, reason: `order ${o.status || 'unfilled'}` };
     const avg = fillCost != null ? fillCost / filled : limit;
     const f = fee != null ? fee : this.feeFor('KS', filled, avg);
     return { filled, avg: r4(avg), fee: f, cost: r2(filled * avg + f), orderId: o.order_id };
   }
-  async sell({ venue, ref, side, qty, px }) {
+  async sell({ venue, ref, side, qty, px, key }) {
     if (venue !== 'KS') return { filled: 0, reason: 'Polymarket live execution not implemented' };
-    const { o, filled, fillCost, fee } = await this.place({ ref, action: 'sell', side, qty, limit: px });
+    const { o, filled, fillCost, fee } = await this.place({ ref, action: 'sell', side, qty, limit: px, key });
     if (filled < 1) return { filled: 0, reason: `order ${o.status || 'unfilled'}` };
     const avg = fillCost != null ? fillCost / filled : px;
     const f = fee != null ? fee : this.feeFor('KS', filled, avg);

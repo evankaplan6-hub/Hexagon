@@ -130,6 +130,25 @@ without them rather than pretending to know. `src/probe.js` settles it going for
 over `PROBE_GAP` dumps both full ladders to `data/probes-*.jsonl`. Real depth means a strategy (a
 different one than this desk trades). An empty book closes the thread.
 
+## Operating it
+
+The dashboard is read-only. Two control endpoints exist, both POST, both requiring `FLATTEN_TOKEN`
+from `.env` (unset = disabled; there is no default token):
+
+```bash
+curl -XPOST -H "x-flatten-token: $TOKEN" http://127.0.0.1:8787/api/flatten?reason=whatever
+curl -XPOST -H "x-flatten-token: $TOKEN" http://127.0.0.1:8787/api/resume
+```
+
+`flatten` closes every open position at the mark and **latches an operator halt** that survives
+TESS's own risk checks — a drawdown halt stops new risk while leaving existing positions running,
+which is not the same as being flat. Only `resume` clears it. The server binds `127.0.0.1` by
+default because `/api/positions` and the activity log are unauthenticated.
+
+`data/journal-YYYY-MM-DD.jsonl` is the append-only record: every open, close, settle, failed exit,
+flatten and resume, never rewritten. `state.json` stays the fast working copy, but it trims
+`log` at 500 entries and `closed` at 2000 — oldest first — so the journal is the real history.
+
 ## Honest notes
 - Paper results are not predictive. Cross-venue gaps on liquid pre-game and macro markets are usually 0 to 1c, so expect the desk to spend most of its time researching and to trade rarely. That is correct behavior, not a bug.
 - The viral desk this is modeled on made most of its money trading a memecoin overnight, with prediction-market books as the smaller line. This project is the books side only. It does not trade tokens.

@@ -7,6 +7,7 @@ const http = require('./http');
 const { makeBroker } = require('./broker');
 const { makeRecorder } = require('./recorder');
 const { makeProbe } = require('./probe');
+const { makeJournal } = require('./journal');
 const agents = require('./agents');
 
 const AGENTS = [
@@ -29,6 +30,12 @@ class Engine {
     this.broker = makeBroker(cfg, this);
     this.recordTick = makeRecorder(cfg);
     this.probe = makeProbe(cfg);
+    this.journal = makeJournal(cfg);
+    this.lastCycleMs = 0;
+    // Operator halt, distinct from TESS's automatic one. TESS recomputes its halt from scratch
+    // every cycle, so anything written to this.halt is gone within 15s -- a kill switch that
+    // un-sets itself is not a kill switch. This latches until a human clears it.
+    this.operatorHalt = null;
     this.pinned = new Map(); // positions' markets, kept alive when they drop out of the universe
     this.quotes = { pm: new Map(), ks: new Map() };
     this.pairs = [];
@@ -164,13 +171,22 @@ class Engine {
   }
 
   // ---------------------------------------------------------------- positions
+  // The exchange reference for one leg. A Polymarket NO leg is a DIFFERENT token from the YES
+  // leg. The old inline expression fell back to the YES token id whenever the market was missing
+  // from the quote map: harmless bookkeeping on paper, the wrong instrument with real money.
+  // There is no safe default here, so fail loudly and let the caller skip the signal.
+  legRef(pair, leg) {
+    if (leg.venue === 'KS') return pair.ks.ticker;
+    if (leg.side === 'yes') return pair.pm.tokenId;
+    const ref = ((this.quotes.pm.get(pair.pm.id) || {}).tokenIds || [])[1 - pair.pm.tokenIndex];
+    if (!ref) throw new Error(`no Polymarket NO token for ${pair.label} (market ${pair.pm.id} absent from quote map)`);
+    return ref;
+  }
   open(signal, leg, fill, group, note) {
     const pos = {
       id: `${group}-${leg.venue}${leg.side[0]}`, group, pairId: signal.pair.id, label: signal.pair.label,
       venue: leg.venue,
-      ref: leg.venue === 'KS' ? signal.pair.ks.ticker
-        : leg.side === 'yes' ? signal.pair.pm.tokenId
-        : (((this.quotes.pm.get(signal.pair.pm.id) || {}).tokenIds || [])[1 - signal.pair.pm.tokenIndex] || signal.pair.pm.tokenId),
+      ref: this.legRef(signal.pair, leg),
       pmId: signal.pair.pm.id, tokenIndex: signal.pair.pm.tokenIndex,
       side: leg.side, qty: fill.filled, entry: fill.avg, fee: fill.fee, cost: fill.cost, mark: fill.avg,
       openedAt: Date.now(), strategy: signal.type, entryGap: signal.gap != null ? r3(Math.abs(signal.gap)) : null, note,
@@ -179,6 +195,7 @@ class Engine {
     this.state.cash = r2(this.state.cash - fill.cost);
     this.state.stats.fees = r2(this.state.stats.fees + fill.fee);
     this.state.positions.push(pos);
+    this.journal(this, 'OPEN', { id: pos.id, group, label: pos.label, venue: pos.venue, side: pos.side, qty: pos.qty, entry: pos.entry, fee: pos.fee, cost: pos.cost, strategy: pos.strategy, ref: pos.ref, orderId: pos.orderId, cash: this.state.cash });
     this.dirty = true;
     return pos;
   }
@@ -187,9 +204,20 @@ class Engine {
     let fill;
     if (resolved) fill = { filled: pos.qty, avg: px, fee: 0, proceeds: r2(pos.qty * px) };
     else {
-      try { fill = await this.broker.sell({ venue: pos.venue, ref: pos.ref, side: pos.side, qty: pos.qty, px }); }
-      catch (e) { this.log('RIGO', 'PASS', null, `${pos.label}: exit failed (${e.message.slice(0, 80)})`); return; }
-      if (!fill.filled) { this.log('RIGO', 'PASS', null, `${pos.label}: exit unfilled (${fill.reason || 'no fill'})`); return; }
+      // A position whose exit does not fill is STUCK, not closed. Flag it so RIGO keeps trying
+      // every cycle instead of leaving naked directional risk sitting in the book unattended.
+      pos.exitSeq = (pos.exitSeq || 0) + 1;
+      try { fill = await this.broker.sell({ venue: pos.venue, ref: pos.ref, side: pos.side, qty: pos.qty, px, key: `${pos.id}-out-${pos.exitSeq}` }); }
+      catch (e) {
+        pos.orphan = true; this.journal(this, 'EXIT_FAIL', { id: pos.id, reason: String(e.message).slice(0, 120), attempt: pos.exitSeq });
+        if (this.due(`exit-fail-${pos.id}`, 120)) this.log('RIGO', 'PASS', null, `${pos.label}: exit failed (${e.message.slice(0, 80)}) \u00b7 flagged stuck, will retry`);
+        return;
+      }
+      if (!fill.filled) {
+        pos.orphan = true; this.journal(this, 'EXIT_FAIL', { id: pos.id, reason: fill.reason || 'no fill', attempt: pos.exitSeq });
+        if (this.due(`exit-fail-${pos.id}`, 120)) this.log('RIGO', 'PASS', null, `${pos.label}: exit unfilled (${fill.reason || 'no fill'}) \u00b7 flagged stuck, will retry`);
+        return;
+      }
     }
     const idx = this.state.positions.indexOf(pos);
     if (idx < 0) return;
@@ -211,8 +239,35 @@ class Engine {
       if (gpnl >= 0) this.state.stats.wins++; else this.state.stats.losses++;
       if (pos.strategy === 'arb') text += ` · arb pair net ${gpnl >= 0 ? '+' : '−'}$${Math.abs(gpnl).toFixed(2)}`;
     }
+    this.journal(this, resolved ? 'SETTLE' : 'CLOSE', { id: pos.id, group: pos.group, label: pos.label, venue: pos.venue, side: pos.side, qty: pos.qty, entry: pos.entry, exit: fill.avg, fee: fill.fee, proceeds: fill.proceeds, pnl, reason, strategy: pos.strategy, heldMs: Date.now() - pos.openedAt, cash: this.state.cash });
     this.log('RIGO', 'SETTLE', pnl, text);
     this.dirty = true;
+  }
+
+  // Manual kill switch, reachable only over POST /api/flatten with FLATTEN_TOKEN. Halting new
+  // risk is not the same as being flat: TESS's drawdown halt stops entries while leaving every
+  // open position running. This is the button for when you want out of everything, now.
+  async flattenAll(reason = 'manual flatten') {
+    const open = [...this.state.positions];
+    this.operatorHalt = `flattened by operator (${reason}) \u2014 POST /api/resume to re-enable`;
+    this.journal(this, 'FLATTEN_REQUESTED', { reason, positions: open.length });
+    this.log('TESS', 'OPS', null, `FLATTEN ALL requested (${reason}) \u00b7 ${open.length} position${open.length === 1 ? '' : 's'} to close`);
+    for (const pos of open) {
+      const pair = this.pairs.find((p) => p.id === pos.pairId);
+      const px = pair && pair.q ? this.markPrice(pos, pair.q) : (pos.mark ?? pos.entry);
+      await this.close(pos, px, `flatten: ${reason}`).catch(() => {});
+    }
+    const left = this.state.positions.length;
+    this.log('TESS', 'OPS', null, left ? `flatten incomplete \u00b7 ${left} position(s) would not fill, flagged stuck` : 'flatten complete \u00b7 book is empty \u00b7 new risk stays disabled until /api/resume');
+    return { requested: open.length, remaining: left, halted: this.operatorHalt };
+  }
+
+  resume() {
+    const was = this.operatorHalt;
+    this.operatorHalt = null;
+    this.journal(this, 'RESUMED', { was });
+    this.log('TESS', 'OPS', null, 'operator halt cleared \u00b7 automatic risk checks resume control');
+    return { resumed: !!was };
   }
 
   // ---------------------------------------------------------------- data
@@ -311,6 +366,7 @@ class Engine {
   async step() {
     if (this.stepping) return;
     this.stepping = true;
+    const t0 = Date.now();
     try {
       this.cycle++;
       await this.refreshQuotes();
@@ -331,7 +387,15 @@ class Engine {
     } catch (e) {
       http.noteError(e);
       this.log('TESS', 'OPS', null, `cycle error: ${String(e.message).slice(0, 140)}`);
-    } finally { this.stepping = false; }
+    } finally {
+      this.lastCycleMs = Date.now() - t0;
+      // A cycle that outruns its own interval means the next tick is silently dropped by the
+      // `stepping` guard. That used to happen invisibly; say so.
+      if (this.lastCycleMs > this.cfg.priceEvery * 1000 && this.due('slow-cycle', 300)) {
+        this.log('TESS', 'OPS', null, `cycle took ${(this.lastCycleMs / 1000).toFixed(1)}s, longer than the ${this.cfg.priceEvery}s interval \u00b7 ticks are being skipped`);
+      }
+      this.stepping = false;
+    }
   }
 
   // ---------------------------------------------------------------- snapshot for the UI
@@ -363,6 +427,7 @@ class Engine {
       agents: AGENTS.map((a) => ({ ...a, ...this.agentStatus[a.key], active: now - this.agentStatus[a.key].lastActive < 4000 })),
       pairs: pairs.slice(0, 40),
       pairCount: this.pairs.length,
+      cycleMs: this.lastCycleMs,
       universe: {
         pm: this.quotes.pm.size, ks: this.quotes.ks.size, dataAge: this.lastQuoteAt ? Math.round((now - this.lastQuoteAt) / 1000) : null,
         apiOk: http.stats.ok, apiErr: http.stats.err, lastError: http.stats.lastError, rejected: this.rejected.length,

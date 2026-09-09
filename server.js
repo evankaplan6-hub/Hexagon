@@ -41,6 +41,24 @@ function json(res, obj) {
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const p = url.pathname;
+  // Manual kill switch. TESS's drawdown halt stops NEW risk while leaving every open position
+  // running -- halted is not the same as flat. This is the button for getting out of everything.
+  // POST only (a GET would fire from a stray link or a prefetch), shared secret required, and
+  // disabled outright when FLATTEN_TOKEN is unset: a guessable default is worse than no switch.
+  if (p === '/api/flatten') {
+    if (req.method !== 'POST') { res.writeHead(405); return res.end('POST only'); }
+    if (!cfg.flattenToken) { res.writeHead(503); return res.end('flatten disabled: set FLATTEN_TOKEN in .env'); }
+    if (req.headers['x-flatten-token'] !== cfg.flattenToken) { res.writeHead(403); return res.end('bad token'); }
+    return engine.flattenAll(url.searchParams.get('reason') || 'manual')
+      .then((r) => json(res, r))
+      .catch((e) => { res.writeHead(500); res.end(String(e.message).slice(0, 200)); });
+  }
+  if (p === '/api/resume') {
+    if (req.method !== 'POST') { res.writeHead(405); return res.end('POST only'); }
+    if (!cfg.flattenToken) { res.writeHead(503); return res.end('disabled: set FLATTEN_TOKEN in .env'); }
+    if (req.headers['x-flatten-token'] !== cfg.flattenToken) { res.writeHead(403); return res.end('bad token'); }
+    return json(res, engine.resume());
+  }
   if (p === '/api/state') return json(res, engine.snapshot());
   if (p === '/api/pairs') return json(res, engine.pairs.map((x) => ({ ...x, q: x.q || null })));
   if (p === '/api/trades') return json(res, engine.state.closed);
@@ -68,8 +86,10 @@ setInterval(() => {
   for (const c of clients) c.write(payload);
 }, 2000);
 
-server.listen(cfg.port, () => {
-  console.log(`The Hexagon  →  http://localhost:${cfg.port}   mode=${cfg.mode.toUpperCase()}${cfg.demo ? ' (DEMO quotes)' : ''}`);
+// Loopback by default: /api/positions and the whole activity log are unauthenticated, and on a
+// live account that is not something to hand the local network. BIND_HOST=0.0.0.0 to override.
+server.listen(cfg.port, cfg.bindHost, () => {
+  console.log(`The Hexagon  →  http://localhost:${cfg.port}   mode=${cfg.mode.toUpperCase()}${cfg.demo ? ' (DEMO quotes)' : ''}   bound to ${cfg.bindHost}${cfg.flattenToken ? '   flatten switch armed' : ''}`);
 });
 
 engine.start().catch((e) => { console.error('engine failed to start:', e); process.exit(1); });
