@@ -1,5 +1,9 @@
 'use strict';
-// The six desks. Each is a plain function over the engine; the engine sequences them every cycle.
+// The six desks. Each gathers a view, asks src/decide.js what to do, and applies the answer.
+// Every decision -- what is a signal, what exits, how big -- lives in decide.js as a pure
+// function of explicit inputs, so the same logic can be replayed against a recorded tape
+// (tools/replay.js) instead of a live network. The desks own I/O, logging and sequencing only;
+// the engine remains the sole mutator of cash and positions.
 //   HOLT  scanner    — discovers matched pairs across venues
 //   ILSA  sentiment  — reads flow: drift and gap tendency per pair
 //   TESS  ops        — health, budget, drawdown, halt switch
@@ -9,6 +13,8 @@
 const ks = require('./venues/kalshi');
 const { matchPairs } = require('./matcher');
 const http = require('./http');
+const decide = require('./decide');
+const { fairValue, convEdge } = decide;
 
 const r2 = (x) => Math.round(x * 100) / 100;
 const c = (x) => `${(x * 100).toFixed(1)}c`; // dollars -> cents string
@@ -17,32 +23,6 @@ const VEN = { PM: 'Polymarket', KS: 'Kalshi' };
 const other = (v) => (v === 'PM' ? 'KS' : 'PM');
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 const ET_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' });
-
-// Fair value leans on the venue with more volume: when two books disagree, the thin one is usually wrong.
-function fairValue(q) {
-  const wp = (q.pmVol || 0) + 100, wk = (q.ksVol || 0) + 100;
-  return (q.pmMid * wp + q.ksMid * wk) / (wp + wk);
-}
-
-// What a convergence trade is actually worth, per contract, on venue `v` / `side`.
-// The round trip costs more than the entry fee the old model charged:
-//   - in  at the ask (or 1-bid for NO), paying a taker fee
-//   - out at the BID once the mid reaches fair (RIGO exits at E.markPrice, which is the
-//     bid side), so the venue's spread is a cost too, not just half of it
-//   - and a second taker fee on that exit
-// On Kalshi at mid prices the fee alone is ~1.75c each way; ignoring the exit leg was
-// flattering every convergence signal by roughly spread/2 + one full fee.
-function convEdge(v, side, q, fair, cfg) {
-  const bid = v === 'PM' ? q.pmBid : q.ksBid;
-  const ask = v === 'PM' ? q.pmAsk : q.ksAsk;
-  const spread = Math.max(0, ask - bid);
-  const px = side === 'yes' ? ask : r2(1 - bid);
-  const target = side === 'yes' ? fair : 1 - fair; // where the mid should land
-  const exit = target - spread / 2;                // ...but we sell into the bid
-  const feeIn = v === 'PM' ? cfg.pmTakerFee * px : ks.feePerContract(px, cfg.ksFeeRate);
-  const feeOut = v === 'PM' ? cfg.pmTakerFee * exit : ks.feePerContract(exit, cfg.ksFeeRate);
-  return { px, edge: exit - px - feeIn - feeOut };
-}
 
 // ---------------------------------------------------------------- HOLT
 function HOLT(E) {
@@ -74,19 +54,8 @@ function HOLT(E) {
 function ILSA(E) {
   let top = null;
   for (const p of E.pairs) {
-    const h = E.history.get(p.id) || [];
-    if (h.length < 3) continue;
-    const a = h[Math.max(0, h.length - 8)], b = h[h.length - 1];
-    const gapThen = a.ksMid - a.pmMid, gapNow = b.ksMid - b.pmMid;
-    // +1 = venues converging, -1 = diverging
-    const score = clamp((Math.abs(gapThen) - Math.abs(gapNow)) / Math.max(0.01, Math.abs(gapThen)), -1, 1);
-    // The score is only meaningful if there was a gap to begin with. With the 0.01 floor in
-    // the denominator, a pair whose gap opened from ~0 to 2c scores -1 ("diverging") — but a
-    // freshly opened gap is exactly the convergence setup, so that veto was throwing away
-    // the only trades this strategy exists to take. Trust "widening" only once the earlier
-    // gap was itself tradeable.
-    const reliable = Math.abs(gapThen) >= E.cfg.minGap;
-    const bias = { score, reliable, pmDrift: b.pmMid - a.pmMid, ksDrift: b.ksMid - a.ksMid, gapNow, mins: Math.round((b.t - a.t) / 60000) };
+    const bias = decide.biasFor(E.history.get(p.id), E.cfg);
+    if (!bias) continue;
     E.bias.set(p.id, bias);
     const move = Math.abs(bias.pmDrift) + Math.abs(bias.ksDrift);
     if (!top || move > top.move) top = { p, bias, move };
@@ -114,14 +83,7 @@ function TESS(E) {
   }
   const dd = (E.state.dayStartEquity - eq) / Math.max(1, E.state.dayStartEquity);
   const errs = http.recentErrors();
-  let halt = null;
-  // the operator's halt wins over every automatic check, and only a human clears it
-  if (E.operatorHalt) halt = E.operatorHalt;
-  else if (!Number.isFinite(age)) halt = 'no quotes yet';
-  else if (age > E.cfg.maxDataAgeSec) halt = `stale data (${Math.round(age)}s old)`;
-  else if (dd >= E.cfg.maxDailyDrawdownPct) halt = `daily drawdown ${(dd * 100).toFixed(1)}% hit the ${(E.cfg.maxDailyDrawdownPct * 100).toFixed(0)}% limit`;
-  else if (errs >= 25) halt = `${errs} API errors in 5m`;
-  else if (E.cfg.mode === 'live' && !E.liveReady) halt = 'live venue not authenticated';
+  const halt = decide.riskState({ operatorHalt: E.operatorHalt, age, drawdown: dd, errs, mode: E.cfg.mode, liveReady: E.liveReady, cfg: E.cfg });
   if (halt !== E.halt) {
     E.halt = halt;
     E.log('TESS', 'OPS', null, halt ? `HALT · ${halt} · no new risk until clear` : 'window is clean · trading re-enabled');
@@ -154,25 +116,13 @@ async function RIGO(E) {
       await E.close(pos, q ? E.markPrice(pos, q) : (pos.mark ?? pos.entry), `retry flatten of stuck leg (attempt ${(pos.exitSeq || 0) + 1})`);
       continue;
     }
-    if (pos.strategy !== 'converge') continue;
-    const heldMin = (Date.now() - pos.openedAt) / 60000;
-    const mark = pos.mark ?? pos.entry;
-    // Clock-driven exits run whether or not a price arrived this cycle. Nested under the old
-    // `if (!q) continue`, a position whose pair stopped being rebuilt was never stopped out and
-    // never timed out \u2014 it was carried to resolution unmanaged. Time is always available.
-    if (heldMin >= E.cfg.maxHoldMin) {
-      await E.close(pos, mark, `max hold ${E.cfg.maxHoldMin}m reached${q ? `, gap still ${c(Math.abs(q.ksMid - q.pmMid))}` : ' (no live quote)'}`);
-      continue;
+    const intent = decide.exitIntent(pos, pair, E.cfg, Date.now());
+    if (intent) { await E.close(pos, intent.px, intent.reason); continue; }
+    // no intent and no quote means we are holding blind: the clock-driven exits inside
+    // exitIntent stay armed, but say so rather than going quiet
+    if (pos.strategy === 'converge' && !q && E.due(`rigo-blind-${pos.id}`, 300)) {
+      E.log('RIGO', 'OPS', null, `${pos.label}: no live quote, holding at last mark ${(pos.mark ?? pos.entry).toFixed(3)} \u00b7 time exits still armed`);
     }
-    if (pair && pair.inPlay) { await E.close(pos, mark, `event going live, flattening directional risk`); continue; }
-    if (!q) {
-      if (E.due(`rigo-blind-${pos.id}`, 300)) E.log('RIGO', 'OPS', null, `${pos.label}: no live quote, holding at last mark ${mark.toFixed(3)} \u00b7 time exits still armed`);
-      continue;
-    }
-    const gap = Math.abs(q.ksMid - q.pmMid);
-    const perContract = pos.mark - pos.entry;
-    if (gap <= E.cfg.exitGap) await E.close(pos, pos.mark, `gap closed to ${c(gap)}, held ${Math.round(heldMin)}m`);
-    else if (perContract <= -E.cfg.stopLoss) await E.close(pos, pos.mark, `stop: mark ${c(perContract)} vs entry`);
   }
   // locked arbs: if both legs' bids ever sum past $1, take the free exit
   const groups = new Map();
@@ -191,62 +141,14 @@ async function RIGO(E) {
 
 // ---------------------------------------------------------------- BRAM
 function BRAM(E) {
-  const sig = [];
-  let widest = null;
-  let inPlayN = 0;
-  const pmFee = E.cfg.pmTakerFee;
-  const now = Date.now();
-  let staleN = 0;
+  const { signals: sig, widest, inPlayN, staleN, fair, best } = decide.scan(E.pairs, E.cfg, Date.now());
+  // Stamp fair value and the best candidate back onto the pairs. The tick tape reads both, and
+  // `best` is deliberately set even where the thresholds were missed -- near-misses are what let
+  // the tape answer "how close did the desk ever come?" rather than only "did it trade?".
   for (const p of E.pairs) {
-    const q = p.q;
-    if (!q) continue;
-    // Per-instrument staleness. TESS only watches the global clock, which keeps advancing as long
-    // as the venue calls succeed \u2014 so a single pair that quietly stopped repricing stayed
-    // tradeable while the dashboard read "data age 0s". quote() carries the last good q forward,
-    // so trust the quote's own timestamp, not the desk-wide one.
-    if (q.t && now - q.t > E.cfg.maxDataAgeSec * 1000) { staleN++; continue; }
-    // games are untradeable from 2 minutes before start (flagged in HOLT, which runs before
-    // RIGO): listings lag live play by far more than any gap
-    if (p.inPlay) { inPlayN++; continue; }
-    // feePerContract, not fee(1, ...). fee() ceils to the cent for a whole ORDER, so pricing a
-    // single contract with it overstates the marginal cost by up to a full cent -- 2.00c against
-    // a true 1.75c at P=0.50. convEdge already used the marginal form, so the arb book was being
-    // held to a quietly stricter bar than the convergence book. One function, used everywhere.
-    const ksFeeYes = ks.feePerContract(q.ksAsk, E.cfg.ksFeeRate);
-    const ksFeeNo = ks.feePerContract(1 - q.ksBid, E.cfg.ksFeeRate);
-    // locked arbs: YES here + NO there must cost < $1 after fees
-    const edgeA = 1 - (q.pmAsk + (1 - q.ksBid) + pmFee * q.pmAsk + ksFeeNo);
-    const edgeB = 1 - (q.ksAsk + (1 - q.pmBid) + pmFee * (1 - q.pmBid) + ksFeeYes);
-    if (edgeA >= E.cfg.minArbEdge) sig.push({ type: 'arb', pair: p, edge: edgeA, legs: [{ venue: 'PM', side: 'yes', px: q.pmAsk }, { venue: 'KS', side: 'no', px: r2(1 - q.ksBid) }] });
-    if (edgeB >= E.cfg.minArbEdge) sig.push({ type: 'arb', pair: p, edge: edgeB, legs: [{ venue: 'KS', side: 'yes', px: q.ksAsk }, { venue: 'PM', side: 'no', px: r2(1 - q.pmBid) }] });
-    // convergence: when venues disagree by >= minGap, trade the venue that is off fair value, toward fair.
-    // Candidates: YES or NO on either venue; keep the single best net-of-fee edge for the pair.
-    const gap = q.ksMid - q.pmMid; // + => Kalshi rich, Polymarket cheap
-    if (!widest || Math.abs(gap) > Math.abs(widest.gap)) widest = { p, gap, q };
-    const fair = fairValue(q);
-    p.fair = fair;
-    // Price every candidate first and gate afterwards. Picking the max and then testing it is
-    // the same signal as testing each candidate and keeping the max, but it leaves p.best set
-    // on pairs that miss the gates too — the tick tape needs the near-misses to show how close
-    // the desk ever came, and the gated version left no trace of them at all.
-    let best = null;
-    for (const v of ['PM', 'KS']) {
-      const bid = v === 'PM' ? q.pmBid : q.ksBid, ask = v === 'PM' ? q.pmAsk : q.ksAsk;
-      if (ask - bid > E.cfg.maxSpread + 1e-9) continue; // epsilon: 0.05 - 0.00 lands at 0.05000000000000004
-      for (const side of ['yes', 'no']) {
-        const { px, edge } = convEdge(v, side, q, fair, E.cfg);
-        if (!best || edge > best.edge) best = { venue: v, side, px, edge };
-      }
-    }
-    p.best = best; // recorded, not traded
-    // minEdge, not minGap: fair value sits between the two venues, so the realisable edge is a
-    // fraction of the gap. Testing it against minGap needed a 6-10c gap to clear a nominal 3c
-    // bar, which is why this book never opened a position.
-    if (best && best.edge >= E.cfg.minEdge && fair > E.cfg.minMid && fair < E.cfg.maxMid && Math.abs(gap) >= E.cfg.minGap) {
-      sig.push({ type: 'converge', pair: p, edge: best.edge, gap, fair, legs: [{ venue: best.venue, side: best.side, px: best.px }] });
-    }
+    if (fair.has(p.id)) p.fair = fair.get(p.id);
+    if (best.has(p.id)) p.best = best.get(p.id);
   }
-  sig.sort((a, b) => b.edge - a.edge);
   E.signals = sig;
   E.touch('BRAM', widest ? `widest ${c(Math.abs(widest.gap))} ${widest.p.label}` : inPlayN ? `${inPlayN} pairs in-play, none tradeable` : 'no pairs');
   if (staleN && E.due('bram-stale', 300)) E.log('BRAM', 'RESEARCH', null, `${staleN} pair${staleN > 1 ? 's' : ''} skipped on stale quotes (older than ${E.cfg.maxDataAgeSec}s) \u00b7 desk-wide data age is fine, these instruments individually are not`);
@@ -319,13 +221,7 @@ async function KETT(E) {
       }
       s.edge = edgeLive; s.fair = fairLive; s.gap = liveQ.ksMid - liveQ.pmMid; leg.px = pxLive;
     }
-    const unitCost = s.legs.reduce((a, l) => a + l.px, 0) + s.legs.reduce((a, l) => a + (l.venue === 'KS' ? ks.fee(1, l.px, E.cfg.ksFeeRate) : E.cfg.pmTakerFee * l.px), 0);
-    let qty = Math.floor((budget * sizeMult) / unitCost);
-    for (let i = 0; i < s.legs.length; i++) {
-      const limit = s.legs[i].px + 0.01;
-      const depth = Math.floor(books[i].asks.filter((l) => l.price <= limit + 1e-9).reduce((a, l) => a + l.size, 0));
-      qty = Math.min(qty, depth);
-    }
+    const { qty } = decide.sizePlan(s, { budget, sizeMult, books, cfg: E.cfg });
     if (qty < 5) { if (E.due(`kett-depth-${s.pair.id}`, 300)) E.log('KETT', 'PASS', null, `${s.pair.label}: only ${qty} contracts inside limit, below 5-lot floor`); continue; }
 
     // Resolve every leg's exchange reference up front. A Polymarket NO leg needs the OTHER
