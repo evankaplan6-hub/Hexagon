@@ -145,9 +145,19 @@ the same outcome at 1-2c, **for 51 to 89 hours**. Nominally a 20c+ edge. A real 
 market is gone in seconds, so the overwhelmingly likely explanation is that there was no resting
 size behind the Polymarket price. Neither venue publishes historical order books, so that cannot be
 settled after the fact — the scanner flags such pairs `!` as **suspect** and reports totals with and
-without them rather than pretending to know. `src/probe.js` settles it going forward: any live gap
-over `PROBE_GAP` dumps both full ladders to `data/probes-*.jsonl`. Real depth means a strategy (a
-different one than this desk trades). An empty book closes the thread.
+without them rather than pretending to know. `src/probe.js` settles it going forward: any live **pre-game**
+gap over `PROBE_GAP` dumps both full ladders to `data/probes-*.jsonl`. Real depth means a strategy
+(a different one than this desk trades). An empty book closes the thread.
+
+The in-play exclusion was learned the hard way. The first four probes ever taken all landed on live
+MLB games showing 13–22c gaps — and the books said both venues agreed. Kalshi's *listing* quote was
+lagging its own order book: listing 0.425 against a book of 0.63/0.65. Since probes are ranked by
+gap size and capped per cycle, that noise crowded out the pre-game cases the probe exists for.
+
+Measured across the tradeable book, listing and order book agree to **0.00c median, 0.00c max**.
+That is why there is no Kalshi equivalent of `refreshPairPrices()` — it would spend an API call per
+pair per cycle to correct an error of zero. The lag is real, but only where the desk already
+refuses to trade.
 
 ## What else was tried
 
