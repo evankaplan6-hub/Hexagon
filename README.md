@@ -121,6 +121,25 @@ node tools/history-scan.js            # pairs from the running desk
 node tools/history-scan.js data/ticks-2026-09-09.jsonl
 ```
 
+`tools/replay.js` runs the same question against the recorded tape, using the *same* decision
+functions the live desk uses (`src/decide.js` takes `now` as an argument and does no I/O, so a
+file and a synthetic clock substitute for the network and the wall clock):
+
+```bash
+node tools/replay.js data/ticks-*.jsonl                      # what would it have traded?
+node tools/replay.js data/ticks-*.jsonl --minEdge 0.002      # ...at a different bar
+node tools/replay.js data/ticks-*.jsonl --sweep              # any bar at all?
+```
+
+The sweep is the one that settles it. Over a 1.1h tape the only grid cells that trade are the ones
+where `MIN_EDGE` is **negative** — where you have agreed in advance to lose money: 5 trades, 0 wins,
+-$18.63. Every other combination of `MIN_GAP` and `MIN_EDGE` takes zero trades. Loosening a
+threshold buys more trades, not more edge.
+
+Replay fills assume the whole order at top of book, because the tape records no depth. Every P&L it
+prints is therefore an **upper bound**. A losing replay is conclusive; a winning one is a hypothesis
+that still has to survive `data/probes-*.jsonl`.
+
 The one unresolved case: three thin NCAAF markets where Polymarket sat near 50c while Kalshi priced
 the same outcome at 1-2c, **for 51 to 89 hours**. Nominally a 20c+ edge. A real 20c edge on a binary
 market is gone in seconds, so the overwhelmingly likely explanation is that there was no resting
