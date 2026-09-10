@@ -26,7 +26,7 @@ auto-stop for exactly that reason.
 ```bash
 brew install flyctl && fly auth signup        # once
 
-cd ~/claude/hexagon
+cd ~/Hexagon
 fly launch --no-deploy --copy-config --name hexagon-desk   # reads fly.toml
 fly volumes create hexagon_data --region iad --size 1      # the journals live here
 

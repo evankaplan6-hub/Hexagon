@@ -1,6 +1,6 @@
 # Hexagon — current task prompt (tick recorder)
 
-Paste everything below the divider into Claude Code in `~/claude/hexagon`, in plan mode.
+Paste everything below the divider into Claude Code in `~/Hexagon`, in plan mode.
 
 ---
 
