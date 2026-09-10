@@ -20,7 +20,9 @@ const m = (x) => `${x < 0 ? '-' : '+'}$${Math.abs(x).toFixed(2)}`;
     fills += x.fills || 0; inv += Math.abs(x.inv || 0); cost += x.cost || 0;
     const mark = (x.inv || 0) * (x.mid ?? 0.5);
     mtm += mark;
-    if (x.quotes && (x.quotes.bid != null || x.quotes.ask != null)) quoted++;
+    // the snapshot exposes bid/ask directly now; this was still looking for the old nested
+    // `quotes` object and so reported "0 currently quoting" while 33 markets had live quotes
+    if (x.bid != null || x.ask != null) quoted++;
     if (x.fills) rows.push({ t, name: x.sub || x.title || t, fills: x.fills, inv: x.inv, cost: x.cost,
       pl: mark - (x.cost || 0), q: { bid: x.qBid, ask: x.qAsk } });
   }
