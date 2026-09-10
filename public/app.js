@@ -297,6 +297,7 @@
     // desks + agents
     // advance the shared clock between SSE frames so the stagger animates smoothly
     S.now = Math.max(S.now, (S._rx || 0) + (performance.now() - (S._rxPerf || performance.now())));
+    const bubbles = [];
     S.agents.forEach((a, i) => {
       if (!DESKS[i]) return;                 // more agents than seats: skip rather than throw
       const [x, y] = DESKS[i];
@@ -317,18 +318,24 @@
       if (blink) { px(ctx, bx - 4, by - 3, 3, 1, '#fff'); px(ctx, bx + 1, by - 3, 3, 1, '#fff'); }
       else { px(ctx, bx - 4, by - 4, 3, 3, '#fff'); px(ctx, bx + 1, by - 4, 3, 3, '#fff'); px(ctx, bx - 3, by - 3, 1, 1, '#111'); px(ctx, bx + 2, by - 3, 1, 1, '#111'); }
       text(ctx, a.key, bx, y + 36, act ? '#e6e8ee' : '#5b6270', 6, 'center');
-      // speech bubble (front row speaks to the right of the desk so it never covers the back row)
-      if (act && a.note) {
-        const s = a.note.length > 30 ? a.note.slice(0, 29) + '…' : a.note;
-        ctx.font = '6px JetBrains Mono, monospace'; const w = Math.ceil(ctx.measureText(s).width) + 6;
-        const back = i < 3;
-        const by2 = back ? y - 28 : y + 14;
-        let lx = back ? Math.min(Math.max(bx - w / 2, 2), 478 - w) : Math.min(bx + 12, 478 - w);
-        px(ctx, lx, by2, w, 9, '#e6e8ee');
-        if (back) px(ctx, bx - 1, by2 + 9, 2, 2, '#e6e8ee'); else px(ctx, bx + 9, by2 + 4, 3, 2, '#e6e8ee');
-        text(ctx, s, lx + 3, by2 + 2, '#0a0b0d', 6);
-      }
+      // Speech bubbles are QUEUED, not drawn here. Drawing one inside this loop put it under the
+      // next agent's desk, which is why they read "budget $20" and "22 pairs /" -- the box was
+      // being painted over a few iterations later. They go on top, after every desk is down.
+      if (act && a.note) bubbles.push({ note: a.note, bx, y, back: i < 3 });
     });
+    // second pass: every bubble on top of every desk
+    for (const b of bubbles) {
+      const s2 = b.note.length > 30 ? b.note.slice(0, 29) + '…' : b.note;
+      ctx.font = '6px JetBrains Mono, monospace';
+      const w = Math.ceil(ctx.measureText(s2).width) + 6;
+      // back row rises off the desk; the room floor starts at y=120, so keep it off the wall screen
+      const by2 = b.back ? Math.max(122, b.y - 28) : b.y + 14;
+      const lx = b.back ? Math.min(Math.max(b.bx - w / 2, 2), 478 - w) : Math.min(b.bx + 12, 478 - w);
+      px(ctx, lx, by2, w, 9, '#e6e8ee');
+      if (b.back) px(ctx, b.bx - 1, by2 + 9, 2, 2, '#e6e8ee'); else px(ctx, b.bx + 9, by2 + 4, 3, 2, '#e6e8ee');
+      text(ctx, s2, lx + 3, by2 + 2, '#0a0b0d', 6);
+    }
+
     // server rack + plant flavour
     px(ctx, 440, 130, 26, 60, '#12161e'); for (let i = 0; i < 6; i++) { px(ctx, 443, 134 + i * 9, 20, 6, '#0a0d13'); px(ctx, 459, 136 + i * 9, 2, 2, (Math.floor(t * 4) + i) % 3 ? '#22c55e' : '#0f3a1f'); }
     px(ctx, 16, 150, 12, 24, '#2a2219'); px(ctx, 10, 134, 24, 18, '#1a4d2e'); px(ctx, 14, 128, 16, 10, '#236b3d');
