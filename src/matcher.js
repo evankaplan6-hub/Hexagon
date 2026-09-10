@@ -108,7 +108,12 @@ function matchPairs(pmList, ksList) {
     if (r) {
       const dir = r[1].toLowerCase() === 'decrease' ? 'C' : 'H';
       const bps = +r[2], plus = r[3] === '+';
-      code = bps === 25 && !plus ? `${dir}25` : (bps >= 50 || plus) ? `${dir}26` : null;
+      // Kalshi's two brackets are "25bps" and ">25bps" -- the second EXCLUDES 25. Polymarket's
+      // "25+ bps" includes it, so it spans both and matches neither. It used to map to the >25
+      // bracket, which resolves differently at exactly 25bps: the two legs of a "locked" arb would
+      // then settle opposite ways on the single most likely outcome of a Fed meeting. A question
+      // that spans two brackets has no counterpart here, and no pair is the right answer.
+      code = bps === 25 && !plus ? `${dir}25` : (bps >= 50 && !plus) ? `${dir}26` : null;
       mon = r[4]; yr = r[5];
     } else if ((r = q.match(/no change in Fed interest rates after the (\w+) (\d{4}) meeting/i))) {
       code = 'H0'; mon = r[1]; yr = r[2];
@@ -152,9 +157,14 @@ function matchPairs(pmList, ksList) {
     if (!hit || usedKs.has(hit.ks.ticker)) continue;
 
     // sanity: venues should roughly agree; a 30c+ disagreement means we matched the wrong thing
+    // Validate the LEGS, not the average. `null + null` is 0 in JS and Number.isFinite(0) is true,
+    // so an entirely unpriced market used to arrive here as a confident mid of zero and pair with
+    // anything Kalshi priced under 30c -- the one correctness guard in this file, passing on a
+    // market that had no price at all.
+    const legs = [m.bestBid, m.bestAsk, hit.ks.yesBid, hit.ks.yesAsk];
+    if (!legs.every((x) => typeof x === 'number' && Number.isFinite(x))) continue;
     const pmMid = (m.bestBid + m.bestAsk) / 2;
     const ksMid = (hit.ks.yesBid + hit.ks.yesAsk) / 2;
-    if (!Number.isFinite(pmMid) || !Number.isFinite(ksMid)) continue;
     if (Math.abs(pmMid - ksMid) > 0.30) { rejected.push({ label: hit.label, pm: m.question, ks: hit.ks.title, pmMid, ksMid }); continue; }
 
     usedKs.add(hit.ks.ticker);

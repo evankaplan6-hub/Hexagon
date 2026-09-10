@@ -1,0 +1,273 @@
+'use strict';
+// Assertions for the MAKER desk's pure core (src/maker.js): where it rests quotes, which trades
+// fill them, and what a fill does to the money.
+//
+// This desk is the only code in the repo that has ever traded. The taker book has taken zero
+// positions in its life; every fill on the journal -- all 94 of them -- is a MAKER_FILL. It ran
+// untested. That ordering was backwards, and this file is the correction.
+//
+//   node tools/maker-test.js
+const maker = require('../src/maker');
+const base = require('../src/config');
+
+let pass = 0, fail = 0;
+const ok = (name, cond, got) => {
+  if (cond) { pass++; return; }
+  fail++;
+  console.log(`  FAIL  ${name}${got === undefined ? '' : `\n        got: ${JSON.stringify(got)}`}`);
+};
+const group = (n) => console.log(`\n${n}`);
+const cfg = (over = {}) => ({ ...base, ...over });
+const book = (bid, ask, bidSize = 5000, askSize = 5000) => ({
+  yesBids: bid == null ? [] : [{ price: bid, size: bidSize }],
+  yesAsks: ask == null ? [] : [{ price: ask, size: askSize }],
+});
+
+// ---------------------------------------------------------------- desiredQuotes
+group('desiredQuotes rests at the touch, or explains why it will not');
+{
+  const q = maker.desiredQuotes(book(0.44, 0.45), 0, cfg());
+  ok('joins the touch on both sides', q.bid === 0.44 && q.ask === 0.45, q);
+  ok('reports the spread and mid it used', q.spread !== undefined && Math.abs(q.mid - 0.445) < 1e-9, q);
+
+  // Quoting INSIDE the touch hands the spread back; quoting outside never fills. There is nowhere
+  // else to be, which is why inventory is managed by withdrawal rather than by skew.
+  ok('a one-sided book is refused by name', maker.desiredQuotes(book(0.44, null), 0, cfg()).why === 'one-sided book');
+  ok('an empty book is refused by name', maker.desiredQuotes(book(null, null), 0, cfg()).why === 'one-sided book');
+  ok('a crossed book is refused', maker.desiredQuotes(book(0.50, 0.45), 0, cfg()).why === 'one-sided book');
+  ok('a locked book (ask == bid) is refused', maker.desiredQuotes(book(0.45, 0.45), 0, cfg()).why === 'one-sided book');
+
+  const tight = maker.desiredQuotes(book(0.440, 0.445), 0, cfg({ makerMinSpread: 0.01 }));
+  ok('a sub-minimum spread is refused', tight.bid === null && /spread/.test(tight.why), tight);
+  ok('...and says both numbers', /0\.5c/.test(tight.why) && /1\.0c/.test(tight.why), tight.why);
+
+  // Inventory held into resolution is a coin flip, and the tails are where a one-tick spread is
+  // worth least against the risk.
+  ok('below makerMinMid is refused', maker.desiredQuotes(book(0.04, 0.05), 0, cfg()).why === 'price in the tails');
+  ok('above makerMaxMid is refused', maker.desiredQuotes(book(0.95, 0.96), 0, cfg()).why === 'price in the tails');
+}
+
+group('a book we will not QUOTE is still a book we can MARK');
+{
+  // makerdesk carries the last mid forward (`m.mid = q.mid ?? m.mid`) and marks inventory with it.
+  // A refusal that returns no mid therefore freezes the mark on a position the desk still holds --
+  // and the tails are exactly where a position is on its way to resolving at 0 or 1.
+  const tails = maker.desiredQuotes(book(0.95, 0.96), 0, cfg());
+  ok('the tails refuse to quote', tails.bid === null && tails.ask === null, tails);
+  ok('...but still report a mid to mark against', Math.abs(tails.mid - 0.955) < 1e-9, tails);
+
+  const tight = maker.desiredQuotes(book(0.440, 0.445), 0, cfg({ makerMinSpread: 0.01 }));
+  ok('a too-narrow spread refuses to quote', tight.bid === null, tight);
+  ok('...but still reports a mid', Math.abs(tight.mid - 0.4425) < 1e-9, tight);
+  ok('...and the spread it measured', Math.abs(tight.spread - 0.005) < 1e-9, tight);
+
+  // a genuinely one-sided book has no two-sided mid, and inventing one would be worse
+  ok('a one-sided book reports no mid', maker.desiredQuotes(book(0.44, null), 0, cfg()).mid === undefined);
+}
+
+group('the inventory cap withdraws a side rather than skewing price');
+{
+  const c = cfg({ makerCap: 100 });
+  const atLongCap = maker.desiredQuotes(book(0.44, 0.45), 100, c);
+  ok('long at the cap stops bidding', atLongCap.bid === null, atLongCap);
+  ok('...but keeps offering, so it can get flat', atLongCap.ask === 0.45, atLongCap);
+
+  const atShortCap = maker.desiredQuotes(book(0.44, 0.45), -100, c);
+  ok('short at the cap stops offering', atShortCap.ask === null, atShortCap);
+  ok('...but keeps bidding', atShortCap.bid === 0.44, atShortCap);
+
+  const inside = maker.desiredQuotes(book(0.44, 0.45), 99, c);
+  ok('one contract inside the cap still quotes both sides', inside.bid === 0.44 && inside.ask === 0.45, inside);
+}
+
+// ---------------------------------------------------------------- fillsFrom
+const trade = (id, side, px, n, extra = {}) => ({ trade_id: id, taker_book_side: side, yes_price_dollars: String(px), count_fp: String(n), ...extra });
+const QUOTES = { bid: 0.44, ask: 0.45 };
+const noQueue = { bid: 0, ask: 0 };
+
+group('fillsFrom maps taker side to our side correctly');
+{
+  const c = cfg({ makerParticipation: 0.10, makerCap: 100 });
+  // taker_book_side 'bid' means the taker was bidding -- lifting our ask. We SELL.
+  const sell = maker.fillsFrom([trade('t1', 'bid', 0.45, 100)], QUOTES, 0, c, new Set(), noQueue);
+  ok('a taker on the bid lifts our ask, so we sell', sell.fills.length === 1 && sell.fills[0].side === 'sell', sell.fills);
+  ok('at OUR price, not the trade price', sell.fills[0].px === 0.45, sell.fills[0]);
+
+  const buy = maker.fillsFrom([trade('t2', 'ask', 0.44, 100)], QUOTES, 0, c, new Set(), noQueue);
+  ok('a taker on the ask hits our bid, so we buy', buy.fills.length === 1 && buy.fills[0].side === 'buy', buy.fills);
+  ok('at our bid', buy.fills[0].px === 0.44, buy.fills[0]);
+
+  // no lookahead: a trade that does not reach our resting price cannot fill it
+  const away = maker.fillsFrom([trade('t3', 'bid', 0.44, 100)], QUOTES, 0, c, new Set(), noQueue);
+  ok('a trade below our ask does not fill our ask', away.fills.length === 0, away.fills);
+}
+
+group('the queue ahead of us fills first -- the correction that cut the backtest 90%');
+{
+  const c = cfg({ makerParticipation: 0.10, makerCap: 100 });
+  // 1000 contracts resting ahead of us; a 1000-lot taker clears exactly them and never reaches us.
+  const blocked = maker.fillsFrom([trade('q1', 'bid', 0.45, 1000)], QUOTES, 0, c, new Set(), { bid: 0, ask: 1000 });
+  ok('a taker that only clears the queue does not fill us', blocked.fills.length === 0, blocked.fills);
+  ok('but the queue it ate is gone', blocked.queue.ask === 0, blocked.queue);
+
+  // ...and the NEXT taker, arriving against the now-empty queue, does reach us
+  const through = maker.fillsFrom([trade('q2', 'bid', 0.45, 1000)], QUOTES, 0, c, new Set(), blocked.queue);
+  ok('the next taker reaches us once the queue is clear', through.fills.length === 1, through.fills);
+  ok('and we take our participation share of it', through.fills[0].qty === Math.floor(1000 * 0.10), through.fills[0]);
+
+  // partial: 600 ahead, 1000-lot taker -> 400 left for the pool, we get 10% of that
+  const partial = maker.fillsFrom([trade('q3', 'bid', 0.45, 1000)], QUOTES, 0, c, new Set(), { bid: 0, ask: 600 });
+  ok('a partly-cleared queue leaves the remainder to the pool', partial.fills[0].qty === Math.floor(400 * 0.10), partial.fills[0]);
+  ok('and reports the queue it has left', partial.queue.ask === 0, partial.queue);
+
+  // the queue is consumed even when our own share rounds away to nothing
+  const crumbs = maker.fillsFrom([trade('q4', 'bid', 0.45, 105)], QUOTES, 0, c, new Set(), { bid: 0, ask: 100 });
+  ok('a sub-1-contract share is not a fill', crumbs.fills.length === 0, crumbs.fills);
+  ok('...but the queue still moved', crumbs.queue.ask === 0, crumbs.queue);
+}
+
+group('trades are counted once, and block trades never');
+{
+  const c = cfg({ makerParticipation: 0.10, makerCap: 100 });
+  // The tape deliberately OVERLAPS -- a 1000-print page covers ~6s and it is polled every 2s -- so
+  // de-duplication is load-bearing, not hygiene. Without it every fill is counted about three times.
+  const seen = new Set(['dup']);
+  const r = maker.fillsFrom([trade('dup', 'bid', 0.45, 500)], QUOTES, 0, c, seen, noQueue);
+  ok('a trade already seen is skipped', r.fills.length === 0, r.fills);
+
+  const blk = maker.fillsFrom([trade('b1', 'bid', 0.45, 500, { is_block_trade: true })], QUOTES, 0, c, new Set(), noQueue);
+  ok('a block trade never fills a resting quote', blk.fills.length === 0, blk.fills);
+
+  // a trade id repeated WITHIN one batch must not fill twice either
+  const twice = maker.fillsFrom([trade('same', 'bid', 0.45, 500), trade('same', 'bid', 0.45, 500)], QUOTES, 0, c, new Set(), noQueue);
+  ok('a duplicate inside one batch fills once', twice.fills.length === 1, twice.fills);
+
+  const junk = maker.fillsFrom([
+    trade('j1', 'bid', 'not-a-price', 500),
+    trade('j2', 'bid', 0.45, 0),
+    trade('j3', 'bid', 0.45, -5),
+  ], QUOTES, 0, c, new Set(), noQueue);
+  ok('unparseable or non-positive trades are ignored', junk.fills.length === 0, junk.fills);
+}
+
+group('the position cap is enforced per fill, and adverse fills are flagged');
+{
+  const c = cfg({ makerParticipation: 1.0, makerCap: 100 });
+  const atCap = maker.fillsFrom([trade('c1', 'bid', 0.45, 50)], QUOTES, -100, c, new Set(), noQueue);
+  ok('already short the cap, a further sell is refused', atCap.fills.length === 0, atCap.fills);
+  const atCapBuy = maker.fillsFrom([trade('c2', 'ask', 0.44, 50)], QUOTES, 100, c, new Set(), noQueue);
+  ok('already long the cap, a further buy is refused', atCapBuy.fills.length === 0, atCapBuy.fills);
+  const upTo = maker.fillsFrom([trade('c3', 'bid', 0.45, 100)], QUOTES, 0, c, new Set(), noQueue);
+  ok('a fill that lands exactly ON the cap is allowed', upTo.fills.length === 1 && upTo.fills[0].qty === 100, upTo.fills);
+
+  // runOver is the adverse-selection marker: the market traded THROUGH our stale quote, so we sold
+  // below where it printed. 69% of live fills were run over against 5% in the backtest.
+  const over = maker.fillsFrom([trade('r1', 'bid', 0.60, 100)], QUOTES, 0, c, new Set(), noQueue);
+  ok('selling into a print above our ask is flagged run-over', over.fills[0].runOver === true, over.fills[0]);
+  const clean = maker.fillsFrom([trade('r2', 'bid', 0.45, 100)], QUOTES, 0, c, new Set(), noQueue);
+  ok('a print AT our ask is not run-over', clean.fills[0].runOver === false, clean.fills[0]);
+}
+
+// ---------------------------------------------------------------- applyFill
+group('applyFill: once flat, realised MUST equal the change in cash');
+{
+  // This is the whole invariant. Cash is not profit -- it falls when we buy and rises when we sell,
+  // so a short book shows positive cash that is only proceeds on contracts still owed. But when the
+  // position returns to FLAT there is nothing owed, and the two numbers have to meet. Anywhere they
+  // do not, the cost basis is lying.
+  const roundTrip = (fills) => {
+    let pos = { inv: 0, cost: 0, realized: 0 }, cash = 0;
+    for (const f of fills) { const r = maker.applyFill(pos, f); cash = Math.round((cash + r.cashDelta) * 100) / 100; pos = { inv: r.inv, cost: r.cost, realized: r.realized }; }
+    return { pos, cash };
+  };
+  const CASES = [
+    ['a full close', [{ side: 'buy', qty: 10, px: 0.40 }, { side: 'sell', qty: 10, px: 0.50 }]],
+    ['a PARTIAL close', [{ side: 'buy', qty: 20, px: 0.40 }, { side: 'sell', qty: 10, px: 0.50 }, { side: 'sell', qty: 10, px: 0.50 }]],
+    ['a fill that flips long to short', [{ side: 'buy', qty: 10, px: 0.40 }, { side: 'sell', qty: 25, px: 0.50 }, { side: 'buy', qty: 15, px: 0.50 }]],
+    ['a fill that flips short to long', [{ side: 'sell', qty: 10, px: 0.60 }, { side: 'buy', qty: 30, px: 0.50 }, { side: 'sell', qty: 20, px: 0.50 }]],
+    ['ragged partials both ways', [{ side: 'buy', qty: 30, px: 0.30 }, { side: 'sell', qty: 7, px: 0.44 }, { side: 'buy', qty: 5, px: 0.31 }, { side: 'sell', qty: 28, px: 0.42 }]],
+    ['plain spread capture, three times', [{ side: 'buy', qty: 10, px: 0.40 }, { side: 'sell', qty: 10, px: 0.41 }, { side: 'buy', qty: 10, px: 0.40 }, { side: 'sell', qty: 10, px: 0.41 }, { side: 'buy', qty: 10, px: 0.40 }, { side: 'sell', qty: 10, px: 0.41 }]],
+  ];
+  for (const [name, fills] of CASES) {
+    const { pos, cash } = roundTrip(fills);
+    ok(`${name} ends flat`, pos.inv === 0, pos);
+    ok(`${name}: realised equals cash`, Math.abs(pos.realized - cash) < 0.005, { realized: pos.realized, cash });
+  }
+}
+
+group('applyFill: the basis left behind is a real price');
+{
+  // The regression itself. Buy 20 @ 40c, sell 10 @ 50c: ten contracts are still held, and they were
+  // bought at 40c. Moving `cost` by cash flow left $3.00 against them -- an implied average of 30c,
+  // a price this position never traded at -- and every later close measured its profit from there.
+  const a = maker.applyFill({ inv: 0, cost: 0, realized: 0 }, { side: 'buy', qty: 20, px: 0.40 });
+  ok('opening 20 @ 40c costs $8.00', a.cost === 8, a);
+  ok('and realises nothing', a.pnl === 0, a);
+
+  const b = maker.applyFill(a, { side: 'sell', qty: 10, px: 0.50 });
+  ok('closing half realises 10 x 10c = $1.00', Math.abs(b.pnl - 1) < 0.005, b);
+  ok('and leaves the OTHER half at its own basis, $4.00', Math.abs(b.cost - 4) < 0.005, b);
+  ok('so the implied average is still 40c, not 30c', Math.abs(Math.abs(b.cost / b.inv) - 0.40) < 1e-6, { avg: Math.abs(b.cost / b.inv) });
+
+  // and the flip: the opening remainder enters at the price it actually traded at
+  const c1 = maker.applyFill({ inv: 10, cost: 4, realized: 0 }, { side: 'sell', qty: 25, px: 0.50 });
+  ok('a flip through zero leaves a short of 15', c1.inv === -15, c1);
+  ok('...booked at the fill price, 50c', Math.abs(Math.abs(c1.cost / c1.inv) - 0.50) < 1e-6, { avg: Math.abs(c1.cost / c1.inv) });
+  ok('...realising only the part that closed', Math.abs(c1.pnl - 1) < 0.005, c1);
+
+  const flat = maker.applyFill({ inv: 10, cost: 4, realized: 0 }, { side: 'sell', qty: 10, px: 0.50 });
+  ok('going flat carries no basis forward', flat.inv === 0 && flat.cost === 0, flat);
+}
+
+group('applyFill: same-direction fills never realise anything');
+{
+  const a = maker.applyFill({ inv: 10, cost: 4, realized: 0 }, { side: 'buy', qty: 10, px: 0.50 });
+  ok('adding to a long realises nothing', a.pnl === 0, a);
+  ok('and averages the basis', Math.abs(Math.abs(a.cost / a.inv) - 0.45) < 1e-6, { avg: Math.abs(a.cost / a.inv) });
+  const s = maker.applyFill({ inv: -10, cost: -6, realized: 0 }, { side: 'sell', qty: 10, px: 0.50 });
+  ok('adding to a short realises nothing', s.pnl === 0, s);
+  ok('and averages the short basis', Math.abs(Math.abs(s.cost / s.inv) - 0.55) < 1e-6, { avg: Math.abs(s.cost / s.inv) });
+  const f = maker.applyFill({ inv: 0, cost: 0, realized: 0 }, { side: 'sell', qty: 10, px: 0.50 });
+  ok('opening from flat realises nothing', f.pnl === 0 && f.inv === -10, f);
+}
+
+group('the flatten path realises what it closes');
+{
+  // makerdesk.flatten() used to move cash and then zero `inv` and `cost` without booking a cent of
+  // realised profit, so a desk flattened at a gain reported none. It now closes through applyFill
+  // and takes the crossing fee off with it, which keeps the same invariant: from a standing start,
+  // realised must equal total cash once the book is flat.
+  const flat = (pos, cashSoFar, px, fee) => {
+    const res = maker.applyFill(pos, { side: pos.inv > 0 ? 'sell' : 'buy', qty: Math.abs(pos.inv), px });
+    return { inv: res.inv, cost: res.cost, realized: r2(res.realized - fee), cash: r2(cashSoFar + res.cashDelta - fee) };
+  };
+  const r2 = (x) => Math.round(x * 100) / 100;
+
+  // bought 100 @ 40c (cash -$40), flattened at 50c with a $1.75 taker fee
+  const long = flat({ inv: 100, cost: 40, realized: 0 }, -40, 0.50, 1.75);
+  ok('flattening leaves the book flat', long.inv === 0 && long.cost === 0, long);
+  ok('and realises the gain net of the crossing fee', Math.abs(long.realized - 8.25) < 0.005, long);
+  ok('and realised still equals total cash', Math.abs(long.realized - long.cash) < 0.005, long);
+
+  // sold 100 @ 60c (cash +$60), bought back at 50c
+  const short = flat({ inv: -100, cost: -60, realized: 0 }, 60, 0.50, 1.75);
+  ok('a short flattens to flat', short.inv === 0, short);
+  ok('...realising the gain net of fee', Math.abs(short.realized - 8.25) < 0.005, short);
+  ok('...and still agreeing with cash', Math.abs(short.realized - short.cash) < 0.005, short);
+
+  // a LOSS must be booked too, not silently dropped
+  const loss = flat({ inv: 100, cost: 60, realized: 0 }, -60, 0.50, 1.75);
+  ok('a losing flatten books a loss', loss.realized < 0, loss);
+  ok('...that agrees with cash', Math.abs(loss.realized - loss.cash) < 0.005, loss);
+}
+
+group('applyFill: cash moves in the direction it should');
+{
+  const b = maker.applyFill({ inv: 0, cost: 0, realized: 0 }, { side: 'buy', qty: 10, px: 0.40 });
+  ok('buying costs cash', b.cashDelta === -4, b);
+  const s = maker.applyFill({ inv: 0, cost: 0, realized: 0 }, { side: 'sell', qty: 10, px: 0.40 });
+  ok('selling raises cash', s.cashDelta === 4, s);
+}
+
+console.log(`\n${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);

@@ -6,8 +6,11 @@
   "scripts": {
     "start": "node server.js",
     "demo": "DEMO=1 DATA_DIR=./data-demo node server.js",
-    "reset": "rm -f data/state.json && echo 'paper account reset'"
+    "reset": "rm -f data/state.json && echo 'paper account reset'",
+    "test": "node tools/test.js"
   },
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "license": "MIT"
 }

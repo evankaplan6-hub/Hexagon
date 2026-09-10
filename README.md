@@ -375,8 +375,12 @@ src/venues/            Polymarket (Gamma + CLOB) and Kalshi public data
 public/                dashboard (index.html, style.css, app.js)
 data/state.json        persisted account (created on first run)
 data/ticks-*.jsonl     tick tape, one line per priced pair per cycle (RECORD=1)
-tools/decide-test.js   assertions for the decision core
+tools/test.js          every suite in one command (npm test)
+tools/decide-test.js   assertions for the taker decision core
 tools/probe-test.js    assertions for the thin-market probe (stubbed venues, frozen clock)
+tools/maker-test.js    assertions for the maker core: quoting, queue, fills, realised P&L
+tools/broker-test.js   assertions for fills, incl. the live Kalshi order path (no network)
+tools/matcher-test.js  assertions for cross-venue matching
 tools/golden.js        fixed-fixture output diff, for refactors meant to change nothing
 ```
 
@@ -385,7 +389,65 @@ tape and a synthetic clock (`tools/replay.js`) instead of a network and a wall c
 guard it, and both are worth running after any change to the gates:
 
 ```bash
-node tools/decide-test.js     # gate behaviour: ranking, vetoes, sizing rails, exits
-node tools/probe-test.js      # probe threshold, in-play exclusion, cooldown, darkness reporting
-node tools/golden.js          # fixed fixtures; diff before/after a refactor
+npm test                      # all 224 assertions across five suites
+node tools/maker-test.js      # ...or one suite at a time while working on one file
 ```
+
+Coverage follows the money, which took a while to admit. **The taker desk has never traded** — in
+both journal days on disk every fill is a `MAKER_FILL`, 94 of them, and the taker book is empty.
+The maker desk is the only code here that has ever moved a contract, and it was the code without
+tests. `src/maker.js` is now the maker's `decide.js`: `desiredQuotes`, `fillsFrom` and `applyFill`
+are pure, and `makerdesk.js` is the I/O around them.
+
+### The realised-P&L bug those tests found
+
+`applyFill` used to move the cost basis by **cash flow** (`cost -= qty × px`). That retires a closed
+slice at the price it was *sold* at rather than the price it was *bought* at, so the basis left
+behind belongs to no real position — buy 20 @ 40c then sell 10 @ 50c left $3.00 against ten
+contracts genuinely held at 40c, an implied average of **30c**. Every later close then measured its
+profit from that wrong mark:
+
+```
+buy 20 @ 40c, sell 10 @ 50c, sell 10 @ 50c   →   cash +$2.00, realised reported +$3.00
+```
+
+It was right on a *full* close (buy 10, sell 10) and on repeated equal-size round trips, which is
+the idealised pattern the desk was reasoned about in — and why it survived. Variable fill sizes
+produce partial closes constantly. The invariant that catches it, now asserted over six fill
+sequences: **once a market is flat, total realised must equal the total change in cash.**
+
+It had not yet corrupted the live ledger — every one of the 94 fills so far was one-directional
+accumulation, so no market had done a closing fill and `realized` was still 0 everywhere. It would
+have fired on the first two-sided market.
+
+`makerdesk.flatten()` had the same hole from the other end: it moved cash and then zeroed `inv` and
+`cost` without booking a cent of realised profit, so a desk flattened at a gain reported none. It
+now closes through `applyFill` and takes the crossing fee off with it.
+
+### The Fed brackets did not mean the same thing
+
+Kalshi lists **`Hike 25bps`** and **`Hike >25bps`** — the second *excludes* 25. Polymarket asks
+"by 25+ bps", which *includes* it. The matcher mapped the second to the first, and the recorded
+tape confirms the desk was pricing that pair in production. Both legs of a "locked" arb on it would
+settle opposite ways at exactly 25bps — the single most likely outcome of a Fed meeting. A question
+that spans two brackets now pairs to nothing, which drops the universe from 19 pairs to 15.
+
+The matcher's price-agreement guard could never have caught this: two brackets that overlap on most
+outcomes price close together, and the guard only rejects disagreements over 30c.
+
+### Known and not fixed
+
+Named here rather than left in a transcript. None are reachable today; all are real:
+
+- **`nameMatch` accepts a shorter Kalshi name as a longer, different Polymarket team** — "Washington"
+  matches "Washington State". Fixing the heuristic blind, without a corpus of real venue names to
+  score against, risks silently dropping good pairs to close a hypothetical one. It needs the
+  corpus first, and `tools/matcher-test.js` documents the limit in the meantime.
+- **`liveBalance` is fetched, streamed to the dashboard, and never constrains sizing.** In live mode
+  the desk would size off `state.cash` — the paper-initialised balance — not the money actually at
+  the exchange. This is a blocker for funding the account, not a bug in paper.
+- **The maker's drawdown rail measures loss from `initialBalance`, not drawdown from peak**, so a
+  book that runs +$500 and bleeds back to +$50 never trips it.
+- **Same-date bucketing cannot separate the two games of a doubleheader.**
+- **A market whose listing reports zero top-of-book size ranks first** (an empty queue looks like a
+  queue that clears instantly) and is then modelled with no queue at all.

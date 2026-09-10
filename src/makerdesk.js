@@ -211,25 +211,19 @@ function makeMakerDesk(cfg) {
       const { fills, queue } = maker.fillsFrom(trades, m.quotes, m.inv, cfg, seen, m.queue);
       m.queue = queue;                                     // what is still ahead of us, carried forward
       for (const f of fills) {
-        // REALISED profit, which is the only number that is actually money.
+        // REALISED profit, which is the only number that is actually money. `cash` is not profit
+        // and never was: it falls when we buy and rises when we sell, so a net-short book shows a
+        // large positive cash balance that is simply proceeds from contracts we still owe. Calling
+        // that "banked from spread" was wrong, and it read as +$51 of earnings on a book that had
+        // earned nothing. Profit exists only where a fill CLOSES part of a position.
         //
-        // `cash` is not profit and never was: it falls when we buy and rises when we sell, so a
-        // net-short book shows a large positive cash balance that is simply proceeds from
-        // contracts we still owe. Calling that "banked from spread" was wrong, and it read as
-        // +$51 of earnings on a book that had earned nothing. Profit only exists when a fill
-        // CLOSES part of a position, and it is the difference between what that slice was opened
-        // at and what it was closed at.
-        const dir = f.side === 'buy' ? 1 : -1;
-        const closing = Math.min(Math.abs(m.inv), f.qty) * (Math.sign(m.inv) === -dir ? 1 : 0);
-        if (closing > 0) {
-          const avg = Math.abs(m.cost / m.inv);              // weighted average of the open side
-          const pnl = m.inv > 0 ? (f.px - avg) * closing : (avg - f.px) * closing;
-          m.realized = r2((m.realized || 0) + pnl);
-          S.realized = r2((S.realized || 0) + pnl);
-        }
-        if (f.side === 'buy') { S.cash = r2(S.cash - f.qty * f.px); m.inv += f.qty; m.cost = r2(m.cost + f.qty * f.px); }
-        else { S.cash = r2(S.cash + f.qty * f.px); m.inv -= f.qty; m.cost = r2(m.cost - f.qty * f.px); }
-        if (m.inv === 0) m.cost = 0;                          // flat means no basis to carry
+        // The arithmetic itself is maker.applyFill, so it can be asserted without a network. See
+        // the note there on why a cost BASIS cannot be moved by cash flow -- getting that wrong
+        // overstated realised profit on every partial close, which is most of them.
+        const res = maker.applyFill(m, f);
+        if (res.pnl) S.realized = r2((S.realized || 0) + res.pnl);
+        S.cash = r2(S.cash + res.cashDelta);
+        m.inv = res.inv; m.cost = res.cost; m.realized = res.realized;
         m.fills++; S.fills = (S.fills || 0) + 1; filled++; netQty += f.qty;
         // remembered for the dashboard: "nothing is happening" and "something happened four
         // minutes ago" look identical unless the page can say which.
@@ -308,10 +302,20 @@ function makeMakerDesk(cfg) {
         px = m.inv > 0 ? (bk.yesBids[0] ? bk.yesBids[0].price : px) : (bk.yesAsks[0] ? bk.yesAsks[0].price : px);
       } catch { /* fall back to the last mark */ }
       const fee = ks.fee(Math.abs(m.inv), px, cfg.ksFeeRate, ticker);
-      S.cash = r2(S.cash + m.inv * px - fee);
-      E.journal(E, 'MAKER_FLATTEN', { ticker, qty: m.inv, px, fee, reason });
-      contracts += Math.abs(m.inv); closed++;
-      m.inv = 0; m.cost = 0;
+      // Flattening CLOSES a position, so it realises whatever that position made -- it used to move
+      // cash and then zero `inv` and `cost` without booking a cent of it, which breaks the same
+      // invariant maker.applyFill exists to hold: once flat, realised equals the change in cash.
+      // A desk flattened at a profit reported no profit at all. The crossing fee is a realised cost
+      // and comes off with it.
+      const qty = Math.abs(m.inv);
+      const res = maker.applyFill(m, { side: m.inv > 0 ? 'sell' : 'buy', qty, px });
+      const pnl = r2(res.pnl - fee);
+      m.realized = r2(res.realized - fee);                  // applyFill already folded in res.pnl
+      S.realized = r2((S.realized || 0) + pnl);
+      S.cash = r2(S.cash + res.cashDelta - fee);
+      E.journal(E, 'MAKER_FLATTEN', { ticker, qty: m.inv, px, fee, pnl, reason });
+      contracts += qty; closed++;
+      m.inv = res.inv; m.cost = res.cost;
     }
     S.equity = r2(S.cash);
     S.halted = `flattened by operator (${reason})`;

@@ -10,7 +10,9 @@ const r4 = (x) => Math.round(x * 10000) / 10000;
 // Walk an ask ladder (best first) up to a limit price.
 function walk(asks, qty, limit) {
   let filled = 0, cost = 0;
-  for (const l of asks) {
+  // `|| []` because the sizing path already guards the same value that way (decide.sizePlan) and
+  // this is the side of it that spends money -- a one-sided book must be a no-fill, not a throw.
+  for (const l of asks || []) {
     if (l.price > limit + 1e-9) break;
     const take = Math.min(qty - filled, l.size);
     filled += take; cost += take * l.price;
@@ -76,12 +78,20 @@ class LiveKalshiBroker extends PaperBroker {
   async reconcile() {
     let remote;
     try {
-      const r = await this.request('GET', '/portfolio/positions');
+      // FOLLOW THE CURSOR. Reading one page and treating it as the whole account is only safe in
+      // the direction that finds too FEW remote positions -- and that is the dangerous one: an
+      // empty first page against an empty local book reconciles clean and enables trading while
+      // real contracts sit unmanaged on a later page. Bounded so a broken cursor cannot spin.
       remote = new Map();
-      for (const p of (r.market_positions || [])) {
-        const n = Math.round(+(p.position_fp ?? p.position ?? 0));
-        if (n !== 0) remote.set(p.ticker, n);
-      }
+      let cursor = null, pages = 0;
+      do {
+        const r = await this.request('GET', `/portfolio/positions${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`);
+        for (const p of (r.market_positions || [])) {
+          const n = Math.round(+(p.position_fp ?? p.position ?? 0));
+          if (n !== 0) remote.set(p.ticker, n);
+        }
+        cursor = r.cursor || null;
+      } while (cursor && ++pages < 50);
     } catch (e) {
       this.E.log('TESS', 'OPS', null, `reconciliation failed (${String(e.message).slice(0, 90)}) · staying halted rather than trading against an unverified book`);
       return; // liveReady stays false: TESS halts on 'live venue not authenticated'
@@ -110,7 +120,12 @@ class LiveKalshiBroker extends PaperBroker {
   async place({ ref, action, side, qty, limit, key }) {
     const clientId = key ? crypto.createHash('sha256').update(String(key)).digest('hex').replace(/(.{8})(.{4})(.{4})(.{4})(.{12}).*/, '$1-$2-$3-$4-$5') : crypto.randomUUID();
     const body = { ticker: ref, action, side, type: 'limit', count: qty, time_in_force: 'immediate_or_cancel', client_order_id: clientId };
-    body[side === 'yes' ? 'yes_price' : 'no_price'] = Math.max(1, Math.min(99, Math.round(limit * 100)));
+    // Kalshi prices are integer cents. ROUNDING can cross the caller's limit -- a buy limit of
+    // 50.5c rounds to 51c and pays a cent more than the edge was priced at, which on a MIN_EDGE of
+    // 0.5c is the whole trade. Round in the direction that respects the limit: down for a buy, up
+    // for a sell. The 1..99 clamp stays; the exchange rejects 0 and 100.
+    const cents = action === 'buy' ? Math.floor(limit * 100 + 1e-9) : Math.ceil(limit * 100 - 1e-9);
+    body[side === 'yes' ? 'yes_price' : 'no_price'] = Math.max(1, Math.min(99, cents));
     const res = await this.request('POST', '/portfolio/orders', body);
     const o = res.order || {};
     const filled = Math.floor(+(o.fill_count_fp ?? o.fill_count ?? 0));
@@ -123,7 +138,9 @@ class LiveKalshiBroker extends PaperBroker {
     const { o, filled, fillCost, fee } = await this.place({ ref, action: 'buy', side, qty, limit, key });
     if (filled < 1) return { filled: 0, reason: `order ${o.status || 'unfilled'}` };
     const avg = fillCost != null ? fillCost / filled : limit;
-    const f = fee != null ? fee : this.feeFor('KS', filled, avg);
+    // `ref` matters: the taker multiplier is per-series (MLB is 0.5, fourteen series are 0).
+    // Dropping it billed every series at the full rate -- the safe direction, but still wrong.
+    const f = fee != null ? fee : this.feeFor('KS', filled, avg, ref);
     return { filled, avg: r4(avg), fee: f, cost: r2(filled * avg + f), orderId: o.order_id };
   }
   async sell({ venue, ref, side, qty, px, key }) {
@@ -131,7 +148,7 @@ class LiveKalshiBroker extends PaperBroker {
     const { o, filled, fillCost, fee } = await this.place({ ref, action: 'sell', side, qty, limit: px, key });
     if (filled < 1) return { filled: 0, reason: `order ${o.status || 'unfilled'}` };
     const avg = fillCost != null ? fillCost / filled : px;
-    const f = fee != null ? fee : this.feeFor('KS', filled, avg);
+    const f = fee != null ? fee : this.feeFor('KS', filled, avg, ref);
     return { filled, avg: r4(avg), fee: f, proceeds: r2(filled * avg - f), orderId: o.order_id };
   }
 }

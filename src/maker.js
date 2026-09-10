@@ -30,11 +30,17 @@ const c = (x) => `${(x * 100).toFixed(1)}c`;
 function desiredQuotes(book, inv, cfg) {
   const bid = book.yesBids[0] ? book.yesBids[0].price : null;
   const ask = book.yesAsks[0] ? book.yesAsks[0].price : null;
+  // A book we will not QUOTE is still a book we can MARK, and those are different questions.
+  // Every refusal below used to return without a mid, and makerdesk carries the last one forward
+  // (`m.mid = q.mid ?? m.mid`), so a market that drifted into the tails kept marking its inventory
+  // at the last price it was quotable at -- and the tails are precisely where a position is on its
+  // way to resolving at 0 or 1. Equity went stale on exactly the positions most likely to move.
+  // Only a genuinely one-sided book has no two-sided mid to report.
   if (bid == null || ask == null || !(ask > bid)) return { bid: null, ask: null, why: 'one-sided book' };
   const spread = ask - bid;
-  if (spread < cfg.makerMinSpread - 1e-9) return { bid: null, ask: null, why: `spread ${c(spread)} under ${c(cfg.makerMinSpread)}` };
   const mid = (bid + ask) / 2;
-  if (mid < cfg.makerMinMid || mid > cfg.makerMaxMid) return { bid: null, ask: null, why: 'price in the tails' };
+  if (spread < cfg.makerMinSpread - 1e-9) return { bid: null, ask: null, spread, mid, why: `spread ${c(spread)} under ${c(cfg.makerMinSpread)}` };
+  if (mid < cfg.makerMinMid || mid > cfg.makerMaxMid) return { bid: null, ask: null, spread, mid, why: 'price in the tails' };
   return {
     bid: inv < cfg.makerCap ? bid : null,   // stop bidding once long the cap
     ask: inv > -cfg.makerCap ? ask : null,  // stop offering once short the cap
@@ -68,6 +74,7 @@ function fillsFrom(trades, quotes, inv, cfg, seen, queue) {
       if (qty < 1) continue;
       if (position - qty < -cfg.makerCap) continue;
       position -= qty;
+      seen.add(t.trade_id);   // the caller de-dupes ACROSS batches; this covers a repeat WITHIN one
       out.push({ side: 'sell', px: quotes.ask, qty, tradePx: p, runOver: quotes.ask < p, id: t.trade_id });
     } else if (t.taker_book_side === 'ask' && quotes.bid != null && quotes.bid >= p) {
       const eaten = Math.min(qb, n); qb -= eaten;
@@ -75,10 +82,51 @@ function fillsFrom(trades, quotes, inv, cfg, seen, queue) {
       if (qty < 1) continue;
       if (position + qty > cfg.makerCap) continue;
       position += qty;
+      seen.add(t.trade_id);
       out.push({ side: 'buy', px: quotes.bid, qty, tradePx: p, runOver: quotes.bid > p, id: t.trade_id });
     }
   }
   return { fills: out, queue: { bid: qb, ask: qa } };
+}
+
+// ---------------------------------------------------------------- accounting
+// What one fill does to a position. Pure: takes the position and the fill, returns the position
+// that results plus what was realised and what moved in cash. It lives here rather than inside
+// makerdesk.js for the same reason decide.js lives apart from agents.js -- this is the arithmetic
+// that decides whether the desk is making money, and it has to be assertable without a network.
+//
+// `cost` is a COST BASIS, not a running cash total, and the two only diverge on a PARTIAL close.
+// Moving it by cash flow (`cost -= qty * px`) retires the closed slice at the price it was SOLD
+// at rather than the price it was BOUGHT at, leaving a basis that belongs to no real position:
+// buy 20 @ 40c then sell 10 @ 50c leaves cost at $3.00 against 10 contracts genuinely held at 40c,
+// an implied average of 30c. Every later close then measures its profit from that wrong mark and
+// the error compounds -- round-tripping 20 contracts for $2.00 of real cash reported $3.00.
+//
+// The invariant that catches it: once a market is flat again, total realised MUST equal the total
+// change in cash. The old arithmetic satisfied that only when every close was a FULL one (buy 10,
+// sell 10), which is the idealised pattern this desk was reasoned about in and not the one
+// variable fill sizes produce.
+function applyFill(pos, f) {
+  const inv = pos.inv || 0, cost = pos.cost || 0;
+  const dir = f.side === 'buy' ? 1 : -1;
+  const sign = Math.sign(inv);                    // captured before inv moves
+  const closing = sign === -dir ? Math.min(Math.abs(inv), f.qty) : 0;
+  let basis = cost, pnl = 0;
+  if (closing > 0) {
+    const avg = Math.abs(cost / inv);             // weighted average of the open side
+    pnl = inv > 0 ? (f.px - avg) * closing : (avg - f.px) * closing;
+    basis = r2(basis - sign * closing * avg);     // the slice leaves at ITS OWN basis
+  }
+  const opening = f.qty - closing;                // the rest opens new position, at the fill price
+  if (opening > 0) basis = r2(basis + dir * opening * f.px);
+  const next = inv + dir * f.qty;
+  return {
+    inv: next,
+    cost: next === 0 ? 0 : basis,                 // flat means no basis to carry
+    realized: r2((pos.realized || 0) + pnl),
+    pnl: r2(pnl),
+    cashDelta: r2(dir === 1 ? -f.qty * f.px : f.qty * f.px),
+  };
 }
 
 // ---------------------------------------------------------------- universe
@@ -97,4 +145,4 @@ async function eligibleSeries(candidates) {
   return ok;
 }
 
-module.exports = { desiredQuotes, fillsFrom, eligibleSeries };
+module.exports = { desiredQuotes, fillsFrom, applyFill, eligibleSeries };
