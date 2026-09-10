@@ -2,11 +2,12 @@
 // What the maker desk has actually done, from its own ledger. Written to be read by someone who
 // did not build it: every number is either measured or explicitly labelled as a mark, never both.
 const cfg = require('../src/config');
+const api = require('./api');
 
 const m = (x) => `${x < 0 ? '-' : '+'}$${Math.abs(x).toFixed(2)}`;
 
 (async () => {
-  const st = await (await fetch(`http://localhost:${cfg.port}/api/state`)).json();
+  const st = await api.state();
   const S = st.maker || {};
   // The snapshot used to be an object keyed by ticker and is now a shaped array. Object.entries on
   // an array yields "0", "1", "2" as the keys, which is why this printed index numbers where the
@@ -40,4 +41,4 @@ const m = (x) => `${x < 0 ? '-' : '+'}$${Math.abs(x).toFixed(2)}`;
   console.log(`\n  market                             fills    inv     paid      marked P&L   queue left`);
   for (const r of rows) console.log('  ' + String(r.name).slice(0, 33).padEnd(34) + String(r.fills).padStart(5) + String(Math.round(r.inv)).padStart(7)
     + m(r.cost).padStart(10) + m(r.pl).padStart(13) + `   ${Math.round(r.q.bid || 0)}/${Math.round(r.q.ask || 0)}`);
-})();
+})().catch((e) => { console.error(e.message); process.exit(1); });

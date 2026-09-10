@@ -12,6 +12,7 @@
 const fs = require('fs');
 const path = require('path');
 const cfg = require('../src/config');
+const api = require('./api');
 const ks = require('../src/venues/kalshi');
 const maker = require('../src/maker');
 
@@ -34,7 +35,7 @@ function journalFills(sinceMs) {
 }
 
 (async () => {
-  const st = await (await fetch(`http://localhost:${cfg.port}/api/state`)).json();
+  const st = await api.state();
   const S = st.maker || {};
   // Only count fills this PROCESS produced. The journal spans every build of the day, and the
   // builds before the queue model filled a completely different way -- mixing them in was the
@@ -90,4 +91,4 @@ function journalFills(sinceMs) {
   // append the reading so a week of these accumulates on its own
   fs.appendFileSync(path.join(cfg.dataDir, 'fillcheck.jsonl'),
     JSON.stringify({ t: new Date().toISOString(), hours: r2h(upH), liveFills: lf, liveQty: lc, modelFills: mf, modelQty: mc, ratio }) + '\n');
-})();
+})().catch((e) => { console.error(e.message); process.exit(1); });

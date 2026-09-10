@@ -14,15 +14,17 @@ const ks = require('../src/venues/kalshi');
 const http = require('../src/http');
 const maker = require('../src/maker');
 const cfg = require('../src/config');
+const api = require('./api');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const money = (x) => `${x < 0 ? '-' : '+'}$${Math.abs(x).toFixed(2)}`;
 
 (async () => {
-  const snap = await (await fetch(`http://localhost:${cfg.port}/api/state`)).json().catch(() => null);
+  const snap = await api.state().catch(() => null);
   if (!snap || !snap.maker) { console.error(`desk not answering on :${cfg.port}`); process.exit(1); }
   const live = snap.maker;
-  const tickers = Object.keys(live.markets || {});
+  // `markets` is a shaped array now; Object.keys on an array gives "0", "1", "2"
+  const tickers = Array.isArray(live.markets) ? live.markets.map((m) => m.ticker) : Object.keys(live.markets || {});
   if (!tickers.length) { console.error('desk has not quoted anything yet'); process.exit(1); }
 
   // the desk's own journal is the record of what it actually did, and when it started
@@ -61,4 +63,4 @@ const money = (x) => `${x < 0 ? '-' : '+'}$${Math.abs(x).toFixed(2)}`;
   console.log('  the live desk requoted every cycle as the book moved. They will not match exactly;');
   console.log('  what matters is that they are the same order of magnitude and neither is zero when');
   console.log('  the other is not.');
-})();
+})().catch((e) => { console.error(e.message); process.exit(1); });
