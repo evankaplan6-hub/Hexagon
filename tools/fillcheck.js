@@ -42,7 +42,11 @@ function journalFills(sinceMs) {
   // prices where 15,000 orders were resting.
   const since = Math.max(Date.now() - HOURS * 3600 * 1000, st.startedAt || 0);
   const upH = (Date.now() - since) / 3600000;
-  const tickers = Object.keys(S.markets || {});
+  // Same trap as maker-report: `markets` is a shaped ARRAY now, and Object.keys on an array gives
+  // "0", "1", "2". This tool went looking for a market called "0", matched nothing, and reported
+  // "live 0 fills" on the same line as "17 live fills journalled" -- a contradiction it printed
+  // without noticing, which is exactly the failure mode it exists to catch elsewhere.
+  const tickers = Array.isArray(S.markets) ? S.markets.map((m) => m.ticker) : Object.keys(S.markets || {});
   if (!tickers.length) return console.log('the desk has no book yet');
 
   const live = journalFills(since);
@@ -70,6 +74,10 @@ function journalFills(sinceMs) {
     mf += fills.length; mc += fills.reduce((a, f) => a + f.qty, 0); lf += l; lc += lqty;
     if (l || fills.length) console.log('  ' + t.padEnd(34) + String(l).padStart(8) + String(fills.length).padStart(14) + String(Math.round((bid.size + ask.size) / 2)).padStart(9));
     await sleep(110);
+  }
+  if (live.length && !lf) {
+    console.log(`\n  WARNING: the journal has ${live.length} fills in this window but none matched a market in`);
+    console.log('  the book. That is a bug in this tool, not a result -- do not read anything into it.');
   }
   const ratio = mf ? lf / mf : null;
   console.log(`\n  live   ${lf} fills, ${lc} contracts`);
