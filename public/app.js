@@ -58,7 +58,7 @@
   // more rows than fit, and a canvas has no native scrolling -- so the wheel fell through to the
   // page and moved the whole document instead of the list under the pointer.
   let zones = [];                // rebuilt each frame: { x, y, w, h, id, max }
-  const scroll = { book: 0, tape: 0, agentlog: 0, log: 0 };
+  const scroll = { book: 0, tape: 0, agentlog: 0, log: 0, pos: 0 };
   const zoneAt = (p) => zones.find((z) => p.x >= z.x && p.x <= z.x + z.w && p.y >= z.y && p.y <= z.y + z.h) || null;
 
   function floorPoint(ev) {
@@ -81,7 +81,7 @@
     cv.addEventListener('click', (ev) => {
       const h = hitAt(floorPoint(ev));
       sel = same(h, sel) ? null : h;          // clicking the selected thing again closes it
-      scroll.agentlog = 0; scroll.book = 0;   // a new view starts at the top
+      scroll.agentlog = 0; scroll.book = 0; scroll.pos = 0;   // a new view starts at the top
     });
     // Scroll the list under the pointer, and only then let the page have the event. passive:false
     // is required -- without it the browser ignores preventDefault and scrolls the document anyway.
@@ -266,7 +266,8 @@
     px(ctx, 14, 71, 4, 4, stCol);
     text(ctx, halted ? 'STOPPED' : working ? 'WORKING' : 'IDLE', 22, 70, stCol, 8);
     text(ctx, working ? `quoting ${M.quoting} markets` : (halted ? 'trading stopped' : 'waiting for scan'), 14, 82, '#aab3c5', 6);
-    text(ctx, 'resting orders, never crossing', 14, 90, '#5b6270', 5);
+    const nHeld = (M.markets || []).filter((m) => m.inv).length;
+    text(ctx, nHeld ? `holding ${M.inv} contracts in ${nHeld}` : 'flat — nothing held', 14, 90, nHeld ? '#c7cdd8' : '#5b6270', 5);
     px(ctx, 14, 98, 100, 1, '#141b28');
     const lf = M.lastFill;
     // The ledger survives a restart but the last-fill detail does not, so "no fills yet" beside a
@@ -298,41 +299,65 @@
       [['BANKED', banked, 'from spread'], ['ON INVENTORY', marked, `${M.inv || 0} contracts`], ['NET', mEq, 'if closed now']]
         .forEach(([lab, v, sub], i) => {
           const cx = 168 + i * 68;
-          text(ctx, lab, cx, 25, '#5b6270', 5, 'center');
-          text(ctx, signed(v), cx, 32, v >= 0 ? '#22c55e' : '#ef4444', 9, 'center');
-          text(ctx, sub, cx, 43, '#4b5563', 5, 'center');
+          text(ctx, lab, cx, 22, '#5b6270', 5, 'center');
+          text(ctx, signed(v), cx, 29, v >= 0 ? '#22c55e' : '#ef4444', 9, 'center');
+          text(ctx, sub, cx, 40, '#4b5563', 5, 'center');
         });
-      px(ctx, 144, 50, 192, 1, '#141b28');
-      text(ctx, 'MARKET', 144, 54, '#4b5563', 5);
-      text(ctx, 'FLOW', 254, 54, '#4b5563', 5, 'right');
-      text(ctx, 'BID', 282, 54, '#4b5563', 5, 'right');
-      text(ctx, 'ASK', 310, 54, '#4b5563', 5, 'right');
-      text(ctx, 'HELD', 331, 54, '#4b5563', 5, 'right');
-      const book = (M.markets || []).filter((m) => m.quoting || m.inv);
-      const ROWS = 12;   // inner screen is y 12-142; 12 rows from 61 ends at 135
-      const maxB = Math.max(0, book.length - ROWS);
-      scroll.book = Math.min(scroll.book, maxB);          // the book shrinks; the offset must too
-      zones.push({ x: 144, y: 58, w: 192, h: 78, id: 'book', max: maxB });
-      book.slice(scroll.book, scroll.book + ROWS).forEach((m, i) => {
-        const y = 61 + i * 6.2;
+      px(ctx, 144, 46, 192, 1, '#141b28');
+
+      // Positions first, and separated. They used to be mixed into one list of 24 quoted markets
+      // with a HELD column that was a dot on almost every row -- the five things we actually own
+      // were the hardest part of the board to find.
+      const all = M.markets || [];
+      const held = all.filter((m) => m.inv);
+      const flat = all.filter((m) => !m.inv && m.quoting);
+      const heldPL = held.reduce((a2, m) => a2 + (m.mark - m.cost), 0);
+
+      const PROWS = Math.min(6, Math.max(1, held.length));
+      text(ctx, `OPEN POSITIONS  ${held.length}`, 144, 50, held.length ? '#c7cdd8' : '#4b5563', 5);
+      if (held.length) text(ctx, `${signed(heldPL)} marked`, 331, 50, heldPL >= 0 ? '#22c55e' : '#ef4444', 5, 'right');
+      if (!held.length) text(ctx, 'flat — nothing held', 144, 59, '#3d4350', 5);
+      else {
+        const maxP = Math.max(0, held.length - PROWS);
+        scroll.pos = Math.min(scroll.pos || 0, maxP);
+        zones.push({ x: 144, y: 54, w: 192, h: PROWS * 7 + 2, id: 'pos', max: maxP });
+        held.slice(scroll.pos, scroll.pos + PROWS).forEach((m, i) => {
+          const y = 58 + i * 7;
+          hits.push({ x: 144, y: y - 1, w: 192, h: 7, kind: 'market', key: m.ticker });
+          const hot = (hover && hover.kind === 'market' && hover.key === m.ticker);
+          if (hot) px(ctx, 144, y - 1, 192, 7, '#101826');
+          const long = m.inv > 0, pl = m.mark - m.cost;
+          px(ctx, 144, y + 1, 3, 4, long ? '#22c55e' : '#ef4444');
+          text(ctx, marketLabel(m, 24), 150, y, hot ? '#e6e8ee' : '#aab3c5', 5);
+          text(ctx, `${long ? 'LONG' : 'SHORT'} ${Math.abs(m.inv)}`, 262, y, long ? '#4ade80' : '#f87171', 5, 'right');
+          text(ctx, cents(Math.abs(m.cost / m.inv)), 292, y, '#5b6270', 5, 'right');
+          text(ctx, signed(pl), 331, y, pl >= 0 ? '#22c55e' : '#ef4444', 5, 'right');
+        });
+        if (maxP) text(ctx, `${scroll.pos + 1}-${Math.min(held.length, scroll.pos + PROWS)} of ${held.length}`, 331, 58 + PROWS * 7, '#3d4350', 4.5, 'right');
+      }
+
+      // quoting-but-flat: what is on the book waiting to be traded against
+      const qTop = 54 + (held.length ? PROWS * 7 + 8 : 14);
+      px(ctx, 144, qTop - 4, 192, 1, '#141b28');
+      text(ctx, `QUOTING  ${flat.length}`, 144, qTop, '#4b5563', 5);
+      text(ctx, 'BID', 292, qTop, '#3d4350', 4.5, 'right');
+      text(ctx, 'ASK', 331, qTop, '#3d4350', 4.5, 'right');
+      const QROWS = Math.max(1, Math.floor((134 - (qTop + 7)) / 6.2));
+      const maxB = Math.max(0, flat.length - QROWS);
+      scroll.book = Math.min(scroll.book, maxB);
+      zones.push({ x: 144, y: qTop + 5, w: 192, h: QROWS * 6.2 + 2, id: 'book', max: maxB });
+      flat.slice(scroll.book, scroll.book + QROWS).forEach((m, i) => {
+        const y = qTop + 7 + i * 6.2;
         hits.push({ x: 144, y: y - 1, w: 192, h: 6.2, kind: 'market', key: m.ticker });
         const hot = (hover && hover.kind === 'market' && hover.key === m.ticker);
         if (hot) px(ctx, 144, y - 1, 192, 6.2, '#101826');
-        px(ctx, 144, y + 1, 3, 3, m.quoting ? '#22c55e' : '#3d4350');
-        text(ctx, marketLabel(m, 28), 150, y, hot ? '#e6e8ee' : (m.quoting ? '#aab3c5' : '#5b6270'), 5);
-        text(ctx, m.tpd ? `${m.tpd}/d` : '—', 254, y, '#4b5563', 5, 'right');
-        text(ctx, m.bid == null ? '—' : cents(m.bid), 282, y, '#7c869a', 5, 'right');
-        text(ctx, m.ask == null ? '—' : cents(m.ask), 310, y, '#7c869a', 5, 'right');
-        text(ctx, m.inv ? String(m.inv) : '·', 331, y, m.inv > 0 ? '#22c55e' : m.inv < 0 ? '#ef4444' : '#3d4350', 5, 'right');
+        px(ctx, 144, y + 1, 3, 3, '#22c55e');
+        text(ctx, marketLabel(m, 26), 150, y, hot ? '#e6e8ee' : '#7c869a', 5);
+        text(ctx, m.bid == null ? '—' : cents(m.bid), 292, y, '#5b6270', 5, 'right');
+        text(ctx, m.ask == null ? '—' : cents(m.ask), 331, y, '#5b6270', 5, 'right');
       });
-      if (!book.length) text(ctx, M.quoting ? 'quoting — no inventory yet' : 'scanning for markets', 240, 90, '#3d4350', 6, 'center');
-      else if (maxB) {
-        text(ctx, `${scroll.book + 1}-${Math.min(book.length, scroll.book + ROWS)} of ${book.length}`, 336, 136, '#3d4350', 5, 'right');
-        // a thumb on the right edge, so it is obvious the list has more in it
-        const th = Math.max(6, 78 * ROWS / book.length);
-        px(ctx, 336, 58, 1, 78, '#141b28');
-        px(ctx, 336, 58 + (78 - th) * (scroll.book / maxB), 1, th, '#4b5563');
-      }
+      if (maxB) text(ctx, `${scroll.book + 1}-${Math.min(flat.length, scroll.book + QROWS)} of ${flat.length}`, 331, 136, '#3d4350', 4.5, 'right');
+      if (!all.length) text(ctx, 'scanning for markets', 240, 95, '#3d4350', 6, 'center');
       text(ctx, 'click a market or an agent', 144, 136, '#243044', 5);
     }
     px(ctx, 236, 146, 8, 8, '#1a2030'); // mount
