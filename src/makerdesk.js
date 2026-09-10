@@ -50,6 +50,7 @@ function makeMakerDesk(cfg) {
   let universe = [];         // tickers we are quoting
   let eligible = null;       // series that actually charge makers nothing
   let lastUniverseAt = 0;
+  let refreshing = null;     // in-flight refresh, so the scan never runs twice or blocks the tick
 
   // Pick the most liquid mid-priced markets from the fee-free series.
   async function refreshUniverse(E) {
@@ -120,7 +121,17 @@ function makeMakerDesk(cfg) {
       E.touch('MAKR', 'quotes withdrawn');
       return;
     }
-    if (!universe.length || Date.now() - lastUniverseAt > 15 * 60 * 1000) await refreshUniverse(E);
+    // The scan costs 38 series listings plus 40 trade-rate probes -- about 23 seconds, against a
+    // 15-second tick. Awaiting it made the whole desk skip ticks every fifteen minutes, taker side
+    // included. The first one has to block (there is nothing to quote yet); after that it runs in
+    // the background off the previous universe, guarded so it can never overlap itself.
+    const stale = Date.now() - lastUniverseAt > 15 * 60 * 1000;
+    if (!universe.length) await refreshUniverse(E);
+    else if (stale && !refreshing) {
+      refreshing = refreshUniverse(E)
+        .catch((e) => E.log('MAKR', 'OPS', null, `universe refresh failed (${String(e.message).slice(0, 80)}) · still quoting the previous ${universe.length}`))
+        .finally(() => { refreshing = null; });
+    }
 
     // Anything we still hold stays in the loop even after it drops out of the universe. Otherwise
     // rotating the book strands inventory: no quotes, no fills, and a mark that freezes at whatever

@@ -29,7 +29,12 @@ module.exports = {
   // More markets is more flow and therefore faster evidence, and the risk is capped PER market by
   // makerCap, so widening the book does not widen the per-name exposure. The binding constraint is
   // Kalshi's rate limit: each quoted market costs two calls per maker cycle.
-  makerMarkets: num('MAKER_MARKETS', 12),
+  // Capital is not the constraint and it is not close: the held-out backtest peaked at $2.5k of
+  // inventory against a $10k book. Absolute dollars is what matters, so quote wider rather than
+  // bigger -- on the held-out pool the top 12 markets by trade rate returned +$454 and the top 24
+  // returned +$515, on the same participation and the same cap. The real limit is the tick budget:
+  // each quoted market costs two calls and ~80ms of pacing per maker cycle.
+  makerMarkets: num('MAKER_MARKETS', 24),
   makerCap: num('MAKER_CAP', 100),              // inventory cap per market, in contracts
   makerParticipation: num('MAKER_PARTICIPATION', 0.10), // share of crossing volume we expect to win
   // One tick IS the target, not a fallback. Measured across 34 markets, P&L correlates -0.33 with
