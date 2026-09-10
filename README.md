@@ -159,6 +159,55 @@ That is why there is no Kalshi equivalent of `refreshPairPrices()` — it would 
 pair per cycle to correct an error of zero. The lag is real, but only where the desk already
 refuses to trade.
 
+## The MAKER desk (07)
+
+Everything above this line TAKES liquidity: buy the ask, sell the bid, pay a taker fee both ways.
+That is roughly a 4c round trip against venues that disagree by about half a cent, which is why
+seven days of measurement and a full threshold sweep found nothing. There is no 4c mispricing to
+find in a book quoted one tick wide.
+
+The seventh desk does the opposite. It **rests** quotes and is paid the spread, on the **13,774 of
+Kalshi's 13,951 series whose `fee_type` is plain `quadratic`** and therefore charge makers nothing.
+That filter is hard, not a preference: on series that do charge makers, the fee is ~73% of the
+profit (the same twelve game markets score +$94 with real maker fees and +$354 at zero).
+
+Backtested over ~68 days of real Kalshi trade tape across 34 fee-free markets:
+
+```
+spread captured   +$3230
+adverse selection  -$643
+fees                 -$26      (vs -$290 on fee-charging series)
+NET               +$2187 on ~$1350 peak capital · 27 of 34 markets positive
+```
+
+Robust in every direction tested: **+$642** with 10,000 contracts queued ahead of us at every
+price; **+$480** with queue *and* 2.5% participation *and* stale quotes *and* a 50-contract cap
+applied together; **+$2083** when forced to requote only every ten minutes.
+
+### Two things that were backwards, and the measurements that caught them
+
+**Lookahead.** The first backtest set its quote from the trade currently arriving and then filled on
+that same trade — so it could never be run over. That deletes adverse selection, which is the
+entire risk of market making. Rewritten so quotes rest from prior state and fill at *our* price,
+the result fell 15% and survived. `taker_book_side` semantics were verified empirically first
+(943 to 3 on adjacent opposite-side trades), because inverting it would have flipped every sign.
+
+**Selection.** Across 34 markets, P&L correlates **+0.82 with trade count** and **−0.33 with median
+spread**. Wide spreads are a *negative* signal — a wide book on Kalshi is an illiquid one, and when
+an illiquid market trades it is usually because the taker knows something. Every earner sat at a
+**1c spread** (the minimum tick) with 7,000–15,000 trades. Ranking by spread, as the first version
+did, picked six dead markets at 10–14c and took zero fills.
+
+### Rails
+
+Its ledger is separate from the taker book on purpose — one blended equity number makes it
+impossible to tell which strategy is working. It carries its own `MAKER_MAX_DRAWDOWN_PCT`, because
+TESS's drawdown watches the taker book and would never see this desk bleeding. `POST /api/flatten`
+liquidates its inventory too, at the touch, paying the taker fee.
+
+**Paper only.** What no simulation here can model: our own size changing other people's behaviour,
+and Kalshi's real queue at our price level.
+
 ## What else was tried
 
 Before building anything new, three other locked-arbitrage structures were measured live.

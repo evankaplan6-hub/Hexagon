@@ -23,7 +23,10 @@ module.exports = {
   // filter is hard rather than a preference. Candidates are screened for that at startup.
   makerEnabled: env('MAKER', '1') !== '0',
   makerSeries: env('MAKER_SERIES', 'CONTROLH,KXPRESNOMD,SENATEME,SENATETX,SENATEOHS,KXBALANCEPOWERCOMBO,KXHOUSERACE,KXPRESPERSON,KXOSCARPIC,KXGOVBAL,KXNFLWINS').split(',').map((s) => s.trim()).filter(Boolean),
-  makerMarkets: num('MAKER_MARKETS', 6),        // how many markets to quote at once
+  // More markets is more flow and therefore faster evidence, and the risk is capped PER market by
+  // makerCap, so widening the book does not widen the per-name exposure. The binding constraint is
+  // Kalshi's rate limit: each quoted market costs two calls per maker cycle.
+  makerMarkets: num('MAKER_MARKETS', 10),
   makerCap: num('MAKER_CAP', 100),              // inventory cap per market, in contracts
   makerParticipation: num('MAKER_PARTICIPATION', 0.10), // share of crossing volume we expect to win
   // One tick IS the target, not a fallback. Measured across 34 markets, P&L correlates -0.33 with
