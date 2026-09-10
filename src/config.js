@@ -17,6 +17,25 @@ module.exports = {
   probeEverySec: num('PROBE_EVERY_SEC', 600),   // per-pair cooldown, so one wide pair cannot spam
   probesPerCycle: num('PROBES_PER_CYCLE', 2),   // bound the extra API calls per cycle
 
+  // ---- MAKER desk (src/maker.js) ----
+  // Resting quotes instead of crossing. Only on series whose fee_type is plain `quadratic`, which
+  // charge makers nothing -- on series that DO charge makers the fee is ~73% of the profit, so the
+  // filter is hard rather than a preference. Candidates are screened for that at startup.
+  makerEnabled: env('MAKER', '1') !== '0',
+  makerSeries: env('MAKER_SERIES', 'CONTROLH,KXPRESNOMD,SENATEME,SENATETX,SENATEOHS,KXBALANCEPOWERCOMBO,KXHOUSERACE,KXPRESPERSON,KXOSCARPIC,KXGOVBAL,KXNFLWINS').split(',').map((s) => s.trim()).filter(Boolean),
+  makerMarkets: num('MAKER_MARKETS', 6),        // how many markets to quote at once
+  makerCap: num('MAKER_CAP', 100),              // inventory cap per market, in contracts
+  makerParticipation: num('MAKER_PARTICIPATION', 0.10), // share of crossing volume we expect to win
+  // One tick IS the target, not a fallback. Measured across 34 markets, P&L correlates -0.33 with
+  // median spread and +0.82 with trade count: the earners all sit at a 1c spread with 7,000-15,000
+  // trades, and every wide-spread market lost money. A wide book on Kalshi means an illiquid one,
+  // and when an illiquid market trades it is usually because the taker knows something.
+  makerMinSpread: num('MAKER_MIN_SPREAD', 0.01),
+  makerMinVol24: num('MAKER_MIN_VOL24', 5000),  // fills are the revenue; no flow, no business
+  makerMinMid: num('MAKER_MIN_MID', 0.08),
+  makerMaxMid: num('MAKER_MAX_MID', 0.92),
+  makerEveryCycles: num('MAKER_EVERY_CYCLES', 2), // 2 x priceEvery seconds between requotes
+
   // serving. Default to loopback: /api/positions and the full activity log are unauthenticated,
   // and on a live account that is not something to expose to the local network by default.
   bindHost: env('BIND_HOST', '127.0.0.1'),

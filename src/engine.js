@@ -8,6 +8,7 @@ const { makeBroker } = require('./broker');
 const { makeRecorder } = require('./recorder');
 const { makeProbe } = require('./probe');
 const { makeJournal } = require('./journal');
+const { makeMakerDesk } = require('./makerdesk');
 const agents = require('./agents');
 
 const AGENTS = [
@@ -17,6 +18,7 @@ const AGENTS = [
   { key: 'TESS', n: '04', role: 'OPS', color: '#ec4899' },
   { key: 'HOLT', n: '05', role: 'SCANNER', color: '#e5e7eb' },
   { key: 'ILSA', n: '06', role: 'SENTIMENT', color: '#f59e0b' },
+  { key: 'MAKR', n: '07', role: 'MAKING', color: '#a855f7' },
 ];
 const r2 = (x) => Math.round(x * 100) / 100;
 const r3 = (x) => Math.round(x * 1000) / 1000;
@@ -31,6 +33,7 @@ class Engine {
     this.recordTick = makeRecorder(cfg);
     this.probe = makeProbe(cfg);
     this.journal = makeJournal(cfg);
+    this.maker = makeMakerDesk(cfg);
     this.lastCycleMs = 0;
     // Operator halt, distinct from TESS's automatic one. TESS recomputes its halt from scratch
     // every cycle, so anything written to this.halt is gone within 15s -- a kill switch that
@@ -67,6 +70,7 @@ class Engine {
       try { s = JSON.parse(fs.readFileSync(this.file, 'utf8')); }
       catch (e) { throw new Error(`state file ${this.file} is unreadable (${e.message}). Refusing to start and overwrite it \u2014 move it aside to begin a fresh account.`); }
       if (!s || s.version !== 1) throw new Error(`state file ${this.file} has unexpected version ${s && s.version}. Refusing to start.`);
+      if (!s.maker) s.maker = { cash: this.cfg.initialBalance, equity: this.cfg.initialBalance, markets: {}, fills: 0 };
       return s;
     }
     return {
@@ -75,6 +79,9 @@ class Engine {
       positions: [], closed: [], balanceHistory: [], log: [],
       dayKey: null, dayStartEquity: this.cfg.initialBalance,
       stats: { wins: 0, losses: 0, realized: 0, fees: 0, groupsClosed: 0 },
+      // the MAKER desk keeps its own cash and inventory. Separate on purpose: mixing a taker book
+      // and a maker book into one equity number makes it impossible to tell which one is working.
+      maker: { cash: this.cfg.initialBalance, equity: this.cfg.initialBalance, markets: {}, fills: 0 },
     };
   }
   save() {
@@ -386,6 +393,9 @@ class Engine {
       this.recordTick(this); // durable tape of what BRAM just saw; never throws
       await this.probe(this);  // full order books whenever a gap looks too good; never throws
       await agents.KETT(this);
+      // the maker runs on its own cadence: requoting every cycle costs an API call per market and
+      // buys nothing when the book has not moved
+      if (this.cycle % this.cfg.makerEveryCycles === 0) await this.maker.step(this).catch((e) => this.log('MAKR', 'OPS', null, `maker cycle error: ${String(e.message).slice(0, 110)}`));
       this.pushBalance();
     } catch (e) {
       http.noteError(e);
@@ -431,6 +441,7 @@ class Engine {
       pairs: pairs.slice(0, 40),
       pairCount: this.pairs.length,
       cycleMs: this.lastCycleMs,
+      maker: this.maker.snapshot(this),
       universe: {
         pm: this.quotes.pm.size, ks: this.quotes.ks.size, dataAge: this.lastQuoteAt ? Math.round((now - this.lastQuoteAt) / 1000) : null,
         apiOk: http.stats.ok, apiErr: http.stats.err, lastError: http.stats.lastError, rejected: this.rejected.length,
