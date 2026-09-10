@@ -208,29 +208,36 @@
       // Speech bubbles are QUEUED, not drawn here. Drawing one inside this loop put it under the
       // next agent's desk, which is why they read "budget $20" and "22 pairs /" -- the box was
       // being painted over a few iterations later. They go on top, after every desk is down.
-      if (act && a.note) bubbles.push({ note: a.note, bx, y, back: i < 3 });
+      if (act && a.note) bubbles.push({ note: a.note, bx, y, back: i < 3, color: a.color });
     });
-    // second pass: every bubble on top of every desk
-    for (const b of bubbles) {
-      const s2 = b.note.length > 30 ? b.note.slice(0, 29) + '…' : b.note;
-      ctx.font = '6px JetBrains Mono, monospace';
-      const w = Math.ceil(ctx.measureText(s2).width) + 6;
-      // back row rises off the desk; the room floor starts at y=120, so keep it off the wall screen
-      const by2 = b.back ? Math.max(152, b.y - 28) : b.y + 14;
-      // Front-row bubbles open to the right of the agent, but the seventh desk sits at the wall,
-      // so its bubble ran off the canvas. Flip to the left when there is no room on the right.
-      const lx = b.back ? Math.min(Math.max(b.bx - w / 2, 2), 478 - w)
-        : (b.bx + 12 + w <= 478 ? b.bx + 12 : Math.max(2, b.bx - 12 - w));
-      px(ctx, lx, by2, w, 9, '#e6e8ee');
-      const rightward = lx > b.bx;
-      if (b.back) px(ctx, b.bx - 1, by2 + 9, 2, 2, '#e6e8ee');
-      else px(ctx, rightward ? b.bx + 9 : b.bx - 11, by2 + 4, 3, 2, '#e6e8ee');
-      text(ctx, s2, lx + 3, by2 + 2, '#0a0b0d', 6);
-    }
-
-    // server rack + plant flavour
+    // furniture, before the bubbles -- the server rack stands where the seventh agent sits and was
+    // painting straight over MAKR's line
     px(ctx, 440, 162, 26, 60, '#12161e'); for (let i = 0; i < 6; i++) { px(ctx, 443, 166 + i * 9, 20, 6, '#0a0d13'); px(ctx, 459, 168 + i * 9, 2, 2, (Math.floor(t * 4) + i) % 3 ? '#22c55e' : '#0f3a1f'); }
     px(ctx, 16, 186, 12, 24, '#2a2219'); px(ctx, 10, 170, 24, 18, '#1a4d2e'); px(ctx, 14, 164, 16, 10, '#236b3d');
+
+    // ---- speech bubbles, last of everything so nothing can cover them
+    // They used to be solid white blocks with black text: the brightest thing in a dark room, for
+    // the least important content on it. Now they read as part of the room -- a dark plate, a hair
+    // line in the agent's own colour, and the label in the same grey as the rest of the furniture.
+    for (const b of bubbles) {
+      const s2 = b.note.length > 34 ? b.note.slice(0, 33) + '…' : b.note;
+      ctx.font = '6px JetBrains Mono, monospace';
+      const w = Math.ceil(ctx.measureText(s2).width) + 8;
+      const h = 10;
+      // back row rises off the desk; the floor starts at y=150, so keep it clear of the wall screen
+      const by2 = b.back ? Math.max(152, b.y - 30) : b.y + 13;
+      // Front-row bubbles open to the right, but the seventh desk sits against the wall -- flip
+      // left when there is no room on the right.
+      const lx = b.back ? Math.min(Math.max(b.bx - w / 2, 3), 477 - w)
+        : (b.bx + 12 + w <= 477 ? b.bx + 12 : Math.max(3, b.bx - 12 - w));
+      const rightward = lx > b.bx;
+      px(ctx, lx, by2, w, h, '#0d1119');                    // plate
+      px(ctx, lx, by2, w, 1, b.color); px(ctx, lx, by2 + h - 1, w, 1, '#1b2130');
+      px(ctx, lx, by2, 1, h, '#1b2130'); px(ctx, lx + w - 1, by2, 1, h, '#1b2130');
+      if (b.back) px(ctx, b.bx - 1, by2 + h, 2, 2, '#0d1119');
+      else px(ctx, rightward ? lx - 2 : lx + w, by2 + 4, 2, 2, '#0d1119');
+      text(ctx, s2, lx + 4, by2 + 2, '#9aa3b5', 6);
+    }
   }
   function loop(ts) { drawFloor(ts / 1000); requestAnimationFrame(loop); }
   requestAnimationFrame(loop);
