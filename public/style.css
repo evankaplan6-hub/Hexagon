@@ -103,3 +103,22 @@ footer { color: var(--dim); font-size: 10px; text-align: center; padding-top: 6p
   .meta { display: none; }
   .pr { grid-template-columns: 1.4fr 50px 50px 60px 70px; } .pr span:nth-child(n+6) { display: none; }
 }
+
+/* ---- maker desk (07) ---------------------------------------------------- */
+.mktiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--line); border-bottom: 1px solid var(--line); }
+.mkt { background: var(--panel); padding: 10px 12px; display: flex; flex-direction: column; gap: 3px; }
+.mkt span { font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+.mkt b { font: 500 18px/1 var(--mono); }
+.mkt i { font-style: normal; font-size: 10px; color: var(--dim); }
+.mkbook { max-height: 300px; overflow-y: auto; }
+.mr { display: grid; grid-template-columns: minmax(180px, 2.4fr) 0.8fr 1fr 0.8fr 0.8fr 1fr 0.6fr 0.9fr; gap: 8px; padding: 5px 12px; border-bottom: 1px solid var(--line); align-items: center; }
+.mr span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mr .r { text-align: right; }
+.mr .dim { color: var(--dim); }
+.mr.head { position: sticky; top: 0; background: var(--panel2); color: var(--muted); font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; z-index: 1; }
+.mr.off { opacity: 0.42; }
+.mr .on { color: var(--green); font-size: 8px; }
+.mr .dimdot { color: var(--dim); font-size: 8px; }
+.mkbook .empty, .positions .empty { padding: 18px 12px; color: var(--muted); text-align: center; }
+#mk-meta.halt { color: var(--red); }
+@media (max-width: 900px) { .mktiles { grid-template-columns: repeat(2, 1fr); } }

@@ -248,7 +248,34 @@ function makeMakerDesk(cfg) {
 
   function resume(E) { const S = book(E); S.halted = null; }
 
-  return { step, flatten, resume, snapshot: (E) => ({ ...(E.state.maker || {}), universe: universe.map((u) => u.ticker) }) };
+  // What the dashboard gets. Deliberately NOT a spread of the raw ledger: each market carries a
+  // 400-entry `seen` list for trade de-duplication, and streaming 26 of those to every connected
+  // browser twice a second is a few hundred kilobytes a second of pure dedupe bookkeeping.
+  function snapshot(E) {
+    const S = E.state.maker || {};
+    const meta = new Map(universe.map((u) => [u.ticker, u]));
+    const markets = Object.entries(S.markets || {}).map(([ticker, m]) => {
+      const u = meta.get(ticker);
+      return {
+        ticker, series: m.series, inv: m.inv, cost: m.cost, fills: m.fills,
+        mid: m.mid ?? null, spread: m.spread ?? null, why: m.why || null,
+        bid: m.quotes ? m.quotes.bid : null, ask: m.quotes ? m.quotes.ask : null,
+        qBid: m.queue ? Math.round(m.queue.bid) : null, qAsk: m.queue ? Math.round(m.queue.ask) : null,
+        mark: r2((m.inv || 0) * (m.mid ?? 0.5)),
+        quoting: !!u, tpd: u ? Math.round(u.tpd || 0) : null, clear: u ? u.clear : null,
+      };
+    }).sort((a, b) => (b.quoting - a.quoting) || (b.fills - a.fills) || Math.abs(b.inv) - Math.abs(a.inv));
+    return {
+      cash: S.cash, equity: S.equity, fills: S.fills || 0, halted: S.halted || null,
+      initial: cfg.initialBalance, enabled: cfg.makerEnabled,
+      quoting: universe.length, tracked: markets.length,
+      inv: markets.reduce((a, m) => a + Math.abs(m.inv || 0), 0),
+      mark: r2(markets.reduce((a, m) => a + m.mark, 0)),
+      markets: markets.slice(0, 40),
+    };
+  }
+
+  return { step, flatten, resume, snapshot };
 }
 
 module.exports = { makeMakerDesk };

@@ -15,8 +15,8 @@
   const agentColor = (k) => (S && S.agents.find((a) => a.key === k) || {}).color || '#888';
   // The desks run back-to-back within milliseconds each cycle; stagger the RUN indicator in cycle order
   // so the floor reads as a sequence (scan → flow → ops → settle → price → execute) instead of one flash.
-  const CYCLE = { HOLT: 0, ILSA: 1, TESS: 2, RIGO: 3, BRAM: 4, KETT: 5 };
-  const isActive = (a) => { const dt = S.now - a.lastActive - CYCLE[a.key] * 900; return dt >= 0 && dt < 3200; };
+  const CYCLE = { HOLT: 0, ILSA: 1, TESS: 2, RIGO: 3, BRAM: 4, KETT: 5, MAKR: 6 };
+  const isActive = (a) => { const dt = S.now - a.lastActive - (CYCLE[a.key] || 0) * 900; return dt >= 0 && dt < 3200; };
 
   // ------------------------------------------------------------ header + tiles
   function renderHeader() {
@@ -85,6 +85,39 @@
     $('pos-meta').textContent = `${S.positions.length} open · ${signed(S.unrealized)} unrealized`;
   }
 
+  // ------------------------------------------------------------ maker desk
+  // The seventh desk, and the only one currently making money. It keeps a ledger separate from the
+  // taker book on purpose, so the tiles above do NOT include it -- combining a convergence book and
+  // a maker book into one equity number makes it impossible to tell which of the two is working.
+  function renderMaker() {
+    const M = S.maker;
+    const el = $('mk-book'), tl = $('mk-tiles');
+    if (!M || !M.enabled) { $('mk-meta').textContent = 'disabled'; tl.innerHTML = ''; el.innerHTML = '<div class="empty">maker desk is off</div>'; return; }
+    const pnl = (M.equity ?? M.initial) - M.initial;
+    const cashPnl = (M.cash ?? M.initial) - M.initial;
+    tl.innerHTML =
+      `<div class="mkt"><span>Equity</span><b class="${pnl >= 0 ? 'pos' : 'neg'}">${signed(pnl)}</b><i>vs ${money(M.initial, 0)} start</i></div>` +
+      `<div class="mkt"><span>Cash from spread</span><b class="${cashPnl >= 0 ? 'pos' : 'neg'}">${signed(cashPnl)}</b><i>banked, not a mark</i></div>` +
+      `<div class="mkt"><span>Inventory mark</span><b class="${M.mark >= 0 ? 'pos' : 'neg'}">${signed(M.mark)}</b><i>${M.inv} contracts · only real when it trades out</i></div>` +
+      `<div class="mkt"><span>Fills</span><b>${M.fills}</b><i>${M.quoting} quoting · ${M.tracked} tracked</i></div>`;
+    const head = '<div class="mr head"><span>Market</span><span class="r">Flow</span><span class="r">Queue clears</span><span class="r">Our bid</span><span class="r">Our ask</span><span class="r">Ahead of us</span><span class="r">Inv</span><span class="r">Marked</span></div>';
+    el.innerHTML = head + (M.markets.map((m) => {
+      const clear = m.clear == null ? '—' : (m.clear < 1 ? `${(m.clear * 24).toFixed(1)}h` : `${m.clear.toFixed(1)}d`);
+      const q = m.qBid == null ? '—' : `${m.qBid}/${m.qAsk}`;
+      return `<div class="mr ${m.quoting ? '' : 'off'}" title="${esc(m.ticker)}${m.why ? ' · ' + esc(m.why) : ''}">` +
+        `<span>${m.quoting ? '<b class="on">●</b>' : '<b class="dimdot">○</b>'} ${esc(m.ticker)}</span>` +
+        `<span class="r">${m.tpd == null ? '—' : m.tpd + '/day'}</span>` +
+        `<span class="r">${clear}</span>` +
+        `<span class="r">${m.bid == null ? '—' : cents(m.bid)}</span>` +
+        `<span class="r">${m.ask == null ? '—' : cents(m.ask)}</span>` +
+        `<span class="r dim">${q}</span>` +
+        `<span class="r ${m.inv > 0 ? 'pos' : m.inv < 0 ? 'neg' : 'dim'}">${m.inv || 0}</span>` +
+        `<span class="r ${m.mark >= 0 ? 'pos' : 'neg'}">${m.inv ? signed(m.mark) : '—'}</span></div>`;
+    }).join('') || '<div class="empty">no markets in the book yet — first scan takes about a minute</div>');
+    $('mk-meta').textContent = M.halted ? `HALTED · ${M.halted}` : `${M.quoting} quoting · ${M.fills} fills · resting orders, never crossing`;
+    $('mk-meta').className = M.halted ? 'halt' : '';
+  }
+
   // ------------------------------------------------------------ balance chart
   function sizeCanvas(cv) {
     const r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
@@ -136,7 +169,11 @@
 
   // ------------------------------------------------------------ trading floor (pixel scene, 480x200)
   const floor = $('floorc').getContext('2d');
-  const DESKS = [[132, 126], [216, 126], [300, 126], [132, 164], [216, 164], [300, 164]];
+  // One seat per agent. MAKR joined as the seventh and this array still had six, so DESKS[6] was
+  // undefined and destructuring it threw on every animation frame -- sixty times a second, with the
+  // whole trading floor going dark below the point of failure. The guard below means adding an
+  // eighth agent degrades to a missing seat instead of a dead canvas.
+  const DESKS = [[132, 126], [216, 126], [300, 126], [132, 164], [216, 164], [300, 164], [384, 164]];
   function hash(i, j, k) { let x = (i * 374761393 + j * 668265263 + k * 2246822519) | 0; x = (x ^ (x >>> 13)) * 1274126177; return ((x ^ (x >>> 16)) >>> 0) / 4294967295; }
   function px(ctx, x, y, w, h, c) { ctx.fillStyle = c; ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h)); }
   function text(ctx, s, x, y, c, size = 7, align = 'left') { ctx.fillStyle = c; ctx.font = `${size}px JetBrains Mono, monospace`; ctx.textAlign = align; ctx.textBaseline = 'top'; ctx.fillText(s, Math.round(x), Math.round(y)); }
@@ -194,6 +231,7 @@
     // advance the shared clock between SSE frames so the stagger animates smoothly
     S.now = Math.max(S.now, (S._rx || 0) + (performance.now() - (S._rxPerf || performance.now())));
     S.agents.forEach((a, i) => {
+      if (!DESKS[i]) return;                 // more agents than seats: skip rather than throw
       const [x, y] = DESKS[i];
       const act = isActive(a);
       // monitor
@@ -232,7 +270,7 @@
   requestAnimationFrame(loop);
 
   // ------------------------------------------------------------ wiring
-  function render() { renderHeader(); renderTiles(); renderLog(); renderFeed(); renderAgents(); renderPositions(); drawBalance(); }
+  function render() { renderHeader(); renderTiles(); renderMaker(); renderLog(); renderFeed(); renderAgents(); renderPositions(); drawBalance(); }
   function connect() {
     const es = new EventSource('/api/stream');
     es.onmessage = (ev) => { try { S = JSON.parse(ev.data); S._rx = S.now; S._rxPerf = performance.now(); render(); } catch (e) { console.error(e); } };
