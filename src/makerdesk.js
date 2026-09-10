@@ -168,7 +168,8 @@ function makeMakerDesk(cfg) {
 
       // 1) fill the quotes we were ALREADY resting, against trades that have since arrived
       const seen = new Set(m.seen);
-      const fills = maker.fillsFrom(trades, m.quotes, m.inv, cfg, seen);
+      const { fills, queue } = maker.fillsFrom(trades, m.quotes, m.inv, cfg, seen, m.queue);
+      m.queue = queue;                                     // what is still ahead of us, carried forward
       for (const f of fills) {
         if (f.side === 'buy') { S.cash = r2(S.cash - f.qty * f.px); m.inv += f.qty; m.cost = r2(m.cost + f.qty * f.px); }
         else { S.cash = r2(S.cash + f.qty * f.px); m.inv -= f.qty; m.cost = r2(m.cost - f.qty * f.px); }
@@ -183,9 +184,19 @@ function makeMakerDesk(cfg) {
       await sleep(80);                     // pace per-market polling too
       const q = maker.desiredQuotes(bk, m.inv, cfg);
       // reduce-only: drop whichever side would grow the position
-      m.quotes = u.reduceOnly
+      const next = u.reduceOnly
         ? { bid: m.inv < 0 ? q.bid : null, ask: m.inv > 0 ? q.ask : null }
         : { bid: q.bid, ask: q.ask };
+      // Queue position. Moving to a new price puts us at the back of whatever is resting there;
+      // staying put keeps the position we have already worked down. A cancel-replace at the same
+      // price would lose it, which is a reason not to churn quotes that are still at the touch.
+      const depth = (side) => { const l = side === 'bid' ? bk.yesBids[0] : bk.yesAsks[0]; return l ? l.size : 0; };
+      const prev = m.queue || { bid: 0, ask: 0 };
+      m.queue = {
+        bid: next.bid == null ? 0 : (next.bid === (m.quotes && m.quotes.bid) ? prev.bid : depth('bid')),
+        ask: next.ask == null ? 0 : (next.ask === (m.quotes && m.quotes.ask) ? prev.ask : depth('ask')),
+      };
+      m.quotes = next;
       m.mid = q.mid ?? m.mid;
       m.spread = q.spread ?? null;
       m.why = q.why || null;

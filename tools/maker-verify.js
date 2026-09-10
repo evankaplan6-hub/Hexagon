@@ -47,7 +47,7 @@ const money = (x) => `${x < 0 ? '-' : '+'}$${Math.abs(x).toFixed(2)}`;
     // how many trades even COULD have hit a quote at the touch during the window
     const m = live.markets[t];
     const q = { bid: m.quotes.bid, ask: m.quotes.ask };
-    const f = maker.fillsFrom(win, q, 0, cfg, new Set());
+    const f = maker.fillsFrom(win, q, 0, cfg, new Set(), { bid: 0, ask: 0 }).fills;
     const lf = jrows.filter((r) => r.ticker === t && r.kind === 'MAKER_FILL');
     crossings += win.length; simFills += f.length; simQty += f.reduce((a, x) => a + x.qty, 0);
     liveFills += lf.length; liveQty += lf.reduce((a, x) => a + (x.qty || 0), 0);

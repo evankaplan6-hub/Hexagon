@@ -47,26 +47,38 @@ function desiredQuotes(book, inv, cfg) {
 // happens at OUR price, not the trade's. So when the market gaps through a stale quote we sell low
 // into it -- which is exactly the adverse selection that makes market making risky, and modelling
 // it away was the single biggest error in the first version of the backtest.
-function fillsFrom(trades, quotes, inv, cfg, seen) {
+//
+// AND WE ARE NOT ALONE AT OUR PRICE. `queue` is the size that was already resting at each of our
+// two price levels when we joined, and a taker fills through that before reaching us. Leaving it
+// out was the SECOND biggest error: the median market the desk was quoting had 15,700 contracts
+// ahead of it, and scoring the backtest with real depth cut it from +$2187 to +$210. A paper desk
+// that fills instantly at a price where 15,700 orders sit in front of it is not paper trading, it
+// is fiction. Returns the queue it has left so the caller can carry it to the next cycle.
+function fillsFrom(trades, quotes, inv, cfg, seen, queue) {
   const out = [];
   let position = inv;
+  let qb = Math.max(0, (queue && queue.bid) || 0), qa = Math.max(0, (queue && queue.ask) || 0);
   for (const t of trades) {
     if (t.is_block_trade || seen.has(t.trade_id)) continue;
     const p = parseFloat(t.yes_price_dollars), n = parseFloat(t.count_fp) || 0;
     if (!Number.isFinite(p) || n <= 0) continue;
-    const qty = Math.floor(n * cfg.makerParticipation);
-    if (qty < 1) continue;
     if (t.taker_book_side === 'bid' && quotes.ask != null && quotes.ask <= p) {
+      const eaten = Math.min(qa, n); qa -= eaten;          // they filled the orders ahead of us first
+      const qty = Math.floor((n - eaten) * cfg.makerParticipation);
+      if (qty < 1) continue;
       if (position - qty < -cfg.makerCap) continue;
       position -= qty;
       out.push({ side: 'sell', px: quotes.ask, qty, tradePx: p, runOver: quotes.ask < p, id: t.trade_id });
     } else if (t.taker_book_side === 'ask' && quotes.bid != null && quotes.bid >= p) {
+      const eaten = Math.min(qb, n); qb -= eaten;
+      const qty = Math.floor((n - eaten) * cfg.makerParticipation);
+      if (qty < 1) continue;
       if (position + qty > cfg.makerCap) continue;
       position += qty;
       out.push({ side: 'buy', px: quotes.bid, qty, tradePx: p, runOver: quotes.bid > p, id: t.trade_id });
     }
   }
-  return out;
+  return { fills: out, queue: { bid: qb, ask: qa } };
 }
 
 // ---------------------------------------------------------------- universe
