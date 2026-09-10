@@ -82,8 +82,14 @@ h1 { font: 800 22px/1 var(--sans); margin: 0; letter-spacing: -0.01em; }
 /* The canvas takes the width it is given and derives its own height from the room's shape, so the
    panel ends exactly where the room ends -- no dead band inside the border. floorCtx still enforces
    a single uniform scale internally, so a stylesheet can never stretch the room again. */
+/* Fill the box in BOTH directions and let floorCtx do the fitting.
+   Deriving height from width via aspect-ratio made the canvas taller than the viewport on any wide
+   window: the panel clipped the overflow, and what got clipped was the bottom of the room -- the
+   P&L chart and the activity tape. The room's proportions are enforced in JS with a single uniform
+   scale and centred letterboxing, so handing the canvas a box of any shape is safe, and the whole
+   floor is always on screen. */
 #floorc { display: block; background: #0b0e14; image-rendering: pixelated;
-  width: 100%; height: auto; aspect-ratio: 480 / 360; }
+  width: 100%; height: 100%; flex: 1 1 auto; min-height: 0; }
 
 .agents { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
 .card { min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px 12px; transition: border-color .3s, box-shadow .3s; }
@@ -163,7 +169,7 @@ h1 { font-size: 18px; }
 .brand svg { width: 26px; height: 26px; }
 /* The floor takes every pixel the header leaves, and the canvas takes every pixel of that -- as
    large as it can be in both directions while keeping its shape. */
-#floor { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+#floor { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 #floor .ph { flex: 0 0 auto; }
 footer { display: none; }
 

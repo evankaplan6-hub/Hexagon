@@ -673,9 +673,9 @@
       ctx.strokeStyle = col; ctx.lineWidth = width; ctx.lineJoin = 'round'; ctx.stroke(); ctx.restore();
     };
     const now = H[H.length - 1];
-    ctx.save(); ctx.beginPath(); ctx.rect(L, T - 2, R - L, B - T + 4); ctx.clip();
-    line('c', '#24523a', 0.6);                                   // banked, faint, clipped
-    ctx.restore();
+    // NET only. The second series is not drawn: points recorded before the realised-P&L correction
+    // stored CASH in that same field, so the line steps between two different quantities partway
+    // along and means nothing across the join. Net is correct for every point ever recorded.
     line('e', now.e >= 0 ? '#22c55e' : '#ef4444', 1, now.e >= 0 ? '#22c55e' : '#ef4444');
 
     // where it stands right now
@@ -688,7 +688,7 @@
     text(ctx, 'NET', x + w - 34, y, now.e >= 0 ? '#22c55e' : '#ef4444', 4.5, 'right');
     text(ctx, signed(now.e), x + w - 6, y, now.e >= 0 ? '#22c55e' : '#ef4444', 5, 'right');
     text(ctx, 'realised', x + w - 34, y + h - 4, '#2f6b45', 4.5, 'right');
-    text(ctx, signed(now.c), x + w - 6, y + h - 4, '#2f6b45', 4.5, 'right');
+    text(ctx, signed((S.maker && S.maker.realized) || 0), x + w - 6, y + h - 4, '#2f6b45', 4.5, 'right');
   }
 
   function drawLog(ctx, x, y, w, h) {
