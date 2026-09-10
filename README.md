@@ -20,7 +20,7 @@ Every 15 seconds the engine pulls the top 300 Polymarket markets by volume and e
 | 06 | **ILSA** | Sentiment | Tracks each pair's price drift and whether the venue gap is narrowing or widening. Execution skips trades ILSA reads as diverging and sizes up ones it reads as converging. |
 | 04 | **TESS** | Ops | Health and risk: halts new risk on stale quotes, API error storms, or a daily drawdown past the limit. Sets the per-trade budget. |
 | 03 | **RIGO** | Settlement | Marks positions, exits convergence trades (gap closed, stop, max hold, or event going in-play), settles resolved markets at $1/$0, realizes P&L, scores wins/losses. |
-| 01 | **BRAM** | Pricing | Two signal types. **Locked arb**: YES on one venue + NO on the other costs under $1 after fees, so it pays $1 at resolution regardless of outcome. **Convergence**: venues disagree by ≥ `MIN_GAP` (3c) on a pre-game or macro market. Fair value is the volume-weighted mid (the thin book is usually the wrong one), and the trade is whichever side of the off-fair venue is cheap relative to fair, YES or NO. The signal fires only if the **round trip** clears `MIN_EDGE` — see below. Exits when the venues agree again. |
+| 01 | **BRAM** | Pricing | Two signal types, at most one per pair per cycle, arb first. **Locked arb**: YES on one venue + NO on the other costs under $1 after fees, so it pays $1 at resolution regardless of outcome. **Convergence**: venues disagree by ≥ `MIN_GAP` (3c) on a pre-game or macro market. Fair value is the volume-weighted mid (the thin book is usually the wrong one), and the trade is whichever side of the off-fair venue is cheap relative to fair, YES or NO. The signal fires only if the **round trip** clears `MIN_EDGE` — see below. Exits when the venues agree again. |
 | 02 | **KETT** | Execution | Pulls the real order books on both venues, re-verifies the gap from live books (listings lag), sizes to depth and budget, fills, and unwinds the first leg if the second leg fails. |
 
 Fees are modeled: Kalshi's `ceil(0.07 × contracts × P × (1−P))` and a configurable Polymarket taker fee (0 by default). Fills walk the ask ladder, so size is limited by real depth.
@@ -51,6 +51,22 @@ the three — read that section before funding anything.
 - Convergence trades are never opened on markets priced under 3c or over 97c (tick noise), or where the cheap venue's spread is over 5c.
 - Max 2% of equity per position, 12 open positions, 3% daily drawdown halt, 90-second stale-data halt. All in `.env`.
 - The daily drawdown window rolls at midnight **US/Eastern**, matching the dates the matcher pairs games on (a UTC roll would reset the limit at 8pm ET, mid-slate).
+- **A locked arb always outranks a convergence signal, and a pair emits at most one of them.** They
+  are not the same asset — one is hedged and pays $1 whatever happens, the other is an unhedged bet
+  that two venues will re-agree — so ranking them together by `edge` let a marginal directional bet
+  jump the queue ahead of a risk-free one. On the same pair the arb is also nearly always the bigger
+  number: gridded over 158k synthetic books it was available alongside a valid convergence candidate
+  95,877 times and was the larger edge in all but 319, where convergence won by at most 0.43c.
+- **The 2% position cap is a hard ceiling, and conviction scales inside it.** ILSA's read is a
+  *fraction of* the cap, never a multiplier on top: a locked arb is hedged and takes the full 2%, a
+  neutral convergence signal takes `BASE_SIZE_MULT` of it (0.8 → 1.6% of equity), and a converging
+  read earns its way back up to the cap. So "sized up on ILSA flow" is still a real 25% more
+  contracts, and `MAX_POSITION_PCT` is a number nothing can lift. The old path applied `budget ×
+  1.25` on top of a budget that already *was* the cap, putting a high-conviction position at 2.5%
+  of equity against a documented 2%.
+- A crossed or non-finite book is rejected, not priced. `convEdge` subtracts `spread/2`, so a
+  negative spread does not fail loudly — it *manufactures* edge and ranks first. Zero of the 30,817
+  recorded ticks contain one, which is the argument for the check being cheap, not for omitting it.
 
 ## The tick tape
 
@@ -58,6 +74,18 @@ Every cycle the desk appends one JSON line per priced pair to `DATA_DIR/ticks-YY
 (Eastern day, the same day boundary TESS rolls the drawdown limit on). `E.history` keeps 240 mids
 per pair in memory and dies with the process; this file is the durable version, and the only way to
 answer whether a tradeable gap ever actually existed.
+
+Each line also carries `veto` — the single gate that stopped that pair this cycle (`gap under
+minGap`, `edge under minEdge`, `mid outside band`, `spread over maxSpread`, `crossed book`) — so a
+tape line explains itself without re-running the gates. BRAM narrates the same thing in aggregate
+every five minutes as a *gate ledger*:
+
+```
+BRAM RESEARCH  gate ledger over 19 pairs · 8 gap under minGap · 6 mid outside band · 1 in-play · 1 edge under minEdge
+```
+
+"Nothing traded" is this desk's ordinary output, so the useful question is never *did it trade* but
+*which rail stopped it* — and before the ledger that took a debugger to answer.
 
 ```json
 {"t":"2026-09-09T22:24:56.865Z","qt":"2026-09-09T22:24:56.701Z","cycle":1,
@@ -318,11 +346,23 @@ flatten and resume, never rewritten. `state.json` stays the fast working copy, b
 server.js              HTTP + SSE server, .env loader, live-mode gate
 src/config.js          all tunables
 src/engine.js          state, cash, positions, cycle loop, snapshot
-src/agents.js          the six desks
+src/agents.js          the six desks (I/O and sequencing)
+src/decide.js          the decision core: pure gate/rank/size/exit logic, no I/O and no clock
 src/matcher.js         cross-venue matching
 src/broker.js          paper broker + live Kalshi adapter
 src/venues/            Polymarket (Gamma + CLOB) and Kalshi public data
 public/                dashboard (index.html, style.css, app.js)
 data/state.json        persisted account (created on first run)
 data/ticks-*.jsonl     tick tape, one line per priced pair per cycle (RECORD=1)
+tools/decide-test.js   assertions for the decision core
+tools/golden.js        fixed-fixture output diff, for refactors meant to change nothing
+```
+
+`src/decide.js` is separated out so the same functions that decide live can be handed a recorded
+tape and a synthetic clock (`tools/replay.js`) instead of a network and a wall clock. Two checks
+guard it, and both are worth running after any change to the gates:
+
+```bash
+node tools/decide-test.js     # gate behaviour: ranking, vetoes, sizing rails, exits
+node tools/golden.js          # fixed fixtures; diff before/after a refactor
 ```

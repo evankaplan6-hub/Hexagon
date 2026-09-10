@@ -141,17 +141,25 @@ async function RIGO(E) {
 
 // ---------------------------------------------------------------- BRAM
 function BRAM(E) {
-  const { signals: sig, widest, inPlayN, staleN, fair, best } = decide.scan(E.pairs, E.cfg, Date.now());
-  // Stamp fair value and the best candidate back onto the pairs. The tick tape reads both, and
-  // `best` is deliberately set even where the thresholds were missed -- near-misses are what let
-  // the tape answer "how close did the desk ever come?" rather than only "did it trade?".
+  const { signals: sig, widest, inPlayN, staleN, fair, best, veto, rejects } = decide.scan(E.pairs, E.cfg, Date.now());
+  // Stamp fair value, the best candidate and the binding gate back onto the pairs. The tick tape
+  // reads all three, and `best` is deliberately set even where the thresholds were missed --
+  // near-misses are what let the tape answer "how close did the desk ever come?" rather than only
+  // "did it trade?", and `veto` says which rail stopped it when it did not.
   for (const p of E.pairs) {
     if (fair.has(p.id)) p.fair = fair.get(p.id);
     if (best.has(p.id)) p.best = best.get(p.id);
+    p.veto = veto.get(p.id) || null;
   }
   E.signals = sig;
   E.touch('BRAM', widest ? `widest ${c(Math.abs(widest.gap))} ${widest.p.label}` : inPlayN ? `${inPlayN} pairs in-play, none tradeable` : 'no pairs');
   if (staleN && E.due('bram-stale', 300)) E.log('BRAM', 'RESEARCH', null, `${staleN} pair${staleN > 1 ? 's' : ''} skipped on stale quotes (older than ${E.cfg.maxDataAgeSec}s) \u00b7 desk-wide data age is fine, these instruments individually are not`);
+  // "Nothing traded" is this desk's normal output, so the useful thing to narrate is which rail
+  // stopped each pair. Without this the only way to answer that was a debugger.
+  if (rejects.size && E.due('bram-gates', 300)) {
+    const ledger = [...rejects.entries()].sort((a, b) => b[1] - a[1]).map(([why, n]) => `${n} ${why}`).join(' \u00b7 ');
+    E.log('BRAM', 'RESEARCH', null, `gate ledger over ${E.pairs.length} pairs \u00b7 ${ledger}`);
+  }
   if (!widest && inPlayN && E.due('bram-inplay', 600)) E.log('BRAM', 'RESEARCH', null, `${inPlayN} matched pairs are all in-play right now · not pricing live games`);
   if (widest) {
     const key = `${widest.p.id}:${Math.round(widest.gap * 100)}`;
@@ -185,12 +193,15 @@ async function KETT(E) {
     const budget = E.budget();
     if (budget < 5) { if (E.due('kett-cash', 300)) E.log('KETT', 'PASS', null, `budget ${money(budget)} below floor, standing down`); break; }
 
-    // ILSA flow check for directional trades
+    // ILSA flow check for directional trades. `sizeMult` is a fraction OF the per-position cap,
+    // not a multiplier on top of it: a locked arb is hedged and takes the full cap, a neutral
+    // convergence read takes `baseSizeMult` of it, and a converging read earns its way back up to
+    // the cap. That keeps "sized up" a real 25% more contracts without lifting maxPositionPct.
     let sizeMult = 1;
     if (s.type === 'converge') {
       const b = E.bias.get(s.pair.id);
       if (b && b.reliable && b.score <= -0.5) { if (E.due(`kett-flow-${s.pair.id}`, 300)) E.log('KETT', 'PASS', null, `${s.pair.label}: gap ${c(Math.abs(s.gap))} but ILSA reads it widening off an already-tradeable gap, pass`); continue; }
-      if (b && b.reliable && b.score >= 0.5) sizeMult = 1.25;
+      sizeMult = b && b.reliable && b.score >= 0.5 ? 1 : E.cfg.baseSizeMult;
     }
 
     // real books at size — and for directional trades, re-verify the gap from live books on BOTH venues
@@ -221,7 +232,10 @@ async function KETT(E) {
       }
       s.edge = edgeLive; s.fair = fairLive; s.gap = liveQ.ksMid - liveQ.pmMid; leg.px = pxLive;
     }
-    const { qty } = decide.sizePlan(s, { budget, sizeMult, books, cfg: E.cfg });
+    const { qty, capped } = decide.sizePlan(s, { budget, sizeMult, books, cfg: E.cfg });
+    // Say so when the risk limit -- not depth, not cash -- is what set the size. Silently clipping
+    // a position back to the cap is how a rail stops being visible enough to argue with.
+    if (capped && E.due(`kett-cap-${s.pair.id}`, 300)) E.log('KETT', 'OPS', null, `${s.pair.label}: sized to the ${(E.cfg.maxPositionPct * 100).toFixed(1)}% position cap, not to available depth`);
     if (qty < 5) { if (E.due(`kett-depth-${s.pair.id}`, 300)) E.log('KETT', 'PASS', null, `${s.pair.label}: only ${qty} contracts inside limit, below 5-lot floor`); continue; }
 
     // Resolve every leg's exchange reference up front. A Polymarket NO leg needs the OTHER
@@ -241,7 +255,7 @@ async function KETT(E) {
       let f;
       // deterministic idempotency key: a retried request for THIS leg of THIS group dedupes at
       // the exchange instead of opening a second position
-      try { f = await E.broker.buy({ venue: l.venue, ref: refs[i], side: l.side, qty, limit: l.px + 0.01, book: books[i].asks, key: `${group}-${l.venue}${l.side[0]}-in` }); }
+      try { f = await E.broker.buy({ venue: l.venue, ref: refs[i], side: l.side, qty, limit: l.px + E.cfg.slipLimit, book: books[i].asks, key: `${group}-${l.venue}${l.side[0]}-in` }); }
       catch (e) { f = { filled: 0, reason: e.message.slice(0, 80) }; }
       if (!f.filled || f.cost > E.state.cash - spent) { failed = f.reason || 'insufficient cash'; break; }
       spent += f.cost;
@@ -265,7 +279,7 @@ async function KETT(E) {
     } else {
       const leg = fills[0].leg, f = fills[0].f;
       const fairSide = leg.side === 'yes' ? s.fair : 1 - s.fair;
-      E.log('KETT', 'FILL', -totalCost, `${s.pair.label} · buy ${qty} ${leg.side.toUpperCase()} @ ${VEN[leg.venue]} ${f.avg.toFixed(3)} · fair ${fairSide.toFixed(3)} on live books (${VEN[other(leg.venue)]} mid ${(leg.venue === 'PM' ? q.ksMid : q.pmMid).toFixed(3)}) · edge ${c(s.edge)} · fee ${money(f.fee)}${sizeMult > 1 ? ' · sized up on ILSA flow' : ''}`);
+      E.log('KETT', 'FILL', -totalCost, `${s.pair.label} · buy ${qty} ${leg.side.toUpperCase()} @ ${VEN[leg.venue]} ${f.avg.toFixed(3)} · fair ${fairSide.toFixed(3)} on live books (${VEN[other(leg.venue)]} mid ${(leg.venue === 'PM' ? q.ksMid : q.pmMid).toFixed(3)}) · edge ${c(s.edge)} · fee ${money(f.fee)}${sizeMult > E.cfg.baseSizeMult ? ' · sized up on ILSA flow' : ''}`);
     }
   }
   E.touch('KETT', E.signals.length ? `${E.signals.length} signals` : 'no signals');

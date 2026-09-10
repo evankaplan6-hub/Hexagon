@@ -33,6 +33,9 @@ function makeRecorder(cfg) {
       // present only when BRAM priced this pair this cycle (it skips in-play pairs entirely)
       if (p.fair != null) row.fair = r4(p.fair);
       if (p.best) { row.edge = r4(p.best.edge); row.venue = p.best.venue; row.side = p.best.side; }
+      // Which rail stopped this pair, when one did. `edge` says how close it came; this says what
+      // it came up short against, so a tape line explains itself without re-running the gates.
+      if (p.veto) row.veto = p.veto;
       lines.push(JSON.stringify(row));
     }
     if (!lines.length) return;

@@ -95,9 +95,24 @@ module.exports = {
 
   // risk
   maxPositionPct: num('MAX_POSITION_PCT', 0.02),
+  // ILSA's conviction read expressed as a FRACTION of the per-position cap, never a boost on top
+  // of it. A neutral convergence signal sizes at this fraction and a converging one at the full
+  // cap, so "sized up on ILSA flow" is a real 25% more contracts while `maxPositionPct` stays a
+  // ceiling nothing can lift. The old `budget * 1.25` put a high-conviction position at 2.5% of
+  // equity against a documented 2%; clamping that multiplier instead made it a silent no-op,
+  // because the budget handed to sizePlan already IS the cap. Locked arbs are unaffected -- they
+  // are hedged, and always size to the full cap.
+  baseSizeMult: num('BASE_SIZE_MULT', 0.8),
   maxOpenPositions: num('MAX_OPEN_POSITIONS', 12),
   maxDailyDrawdownPct: num('MAX_DAILY_DRAWDOWN_PCT', 0.03),
   maxDataAgeSec: num('MAX_DATA_AGE_SEC', 90),
+  // API errors in a 5m window before TESS halts new risk. Was hardcoded as `errs >= 25` inside
+  // riskState while every other rail it checks was a knob -- the one number you cannot tune from
+  // .env is the one that fires during exactly the venue outage you would want to tune it for.
+  // Capped at 200 because that is how many timestamps src/http.js keeps: `recentErrors()` can
+  // never return more, so a threshold above it would silently disable the halt during exactly the
+  // outage it exists for. Exposing the knob is what makes that ceiling reachable.
+  maxApiErrors: Math.min(200, num('MAX_API_ERRORS', 25)),
 
   // strategy
   minArbEdge: num('MIN_ARB_EDGE', 0.01),
@@ -114,6 +129,15 @@ module.exports = {
   minMid: 0.03, // ignore convergence signals on near-certain outcomes (tick noise dominates)
   maxMid: 0.97,
   maxSpread: 0.05, // do not chase into illiquid books
+  // How far past the signalled price a fill may walk when sizing to depth. This is the difference
+  // between the edge the signal was priced on and the edge actually taken: at a MIN_EDGE of 0.5c
+  // a 1c slip allowance can spend twice the edge, so it is a knob, not a constant.
+  slipLimit: num('SLIP_LIMIT', 0.01),
+  // Samples back ILSA looks to call the gap converging or diverging. Eight at a 15s cadence is
+  // two minutes, which is short enough that one wide print flips the read.
+  // Floored at 2 and forced to an integer: `history[length - 0]` is undefined and the next line
+  // reads `.ksMid` off it, which throws inside ILSA's per-pair loop and aborts the whole cycle.
+  biasLookback: Math.max(2, Math.round(num('BIAS_LOOKBACK', 8))),
 
   // cadence (seconds)
   priceEvery: num('PRICE_EVERY_SEC', 15),
