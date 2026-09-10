@@ -385,6 +385,24 @@ class Engine {
     this.log('TESS', 'OPS', null, `desk online · ${this.cfg.mode.toUpperCase()} mode${this.cfg.demo ? ' with DEMO quote noise' : ''} · equity $${this.equity().toFixed(2)} · ${this.cfg.ksSeries.length} Kalshi series vs top ${this.cfg.pmUniverse} Polymarket markets`);
     await this.step();
     setInterval(() => this.step().catch((e) => console.error(e)), this.cfg.priceEvery * 1000);
+    // The maker gets its own loop. Riding the taker's 15s cycle every other tick meant a 30-second
+    // stale quote, which cost more than everything else on this desk combined. `running` is the
+    // guard: a slow round must never start a second one on top of itself.
+    let running = false;
+    setInterval(async () => {
+      if (running) return;
+      running = true;
+      const t0 = Date.now();
+      try { await this.maker.step(this); }
+      catch (e) { this.log('MAKR', 'OPS', null, `maker cycle error: ${String(e.message).slice(0, 110)}`); }
+      finally {
+        running = false;
+        this.lastMakerMs = Date.now() - t0;
+        if (this.lastMakerMs > this.cfg.makerEverySec * 1000 && this.due('makr-slow', 300)) {
+          this.log('MAKR', 'OPS', null, `requote took ${(this.lastMakerMs / 1000).toFixed(1)}s, longer than the ${this.cfg.makerEverySec}s target · quotes are going stale`);
+        }
+      }
+    }, this.cfg.makerEverySec * 1000);
     setInterval(() => { if (this.dirty) this.save(); }, 10000);
   }
   async step() {
@@ -409,7 +427,7 @@ class Engine {
       await agents.KETT(this);
       // the maker runs on its own cadence: requoting every cycle costs an API call per market and
       // buys nothing when the book has not moved
-      if (this.cycle % this.cfg.makerEveryCycles === 0) await this.maker.step(this).catch((e) => this.log('MAKR', 'OPS', null, `maker cycle error: ${String(e.message).slice(0, 110)}`));
+      // the maker runs on its own timer now (see start) -- it must not wait on the taker cycle
       this.pushBalance();
     } catch (e) {
       http.noteError(e);

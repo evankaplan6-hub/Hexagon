@@ -4,6 +4,7 @@
 const ks = require('./venues/kalshi');
 const http = require('./http');
 const maker = require('./maker');
+const { makeTape } = require('./tape');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // Kalshi rate-limits, and a throttled scan is worse than a slow one: the first live run silently
@@ -67,6 +68,7 @@ function makeMakerDesk(cfg) {
   let eligible = null;       // series that actually charge makers nothing
   let lastUniverseAt = 0;
   let refreshing = null;     // in-flight refresh, so the scan never runs twice or blocks the tick
+  const tape = makeTape();   // batched exchange-wide trades + per-series books
 
   // Pick the most liquid mid-priced markets from the fee-free series.
   async function refreshUniverse(E) {
@@ -167,19 +169,42 @@ function makeMakerDesk(cfg) {
       .map(([ticker, m]) => ({ ticker, series: m.series, reduceOnly: true }));
     if (pinned.length) E.touch('MAKR', `${pinned.length} pinned to work off`);
 
+    // ---- ONE call for every market's trades, ONE per series for every market's book ----------
+    // This is what makes a 5-second requote affordable. Per-market fetching cost 48 calls for 24
+    // markets and forced a 30-second cycle; a quote left unattended that long is run over on 69%
+    // of its fills, which was the entire live loss.
+    const work = [...universe, ...pinned];
+    const tickers = work.map((u) => u.ticker);
+    let tapeRes, bookRes;
+    try {
+      [tapeRes, bookRes] = await Promise.all([tape.since(tickers), tape.books(tickers)]);
+    } catch (e) {
+      E.log('MAKR', 'OPS', null, `market data failed (${String(e.message).slice(0, 80)}) · quotes left as they are`);
+      return;
+    }
+    if (tapeRes.gap && E.due('makr-gap', 300)) {
+      E.log('MAKR', 'OPS', null, `tape gap: the exchange traded more than one page between polls (${tapeRes.gaps} so far) · some fills were not seen`);
+    }
+    if (bookRes.failed && E.due('makr-bookfail', 300)) {
+      E.log('MAKR', 'OPS', null, `${bookRes.failed} book(s) failed to load · those markets keep their last quote`);
+    }
+    // bucket the exchange-wide tape by ticker, oldest first
+    const byTicker = new Map();
+    for (const t of tapeRes.trades) {
+      if (!byTicker.has(t.ticker)) byTicker.set(t.ticker, []);
+      byTicker.get(t.ticker).push(t);
+    }
+
     let filled = 0, netQty = 0;
-    for (const u of [...universe, ...pinned]) {
+    for (const u of work) {
       const m = S.markets[u.ticker] || (S.markets[u.ticker] = { series: u.series, inv: 0, cost: 0, realized: 0, fills: 0, quotes: { bid: null, ask: null }, seen: [] });
       // A ticker like KXBALANCEPOWERCOMBO-27FEB-RR says nothing about what is being traded. Keep
       // the exchange's own words for it, and keep them on the ledger so a market that drops out of
       // the universe can still say what it was.
       if (u.title) { m.title = u.title; m.sub = u.sub || ''; }
-      let trades = [], bk = null;
-      try {
-        const d = await getWithBackoff(`${ks.BASE}/markets/trades?ticker=${u.ticker}&limit=200`);
-        trades = (d.trades || []).slice().reverse();       // oldest first
-        bk = await ks.fetchBook(u.ticker);
-      } catch { continue; }
+      const trades = byTicker.get(u.ticker) || [];        // already oldest-first
+      const bk = bookRes.books.get(u.ticker);
+      if (!bk) continue;                                   // no book this round: leave the quote alone
 
       // 1) fill the quotes we were ALREADY resting, against trades that have since arrived
       const seen = new Set(m.seen);
@@ -217,8 +242,8 @@ function makeMakerDesk(cfg) {
       for (const t of trades) seen.add(t.trade_id);
       m.seen = [...seen].slice(-400);                       // bounded
 
-      // 2) rest a fresh quote for the next cycle
-      await sleep(80);                     // pace per-market polling too
+      // 2) rest a fresh quote for the next cycle. No sleep here any more -- there is no per-market
+      // request left to pace, so the whole book requotes in one pass.
       const q = maker.desiredQuotes(bk, m.inv, cfg);
       // reduce-only: drop whichever side would grow the position
       const next = u.reduceOnly

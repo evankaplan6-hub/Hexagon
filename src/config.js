@@ -67,7 +67,16 @@ module.exports = {
   makerRateProbe: num('MAKER_RATE_PROBE', 80),
   makerMinMid: num('MAKER_MIN_MID', 0.08),
   makerMaxMid: num('MAKER_MAX_MID', 0.92),
-  makerEveryCycles: num('MAKER_EVERY_CYCLES', 2), // 2 x priceEvery seconds between requotes
+  // How often the maker requotes, in seconds. This is THE number: a quote resting unattended is
+  // run over on 69% of its fills against 5% in the backtest, because the only fills a stale quote
+  // wins are the ones that have already moved through it. It ran on the engine's 15s cycle every
+  // other tick -- 30 seconds -- because per-market fetching cost 48 calls a round. Batched
+  // (src/tape.js) the same round costs about 11, so it can run on its own timer instead.
+  // Two seconds, not five. A round costs two calls and takes about 100ms, so the limit is not
+  // compute -- it is the tape: /markets/trades returns 1000 prints and the exchange runs at ~160
+  // a second, so a page covers roughly six seconds. Polling every five left no margin and dropped
+  // trades during busy stretches. At two seconds a page holds three times what we need.
+  makerEverySec: num('MAKER_EVERY_SEC', 2),
   // The maker keeps its own drawdown rail. TESS's watches the TAKER book's equity and would never
   // notice this desk bleeding, because the two ledgers are deliberately separate.
   makerMaxDrawdownPct: num('MAKER_MAX_DRAWDOWN_PCT', 0.10),
