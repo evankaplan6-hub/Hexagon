@@ -236,74 +236,29 @@ Roughly linear, and positive in sign at every setting with 14–15 of 21 held-ou
 throughout. So the conclusion does not hinge on the guess — only the magnitude does. The desk runs
 the most conservative cell (10%, cap 100), which is also the one the live paper book is testing.
 
-### Two things that were tested and not built
+### Three things that were tested and not built
+
+**Inventory skew.** The desk rests at the touch on both sides and only withdraws a side at the cap.
+Standard market-making says lean: when short, bid higher and offer higher so the next fill reduces
+the position rather than growing it. The original code declined on the grounds that a 1c book has
+nowhere to skew to — but many quoted markets are 4–9c wide, so the room exists. Scored with real
+queues on the markets the live rule actually picks:
+
+```
+max lean          development      out of sample
+0 ticks (today)      +$241            +$160
+1 tick               +$265             +$85
+2 ticks              +$259             +$35
+3 ticks              +$263             +$22
+```
+
+Better in sample, sharply worse out of it, at every setting — the textbook overfit signature. It
+does not even reduce peak inventory, which pins at the cap regardless. Not adopted.
 
 **A per-market stop loss.** One held-out market lost $53: a trending book where the maker kept
-buying down to the inventory cap. A stop is the obvious rail, so it was measured before being
-built — and it loses money at every threshold (−$30 at $40, −$22 at $25, −$52 at $15) while not
-reliably improving the worst market. Stopping out a mean-reverting book locks in the loss and
-forfeits the recovery.
-
-**Quoting inside the spread.** Improving the touch by a tick creates a new price level where we are
-first in queue — the obvious answer to a 15,700-deep queue. It gives up two ticks to buy priority,
-and the trade is a wash: at a 5c threshold it is *worse* in development (+$176 vs +$210) and
-*better* out of sample (+$196 vs +$144), which is noise rather than edge. At tighter thresholds it
-is clearly negative. Not adopted.
-
-
-### Two things that were backwards
-
-**Lookahead.** The first backtest set its quote from the trade currently arriving and then filled on
-that same trade — so it could never be run over. That deletes adverse selection, which is the
-entire risk of market making. Rewritten so quotes rest from prior state and fill at *our* price,
-the result fell 15% and survived. `taker_book_side` semantics were verified empirically first
-(943 to 3 on adjacent opposite-side trades), because inverting it would have flipped every sign.
-
-**Selection.** Across 34 markets, P&L correlates **+0.82 with trade count** and **−0.33 with median
-spread**. Wide spreads are a *negative* signal — a wide book on Kalshi is an illiquid one, and when
-an illiquid market trades it is usually because the taker knows something. Every earner sat at a
-**1c spread** (the minimum tick) with 7,000–15,000 trades. Ranking by spread, as the first version
-did, picked six dead markets at 10–14c and took zero fills.
-
-### Holding markets out of development
-
-The 34 markets above are the ones the strategy was *built* on, and they were sampled as the five
-most active in each series — a liquidity-biased set. So it was re-run on **48 markets never touched
-during development**: every market in the 38 configured series clearing the live desk's own filters,
-minus the original 34, with every parameter frozen before the tape was pulled. That held-out set is
-the second column in the table above, and it is what makes the surviving edge believable rather than
-fitted. It is also thinner — median 16 trades/day against 44 — which is why it earns less.
-
-One selection change came out of it and survived the queue correction: rank on **measured trades per
-day**, not `volume_24h`, which is a snapshot a single block trade can inflate. On the held-out pool,
-top-12-by-trade-rate returned +$454 against +$259 for top-12-by-volume. Trade rate is now the
-secondary rail behind queue clearance, with a floor of 10 trades/day.
-
-### Measuring the live desk against the model
-
-`tools/fillcheck.js` answers the only question a week of paper trading exists to answer: does the
-desk fill at the rate the model says it should? It replays the same wall-clock window through the
-desk's own fill logic with each market's real measured queue, and compares against the journal.
-
-```
-node tools/fillcheck.js 24      # last 24 hours, or since this build started -- whichever is shorter
-```
-
-Under 50% of the modelled rate means the backtest is *still* too optimistic and the strategy is
-worth less than it measures. Over 150% means the queue model is too harsh and it is worth more.
-Between them, the held-out +$144 stands. Every run appends to `data/fillcheck.jsonl`, so a week of
-readings accumulates without anyone having to remember to write them down.
-
-It only counts fills produced by the currently running process. Mixing builds was the first thing
-this tool got wrong — the journal spans every build of the day, and the pre-queue builds filled a
-completely different way, which flattered the comparison to 131%.
-
-### Keeping it running
-
-A week of evidence needs the process to survive a week, and a `nohup`'d shell job does not survive
-a reboot. `ops/install-autostart.sh` installs a LaunchAgent that starts the desk at login and
-restarts it if it exits. It refuses to install while `MODE=live`: an always-on job is for paper
-measurement. `ops/uninstall-autostart.sh` removes it.
+buying down to the inventory cap. Measured before being built, and it loses money at every
+threshold (−$30 at $40, −$22 at $25, −$52 at $15) while not reliably improving the worst market.
+Stopping out a mean-reverting book locks in the loss and forfeits the recovery.
 
 ### Rails
 
