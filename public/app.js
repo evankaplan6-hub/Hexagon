@@ -276,7 +276,7 @@
   // marker-to-marker deletion of a neighbouring block, and the failure is silent in the source and
   // fatal in the browser: the whole floor goes black sixty times a second.
   //
-  // The art is drawn in a fixed 480x340 space but DISPLAYED at whatever size the viewport allows,
+  // The art is drawn in a fixed 480x360 space but DISPLAYED at whatever size the viewport allows,
   // so the canvas gets a backing store at true device resolution and the context is scaled to
   // match. Coordinates below are unchanged; text draws as vectors at final size rather than being
   // upscaled into a smear.
@@ -297,17 +297,17 @@
     const ctx = cv.getContext('2d');
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = '#0b0e14'; ctx.fillRect(0, 0, w, h);       // paint the letterbox
-    const scale = Math.min(w / 480, h / 340);
+    const scale = Math.min(w / 480, h / 360);
     floorBox.scale = scale / dpr;                              // css px per drawing unit
     floorBox.ox = (w - 480 * scale) / 2 / dpr;
-    floorBox.oy = (h - 340 * scale) / 2 / dpr;
-    ctx.setTransform(scale, 0, 0, scale, (w - 480 * scale) / 2, (h - 340 * scale) / 2);
+    floorBox.oy = (h - 360 * scale) / 2 / dpr;
+    ctx.setTransform(scale, 0, 0, scale, (w - 480 * scale) / 2, (h - 360 * scale) / 2);
     return ctx;
   }
 
   function drawFloor(t) {
     const ctx = floorCtx(); ctx.imageSmoothingEnabled = false;
-    ctx.clearRect(0, 0, 480, 340);   // the letterbox is repainted in floorCtx
+    ctx.clearRect(0, 0, 480, 360);   // the letterbox is repainted in floorCtx
     hits = []; zones = [];                   // rebuilt every frame; the pointer tests against them
     // ---- the room -----------------------------------------------------------------------------
     // wall: darker at the corners, lifting toward the middle where the big screen hangs
@@ -594,45 +594,110 @@
     ctx.fillStyle = vig; ctx.fillRect(0, 0, 480, 262);
     ctx.restore();
 
-    drawLog(ctx);
+    drawLedge(ctx);
   }
   // ---- the tape along the bottom of the room: every agent's activity, scrollable in place
-  function drawLog(ctx) {
-    // a lit ledge rather than a black band bolted to the bottom of the room
-    const g = ctx.createLinearGradient(0, 262, 0, 340);
+  // ---- the ledge along the bottom: P&L on the left, activity on the right ---------------------
+  function drawLedge(ctx) {
+    const g = ctx.createLinearGradient(0, 262, 0, 360);
     g.addColorStop(0, '#0a0e16'); g.addColorStop(1, '#05070c');
-    ctx.fillStyle = g; ctx.fillRect(0, 262, 480, 78);
+    ctx.fillStyle = g; ctx.fillRect(0, 262, 480, 98);
     px(ctx, 0, 262, 480, 1, '#243047'); px(ctx, 0, 263, 480, 1, '#0e1420');
+    drawPnl(ctx, 8, 268, 178, 84);
+    px(ctx, 192, 270, 1, 80, '#141b28');
+    drawLog(ctx, 200, 268, 274, 84);
+  }
 
+  // A continuous picture of the two numbers that matter, and why they are drawn differently.
+  // Banked cash only ever climbs -- a maker is paid the spread on every round trip -- so on its own
+  // it flatters. The mark on open inventory is what pulls against it. NET is the pair together, and
+  // it is the only line worth reading as P&L.
+  function drawPnl(ctx, x, y, w, h) {
+    const H = (S.maker && S.maker.hist) || [];
+    text(ctx, 'P&L', x + 4, y, '#4b5563', 5);
+    if (H.length < 2) {
+      text(ctx, H.length ? 'collecting — one point a minute' : 'no history yet', x + w / 2, y + h / 2 - 4, '#243044', 5, 'center');
+      return;
+    }
+    const t0 = H[0].t, t1 = Math.max(H[H.length - 1].t, t0 + 1);
+    // Scale to NET alone. Banked cash is an order of magnitude larger and only ever climbs, so
+    // sharing an axis with it flattened the one line worth reading into a wobble along the bottom.
+    // It stays on the chart as a faint reference, clipped where it runs off, and as a number below.
+    const vals = H.map((p) => p.e).concat([0]);
+    let lo = Math.min(...vals), hi = Math.max(...vals);
+    const pad = Math.max(0.5, (hi - lo) * 0.15); lo -= pad; hi += pad;
+    const L = x + 22, R = x + w - 6, T = y + 8, B = y + h - 8;
+    const px_ = (t) => L + (R - L) * ((t - t0) / (t1 - t0));
+    const py_ = (v) => B - (B - T) * ((v - lo) / (hi - lo));
+
+    // zero line: the break-even the whole thing is measured against
+    const zy = py_(0);
+    ctx.save(); ctx.setLineDash([2, 2]); ctx.strokeStyle = '#1f2937'; ctx.lineWidth = 0.5;
+    ctx.beginPath(); ctx.moveTo(L, zy); ctx.lineTo(R, zy); ctx.stroke(); ctx.restore();
+    text(ctx, '0', L - 3, zy - 2.5, '#39404e', 4.5, 'right');
+    text(ctx, signed(hi), L - 3, T - 1, '#39404e', 4.5, 'right');
+    text(ctx, signed(lo), L - 3, B - 4, '#39404e', 4.5, 'right');
+
+    const line = (key, col, width, fill) => {
+      ctx.save(); ctx.beginPath();
+      H.forEach((p, i) => { const X = px_(p.t), Y = py_(p[key]); i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y); });
+      if (fill) {
+        const last = H[H.length - 1];
+        ctx.lineTo(px_(last.t), zy); ctx.lineTo(px_(H[0].t), zy); ctx.closePath();
+        const grad = ctx.createLinearGradient(0, T, 0, B);
+        grad.addColorStop(0, fill); grad.addColorStop(1, 'transparent');
+        ctx.globalAlpha = 0.30; ctx.fillStyle = grad; ctx.fill(); ctx.globalAlpha = 1;
+        ctx.beginPath();
+        H.forEach((p, i) => { const X = px_(p.t), Y = py_(p[key]); i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y); });
+      }
+      ctx.strokeStyle = col; ctx.lineWidth = width; ctx.lineJoin = 'round'; ctx.stroke(); ctx.restore();
+    };
+    const now = H[H.length - 1];
+    ctx.save(); ctx.beginPath(); ctx.rect(L, T - 2, R - L, B - T + 4); ctx.clip();
+    line('c', '#24523a', 0.6);                                   // banked, faint, clipped
+    ctx.restore();
+    line('e', now.e >= 0 ? '#22c55e' : '#ef4444', 1, now.e >= 0 ? '#22c55e' : '#ef4444');
+
+    // where it stands right now
+    const nx = px_(now.t), ny = py_(now.e);
+    px(ctx, nx - 1, ny - 1, 2.5, 2.5, now.e >= 0 ? '#4ade80' : '#f87171');
+    glow(ctx, nx, ny, 8, now.e >= 0 ? '#22c55e' : '#ef4444', 0.5);
+
+    const mins = Math.round((t1 - t0) / 60000);
+    text(ctx, mins < 90 ? `last ${mins}m` : `last ${(mins / 60).toFixed(1)}h`, x + 22, y + h - 4, '#39404e', 4.5);
+    text(ctx, 'NET', x + w - 34, y, now.e >= 0 ? '#22c55e' : '#ef4444', 4.5, 'right');
+    text(ctx, signed(now.e), x + w - 6, y, now.e >= 0 ? '#22c55e' : '#ef4444', 5, 'right');
+    text(ctx, 'banked', x + w - 34, y + h - 4, '#2f6b45', 4.5, 'right');
+    text(ctx, signed(now.c), x + w - 6, y + h - 4, '#2f6b45', 4.5, 'right');
+  }
+
+  function drawLog(ctx, x, y, w, h) {
     const rows = S.log || [];
-    const LROWS = 8;
+    const LROWS = 9;
     const maxG = Math.max(0, rows.length - LROWS);
     scroll.log = Math.min(scroll.log, maxG);
-    zones.push({ x: 0, y: 262, w: 480, h: 78, id: 'log', max: maxG });
-    text(ctx, 'ACTIVITY', 10, 267, '#4b5563', 5);
+    zones.push({ x, y, w, h, id: 'log', max: maxG });
+    text(ctx, 'ACTIVITY', x, y, '#4b5563', 5);
     if (maxG) {
-      text(ctx, `${scroll.log + 1}-${Math.min(rows.length, scroll.log + LROWS)} of ${rows.length}`, 470, 267, '#3d4350', 5, 'right');
-      const th = Math.max(5, 62 * LROWS / rows.length);
-      px(ctx, 476, 275, 1, 62, '#141b28');
-      px(ctx, 476, 275 + (62 - th) * (scroll.log / maxG), 1, th, '#4b5563');
+      text(ctx, `${scroll.log + 1}-${Math.min(rows.length, scroll.log + LROWS)} of ${rows.length}`, x + w, y, '#3d4350', 5, 'right');
+      const th = Math.max(5, (h - 12) * LROWS / rows.length);
+      px(ctx, x + w + 2, y + 8, 1, h - 12, '#141b28');
+      px(ctx, x + w + 2, y + 8 + (h - 12 - th) * (scroll.log / maxG), 1, th, '#4b5563');
     }
     rows.slice(scroll.log, scroll.log + LROWS).forEach((e, i) => {
-      const y = 276 + i * 7.7;
-      if (i % 2) px(ctx, 6, y - 1.4, 464, 7.7, '#0a0f18');            // zebra, so the eye tracks across
-      const money = e.pnl != null;
+      const ry = y + 9 + i * 8.2;
+      if (i % 2) px(ctx, x - 2, ry - 1.5, w + 4, 8.2, '#0a0f18');
       const col = agentColor(e.agent);
-      px(ctx, 8, y + 1, 2, 4, col);
-      text(ctx, hhmm(e.t), 14, y, '#39404e', 5);
-      text(ctx, e.agent, 38, y, col, 5);
-      // the kind gets a tinted chip so FILL stands out from the running commentary
-      const kw = e.kind.length * 3 + 5;
+      px(ctx, x, ry + 1, 2, 4, col);
+      text(ctx, hhmm(e.t), x + 5, ry, '#39404e', 5);
+      text(ctx, e.agent, x + 28, ry, col, 5);
       const fill = e.kind === 'FILL' || e.kind === 'SETTLE';
-      px(ctx, 64, y - 0.6, kw, 6.4, fill ? '#1b2a1e' : '#121826');
-      text(ctx, e.kind, 66, y, fill ? '#4ade80' : '#5b6470', 4.5);
-      if (money) text(ctx, signed(e.pnl), 150, y, e.pnl >= 0 ? '#22c55e' : '#ef4444', 5, 'right');
-      text(ctx, clip(e.text, 108), 156, y, fill ? '#c7cdd8' : '#6b7480', 5);
+      px(ctx, x + 53, ry - 0.6, e.kind.length * 3 + 5, 6.4, fill ? '#1b2a1e' : '#121826');
+      text(ctx, e.kind, x + 55, ry, fill ? '#4ade80' : '#5b6470', 4.5);
+      if (e.pnl != null) text(ctx, signed(e.pnl), x + 128, ry, e.pnl >= 0 ? '#22c55e' : '#ef4444', 5, 'right');
+      text(ctx, clip(e.text, 46), x + 132, ry, fill ? '#c7cdd8' : '#6b7480', 5);
     });
-    if (!rows.length) text(ctx, 'waiting for the first cycle', 240, 300, '#243044', 6, 'center');
+    if (!rows.length) text(ctx, 'waiting for the first cycle', x + w / 2, y + h / 2, '#243044', 6, 'center');
   }
 
   function loop(ts) { drawFloor(ts / 1000); requestAnimationFrame(loop); }

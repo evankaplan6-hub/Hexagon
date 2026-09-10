@@ -220,6 +220,21 @@ function makeMakerDesk(cfg) {
     let inv = 0, mtm = 0;
     for (const m of Object.values(S.markets)) { inv += Math.abs(m.inv); mtm += m.inv * (m.mid ?? 0.5); }
     S.equity = r2(S.cash + mtm);
+
+    // Equity history. The board could say what the desk is worth right now but never which way it
+    // had been going, and for a market maker that is the whole question -- banked cash only ever
+    // rises, so the shape of the mark against it is the actual P&L story. Sampled once a minute and
+    // capped at twelve hours; older points are dropped rather than thinned, because a chart that
+    // silently changes resolution partway along is worse than a short one.
+    const nowMs = Date.now();
+    S.hist = S.hist || [];
+    const last = S.hist[S.hist.length - 1];
+    if (!last || nowMs - last.t >= 60000) {
+      S.hist.push({ t: nowMs, c: r2(S.cash - cfg.initialBalance), m: r2(mtm), e: r2(S.equity - cfg.initialBalance) });
+      const cutoff = nowMs - 12 * 3600 * 1000;
+      while (S.hist.length && S.hist[0].t < cutoff) S.hist.shift();
+      if (S.hist.length > 800) S.hist.splice(0, S.hist.length - 800);
+    }
     E.touch('MAKR', filled ? `${filled} fills, ${Math.round(netQty)} contracts` : `${universe.length} quoted, ${Math.round(inv)} inv`);
     if (filled && E.due('makr-fill', 60)) {
       E.log('MAKR', 'FILL', r2(S.equity - cfg.initialBalance), `${filled} fill${filled > 1 ? 's' : ''} this cycle · ${Math.round(inv)} contracts held across ${Object.keys(S.markets).length} markets · equity ${money(S.equity)}`);
@@ -279,6 +294,7 @@ function makeMakerDesk(cfg) {
     return {
       cash: S.cash, equity: S.equity, fills: S.fills || 0, halted: S.halted || null,
       lastFill: S.lastFill || null, recent: (S.recent || []).slice(0, 12), lastScanAt: lastUniverseAt || null,
+      hist: S.hist || [],
       initial: cfg.initialBalance, enabled: cfg.makerEnabled,
       quoting: universe.length, tracked: markets.length,
       inv: markets.reduce((a, m) => a + Math.abs(m.inv || 0), 0),

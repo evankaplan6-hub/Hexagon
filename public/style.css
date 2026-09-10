@@ -83,7 +83,7 @@ h1 { font: 800 22px/1 var(--sans); margin: 0; letter-spacing: -0.01em; }
    panel ends exactly where the room ends -- no dead band inside the border. floorCtx still enforces
    a single uniform scale internally, so a stylesheet can never stretch the room again. */
 #floorc { display: block; background: #0b0e14; image-rendering: pixelated;
-  width: 100%; height: auto; aspect-ratio: 480 / 340; }
+  width: 100%; height: auto; aspect-ratio: 480 / 360; }
 
 .agents { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
 .card { min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px 12px; transition: border-color .3s, box-shadow .3s; }
