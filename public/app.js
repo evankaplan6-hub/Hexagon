@@ -113,8 +113,8 @@
     px(ctx, 144, 31, 192, 1, '#141b28');
   }
   function drawMarketFocus(ctx, m, M) {
-    focusHeader(ctx, clip(m.sub || m.title || m.ticker, 34), m.ticker.replace(/^KX/, ''));
-    if (m.title) { wrap(ctx, m.title, 150, 37, 180, 7, '#7c869a', 5); }
+    focusHeader(ctx, clip(OUTCOME(m) || QUESTION(m), 34), m.ticker.replace(/^KX/, ''));
+    if (m.title) wrap(ctx, QUESTION(m), 150, 37, 180, 7, '#9aa3b5', 5);
     const rows = [
       ['our quote', m.bid == null && m.ask == null ? 'not quoting' : `${m.bid == null ? '—' : cents(m.bid)} bid  /  ${m.ask == null ? '—' : cents(m.ask)} ask`],
       ['flow', m.tpd ? `${m.tpd} trades a day` : 'unmeasured'],
@@ -177,13 +177,20 @@
     // which is the thing a word-boundary cut was supposed to avoid
     return out.replace(/[\s,;:·\-–(\[]+$/, '').trim();
   };
-  // What the market actually IS. "KXBALANCEPOWERCOMBO-27FEB-RR" is a filing reference, not a
-  // description; the exchange's own title and outcome are.
+  // What the market actually IS.
+  //
+  // Kalshi gives a full question in `title` and the specific outcome in `sub`. Clipping the title
+  // to fit a column throws away the half that distinguishes one market from another: "Will
+  // Republicans win the Senate race in Iowa?" and "...in Texas?" both became "Will Republicans
+  // win", twice, on the same board. The outcome is the headline; the question is the subtitle.
+  const OUTCOME = (m) => (m.sub || '').trim();
+  const QUESTION = (m) => (m.title || '').trim().replace(/\s+/g, ' ');
+  // one-line fallback for places with no room for two
   function marketLabel(m, n) {
-    const title = (m.title || '').replace(/\?$/, '').trim();
-    const sub = (m.sub || '').trim();
-    if (!title) return clip(m.ticker.replace(/^KX/, ''), n);
-    return clip(sub && !title.toLowerCase().includes(sub.toLowerCase()) ? `${title}: ${sub}` : title, n);
+    const o = OUTCOME(m), q = QUESTION(m);
+    if (!o && !q) return clip(m.ticker.replace(/^KX/, ''), n);
+    if (!o) return clip(q.replace(/^(Will|Which|How many)\s+/i, '').replace(/\?$/, ''), n);
+    return clip(o, n);
   }
 
   const byTicker = (M, t) => (M.markets || []).find((x) => x.ticker === t);
@@ -313,7 +320,7 @@
       const flat = all.filter((m) => !m.inv && m.quoting);
       const heldPL = held.reduce((a2, m) => a2 + (m.mark - m.cost), 0);
 
-      const PROWS = Math.min(6, Math.max(1, held.length));
+      const PROWS = Math.min(4, Math.max(1, held.length));
       text(ctx, `OPEN POSITIONS  ${held.length}`, 144, 50, held.length ? '#c7cdd8' : '#4b5563', 5);
       if (held.length) text(ctx, `${signed(heldPL)} marked`, 331, 50, heldPL >= 0 ? '#22c55e' : '#ef4444', 5, 'right');
       if (!held.length) text(ctx, 'flat — nothing held', 144, 59, '#3d4350', 5);
@@ -322,39 +329,41 @@
         scroll.pos = Math.min(scroll.pos || 0, maxP);
         zones.push({ x: 144, y: 54, w: 192, h: PROWS * 7 + 2, id: 'pos', max: maxP });
         held.slice(scroll.pos, scroll.pos + PROWS).forEach((m, i) => {
-          const y = 58 + i * 7;
-          hits.push({ x: 144, y: y - 1, w: 192, h: 7, kind: 'market', key: m.ticker });
+          const y = 57 + i * 9;
+          hits.push({ x: 144, y: y - 1, w: 192, h: 9, kind: 'market', key: m.ticker });
           const hot = (hover && hover.kind === 'market' && hover.key === m.ticker);
-          if (hot) px(ctx, 144, y - 1, 192, 7, '#101826');
+          if (hot) px(ctx, 144, y - 1, 192, 9, '#101826');
           const long = m.inv > 0, pl = m.mark - m.cost;
           px(ctx, 144, y + 1, 3, 4, long ? '#22c55e' : '#ef4444');
-          text(ctx, marketLabel(m, 24), 150, y, hot ? '#e6e8ee' : '#aab3c5', 5);
+          text(ctx, clip(OUTCOME(m) || QUESTION(m), 22), 150, y, hot ? '#e6e8ee' : '#c7cdd8', 5);
           text(ctx, `${long ? 'LONG' : 'SHORT'} ${Math.abs(m.inv)}`, 262, y, long ? '#4ade80' : '#f87171', 5, 'right');
           text(ctx, cents(Math.abs(m.cost / m.inv)), 292, y, '#5b6270', 5, 'right');
           text(ctx, signed(pl), 331, y, pl >= 0 ? '#22c55e' : '#ef4444', 5, 'right');
+          text(ctx, clip(QUESTION(m), 62), 150, y + 4.4, '#4b5563', 4.5);
         });
-        if (maxP) text(ctx, `${scroll.pos + 1}-${Math.min(held.length, scroll.pos + PROWS)} of ${held.length}`, 331, 58 + PROWS * 7, '#3d4350', 4.5, 'right');
+        if (maxP) text(ctx, `${scroll.pos + 1}-${Math.min(held.length, scroll.pos + PROWS)} of ${held.length}`, 331, 57 + PROWS * 9, '#3d4350', 4.5, 'right');
       }
 
       // quoting-but-flat: what is on the book waiting to be traded against
-      const qTop = 54 + (held.length ? PROWS * 7 + 8 : 14);
+      const qTop = 54 + (held.length ? PROWS * 9 + 7 : 14);
       px(ctx, 144, qTop - 4, 192, 1, '#141b28');
       text(ctx, `QUOTING  ${flat.length}`, 144, qTop, '#4b5563', 5);
       text(ctx, 'BID', 292, qTop, '#3d4350', 4.5, 'right');
       text(ctx, 'ASK', 331, qTop, '#3d4350', 4.5, 'right');
-      const QROWS = Math.max(1, Math.floor((134 - (qTop + 7)) / 6.2));
+      const QROWS = Math.max(1, Math.floor((136 - (qTop + 7)) / 9));
       const maxB = Math.max(0, flat.length - QROWS);
       scroll.book = Math.min(scroll.book, maxB);
-      zones.push({ x: 144, y: qTop + 5, w: 192, h: QROWS * 6.2 + 2, id: 'book', max: maxB });
+      zones.push({ x: 144, y: qTop + 5, w: 192, h: QROWS * 9 + 2, id: 'book', max: maxB });
       flat.slice(scroll.book, scroll.book + QROWS).forEach((m, i) => {
-        const y = qTop + 7 + i * 6.2;
-        hits.push({ x: 144, y: y - 1, w: 192, h: 6.2, kind: 'market', key: m.ticker });
+        const y = qTop + 7 + i * 9;
+        hits.push({ x: 144, y: y - 1, w: 192, h: 9, kind: 'market', key: m.ticker });
         const hot = (hover && hover.kind === 'market' && hover.key === m.ticker);
-        if (hot) px(ctx, 144, y - 1, 192, 6.2, '#101826');
+        if (hot) px(ctx, 144, y - 1, 192, 9, '#101826');
         px(ctx, 144, y + 1, 3, 3, '#22c55e');
-        text(ctx, marketLabel(m, 26), 150, y, hot ? '#e6e8ee' : '#7c869a', 5);
+        text(ctx, clip(OUTCOME(m) || QUESTION(m), 24), 150, y, hot ? '#e6e8ee' : '#9aa3b5', 5);
         text(ctx, m.bid == null ? '—' : cents(m.bid), 292, y, '#5b6270', 5, 'right');
         text(ctx, m.ask == null ? '—' : cents(m.ask), 331, y, '#5b6270', 5, 'right');
+        text(ctx, clip(QUESTION(m), 62), 150, y + 4.4, '#3d4350', 4.5);
       });
       if (maxB) text(ctx, `${scroll.book + 1}-${Math.min(flat.length, scroll.book + QROWS)} of ${flat.length}`, 331, 136, '#3d4350', 4.5, 'right');
       if (!all.length) text(ctx, 'scanning for markets', 240, 95, '#3d4350', 6, 'center');
@@ -392,7 +401,7 @@
       px(ctx, 376, y + 1, 3, 3, buy ? '#22c55e' : '#ef4444');
       text(ctx, `${buy ? 'BUY' : 'SELL'} ${f.qty}`, 382, y, buy ? '#4ade80' : '#f87171', 5);
       text(ctx, cents(f.px), 466, y, '#86efac', 5, 'right');
-      text(ctx, marketLabel(byTicker(M, f.ticker) || f, 20), 382, y + 4.4, '#3f6b4f', 4.5);
+      text(ctx, clip(OUTCOME(byTicker(M, f.ticker) || {}) || f.ticker.replace(/^KX/, ''), 20), 382, y + 4.4, '#3f6b4f', 4.5);
       });
     }
 
