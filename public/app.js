@@ -52,6 +52,15 @@
   // the 480x260 drawing space; the pointer is mapped into that space and tested against them. Click
   // an agent or a market and the wall screen stops showing the book and shows that thing instead --
   // the big display becomes the focus view rather than a second panel competing for room.
+  // When the desk stops, the page keeps ticking. The clock is advanced locally between SSE frames
+  // so the seconds animate smoothly, which means a dead server looks exactly like a live one --
+  // same numbers, same clock, same lit screens, and the only clue is an activity log whose newest
+  // line is quietly minutes old. That is the same failure that has bitten three tools tonight, so
+  // the page says it out loud instead.
+  let lastFrameAt = 0;
+  const STALE_MS = 12000;   // frames arrive every 2s; 12 is well past a hiccup
+  const stale = () => lastFrameAt && Date.now() - lastFrameAt > STALE_MS;
+
   let hits = [];                 // rebuilt each frame: { x, y, w, h, kind, key }
   let hover = null, sel = null;
   // Scrollable regions inside the canvas. The book, the fill tape and an agent's history all hold
@@ -356,10 +365,12 @@
     // ---- status board (left) : the "is it working" answer, in words
     panel(ctx, 8, 64, 112, 82, '#080c14', '#243047');
     scanlines(ctx, 9, 65, 110, 80, 0.10);
-    const stCol = halted ? '#ef4444' : working ? '#22c55e' : '#d4a72c';
+    const gone = stale();
+    const stCol = gone ? '#ef4444' : halted ? '#ef4444' : working ? '#22c55e' : '#d4a72c';
     px(ctx, 14, 71, 4, 4, stCol);
-    text(ctx, halted ? 'STOPPED' : working ? 'WORKING' : 'IDLE', 22, 70, stCol, 8);
-    text(ctx, working ? `quoting ${M.quoting} markets` : (halted ? 'trading stopped' : 'waiting for scan'), 14, 82, '#aab3c5', 6);
+    text(ctx, gone ? 'NO SIGNAL' : halted ? 'STOPPED' : working ? 'WORKING' : 'IDLE', 22, 70, stCol, 8);
+    text(ctx, gone ? `desk stopped answering` : working ? `quoting ${M.quoting} markets` : (halted ? 'trading stopped' : 'waiting for scan'),
+      14, 82, gone ? '#f87171' : '#aab3c5', 6);
     const nHeld = (M.markets || []).filter((m) => m.inv).length;
     text(ctx, nHeld ? `holding ${M.inv} contracts in ${nHeld}` : 'flat — nothing held', 14, 90, nHeld ? '#c7cdd8' : '#5b6270', 5);
     px(ctx, 14, 98, 100, 1, '#141b28');
@@ -587,6 +598,14 @@
       text(ctx, s2, lx + 4, by2 + 2, '#9aa3b5', 6);
     }
 
+    // a dead feed greys the room out entirely: no chance of reading a frozen board as a live one
+    if (stale()) {
+      ctx.save(); ctx.globalAlpha = 0.55; ctx.fillStyle = '#05070c'; ctx.fillRect(0, 0, 480, 262); ctx.restore();
+      px(ctx, 150, 122, 180, 16, '#1a0d0f'); px(ctx, 150, 122, 180, 1, '#ef4444');
+      text(ctx, 'NO SIGNAL FROM THE DESK', 240, 126, '#f87171', 7, 'center');
+      text(ctx, 'this page is showing the last state it received', 240, 133, '#7f1d1d', 5, 'center');
+    }
+
     // vignette: pulls the eye to the middle of the board and hides the hard canvas corners
     ctx.save();
     const vig = ctx.createRadialGradient(240, 130, 90, 240, 130, 320);
@@ -707,7 +726,7 @@
   function render() { renderHeader(); }
   function connect() {
     const es = new EventSource('/api/stream');
-    es.onmessage = (ev) => { try { S = JSON.parse(ev.data); S._rx = S.now; S._rxPerf = performance.now(); render(); } catch (e) { console.error(e); } };
+    es.onmessage = (ev) => { try { S = JSON.parse(ev.data); S._rx = S.now; S._rxPerf = performance.now(); lastFrameAt = Date.now(); render(); } catch (e) { console.error(e); } };
     es.onerror = () => { es.close(); setTimeout(connect, 3000); };
   }
   wireFloor();
