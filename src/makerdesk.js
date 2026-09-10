@@ -178,6 +178,9 @@ function makeMakerDesk(cfg) {
         if (f.side === 'buy') { S.cash = r2(S.cash - f.qty * f.px); m.inv += f.qty; m.cost = r2(m.cost + f.qty * f.px); }
         else { S.cash = r2(S.cash + f.qty * f.px); m.inv -= f.qty; m.cost = r2(m.cost - f.qty * f.px); }
         m.fills++; S.fills = (S.fills || 0) + 1; filled++; netQty += f.qty;
+        // remembered for the dashboard: "nothing is happening" and "something happened four
+        // minutes ago" look identical unless the page can say which.
+        S.lastFill = { ticker: u.ticker, side: f.side, qty: f.qty, px: f.px, at: Date.now() };
         seen.add(f.id);
         E.journal(E, 'MAKER_FILL', { ticker: u.ticker, side: f.side, qty: f.qty, px: f.px, tradePx: f.tradePx, runOver: f.runOver, inv: m.inv });
       }
@@ -267,6 +270,7 @@ function makeMakerDesk(cfg) {
     }).sort((a, b) => (b.quoting - a.quoting) || (b.fills - a.fills) || Math.abs(b.inv) - Math.abs(a.inv));
     return {
       cash: S.cash, equity: S.equity, fills: S.fills || 0, halted: S.halted || null,
+      lastFill: S.lastFill || null, lastScanAt: lastUniverseAt || null,
       initial: cfg.initialBalance, enabled: cfg.makerEnabled,
       quoting: universe.length, tracked: markets.length,
       inv: markets.reduce((a, m) => a + Math.abs(m.inv || 0), 0),

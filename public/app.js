@@ -31,19 +31,9 @@
       (S.demo ? `<span class="demo">● DEMO QUOTES</span>` : '') +
       `<span><span class="k">Position</span><b class="${modeCls}">● ${modeTxt}</b></span>`;
   }
-  function renderTiles() {
-    const pnl = S.equity - S.initial;
-    $('t-bal').textContent = money(S.equity);
-    $('t-bal-s').textContent = `initial ${money(S.initial)} · cash ${money(S.cash)}`;
-    const tp = $('t-pnl'); tp.textContent = signed(pnl); tp.className = `tv ${pnl >= 0 ? 'pos' : 'neg'}`;
-    $('tile-pnl').className = `tile pnl ${pnl >= 0 ? '' : 'neg'}`;
-    $('t-pnl-s').innerHTML = `realized <b class="${S.realized >= 0 ? 'pos' : 'neg'}">${signed(S.realized)}</b> · open ${signed(S.unrealized)} · fees ${money(S.fees)}`;
-    $('t-dep').textContent = money(S.deployed);
-    $('t-dep-s').textContent = `${S.positions.length} position${S.positions.length === 1 ? '' : 's'} · ${S.equity ? Math.round(S.deployed / S.equity * 100) : 0}% of equity`;
-    const n = S.wins + S.losses;
-    $('t-win').textContent = n ? `${(S.wins / n * 100).toFixed(1)}%` : '—';
-    $('t-win-s').textContent = `${S.wins}W / ${S.losses}L`;
-  }
+  // renderTiles is gone with the tiles it fed. They reported the convergence book -- the desk that
+  // found no edge -- so the page opened on "$10,000.00 / +$0.00" while the maker desk was trading.
+  // A prominent number describing the wrong desk is worse than no number.
 
   // ------------------------------------------------------------ log
   function renderLog() {
@@ -84,6 +74,16 @@
       `<div class="pr"><span title="${esc(p.label)}">${esc(p.label)}</span><span>${p.venue === 'PM' ? 'Polymarket' : 'Kalshi'}</span><span>${p.side.toUpperCase()}</span><span class="r">${p.qty}</span><span class="r">${p.entry.toFixed(3)}</span><span class="r">${(p.mark ?? p.entry).toFixed(3)}</span><span class="r ${p.pnl >= 0 ? 'pos' : 'neg'}">${signed(p.pnl)}</span><span>${p.strategy} · ${dur(S.now - p.openedAt)}</span></div>`).join('') || '<div class="empty">flat — no open positions</div>');
     $('pos-meta').textContent = `${S.positions.length} open · ${signed(S.unrealized)} unrealized`;
   }
+
+  // `ago` is used by the floor: "nothing is happening" and "something happened four minutes ago"
+  // look identical unless the page can say which.
+  const ago = (t) => {
+    if (!t) return 'never';
+    const s = Math.max(0, Math.round((S.now - t) / 1000));
+    if (s < 60) return `${s}s ago`;
+    if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+    return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m ago`;
+  };
 
   // ------------------------------------------------------------ maker desk
   // The seventh desk, and the only one currently making money. It keeps a ledger separate from the
@@ -168,7 +168,25 @@
   }
 
   // ------------------------------------------------------------ trading floor (pixel scene, 480x200)
-  const floor = $('floorc').getContext('2d');
+  // The floor is pixel art drawn in a fixed 480x200 coordinate space, but it is DISPLAYED at
+  // whatever width the panel is -- 856 css px on a 2x display, so every drawn pixel was landing on
+  // 3.57 screen pixels and every 6px label was a smear. `image-rendering: pixelated` kept the edges
+  // hard but could not invent resolution that was never rendered.
+  //
+  // Fix: give the canvas a backing store at true device resolution and scale the context to match,
+  // so the existing 480x200 coordinates still work unchanged. Blocks stay blocks; text is drawn as
+  // vectors at the transformed size, so it comes out sharp instead of upscaled. Same technique the
+  // balance chart already used -- the floor simply never got it.
+  let floorSized = '';
+  function floorCtx() {
+    const cv = $('floorc'), r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    const w = Math.max(1, Math.round(r.width * dpr)), h = Math.max(1, Math.round(r.height * dpr));
+    const key = `${w}x${h}`;
+    if (key !== floorSized) { cv.width = w; cv.height = h; floorSized = key; }
+    const ctx = cv.getContext('2d');
+    ctx.setTransform(w / 480, 0, 0, h / 200, 0, 0);   // keep the 480x200 drawing space
+    return ctx;
+  }
   // One seat per agent. MAKR joined as the seventh and this array still had six, so DESKS[6] was
   // undefined and destructuring it threw on every animation frame -- sixty times a second, with the
   // whole trading floor going dark below the point of failure. The guard below means adding an
@@ -186,7 +204,7 @@
     ctx.stroke();
   }
   function drawFloor(t) {
-    const ctx = floor; ctx.imageSmoothingEnabled = false;
+    const ctx = floorCtx(); ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, 480, 200);
     // room
     const wall = ctx.createLinearGradient(0, 0, 0, 120); wall.addColorStop(0, '#0d1220'); wall.addColorStop(1, '#101828'); ctx.fillStyle = wall; ctx.fillRect(0, 0, 480, 120);
@@ -195,37 +213,86 @@
     for (let y = 132; y < 200; y += 14) px(ctx, 0, y, 480, 1, '#0f131b');
     if (!S) { text(ctx, 'CONNECTING TO THE DESK…', 240, 96, '#4b5563', 8, 'center'); return; }
 
+    // ---- everything below is the MAKER desk, because the maker desk is the one that trades ----
+    // The boards used to show convergence pairs and convergence thresholds: the desk that measured
+    // no edge and correctly does nothing. Reading them told you nothing about whether the machine
+    // was working, which is the only question the floor should answer at a glance.
+    const M = S.maker || {};
+    const banked = (M.cash ?? M.initial ?? 0) - (M.initial ?? 0);
+    const marked = M.mark || 0;
+    const mEq = (M.equity ?? M.initial ?? 0) - (M.initial ?? 0);
+    const halted = S.halt || M.halted;
+    const working = !halted && M.quoting > 0;
+
     // emblem
-    hexagon(ctx, 58, 36, 22, '#7c869a'); hexagon(ctx, 58, 36, 14, '#7c869a'); hexagon(ctx, 58, 36, 6, '#7c869a', true);
-    text(ctx, 'THE', 58, 62, '#9aa3b5', 7, 'center'); text(ctx, 'HEXAGON', 58, 70, '#c7cdd8', 8, 'center');
-    // pairs board (left)
-    px(ctx, 10, 84, 108, 32, '#0b1018'); px(ctx, 10, 84, 108, 1, '#26304a'); px(ctx, 10, 115, 108, 1, '#26304a');
-    text(ctx, 'VENUE GAPS', 14, 86, '#6b7a99', 6);
-    S.pairs.slice(0, 3).forEach((p, i) => { text(ctx, p.label.slice(0, 16), 14, 94 + i * 7, '#aab3c5', 6); text(ctx, `${p.gap >= 0 ? '+' : '-'}${cents(p.gap)}`, 114, 94 + i * 7, Math.abs(p.gap) >= S.cfg.minGap ? '#d4a72c' : '#7c869a', 6, 'right'); });
-    if (!S.pairs.length) text(ctx, 'scanning…', 14, 96, '#5b6270', 6);
+    hexagon(ctx, 58, 30, 20, '#7c869a'); hexagon(ctx, 58, 30, 13, '#7c869a'); hexagon(ctx, 58, 30, 6, '#7c869a', true);
+    text(ctx, 'THE HEXAGON', 58, 54, '#c7cdd8', 8, 'center');
 
-    // wall screen
+    // ---- status board (left) : the "is it working" answer, in words
+    px(ctx, 10, 66, 108, 50, '#0b1018'); px(ctx, 10, 66, 108, 1, '#26304a'); px(ctx, 10, 115, 108, 1, '#26304a');
+    const stCol = halted ? '#ef4444' : working ? '#22c55e' : '#d4a72c';
+    const stTxt = halted ? 'STOPPED' : working ? 'WORKING' : 'IDLE';
+    if (working && Math.floor(t * 2) % 2) px(ctx, 14, 71, 4, 4, stCol); else if (!working) px(ctx, 14, 71, 4, 4, stCol);
+    text(ctx, stTxt, 22, 70, stCol, 8);
+    text(ctx, working ? `quoting ${M.quoting} markets` : (halted ? 'trading stopped' : 'waiting for scan'), 14, 82, '#aab3c5', 6);
+    text(ctx, 'resting orders, never crossing', 14, 90, '#5b6270', 5);
+    // The ledger survives a restart but the last-fill detail does not, so "no fills yet" next to a
+    // screen reading 11 FILLS is a contradiction the reader has no way to resolve. Say which.
+    const lf = M.lastFill;
+    const fillTop = lf ? `last fill ${ago(lf.at)}` : (M.fills ? `${M.fills} fills before restart` : 'no fills yet');
+    text(ctx, fillTop, 14, 100, lf || M.fills ? '#c7cdd8' : '#5b6270', 6);
+    text(ctx, lf ? `${lf.side === 'buy' ? 'bought' : 'sold'} ${lf.qty} @ ${cents(lf.px)}`
+      : (M.fills ? 'waiting for the next one' : 'waiting to be traded against'), 14, 108, '#7c869a', 5);
+
+    // ---- wall screen : the book itself
     px(ctx, 136, 8, 208, 100, '#1a2030'); px(ctx, 140, 12, 200, 92, '#060910');
-    const top = S.pairs[0];
-    text(ctx, top ? top.label.toUpperCase().slice(0, 34) : 'NO PAIRS MATCHED', 144, 15, '#c7cdd8', 6);
-    text(ctx, top ? `PM ${top.pmMid.toFixed(3)}   KS ${top.ksMid.toFixed(3)}   GAP ${cents(top.gap)}` : '', 144, 23, '#7c869a', 6);
-    for (let i = 1; i < 5; i++) px(ctx, 144, 32 + i * 13, 192, 1, '#111826');
-    if (top && top.hist.length > 1) {
-      series(ctx, top.hist.map((h) => h[0]), 146, 34, 188, 60, '#3b82f6');
-      series(ctx, top.hist.map((h) => h[1]), 146, 34, 188, 60, '#d4a72c');
-      px(ctx, 146, 98, 5, 3, '#3b82f6'); text(ctx, 'POLYMARKET', 153, 96, '#7c869a', 6); px(ctx, 206, 98, 5, 3, '#d4a72c'); text(ctx, 'KALSHI', 213, 96, '#7c869a', 6);
-    } else text(ctx, 'collecting price history…', 240, 60, '#3d4350', 7, 'center');
+    text(ctx, `MAKER DESK 07 · ${S.mode.toUpperCase()}`, 144, 15, '#c7cdd8', 6);
+    text(ctx, `${M.fills || 0} FILLS`, 336, 15, '#7c869a', 6, 'right');
+    // three numbers, and they mean different things on purpose
+    const cols = [['BANKED', banked, 'from spread'], ['ON INVENTORY', marked, `${M.inv || 0} contracts`], ['NET', mEq, 'if closed now']];
+    cols.forEach(([lab, v, sub], i) => {
+      const cx = 168 + i * 68;
+      text(ctx, lab, cx, 25, '#5b6270', 5, 'center');
+      text(ctx, signed(v), cx, 32, v >= 0 ? '#22c55e' : '#ef4444', 9, 'center');
+      text(ctx, sub, cx, 43, '#4b5563', 5, 'center');
+    });
+    px(ctx, 144, 50, 192, 1, '#141b28');
+    // the markets we are actually quoting
+    const book = (M.markets || []).filter((m) => m.quoting || m.inv).slice(0, 6);
+    text(ctx, 'MARKET', 144, 54, '#4b5563', 5);
+    text(ctx, 'BID', 258, 54, '#4b5563', 5, 'right');
+    text(ctx, 'ASK', 286, 54, '#4b5563', 5, 'right');
+    text(ctx, 'HELD', 336, 54, '#4b5563', 5, 'right');
+    book.forEach((m, i) => {
+      const y = 63 + i * 7;
+      px(ctx, 144, y + 1, 3, 3, m.quoting ? '#22c55e' : '#3d4350');
+      text(ctx, m.ticker.replace(/^KX/, '').slice(0, 24), 150, y, m.quoting ? '#aab3c5' : '#5b6270', 5);
+      text(ctx, m.bid == null ? '—' : cents(m.bid), 258, y, '#7c869a', 5, 'right');
+      text(ctx, m.ask == null ? '—' : cents(m.ask), 286, y, '#7c869a', 5, 'right');
+      text(ctx, m.inv ? String(m.inv) : '·', 336, y, m.inv > 0 ? '#22c55e' : m.inv < 0 ? '#ef4444' : '#3d4350', 5, 'right');
+    });
+    if (!book.length) text(ctx, M.quoting ? 'quoting — no inventory yet' : 'scanning for markets…', 240, 74, '#3d4350', 6, 'center');
     px(ctx, 236, 108, 8, 8, '#1a2030'); // mount
-    const pnl = S.equity - S.initial;
-    text(ctx, `DESK P&L ${signed(pnl)} · EQUITY ${money(S.equity)} · ${S.pairCount} PAIRS · ${S.positions.length} OPEN`, 240, 110, pnl >= 0 ? '#22c55e' : '#ef4444', 6, 'center');
+    // the strip between the screen and the floor line is 10px tall and 200px wide; anything longer
+    // than this ran straight through both side boards
+    text(ctx, halted ? String(halted).toUpperCase().slice(0, 30) : 'PAPER · NO REAL MONEY',
+      240, 112, halted ? '#ef4444' : '#4b5563', 5, 'center');
 
-    // clock + mandate (right)
+    // ---- clock + how it picks markets (right)
     px(ctx, 372, 10, 98, 20, '#0b1018'); px(ctx, 372, 10, 98, 1, '#26304a');
-    text(ctx, new Date(S.now).toISOString().slice(11, 19), 421, 14, '#22c55e', 10, 'center'); text(ctx, 'UTC', 466, 22, '#4b5563', 5, 'right');
+    text(ctx, new Date(S.now).toTimeString().slice(0, 8), 421, 14, working ? '#22c55e' : '#7c869a', 10, 'center');
+    text(ctx, `UP ${dur(S.now - S.startedAt)}`, 466, 22, '#4b5563', 5, 'right');
     px(ctx, 372, 36, 98, 78, '#0a1710'); px(ctx, 372, 36, 98, 1, '#1e4a2c'); px(ctx, 372, 113, 98, 1, '#1e4a2c');
-    const day = Math.floor((S.now - S.startedAt) / 86400000) + 1;
-    text(ctx, `DAY ${day} MANDATE`, 376, 39, '#86efac', 6);
-    [`- MODE ${S.mode.toUpperCase()}${S.demo ? ' DEMO' : ''}`, `- MIN GAP ${cents(S.cfg.minGap)} / EDGE ${cents(S.cfg.minEdge)}`, `- ARB EDGE ${cents(S.cfg.minArbEdge)}`, `- EXIT ${cents(S.cfg.exitGap)} · STOP ${cents(S.cfg.stopLoss)}`, `- ${Math.round(S.cfg.maxPositionPct * 100)}% PER POS · MAX ${S.cfg.maxOpenPositions}`, `- DAY DD LIMIT ${(S.cfg.maxDailyDrawdownPct * 100).toFixed(0)}%`, S.halt ? `! ${S.halt.toUpperCase().slice(0, 22)}` : '- WINDOW CLEAN'].forEach((l, i) => text(ctx, l, 376, 48 + i * 10, i === 5 && S.halt ? '#f87171' : '#4ade80', 6));
+    text(ctx, 'HOW IT PICKS', 376, 39, '#86efac', 6);
+    [
+      '- fee-free series only',
+      `- queue must clear < ${S.cfg.makerMaxClearDays ?? 1}d`,
+      `- min ${S.cfg.makerMinTradesPerDay ?? 10} trades/day`,
+      `- top ${S.cfg.makerMarkets ?? 24} by queue speed`,
+      `- ${M.tracked || 0} tracked, ${M.quoting || 0} live`,
+      `- scanned ${ago(M.lastScanAt)}`,
+      halted ? '! TRADING STOPPED' : '- rails clear',
+    ].forEach((l, i) => text(ctx, l, 376, 48 + i * 10, i === 6 && halted ? '#f87171' : '#4ade80', 6));
 
     // desks + agents
     // advance the shared clock between SSE frames so the stagger animates smoothly
@@ -270,7 +337,7 @@
   requestAnimationFrame(loop);
 
   // ------------------------------------------------------------ wiring
-  function render() { renderHeader(); renderTiles(); renderMaker(); renderLog(); renderFeed(); renderAgents(); renderPositions(); drawBalance(); }
+  function render() { renderHeader(); renderMaker(); renderLog(); renderFeed(); renderAgents(); renderPositions(); drawBalance(); }
   function connect() {
     const es = new EventSource('/api/stream');
     es.onmessage = (ev) => { try { S = JSON.parse(ev.data); S._rx = S.now; S._rxPerf = performance.now(); render(); } catch (e) { console.error(e); } };

@@ -72,7 +72,11 @@ h1 { font: 800 22px/1 var(--sans); margin: 0; letter-spacing: -0.01em; }
 .gap.hot { color: var(--amber); } .gap.warm { color: var(--text); } .gap.cold { color: var(--dim); }
 .empty { padding: 14px 10px; color: var(--muted); font-size: 10.5px; }
 
-#floorc { width: 100%; aspect-ratio: 12 / 5; display: block; image-rendering: pixelated; image-rendering: crisp-edges; background: #0b0e14; }
+/* The floor is the hero now, so give it room -- but cap the height so it cannot push the desk's
+   actual numbers below the fold on a short window. The canvas carries its own device-resolution
+   backing store (see floorCtx in app.js); `pixelated` keeps the block art hard-edged, it is no
+   longer being asked to hide an upscale. */
+#floorc { width: 100%; aspect-ratio: 12 / 5; max-height: 62vh; display: block; image-rendering: pixelated; background: #0b0e14; }
 
 .agents { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
 .card { min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px 12px; transition: border-color .3s, box-shadow .3s; }
@@ -122,3 +126,19 @@ footer { color: var(--dim); font-size: 10px; text-align: center; padding-top: 6p
 .mkbook .empty, .positions .empty { padding: 18px 12px; color: var(--muted); text-align: center; }
 #mk-meta.halt { color: var(--red); }
 @media (max-width: 900px) { .mktiles { grid-template-columns: repeat(2, 1fr); } }
+
+/* ---- plain-English status band ------------------------------------------ */
+/* Written for someone reading the page, not reading the code. Sentences, not metrics. */
+.status { display: grid; grid-template-columns: auto 1fr; gap: 16px; align-items: start;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 14px 16px; }
+.stag { display: flex; align-items: center; gap: 7px; font: 700 11px/1 var(--sans); letter-spacing: 0.14em;
+  padding: 8px 12px; border-radius: 3px; white-space: nowrap; }
+.stag b { font-size: 9px; }
+.stag.good { background: rgba(34,197,94,0.12); color: var(--green); }
+.stag.warn { background: rgba(212,167,44,0.12); color: var(--amber); }
+.stag.bad  { background: rgba(239,68,68,0.14); color: var(--red); }
+.stx p { margin: 0 0 5px; font: 400 13px/1.55 var(--sans); color: #c3c9d6; }
+.stx p:last-child { margin-bottom: 0; color: var(--muted); font-size: 12px; }
+.stx b { color: var(--text); font-weight: 700; }
+.stx b.pos { color: var(--green); } .stx b.neg { color: var(--red); }
+@media (max-width: 720px) { .status { grid-template-columns: 1fr; } }

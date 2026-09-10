@@ -23,11 +23,9 @@
     <div class="meta" id="meta"></div>
   </header>
 
-  <section class="tiles">
-    <div class="tile"><div class="tl">Current Balance</div><div class="tv" id="t-bal">—</div><div class="ts" id="t-bal-s"></div></div>
-    <div class="tile pnl" id="tile-pnl"><div class="tl">Total P&amp;L</div><div class="tv" id="t-pnl">—</div><div class="ts" id="t-pnl-s"></div></div>
-    <div class="tile"><div class="tl">Deployed</div><div class="tv" id="t-dep">—</div><div class="ts" id="t-dep-s"></div></div>
-    <div class="tile"><div class="tl">Win Rate</div><div class="tv" id="t-win">—</div><div class="ts" id="t-win-s"></div></div>
+  <section class="panel" id="floor">
+    <div class="ph"><span><i>◆</i> Trading Floor</span><span id="floor-meta"></span></div>
+    <canvas id="floorc" width="480" height="200"></canvas>
   </section>
 
   <section class="panel" id="maker-panel">
@@ -54,11 +52,6 @@
       <div class="feedcol"><div class="fh"><b>■</b> Kalshi · top volume</div><div id="feed-ks"></div></div>
       <div class="feedcol"><div class="fh"><b>■</b> Matched pairs · venue gap</div><div id="feed-pairs"></div></div>
     </div>
-  </section>
-
-  <section class="panel" id="floor">
-    <div class="ph"><span><i>◆</i> Trading Floor</span><span id="floor-meta"></span></div>
-    <canvas id="floorc" width="480" height="200"></canvas>
   </section>
 
   <section class="agents" id="agents"></section>
