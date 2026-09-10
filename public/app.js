@@ -81,14 +81,138 @@
     return ctx;
   }
 
+  // ------------------------------------------------------------ floor interaction
+  // The floor is a control surface, not a picture. Every frame rebuilds a list of hit regions in
+  // the 480x260 drawing space; the pointer is mapped into that space and tested against them. Click
+  // an agent or a market and the wall screen stops showing the book and shows that thing instead --
+  // the big display becomes the focus view rather than a second panel competing for room.
+  let hits = [];                 // rebuilt each frame: { x, y, w, h, kind, key }
+  let hover = null, sel = null;
+
+  function floorPoint(ev) {
+    const cv = $('floorc'), r = cv.getBoundingClientRect();
+    return { x: (ev.clientX - r.left) / r.width * 480, y: (ev.clientY - r.top) / r.height * 260 };
+  }
+  const hitAt = (p) => hits.find((h) => p.x >= h.x && p.x <= h.x + h.w && p.y >= h.y && p.y <= h.y + h.h) || null;
+  const same = (a, b) => a && b && a.kind === b.kind && a.key === b.key;
+
+  function wireFloor() {
+    const cv = $('floorc');
+    cv.addEventListener('mousemove', (ev) => {
+      hover = hitAt(floorPoint(ev));
+      cv.style.cursor = hover ? 'pointer' : 'default';
+    });
+    cv.addEventListener('mouseleave', () => { hover = null; });
+    cv.addEventListener('click', (ev) => {
+      const h = hitAt(floorPoint(ev));
+      sel = same(h, sel) ? null : h;          // clicking the selected thing again closes it
+    });
+    // clicking empty floor clears; so does Escape
+    window.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') sel = null; });
+  }
+
   const DESKS = [[132, 158], [216, 158], [300, 158], [132, 200], [216, 200], [300, 200], [384, 200]];
   function hash(i, j, k) { let x = (i * 374761393 + j * 668265263 + k * 2246822519) | 0; x = (x ^ (x >>> 13)) * 1274126177; return ((x ^ (x >>> 16)) >>> 0) / 4294967295; }
   function px(ctx, x, y, w, h, c) { ctx.fillStyle = c; ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h)); }
   function text(ctx, s, x, y, c, size = 7, align = 'left') { ctx.fillStyle = c; ctx.font = `${size}px JetBrains Mono, monospace`; ctx.textAlign = align; ctx.textBaseline = 'top'; ctx.fillText(s, Math.round(x), Math.round(y)); }
   function hexagon(ctx, cx, cy, r, c, fill) { ctx.beginPath(); for (let i = 0; i < 6; i++) { const a = Math.PI / 6 + i * Math.PI / 3; ctx[i ? 'lineTo' : 'moveTo'](cx + r * Math.cos(a), cy + r * Math.sin(a)); } ctx.closePath(); if (fill) { ctx.fillStyle = c; ctx.fill(); } else { ctx.strokeStyle = c; ctx.lineWidth = 1; ctx.stroke(); } }
+  // ------------------------------------------------------------ focus views
+  // What the wall screen shows when you click something. These are the "intelligent" part: not a
+  // dump of the fields, but the read on them -- what the position is, and what it means. A market
+  // that is 77 short with a 32,000-deep queue on the offer is a specific problem, and the screen
+  // should say so rather than leave you to work it out from four numbers.
+  function focusHeader(ctx, title, sub) {
+    text(ctx, title, 144, 15, '#c7cdd8', 6);
+    text(ctx, 'ESC ✕', 336, 15, '#3d4350', 5, 'right');
+    if (sub) text(ctx, sub, 144, 23, '#4b5563', 5);
+    px(ctx, 144, 31, 192, 1, '#141b28');
+  }
+  function drawMarketFocus(ctx, m, M) {
+    focusHeader(ctx, clip(m.sub || m.title || m.ticker, 34), m.ticker.replace(/^KX/, ''));
+    if (m.title) { wrap(ctx, m.title, 150, 37, 180, 7, '#7c869a', 5); }
+    const rows = [
+      ['our quote', m.bid == null && m.ask == null ? 'not quoting' : `${m.bid == null ? '—' : cents(m.bid)} bid  /  ${m.ask == null ? '—' : cents(m.ask)} ask`],
+      ['flow', m.tpd ? `${m.tpd} trades a day` : 'unmeasured'],
+      ['queue ahead of us', m.qBid == null ? '—' : `${m.qBid} on our bid, ${m.qAsk} on our offer`],
+      ['clears in', m.clear == null ? '—' : (m.clear < 1 ? `${(m.clear * 24).toFixed(1)} hours` : `${m.clear.toFixed(1)} days`)],
+      ['position', m.inv ? `${m.inv > 0 ? 'long' : 'short'} ${Math.abs(m.inv)} contracts` : 'flat'],
+      ['paid', m.inv ? signed(m.cost) : '—'],
+      ['marked', m.inv ? signed(m.mark - m.cost) : '—'],
+      ['fills here', String(m.fills || 0)],
+    ];
+    rows.forEach(([k, v], i) => {
+      const y = 53 + i * 7.4;
+      text(ctx, k, 150, y, '#4b5563', 5);
+      text(ctx, v, 330, y, '#aab3c5', 5, 'right');
+    });
+    // the read
+    px(ctx, 144, 114, 192, 1, '#141b28');
+    let read, col = '#7c869a';
+    if (!m.quoting && m.inv) { read = 'Dropped from the book. Quoting one side only, to work it off.'; col = '#d4a72c'; }
+    else if (!m.inv) read = 'Flat here. Both sides resting, waiting to be traded against.';
+    else if (Math.abs(m.inv) > 60) { read = `${m.inv > 0 ? 'Long' : 'Short'} ${Math.abs(m.inv)} — near the ${M.cap || 100} cap. One-sided flow, not a round trip.`; col = '#f87171'; }
+    else if (m.qAsk > 5000 || m.qBid > 5000) read = 'Deep queue here. Fills come slowly; the crowd is served first.';
+    else read = 'Working normally — small position, queue clears fast.';
+    wrap(ctx, read, 150, 119, 180, 7, col, 5);
+  }
+  function drawAgentFocus(ctx, a, M) {
+    focusHeader(ctx, `${a.n} · ${a.key} · ${a.role}`, ROLE[a.key] || '');
+    const mine = (S.log || []).filter((e) => e.agent === a.key).slice(0, 8);
+    text(ctx, 'RECENT', 150, 37, '#4b5563', 5);
+    text(ctx, `${a.runs || 0} runs`, 330, 37, '#4b5563', 5, 'right');
+    if (!mine.length) text(ctx, 'nothing logged yet', 240, 80, '#3d4350', 6, 'center');
+    mine.forEach((e, i) => {
+      const y = 46 + i * 11.4;
+      text(ctx, hhmm(e.t), 150, y, '#3d4350', 5);
+      text(ctx, e.kind, 172, y, a.color, 5);
+      text(ctx, clip(String(e.text).split('·')[0], 48), 150, y + 5, '#7c869a', 4.5);
+    });
+  }
+  // one-line job descriptions, because "RIGO · MANAGING" tells you nothing on its own
+  const ROLE = {
+    HOLT: 'finds and pairs markets across both venues',
+    ILSA: 'reads news and sentiment on live events',
+    BRAM: 'looks for convergence signals worth trading',
+    KETT: 'sizes and places the convergence trades',
+    RIGO: 'manages open positions and exits them',
+    TESS: 'risk: drawdown, data age, the halt switch',
+    MAKR: 'rests quotes and is paid the spread — the desk that trades',
+  };
+  // Cut to fit on a WORD boundary. An ellipsis is an admission that the text did not fit; a short
+  // whole phrase is just a short whole phrase.
+  const clip = (str, n) => {
+    const t = String(str).trim();
+    const out = t.length <= n ? t : t.slice(0, n).replace(/\s+\S*$/, '');
+    // never end on a comma, a bullet or an open bracket -- that reads as a sentence cut off,
+    // which is the thing a word-boundary cut was supposed to avoid
+    return out.replace(/[\s,;:·\-–(\[]+$/, '').trim();
+  };
+  // What the market actually IS. "KXBALANCEPOWERCOMBO-27FEB-RR" is a filing reference, not a
+  // description; the exchange's own title and outcome are.
+  function marketLabel(m, n) {
+    const title = (m.title || '').replace(/\?$/, '').trim();
+    const sub = (m.sub || '').trim();
+    if (!title) return clip(m.ticker.replace(/^KX/, ''), n);
+    return clip(sub && !title.toLowerCase().includes(sub.toLowerCase()) ? `${title}: ${sub}` : title, n);
+  }
+
+  // canvas has no word wrap
+  function wrap(ctx, str, x, y, maxw, lh, col, size) {
+    ctx.font = `${size}px JetBrains Mono, monospace`;
+    const words = String(str).split(' ');
+    let line = '', n = 0;
+    for (const w of words) {
+      const test = line ? line + ' ' + w : w;
+      if (ctx.measureText(test).width > maxw && line) { text(ctx, line, x, y + n * lh, col, size); line = w; n++; }
+      else line = test;
+    }
+    if (line) text(ctx, line, x, y + n * lh, col, size);
+  }
+
   function drawFloor(t) {
     const ctx = floorCtx(); ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, 480, 260);
+    hits = [];                              // rebuilt every frame; the pointer tests against it
     // room
     const wall = ctx.createLinearGradient(0, 0, 0, 150); wall.addColorStop(0, '#0d1220'); wall.addColorStop(1, '#101828'); ctx.fillStyle = wall; ctx.fillRect(0, 0, 480, 150);
     px(ctx, 0, 150, 480, 110, '#0a0d13'); px(ctx, 0, 149, 480, 2, '#1c2434');
@@ -131,55 +255,81 @@
     text(ctx, `scanned ${ago(M.lastScanAt)}`, 14, 133, '#7c869a', 5);
     text(ctx, 'PAPER · no real money', 14, 141, '#4b5563', 5);
 
-    // ---- wall screen : the whole book, not a sample of it
+    // ---- wall screen : the book, or whatever you clicked on
     px(ctx, 136, 8, 208, 138, '#1a2030'); px(ctx, 140, 12, 200, 130, '#060910');
-    text(ctx, `MAKER DESK 07 · ${S.mode.toUpperCase()}`, 144, 15, '#c7cdd8', 6);
-    text(ctx, `${M.fills || 0} FILLS`, 336, 15, '#7c869a', 6, 'right');
-    // three numbers, and they mean different things on purpose
-    [['BANKED', banked, 'from spread'], ['ON INVENTORY', marked, `${M.inv || 0} contracts`], ['NET', mEq, 'if closed now']]
-      .forEach(([lab, v, sub], i) => {
-        const cx = 168 + i * 68;
-        text(ctx, lab, cx, 25, '#5b6270', 5, 'center');
-        text(ctx, signed(v), cx, 32, v >= 0 ? '#22c55e' : '#ef4444', 9, 'center');
-        text(ctx, sub, cx, 43, '#4b5563', 5, 'center');
+
+    if (sel && sel.kind === 'market') {
+      const m = (M.markets || []).find((x) => x.ticker === sel.key);
+      if (!m) sel = null; else drawMarketFocus(ctx, m, M);
+    } else if (sel && sel.kind === 'agent') {
+      const a2 = S.agents.find((x) => x.key === sel.key);
+      if (!a2) sel = null; else drawAgentFocus(ctx, a2, M);
+    }
+
+    if (!sel) {
+      text(ctx, `MAKER DESK 07 · ${S.mode.toUpperCase()}`, 144, 15, '#c7cdd8', 6);
+      text(ctx, `${M.fills || 0} FILLS`, 336, 15, '#7c869a', 6, 'right');
+      // three numbers, and they mean different things on purpose
+      [['BANKED', banked, 'from spread'], ['ON INVENTORY', marked, `${M.inv || 0} contracts`], ['NET', mEq, 'if closed now']]
+        .forEach(([lab, v, sub], i) => {
+          const cx = 168 + i * 68;
+          text(ctx, lab, cx, 25, '#5b6270', 5, 'center');
+          text(ctx, signed(v), cx, 32, v >= 0 ? '#22c55e' : '#ef4444', 9, 'center');
+          text(ctx, sub, cx, 43, '#4b5563', 5, 'center');
+        });
+      px(ctx, 144, 50, 192, 1, '#141b28');
+      text(ctx, 'MARKET', 144, 54, '#4b5563', 5);
+      text(ctx, 'FLOW', 254, 54, '#4b5563', 5, 'right');
+      text(ctx, 'BID', 282, 54, '#4b5563', 5, 'right');
+      text(ctx, 'ASK', 310, 54, '#4b5563', 5, 'right');
+      text(ctx, 'HELD', 336, 54, '#4b5563', 5, 'right');
+      const book = (M.markets || []).filter((m) => m.quoting || m.inv);
+      const ROWS = 12;   // inner screen is y 12-142; 12 rows from 61 ends at 135
+      book.slice(0, ROWS).forEach((m, i) => {
+        const y = 61 + i * 6.2;
+        hits.push({ x: 144, y: y - 1, w: 192, h: 6.2, kind: 'market', key: m.ticker });
+        const hot = (hover && hover.kind === 'market' && hover.key === m.ticker);
+        if (hot) px(ctx, 144, y - 1, 192, 6.2, '#101826');
+        px(ctx, 144, y + 1, 3, 3, m.quoting ? '#22c55e' : '#3d4350');
+        text(ctx, marketLabel(m, 28), 150, y, hot ? '#e6e8ee' : (m.quoting ? '#aab3c5' : '#5b6270'), 5);
+        text(ctx, m.tpd ? `${m.tpd}/d` : '—', 254, y, '#4b5563', 5, 'right');
+        text(ctx, m.bid == null ? '—' : cents(m.bid), 282, y, '#7c869a', 5, 'right');
+        text(ctx, m.ask == null ? '—' : cents(m.ask), 310, y, '#7c869a', 5, 'right');
+        text(ctx, m.inv ? String(m.inv) : '·', 336, y, m.inv > 0 ? '#22c55e' : m.inv < 0 ? '#ef4444' : '#3d4350', 5, 'right');
       });
-    px(ctx, 144, 50, 192, 1, '#141b28');
-    text(ctx, 'MARKET', 144, 54, '#4b5563', 5);
-    text(ctx, 'FLOW', 236, 54, '#4b5563', 5, 'right');
-    text(ctx, 'BID', 266, 54, '#4b5563', 5, 'right');
-    text(ctx, 'ASK', 294, 54, '#4b5563', 5, 'right');
-    text(ctx, 'HELD', 336, 54, '#4b5563', 5, 'right');
-    const book = (M.markets || []).filter((m) => m.quoting || m.inv);
-    const ROWS = 12;   // inner screen is y 12-142; 12 rows from 61 ends at 135, leaving the tail line room
-    book.slice(0, ROWS).forEach((m, i) => {
-      const y = 61 + i * 6.2;
-      px(ctx, 144, y + 1, 3, 3, m.quoting ? '#22c55e' : '#3d4350');
-      text(ctx, m.ticker.replace(/^KX/, '').slice(0, 19), 150, y, m.quoting ? '#aab3c5' : '#5b6270', 5);
-      text(ctx, m.tpd ? `${m.tpd}/d` : '—', 236, y, '#4b5563', 5, 'right');
-      text(ctx, m.bid == null ? '—' : cents(m.bid), 266, y, '#7c869a', 5, 'right');
-      text(ctx, m.ask == null ? '—' : cents(m.ask), 294, y, '#7c869a', 5, 'right');
-      text(ctx, m.inv ? String(m.inv) : '·', 336, y, m.inv > 0 ? '#22c55e' : m.inv < 0 ? '#ef4444' : '#3d4350', 5, 'right');
-    });
-    if (!book.length) text(ctx, M.quoting ? 'quoting — no inventory yet' : 'scanning for markets…', 240, 90, '#3d4350', 6, 'center');
-    else if (book.length > ROWS) text(ctx, `+${book.length - ROWS} more quoting`, 336, 61 + ROWS * 6.2, '#3d4350', 5, 'right');
+      if (!book.length) text(ctx, M.quoting ? 'quoting — no inventory yet' : 'scanning for markets…', 240, 90, '#3d4350', 6, 'center');
+      else if (book.length > ROWS) text(ctx, `+${book.length - ROWS} more quoting`, 336, 61 + ROWS * 6.2, '#3d4350', 5, 'right');
+      text(ctx, 'click a market or an agent', 144, 135, '#243044', 5);
+    }
     px(ctx, 236, 146, 8, 8, '#1a2030'); // mount
 
-    // ---- clock + how it picks markets (right)
+    // ---- clock + the fill tape (right)
     px(ctx, 372, 10, 98, 20, '#0b1018'); px(ctx, 372, 10, 98, 1, '#26304a');
-    text(ctx, new Date(S.now).toTimeString().slice(0, 8), 421, 14, working ? '#22c55e' : '#7c869a', 10, 'center');
+    const nyc = new Date(S.now).toLocaleTimeString('en-US',
+      { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
+    const [hms, ampm] = nyc.split(' ');
+    text(ctx, hms, 415, 14, working ? '#22c55e' : '#7c869a', 10, 'center');
+    text(ctx, ampm, 466, 17, '#4b5563', 6, 'right');
+
+    // The fill tape. This panel used to restate the selection rules -- four lines of config that
+    // never change, in the most valuable strip of the board. What belongs here is the one thing
+    // that is genuinely live: the trades as they land.
     px(ctx, 372, 36, 98, 108, '#0a1710'); px(ctx, 372, 36, 98, 1, '#1e4a2c'); px(ctx, 372, 143, 98, 1, '#1e4a2c');
-    text(ctx, 'HOW IT PICKS', 376, 39, '#86efac', 6);
-    [
-      '- fee-free series only',
-      `- queue clears < ${S.cfg.makerMaxClearDays ?? 1}d`,
-      `- min ${S.cfg.makerMinTradesPerDay ?? 10} trades/day`,
-      `- top ${S.cfg.makerMarkets ?? 24} by queue speed`,
-      '',
-      `- ${M.tracked || 0} tracked`,
-      `- ${M.quoting || 0} quoting now`,
-      '',
-      halted ? '! TRADING STOPPED' : '- rails clear',
-    ].forEach((l, i) => l && text(ctx, l, 376, 48 + i * 10, l[0] === '!' ? '#f87171' : '#4ade80', 6));
+    text(ctx, 'FILLS', 376, 39, '#86efac', 6);
+    text(ctx, `${M.fills || 0} total`, 466, 39, '#3f6b4f', 5, 'right');
+    const tape = M.recent || [];
+    if (!tape.length) {
+      text(ctx, M.fills ? `${M.fills} before` : 'none yet', 421, 84, '#2f5a3f', 6, 'center');
+      text(ctx, M.fills ? 'this restart' : 'waiting to be', 421, 92, '#2f5a3f', 6, 'center');
+      if (!M.fills) text(ctx, 'traded against', 421, 100, '#2f5a3f', 6, 'center');
+    } else tape.slice(0, 10).forEach((f, i) => {
+      const y = 49 + i * 9.4;
+      const buy = f.side === 'buy';
+      px(ctx, 376, y + 1, 3, 3, buy ? '#22c55e' : '#ef4444');
+      text(ctx, `${buy ? 'BUY' : 'SELL'} ${f.qty}`, 382, y, buy ? '#4ade80' : '#f87171', 5);
+      text(ctx, cents(f.px), 466, y, '#86efac', 5, 'right');
+      text(ctx, f.ticker.replace(/^KX/, '').slice(0, 17), 382, y + 4.4, '#3f6b4f', 4.5);
+    });
 
     // desks + agents
     // advance the shared clock between SSE frames so the stagger animates smoothly
@@ -189,6 +339,15 @@
       if (!DESKS[i]) return;                 // more agents than seats: skip rather than throw
       const [x, y] = DESKS[i];
       const act = isActive(a);
+      // the whole desk is the target, not just the blob -- a 14px character is not a click target
+      hits.push({ x: x - 4, y: y - 18, w: 72, h: 60, kind: 'agent', key: a.key });
+      const hot = (hover && hover.kind === 'agent' && hover.key === a.key);
+      const picked = (sel && sel.kind === 'agent' && sel.key === a.key);
+      if (hot || picked) {
+        // a soft pool of the agent's own colour, so the highlight reads as light rather than a box
+        ctx.save(); ctx.globalAlpha = picked ? 0.16 : 0.09; px(ctx, x - 4, y - 18, 72, 60, a.color); ctx.restore();
+        if (picked) { px(ctx, x - 4, y - 18, 72, 1, a.color); px(ctx, x - 4, y + 41, 72, 1, a.color); }
+      }
       // monitor
       px(ctx, x + 12, y - 16, 40, 24, '#232935'); px(ctx, x + 14, y - 14, 36, 20, '#070a10'); px(ctx, x + 30, y + 8, 4, 3, '#232935');
       const bars = 9;
@@ -204,7 +363,7 @@
       const blink = Math.floor(t * 1.3 + i * 0.7) % 6 === 0 && ((t * 1.3 + i * 0.7) % 1) < 0.18;
       if (blink) { px(ctx, bx - 4, by - 3, 3, 1, '#fff'); px(ctx, bx + 1, by - 3, 3, 1, '#fff'); }
       else { px(ctx, bx - 4, by - 4, 3, 3, '#fff'); px(ctx, bx + 1, by - 4, 3, 3, '#fff'); px(ctx, bx - 3, by - 3, 1, 1, '#111'); px(ctx, bx + 2, by - 3, 1, 1, '#111'); }
-      text(ctx, a.key, bx, y + 36, act ? '#e6e8ee' : '#5b6270', 6, 'center');
+      text(ctx, a.key, bx, y + 36, (hot || picked) ? a.color : (act ? '#e6e8ee' : '#5b6270'), 6, 'center');
       // Speech bubbles are QUEUED, not drawn here. Drawing one inside this loop put it under the
       // next agent's desk, which is why they read "budget $20" and "22 pairs /" -- the box was
       // being painted over a few iterations later. They go on top, after every desk is down.
@@ -220,7 +379,9 @@
     // the least important content on it. Now they read as part of the room -- a dark plate, a hair
     // line in the agent's own colour, and the label in the same grey as the rest of the furniture.
     for (const b of bubbles) {
-      const s2 = b.note.length > 34 ? b.note.slice(0, 33) + '…' : b.note;
+      // no ellipsis and no run-ons: the note is already a short whole phrase (engine.touch), and
+      // if it still overruns it gets cut at a word, not mid-syllable with a dot-dot-dot.
+      const s2 = clip(b.note, 34);
       ctx.font = '6px JetBrains Mono, monospace';
       const w = Math.ceil(ctx.measureText(s2).width) + 8;
       const h = 10;
@@ -249,6 +410,7 @@
     es.onmessage = (ev) => { try { S = JSON.parse(ev.data); S._rx = S.now; S._rxPerf = performance.now(); render(); } catch (e) { console.error(e); } };
     es.onerror = () => { es.close(); setTimeout(connect, 3000); };
   }
+  wireFloor();
   connect();
   
 })();

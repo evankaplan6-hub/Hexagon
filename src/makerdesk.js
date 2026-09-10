@@ -88,7 +88,8 @@ function makeMakerDesk(cfg) {
           // a spread. Cheap to check here -- close_time is already in the listing we just fetched.
           const days = m.close_time ? (Date.parse(m.close_time) - Date.now()) / 86400000 : 0;
           if (!(days >= cfg.makerMinDaysToClose)) continue;
-          rows.push({ ticker: m.ticker, series: s, vol: v, spread: a - b, days, title: m.title });
+          rows.push({ ticker: m.ticker, series: s, vol: v, spread: a - b, days,
+            title: m.title || '', sub: m.yes_sub_title || '' });
         }
       } catch (e) { failed.push(s); }
       await sleep(150);                    // pace the scan; it runs once every 15 minutes
@@ -163,6 +164,10 @@ function makeMakerDesk(cfg) {
     let filled = 0, netQty = 0;
     for (const u of [...universe, ...pinned]) {
       const m = S.markets[u.ticker] || (S.markets[u.ticker] = { series: u.series, inv: 0, cost: 0, realized: 0, fills: 0, quotes: { bid: null, ask: null }, seen: [] });
+      // A ticker like KXBALANCEPOWERCOMBO-27FEB-RR says nothing about what is being traded. Keep
+      // the exchange's own words for it, and keep them on the ledger so a market that drops out of
+      // the universe can still say what it was.
+      if (u.title) { m.title = u.title; m.sub = u.sub || ''; }
       let trades = [], bk = null;
       try {
         const d = await getWithBackoff(`${ks.BASE}/markets/trades?ticker=${u.ticker}&limit=200`);
@@ -181,6 +186,8 @@ function makeMakerDesk(cfg) {
         // remembered for the dashboard: "nothing is happening" and "something happened four
         // minutes ago" look identical unless the page can say which.
         S.lastFill = { ticker: u.ticker, side: f.side, qty: f.qty, px: f.px, at: Date.now() };
+        (S.recent = S.recent || []).unshift(S.lastFill);
+        if (S.recent.length > 14) S.recent.length = 14;   // the floor shows ten; the journal keeps them all
         seen.add(f.id);
         E.journal(E, 'MAKER_FILL', { ticker: u.ticker, side: f.side, qty: f.qty, px: f.px, tradePx: f.tradePx, runOver: f.runOver, inv: m.inv });
       }
@@ -261,6 +268,7 @@ function makeMakerDesk(cfg) {
       const u = meta.get(ticker);
       return {
         ticker, series: m.series, inv: m.inv, cost: m.cost, fills: m.fills,
+        title: m.title || '', sub: m.sub || '',
         mid: m.mid ?? null, spread: m.spread ?? null, why: m.why || null,
         bid: m.quotes ? m.quotes.bid : null, ask: m.quotes ? m.quotes.ask : null,
         qBid: m.queue ? Math.round(m.queue.bid) : null, qAsk: m.queue ? Math.round(m.queue.ask) : null,
@@ -270,7 +278,7 @@ function makeMakerDesk(cfg) {
     }).sort((a, b) => (b.quoting - a.quoting) || (b.fills - a.fills) || Math.abs(b.inv) - Math.abs(a.inv));
     return {
       cash: S.cash, equity: S.equity, fills: S.fills || 0, halted: S.halted || null,
-      lastFill: S.lastFill || null, lastScanAt: lastUniverseAt || null,
+      lastFill: S.lastFill || null, recent: (S.recent || []).slice(0, 12), lastScanAt: lastUniverseAt || null,
       initial: cfg.initialBalance, enabled: cfg.makerEnabled,
       quoting: universe.length, tracked: markets.length,
       inv: markets.reduce((a, m) => a + Math.abs(m.inv || 0), 0),

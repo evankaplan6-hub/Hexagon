@@ -102,7 +102,18 @@ class Engine {
     if (!this.timers[name] || now - this.timers[name] >= sec * 1000) { this.timers[name] = now; return true; }
     return false;
   }
-  touch(agent, note) { const a = this.agentStatus[agent]; a.lastActive = Date.now(); a.runs++; if (note) a.note = note; }
+  // The note is what the agent SAYS on the floor, in a box about thirty characters wide. log()
+  // also calls touch with the full log line, which is how the floor ended up full of sentences
+  // sliced off mid-word. Keep the first clause, and cut on a word boundary if even that is long --
+  // a short true statement beats a long one with its end missing.
+  touch(agent, note) {
+    const a = this.agentStatus[agent];
+    a.lastActive = Date.now(); a.runs++;
+    if (!note) return;
+    let n = String(note).split('·')[0].trim();
+    if (n.length > 30) n = n.slice(0, 30).replace(/\s+\S*$/, '').trim();
+    a.note = n;
+  }
   log(agent, kind, pnl, text) {
     const entry = { t: Date.now(), agent, kind, pnl: pnl == null ? null : r2(pnl), text };
     this.state.log.unshift(entry);
