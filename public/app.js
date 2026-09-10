@@ -184,7 +184,43 @@
   // Republicans win the Senate race in Iowa?" and "...in Texas?" both became "Will Republicans
   // win", twice, on the same board. The outcome is the headline; the question is the subtitle.
   const OUTCOME = (m) => (m.sub || '').trim();
-  const QUESTION = (m) => (m.title || '').trim().replace(/\s+/g, ' ');
+  // The question, compressed to the part that identifies the market. Kalshi writes them in full
+  // prose -- "Will Republicans win the Senate race in Iowa?" -- and the outcome above already
+  // carries the answer, so the boilerplate is dead weight in a 190px column.
+  //   Will The Odyssey win Best Picture at the Oscars?        ->  Best Picture, Oscars
+  //   Will Republicans win the Senate race in Iowa?           ->  Republicans win Senate race, Iowa
+  //   Will Port of Mobile ... be above 450,000 TEUs?          ->  Port of Mobile throughput, 2026
+  // "of" is deliberately left alone: it binds names together, and turning it into a comma made
+  // "Port of Mobile" read as two places.
+  const QUESTION = (m) => {
+    const sub = (m.sub || '').trim();
+    let t = String(m.title || '').trim().replace(/\s+/g, ' ').replace(/\?$/, '');
+    t = t.replace(/^(Will|Which|Who|What|How many|How much)\s+/i, '');
+    if (sub) {
+      const esc = sub.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      t = t.replace(new RegExp(`\\b${esc}\\b`, 'i'), '');
+      // the threshold is already the headline; "≥80,000" and "80000" are the same number
+      const n = sub.replace(/[^0-9]/g, '');
+      if (n.length > 2) t = t.replace(new RegExp(`[≥>< ]*\\b${n}\\b`), '');
+      // removing the outcome leaves a leading space, and the verb strip below is anchored to ^
+      t = t.replace(/\s+/g, ' ').trim();
+    }
+    t = t
+      .replace(/^(win|have|be|receive|reach|get)\s+/i, '')
+      .replace(/\bpro football team\b/gi, '')
+      .replace(/\bregular season\b/gi, '')
+      .replace(/\bcontainer throughput\b/gi, 'throughput')
+      .replace(/\bgeneral government net lending\/borrowing balance\b/gi, 'net borrowing')
+      .replace(/\bbe at least\b/gi, '≥').replace(/\bat least\b/gi, '≥')
+      .replace(/\bbe above\b/gi, '>').replace(/\bbe below\b/gi, '<')
+      .replace(/\bthis season\b/gi, '').replace(/\bfor all participants\b/gi, '')
+      .replace(/\b(the|a|an)\s+/gi, ' ')
+      .replace(/\s+(at|in|for)\s+/gi, ', ')
+      .replace(/[≥><]\s+/g, (x) => x.trim())
+      .replace(/\s+\bbe\b\s*$/i, '')
+      .replace(/\s*,\s*,\s*/g, ', ').replace(/\s+/g, ' ').replace(/^[,\s]+|[,\s]+$/g, '');
+    return clip(t.charAt(0).toUpperCase() + t.slice(1), 46);
+  };
   // one-line fallback for places with no room for two
   function marketLabel(m, n) {
     const o = OUTCOME(m), q = QUESTION(m);
