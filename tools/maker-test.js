@@ -261,6 +261,30 @@ group('the flatten path realises what it closes');
   ok('...that agrees with cash', Math.abs(loss.realized - loss.cash) < 0.005, loss);
 }
 
+group('the drawdown rail measures from the peak, not from the opening balance');
+{
+  const I = 10000;
+  const flat = maker.drawdownFrom(I, null, I);
+  ok('a fresh book has no drawdown', flat.dd === 0 && flat.peak === I, flat);
+
+  const up = maker.drawdownFrom(10500, I, I);
+  ok('profit raises the high-water mark', up.peak === 10500, up);
+  ok('...and is not itself a drawdown', up.dd === 0, up);
+
+  // the case a from-inception rail cannot see: $1,450 given back off a $10,500 peak
+  const gaveBack = maker.drawdownFrom(9050, 10500, I);
+  ok('giving back profit IS a drawdown', Math.abs(gaveBack.dd - (10500 - 9050) / 10500) < 1e-9, gaveBack);
+  ok('...and trips a 10% limit', gaveBack.dd >= 0.10, gaveBack.dd);
+  ok('where the old from-inception test read under 10%', (I - 9050) / I < 0.10, (I - 9050) / I);
+
+  // and on a desk that never profited the two tests agree exactly, so this only ever halts earlier
+  const neverUp = maker.drawdownFrom(9050, I, I);
+  ok('a never-profitable book measures the same either way', Math.abs(neverUp.dd - (I - 9050) / I) < 1e-9, neverUp);
+
+  ok('the peak never ratchets down', maker.drawdownFrom(8000, 10500, I).peak === 10500);
+  ok('a missing equity reads as no drawdown', maker.drawdownFrom(undefined, null, I).dd === 0);
+}
+
 group('applyFill: cash moves in the direction it should');
 {
   const b = maker.applyFill({ inv: 0, cost: 0, realized: 0 }, { side: 'buy', qty: 10, px: 0.40 });

@@ -129,6 +129,20 @@ function applyFill(pos, f) {
   };
 }
 
+// ---------------------------------------------------------------- risk
+// Drawdown from the HIGH-WATER MARK, and the new mark. Pure, so the rail can be asserted.
+//
+// Measured against a fixed opening balance instead, the rail loosens with every dollar earned: a
+// book that runs to $10,500 and bleeds back to $9,050 has given up $1,450 -- 13.8% off its high --
+// while a from-inception test reads 9.5% and never fires. The better the desk does, the more it is
+// allowed to lose before anything stops it. A high-water mark can only halt EARLIER than the old
+// test, never later, and the two agree exactly on a desk that has never been in profit.
+function drawdownFrom(equity, peak, initialBalance) {
+  const eq = Number.isFinite(equity) ? equity : initialBalance;
+  const hi = Math.max(Number.isFinite(peak) ? peak : initialBalance, eq);
+  return { peak: hi, dd: hi > 0 ? (hi - eq) / hi : 0 };
+}
+
 // ---------------------------------------------------------------- universe
 // Only plain-`quadratic` series: anything with maker fees hands most of the spread back. Cached,
 // because fee_type does not change intraday.
@@ -145,4 +159,4 @@ async function eligibleSeries(candidates) {
   return ok;
 }
 
-module.exports = { desiredQuotes, fillsFrom, applyFill, eligibleSeries };
+module.exports = { desiredQuotes, fillsFrom, applyFill, drawdownFrom, eligibleSeries };

@@ -135,9 +135,17 @@ function makeMakerDesk(cfg) {
 
     // Own drawdown rail. TESS watches the taker book and would never see this desk bleeding,
     // because the two ledgers are separate on purpose.
-    const dd = (cfg.initialBalance - (S.equity ?? cfg.initialBalance)) / cfg.initialBalance;
+    //
+    // Measured from the PEAK, not from the opening balance. Against a fixed starting reference the
+    // rail loosens with every dollar earned: a book that runs to $10,500 and bleeds back to $9,050
+    // has given up $1,450 -- 13.8% off its high -- while this reads 9.5% and never fires. The
+    // better the desk does, the more it is allowed to lose before anything stops it, which is
+    // backwards. The taker's rail already re-references daily (dayStartEquity); this one had no
+    // moving reference at all. A high-water mark can only ever halt EARLIER than the old test.
+    const { peak, dd } = maker.drawdownFrom(S.equity, S.peak, cfg.initialBalance);
+    S.peak = peak;
     if (dd >= cfg.makerMaxDrawdownPct && !S.halted) {
-      S.halted = `maker drawdown ${(dd * 100).toFixed(1)}% hit the ${(cfg.makerMaxDrawdownPct * 100).toFixed(0)}% limit`;
+      S.halted = `maker drawdown ${(dd * 100).toFixed(1)}% from a peak of ${money(S.peak)} hit the ${(cfg.makerMaxDrawdownPct * 100).toFixed(0)}% limit`;
       E.log('MAKR', 'OPS', null, `HALT · ${S.halted} · quotes withdrawn, inventory held and marked`);
       E.journal(E, 'MAKER_HALT', { reason: S.halted, equity: S.equity });
     }
