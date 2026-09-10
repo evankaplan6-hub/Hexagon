@@ -62,6 +62,11 @@ if (!LOOPBACK.includes(cfg.bindHost) && !cfg.dashPass) {
 // it, because curl and the tools in tools/ use it.
 const COOKIE = 'hexsession';
 const sessionToken = () => crypto.createHmac('sha256', cfg.dashPass).update('hexagon-session-v1').digest('hex');
+// A one-click link, so the dashboard can be opened without transcribing a password on a phone.
+// Derived from DASH_PASS but NOT equal to it: the password itself never travels in a URL, where it
+// would end up in browser history and every proxy log between here and the machine. Changing
+// DASH_PASS invalidates the link along with every session.
+const linkToken = () => crypto.createHmac('sha256', cfg.dashPass).update('hexagon-link-v1').digest('hex').slice(0, 32);
 
 function timingEq(a, b) {
   const x = Buffer.from(String(a)), y = Buffer.from(String(b));
@@ -130,6 +135,13 @@ const server = http.createServer((req, res) => {
         res.writeHead(401, { 'content-type': 'text/html; charset=utf-8' });
         res.end(LOGIN_PAGE(true));
       });
+    }
+    // ?k=<link token> logs in and drops the token from the address bar on the redirect
+    const k = url.searchParams.get('k');
+    if (k && timingEq(k, linkToken())) {
+      const secure = (req.headers['x-forwarded-proto'] || '').includes('https') ? '; Secure' : '';
+      res.writeHead(302, { location: '/', 'set-cookie': `${COOKIE}=${sessionToken()}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000${secure}` });
+      return res.end();
     }
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     return res.end(LOGIN_PAGE(false));
