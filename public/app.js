@@ -100,6 +100,34 @@
   function hash(i, j, k) { let x = (i * 374761393 + j * 668265263 + k * 2246822519) | 0; x = (x ^ (x >>> 13)) * 1274126177; return ((x ^ (x >>> 16)) >>> 0) / 4294967295; }
   function px(ctx, x, y, w, h, c) { ctx.fillStyle = c; ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h)); }
   function text(ctx, s, x, y, c, size = 7, align = 'left') { ctx.fillStyle = c; ctx.font = `${size}px JetBrains Mono, monospace`; ctx.textAlign = align; ctx.textBaseline = 'top'; ctx.fillText(s, Math.round(x), Math.round(y)); }
+  // ---- light, shadow and screen texture -----------------------------------------------------
+  // Everything on this floor was flat fills, which is why it read as a diagram rather than a room.
+  // These are the three things that make a dark interior look lit: a source, what it falls on, and
+  // what it misses.
+  function glow(ctx, cx, cy, r, color, alpha) {
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+    g.addColorStop(0, color); g.addColorStop(1, 'transparent');
+    ctx.save(); ctx.globalAlpha = alpha; ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = g; ctx.fillRect(cx - r, cy - r, r * 2, r * 2); ctx.restore();
+  }
+  function shadow(ctx, x, y, w, h, alpha = 0.5) {
+    ctx.save(); ctx.globalAlpha = alpha; ctx.fillStyle = '#000';
+    ctx.beginPath(); ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+  }
+  // CRT texture: every other line a shade darker. Cheap, and it stops a large dark rectangle from
+  // reading as a hole cut in the wall.
+  function scanlines(ctx, x, y, w, h, alpha = 0.5) {
+    ctx.save(); ctx.globalAlpha = alpha; ctx.fillStyle = '#000';
+    for (let i = 0; i < h; i += 2) ctx.fillRect(x, y + i, w, 1);
+    ctx.restore();
+  }
+  // A recessed panel: dark face, lit top edge, shadowed bottom. One call instead of four px().
+  function panel(ctx, x, y, w, h, face, edge) {
+    px(ctx, x, y, w, h, face);
+    px(ctx, x, y, w, 1, edge);
+    px(ctx, x, y + h - 1, w, 1, '#05070b');
+    px(ctx, x, y, 1, h, edge); px(ctx, x + w - 1, y, 1, h, '#05070b');
+  }
   function hexagon(ctx, cx, cy, r, c, fill) { ctx.beginPath(); for (let i = 0; i < 6; i++) { const a = Math.PI / 6 + i * Math.PI / 3; ctx[i ? 'lineTo' : 'moveTo'](cx + r * Math.cos(a), cy + r * Math.sin(a)); } ctx.closePath(); if (fill) { ctx.fillStyle = c; ctx.fill(); } else { ctx.strokeStyle = c; ctx.lineWidth = 1; ctx.stroke(); } }
   // ------------------------------------------------------------ focus views
   // What the wall screen shows when you click something. These are the "intelligent" part: not a
@@ -281,12 +309,34 @@
     const ctx = floorCtx(); ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, 480, 340);   // the letterbox is repainted in floorCtx
     hits = []; zones = [];                   // rebuilt every frame; the pointer tests against them
-    // room
-    const wall = ctx.createLinearGradient(0, 0, 0, 150); wall.addColorStop(0, '#0d1220'); wall.addColorStop(1, '#101828'); ctx.fillStyle = wall; ctx.fillRect(0, 0, 480, 150);
-    px(ctx, 0, 150, 480, 112, '#0a0d13'); px(ctx, 0, 149, 480, 2, '#1c2434');
-    for (let x = 0; x < 480; x += 24) px(ctx, x, 150, 1, 112, '#0f131b');
-    for (let y = 162; y < 262; y += 14) px(ctx, 0, y, 480, 1, '#0f131b');
+    // ---- the room -----------------------------------------------------------------------------
+    // wall: darker at the corners, lifting toward the middle where the big screen hangs
+    const wall = ctx.createLinearGradient(0, 0, 0, 150);
+    wall.addColorStop(0, '#080b14'); wall.addColorStop(0.55, '#0e1422'); wall.addColorStop(1, '#121a2b');
+    ctx.fillStyle = wall; ctx.fillRect(0, 0, 480, 150);
+    // floor: a gradient away from the wall, so the far edge reads as further away
+    const flr = ctx.createLinearGradient(0, 150, 0, 262);
+    flr.addColorStop(0, '#0c1017'); flr.addColorStop(1, '#070910');
+    ctx.fillStyle = flr; ctx.fillRect(0, 150, 480, 112);
+    px(ctx, 0, 149, 480, 1, '#243047'); px(ctx, 0, 150, 480, 1, '#161d2b');   // skirting
+    // Perspective grid. The old one was a plain lattice, which read as graph paper; verticals now
+    // converge on a vanishing point behind the wall screen and horizontals space out toward us.
+    ctx.save(); ctx.globalAlpha = 0.5;
+    const VPX = 240;
+    for (let i = -10; i <= 10; i++) {
+      const xTop = VPX + i * 13;
+      ctx.strokeStyle = '#131a26'; ctx.lineWidth = 0.5;
+      ctx.beginPath(); ctx.moveTo(xTop, 150); ctx.lineTo(VPX + i * 46, 262); ctx.stroke();
+    }
+    for (let k = 1, y = 150; y < 262; k++) { y = 150 + Math.pow(k, 1.55) * 3.1; px(ctx, 0, y, 480, 0.5, '#141c29'); }
+    ctx.restore();
     if (!S) { text(ctx, 'CONNECTING TO THE DESK', 240, 120, '#4b5563', 8, 'center'); return; }
+
+    // The room is lit by its own screens: a wide cool pool from the wall display and two smaller
+    // ones from the side boards. This is what stops the floor reading as a flat black rectangle.
+    glow(ctx, 240, 78, 210, '#1b3a6b', 0.55);
+    glow(ctx, 64, 105, 95, '#14304f', 0.30);
+    glow(ctx, 421, 90, 95, '#123d2a', 0.30);
 
     // ---- everything below is the MAKER desk, because the maker desk is the one that trades ----
     // The boards used to show convergence pairs and convergence thresholds: the desk that measured
@@ -304,7 +354,8 @@
     text(ctx, 'THE HEXAGON', 58, 54, '#c7cdd8', 8, 'center');
 
     // ---- status board (left) : the "is it working" answer, in words
-    px(ctx, 10, 66, 108, 78, '#0b1018'); px(ctx, 10, 66, 108, 1, '#26304a'); px(ctx, 10, 143, 108, 1, '#26304a');
+    panel(ctx, 8, 64, 112, 82, '#080c14', '#243047');
+    scanlines(ctx, 9, 65, 110, 80, 0.10);
     const stCol = halted ? '#ef4444' : working ? '#22c55e' : '#d4a72c';
     px(ctx, 14, 71, 4, 4, stCol);
     text(ctx, halted ? 'STOPPED' : working ? 'WORKING' : 'IDLE', 22, 70, stCol, 8);
@@ -325,7 +376,15 @@
     text(ctx, 'PAPER · no real money', 14, 141, '#4b5563', 5);
 
     // ---- wall screen : the book, or whatever you clicked on
-    px(ctx, 136, 8, 208, 138, '#1a2030'); px(ctx, 140, 12, 200, 130, '#060910');
+    // bezel, then glass. A single flat rect read as a hole in the wall; a lit top edge and a
+    // shadowed bottom make it an object hanging on it.
+    px(ctx, 134, 6, 212, 142, '#0a0e17');
+    px(ctx, 134, 6, 212, 1, '#2c3a55'); px(ctx, 134, 147, 212, 1, '#04060a');
+    px(ctx, 134, 6, 1, 142, '#222d42'); px(ctx, 345, 6, 1, 142, '#04060a');
+    px(ctx, 140, 12, 200, 130, '#050810');
+    const glass = ctx.createLinearGradient(0, 12, 0, 142);
+    glass.addColorStop(0, 'rgba(70,120,190,0.10)'); glass.addColorStop(1, 'rgba(70,120,190,0.02)');
+    ctx.fillStyle = glass; ctx.fillRect(140, 12, 200, 130);
 
     if (sel && sel.kind === 'market') {
       const m = (M.markets || []).find((x) => x.ticker === sel.key);
@@ -405,10 +464,12 @@
       if (!all.length) text(ctx, 'scanning for markets', 240, 95, '#3d4350', 6, 'center');
       text(ctx, 'click a market or an agent', 144, 136, '#243044', 5);
     }
-    px(ctx, 236, 146, 8, 8, '#1a2030'); // mount
+    scanlines(ctx, 140, 12, 200, 130, 0.16);
+    glow(ctx, 240, 30, 120, '#1e4e8a', 0.18);              // the screen lighting itself
+    px(ctx, 238, 148, 6, 6, '#141b28'); px(ctx, 232, 152, 18, 2, '#0d1420');   // wall mount
 
     // ---- clock + the fill tape (right)
-    px(ctx, 372, 10, 98, 20, '#0b1018'); px(ctx, 372, 10, 98, 1, '#26304a');
+    panel(ctx, 370, 8, 102, 24, '#080c14', '#243047');
     const nyc = new Date(S.now).toLocaleTimeString('en-US',
       { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
     const [hms, ampm] = nyc.split(' ');
@@ -418,7 +479,8 @@
     // The fill tape. This panel used to restate the selection rules -- four lines of config that
     // never change, in the most valuable strip of the board. What belongs here is the one thing
     // that is genuinely live: the trades as they land.
-    px(ctx, 372, 36, 98, 108, '#0a1710'); px(ctx, 372, 36, 98, 1, '#1e4a2c'); px(ctx, 372, 143, 98, 1, '#1e4a2c');
+    panel(ctx, 370, 36, 102, 110, '#060f0a', '#1e4a2c');
+    scanlines(ctx, 371, 37, 100, 108, 0.12);
     text(ctx, 'FILLS', 376, 39, '#86efac', 6);
     text(ctx, `${M.fills || 0} total`, 466, 39, '#3f6b4f', 5, 'right');
     const tape = M.recent || [];
@@ -458,18 +520,29 @@
         ctx.save(); ctx.globalAlpha = picked ? 0.16 : 0.09; px(ctx, x - 4, y - 18, 72, 60, a.color); ctx.restore();
         if (picked) { px(ctx, x - 4, y - 18, 72, 1, a.color); px(ctx, x - 4, y + 41, 72, 1, a.color); }
       }
-      // monitor
-      px(ctx, x + 12, y - 16, 40, 24, '#232935'); px(ctx, x + 14, y - 14, 36, 20, '#070a10'); px(ctx, x + 30, y + 8, 4, 3, '#232935');
+      // contact shadow first, so everything above it sits ON the floor rather than floating
+      shadow(ctx, x + 2, y + 26, 60, 10, 0.45);
+      // monitor: bezel, screen, and its own light thrown back onto the desk
+      px(ctx, x + 12, y - 16, 40, 24, '#1a2029'); px(ctx, x + 12, y - 16, 40, 1, '#2f3a4c');
+      px(ctx, x + 14, y - 14, 36, 20, '#04070c');
       const bars = 9;
-      for (let j = 0; j < bars; j++) { const hgt = 3 + Math.round(hash(i, j, Math.floor(a.runs / 2)) * 12); px(ctx, x + 16 + j * 4, y + 4 - hgt, 3, hgt, act ? a.color : '#243044'); }
+      for (let j = 0; j < bars; j++) { const hgt = 3 + Math.round(hash(i, j, Math.floor(a.runs / 2)) * 12); px(ctx, x + 16 + j * 4, y + 4 - hgt, 3, hgt, act ? a.color : '#1e2836'); }
+      scanlines(ctx, x + 14, y - 14, 36, 20, 0.22);
+      if (act) glow(ctx, x + 32, y - 4, 30, a.color, 0.20);
+      px(ctx, x + 30, y + 8, 4, 3, '#1a2029');
       if (act && Math.floor(t * 6) % 2) px(ctx, x + 47, y - 12, 2, 2, a.color);
-      // desk + chair
-      px(ctx, x, y + 11, 64, 9, '#3a2f22'); px(ctx, x, y + 11, 64, 1, '#5a4a36'); px(ctx, x + 2, y + 20, 4, 8, '#2a2219'); px(ctx, x + 58, y + 20, 4, 8, '#2a2219');
-      px(ctx, x + 24, y + 30, 16, 5, '#171a21'); px(ctx, x + 22, y + 24, 20, 6, '#1d212b');
+      // desk: lit top edge, dark front face, legs
+      px(ctx, x, y + 11, 64, 9, '#33291d'); px(ctx, x, y + 11, 64, 1, '#6b5942'); px(ctx, x, y + 19, 64, 1, '#1b150e');
+      px(ctx, x + 2, y + 20, 4, 8, '#221b13'); px(ctx, x + 58, y + 20, 4, 8, '#221b13');
+      px(ctx, x + 24, y + 30, 16, 5, '#12151b'); px(ctx, x + 22, y + 24, 20, 6, '#1a1e27'); px(ctx, x + 22, y + 24, 20, 1, '#28303d');
       // blob agent (sits in front of the desk, bobs when active)
       const bob = act ? Math.round(Math.sin(t * 9 + i) * 1.5) : 0;
       const bx = x + 32, by = y + 22 + bob;
+      shadow(ctx, bx - 7, by + 3, 14, 5, 0.35);
       ctx.fillStyle = a.color; ctx.beginPath(); ctx.roundRect(bx - 7, by - 8, 14, 13, [6, 6, 5, 5]); ctx.fill();
+      ctx.save(); ctx.globalAlpha = 0.35; ctx.fillStyle = '#fff';   // rim light off the screens
+      ctx.beginPath(); ctx.roundRect(bx - 7, by - 8, 14, 4, [6, 6, 0, 0]); ctx.fill(); ctx.restore();
+      if (act) glow(ctx, bx, by - 2, 16, a.color, 0.22);
       const blink = Math.floor(t * 1.3 + i * 0.7) % 6 === 0 && ((t * 1.3 + i * 0.7) % 1) < 0.18;
       if (blink) { px(ctx, bx - 4, by - 3, 3, 1, '#fff'); px(ctx, bx + 1, by - 3, 3, 1, '#fff'); }
       else { px(ctx, bx - 4, by - 4, 3, 3, '#fff'); px(ctx, bx + 1, by - 4, 3, 3, '#fff'); px(ctx, bx - 3, by - 3, 1, 1, '#111'); px(ctx, bx + 2, by - 3, 1, 1, '#111'); }
@@ -481,8 +554,12 @@
     });
     // furniture, before the bubbles -- the server rack stands where the seventh agent sits and was
     // painting straight over MAKR's line
-    px(ctx, 440, 162, 26, 60, '#12161e'); for (let i = 0; i < 6; i++) { px(ctx, 443, 166 + i * 9, 20, 6, '#0a0d13'); px(ctx, 459, 168 + i * 9, 2, 2, (Math.floor(t * 4) + i) % 3 ? '#22c55e' : '#0f3a1f'); }
-    px(ctx, 16, 186, 12, 24, '#2a2219'); px(ctx, 10, 170, 24, 18, '#1a4d2e'); px(ctx, 14, 164, 16, 10, '#236b3d');
+    shadow(ctx, 438, 216, 30, 10, 0.5);
+    px(ctx, 440, 162, 26, 60, '#0f131b'); px(ctx, 440, 162, 26, 1, '#2a3446'); px(ctx, 440, 162, 1, 60, '#1e2635');
+    for (let i = 0; i < 6; i++) { px(ctx, 443, 166 + i * 9, 20, 6, '#06090e'); const on = (Math.floor(t * 4) + i) % 3; px(ctx, 459, 168 + i * 9, 2, 2, on ? '#22c55e' : '#0f3a1f'); if (on) glow(ctx, 460, 169 + i * 9, 5, '#22c55e', 0.5); }
+    shadow(ctx, 12, 206, 22, 8, 0.45);
+    px(ctx, 16, 186, 12, 24, '#241d14'); px(ctx, 16, 186, 3, 24, '#332918');
+    px(ctx, 10, 170, 24, 18, '#153f26'); px(ctx, 14, 164, 16, 10, '#1d5c34'); px(ctx, 14, 164, 16, 1, '#2a7d47');
 
     // ---- speech bubbles, last of everything so nothing can cover them
     // They used to be solid white blocks with black text: the brightest thing in a dark room, for
@@ -510,26 +587,50 @@
       text(ctx, s2, lx + 4, by2 + 2, '#9aa3b5', 6);
     }
 
+    // vignette: pulls the eye to the middle of the board and hides the hard canvas corners
+    ctx.save();
+    const vig = ctx.createRadialGradient(240, 130, 90, 240, 130, 320);
+    vig.addColorStop(0, 'transparent'); vig.addColorStop(1, 'rgba(0,0,0,0.55)');
+    ctx.fillStyle = vig; ctx.fillRect(0, 0, 480, 262);
+    ctx.restore();
+
     drawLog(ctx);
   }
   // ---- the tape along the bottom of the room: every agent's activity, scrollable in place
   function drawLog(ctx) {
-    px(ctx, 0, 262, 480, 78, '#07090e'); px(ctx, 0, 262, 480, 1, '#1c2434');
+    // a lit ledge rather than a black band bolted to the bottom of the room
+    const g = ctx.createLinearGradient(0, 262, 0, 340);
+    g.addColorStop(0, '#0a0e16'); g.addColorStop(1, '#05070c');
+    ctx.fillStyle = g; ctx.fillRect(0, 262, 480, 78);
+    px(ctx, 0, 262, 480, 1, '#243047'); px(ctx, 0, 263, 480, 1, '#0e1420');
+
     const rows = S.log || [];
     const LROWS = 8;
     const maxG = Math.max(0, rows.length - LROWS);
     scroll.log = Math.min(scroll.log, maxG);
     zones.push({ x: 0, y: 262, w: 480, h: 78, id: 'log', max: maxG });
-    text(ctx, 'ACTIVITY', 10, 266, '#4b5563', 5);
-    if (maxG) text(ctx, `${scroll.log + 1}-${Math.min(rows.length, scroll.log + LROWS)} of ${rows.length}`, 470, 266, '#3d4350', 5, 'right');
+    text(ctx, 'ACTIVITY', 10, 267, '#4b5563', 5);
+    if (maxG) {
+      text(ctx, `${scroll.log + 1}-${Math.min(rows.length, scroll.log + LROWS)} of ${rows.length}`, 470, 267, '#3d4350', 5, 'right');
+      const th = Math.max(5, 62 * LROWS / rows.length);
+      px(ctx, 476, 275, 1, 62, '#141b28');
+      px(ctx, 476, 275 + (62 - th) * (scroll.log / maxG), 1, th, '#4b5563');
+    }
     rows.slice(scroll.log, scroll.log + LROWS).forEach((e, i) => {
-      const y = 275 + i * 8;
-      text(ctx, hhmm(e.t), 10, y, '#3d4350', 5);
-      px(ctx, 34, y + 1, 3, 3, agentColor(e.agent));
-      text(ctx, e.agent, 40, y, agentColor(e.agent), 5);
-      text(ctx, e.kind, 66, y, '#4b5563', 5);
-      if (e.pnl != null) text(ctx, signed(e.pnl), 128, y, e.pnl >= 0 ? '#22c55e' : '#ef4444', 5, 'right');
-      text(ctx, clip(e.text, 112), 132, y, e.kind === 'FILL' ? '#c7cdd8' : '#7c869a', 5);
+      const y = 276 + i * 7.7;
+      if (i % 2) px(ctx, 6, y - 1.4, 464, 7.7, '#0a0f18');            // zebra, so the eye tracks across
+      const money = e.pnl != null;
+      const col = agentColor(e.agent);
+      px(ctx, 8, y + 1, 2, 4, col);
+      text(ctx, hhmm(e.t), 14, y, '#39404e', 5);
+      text(ctx, e.agent, 38, y, col, 5);
+      // the kind gets a tinted chip so FILL stands out from the running commentary
+      const kw = e.kind.length * 3 + 5;
+      const fill = e.kind === 'FILL' || e.kind === 'SETTLE';
+      px(ctx, 64, y - 0.6, kw, 6.4, fill ? '#1b2a1e' : '#121826');
+      text(ctx, e.kind, 66, y, fill ? '#4ade80' : '#5b6470', 4.5);
+      if (money) text(ctx, signed(e.pnl), 150, y, e.pnl >= 0 ? '#22c55e' : '#ef4444', 5, 'right');
+      text(ctx, clip(e.text, 108), 156, y, fill ? '#c7cdd8' : '#6b7480', 5);
     });
     if (!rows.length) text(ctx, 'waiting for the first cycle', 240, 300, '#243044', 6, 'center');
   }

@@ -166,3 +166,32 @@ h1 { font-size: 18px; }
 #floor { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 #floor .ph { flex: 0 0 auto; }
 footer { display: none; }
+
+/* ---- page chrome refresh ------------------------------------------------- */
+/* The floor is doing the work now, so everything around it should recede: a thinner header, a
+   softer frame, and a background that is not the same flat black as the room inside it. */
+body {
+  background:
+    radial-gradient(1200px 600px at 50% -10%, #101725 0%, transparent 60%),
+    #06080c;
+}
+header { border-bottom: none; }
+h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0c0);
+     -webkit-background-clip: text; background-clip: text; color: transparent; }
+.brand svg polygon { stroke: #55617a; }
+.brand svg polygon:last-child { fill: #6b7488; }
+
+#floor {
+  border-color: #1a2233;
+  border-radius: 8px;
+  box-shadow: 0 18px 50px -20px rgba(0,0,0,0.9), inset 0 1px 0 rgba(255,255,255,0.04);
+  background: #070a10;
+}
+#floor .ph {
+  border-bottom-color: #161d2b;
+  background: linear-gradient(180deg, #0d1119, #0a0d14);
+  letter-spacing: 0.18em;
+}
+#floor .ph i { color: #d4a72c; }
+#floorc { border-radius: 0 0 7px 7px; }
+.meta { font-size: 9px; letter-spacing: 0.14em; }
