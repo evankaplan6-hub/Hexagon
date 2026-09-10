@@ -50,23 +50,98 @@ if (!LOOPBACK.includes(cfg.bindHost) && !cfg.dashPass) {
   process.exit(1);
 }
 
-// Basic auth: the browser prompts once and remembers. Compared in constant time so the answer
-// cannot be recovered a character at a time.
+// A real login page, not HTTP basic auth.
+//
+// Basic auth depends on the browser popping a native dialog, and plenty of browsers -- embedded
+// panes, in-app webviews -- simply do not. What the user sees then is the 401 body as plain text
+// with no way to enter anything: "authentication required" on a white page and no prompt. A form
+// and a cookie work everywhere.
+//
+// The cookie is an HMAC of a fixed string under the password, so there is no session store to keep
+// and changing DASH_PASS invalidates every cookie already issued. Basic auth still works alongside
+// it, because curl and the tools in tools/ use it.
+const COOKIE = 'hexsession';
+const sessionToken = () => crypto.createHmac('sha256', cfg.dashPass).update('hexagon-session-v1').digest('hex');
+
+function timingEq(a, b) {
+  const x = Buffer.from(String(a)), y = Buffer.from(String(b));
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+}
 function authed(req) {
   if (!cfg.dashPass) return true;
+  const cookies = String(req.headers.cookie || '');
+  const m = cookies.match(new RegExp(`(?:^|;\\s*)${COOKIE}=([^;]+)`));
+  if (m && timingEq(m[1], sessionToken())) return true;
   const h = String(req.headers.authorization || '');
-  if (!h.startsWith('Basic ')) return false;
-  const want = Buffer.from(`${cfg.dashUser}:${cfg.dashPass}`);
-  const got = Buffer.from(Buffer.from(h.slice(6), 'base64').toString('utf8'));
-  return want.length === got.length && crypto.timingSafeEqual(want, got);
+  if (h.startsWith('Basic ')) {
+    return timingEq(Buffer.from(h.slice(6), 'base64').toString('utf8'), `${cfg.dashUser}:${cfg.dashPass}`);
+  }
+  return false;
+}
+
+const LOGIN_PAGE = (err) => `<!doctype html><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>The Hexagon</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center; background:#06080c;
+         color:#e6e8ee; font:14px/1.5 'JetBrains Mono',ui-monospace,Menlo,monospace; }
+  form { width:min(320px,90vw); background:#0d1119; border:1px solid #1a2233; border-radius:8px;
+         padding:26px; box-shadow:0 18px 50px -20px #000; }
+  h1 { margin:0 0 4px; font:700 17px/1 system-ui,sans-serif; letter-spacing:-0.01em; }
+  p.sub { margin:0 0 20px; color:#5b6270; font-size:11px; letter-spacing:.1em; text-transform:uppercase; }
+  label { display:block; font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:#5b6270; margin:12px 0 5px; }
+  input { width:100%; box-sizing:border-box; padding:9px 10px; background:#06080c; color:#e6e8ee;
+          border:1px solid #243047; border-radius:4px; font:13px 'JetBrains Mono',monospace; }
+  input:focus { outline:none; border-color:#3b82f6; }
+  button { width:100%; margin-top:18px; padding:10px; background:#1b2a1e; color:#4ade80; cursor:pointer;
+           border:1px solid #2a5a38; border-radius:4px; font:700 12px 'JetBrains Mono',monospace; letter-spacing:.1em; }
+  button:hover { background:#22331f; }
+  .err { margin-top:14px; color:#f87171; font-size:11px; }
+  .hex { display:block; margin:0 auto 14px; }
+</style>
+<form method="POST" action="/login">
+  <svg class="hex" viewBox="0 0 40 40" width="34" height="34"><polygon points="20,3 35,11.5 35,28.5 20,37 5,28.5 5,11.5" fill="none" stroke="#55617a" stroke-width="2"/><polygon points="20,15.5 24.5,18 24.5,22 20,24.5 15.5,22 15.5,18" fill="#6b7488"/></svg>
+  <h1>The Hexagon</h1><p class="sub">paper trading desk</p>
+  <label for="u">User</label><input id="u" name="u" value="${cfg.dashUser}" autocomplete="username">
+  <label for="p">Password</label><input id="p" name="p" type="password" autofocus autocomplete="current-password">
+  <button type="submit">ENTER</button>
+  ${err ? '<div class="err">wrong user or password</div>' : ''}
+</form>`;
+
+function readBody(req) {
+  return new Promise((resolve) => {
+    let b = ''; req.on('data', (c) => { b += c; if (b.length > 4096) req.destroy(); });
+    req.on('end', () => resolve(b));
+  });
 }
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const p = url.pathname;
+  if (cfg.dashPass && p === '/login') {
+    if (req.method === 'POST') {
+      return readBody(req).then((body) => {
+        const f = new URLSearchParams(body);
+        if (timingEq(f.get('u') || '', cfg.dashUser) && timingEq(f.get('p') || '', cfg.dashPass)) {
+          const secure = (req.headers['x-forwarded-proto'] || '').includes('https') ? '; Secure' : '';
+          res.writeHead(302, { location: '/', 'set-cookie': `${COOKIE}=${sessionToken()}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000${secure}` });
+          return res.end();
+        }
+        res.writeHead(401, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(LOGIN_PAGE(true));
+      });
+    }
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    return res.end(LOGIN_PAGE(false));
+  }
   if (!authed(req)) {
-    res.writeHead(401, { 'www-authenticate': 'Basic realm="The Hexagon", charset="UTF-8"' });
-    return res.end('authentication required');
+    // an API caller gets a 401 it can act on; a browser gets somewhere to type
+    if (p.startsWith('/api/')) {
+      res.writeHead(401, { 'www-authenticate': 'Basic realm="The Hexagon", charset="UTF-8"' });
+      return res.end('authentication required');
+    }
+    res.writeHead(302, { location: '/login' });
+    return res.end();
   }
   // Manual kill switch. TESS's drawdown halt stops NEW risk while leaving every open position
   // running -- halted is not the same as flat. This is the button for getting out of everything.
