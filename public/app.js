@@ -63,7 +63,10 @@
 
   function floorPoint(ev) {
     const cv = $('floorc'), r = cv.getBoundingClientRect();
-    return { x: (ev.clientX - r.left) / r.width * 480, y: (ev.clientY - r.top) / r.height * 340 };
+    return {
+      x: (ev.clientX - r.left - floorBox.ox) / floorBox.scale,
+      y: (ev.clientY - r.top - floorBox.oy) / floorBox.scale,
+    };
   }
   const hitAt = (p) => hits.find((h) => p.x >= h.x && p.x <= h.x + h.w && p.y >= h.y && p.y <= h.y + h.h) || null;
   const same = (a, b) => a && b && a.kind === b.kind && a.key === b.key;
@@ -207,19 +210,33 @@
   // match. Coordinates below are unchanged; text draws as vectors at final size rather than being
   // upscaled into a smear.
   let floorSized = '';
+  // The element box is whatever CSS ends up giving it, and that is NOT 480:340. Scaling x by
+  // w/480 and y by h/340 -- which is what this did -- stretches the room to fit the box: a 736x787
+  // element made everything 50% too tall. The shape of the room cannot be left to a stylesheet.
+  //
+  // So: ONE scale factor, the smaller of the two, with the result centred. The room keeps its
+  // proportions at any window size and the leftover is letterbox. `floorBox` is the mapping the
+  // pointer has to invert, so it is computed once here and read by floorPoint.
+  const floorBox = { scale: 1, ox: 0, oy: 0 };
   function floorCtx() {
     const cv = $('floorc'), r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
     const w = Math.max(1, Math.round(r.width * dpr)), h = Math.max(1, Math.round(r.height * dpr));
     const key = `${w}x${h}`;
     if (key !== floorSized) { cv.width = w; cv.height = h; floorSized = key; }
     const ctx = cv.getContext('2d');
-    ctx.setTransform(w / 480, 0, 0, h / 340, 0, 0);   // keep the 480x340 drawing space
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = '#0b0e14'; ctx.fillRect(0, 0, w, h);       // paint the letterbox
+    const scale = Math.min(w / 480, h / 340);
+    floorBox.scale = scale / dpr;                              // css px per drawing unit
+    floorBox.ox = (w - 480 * scale) / 2 / dpr;
+    floorBox.oy = (h - 340 * scale) / 2 / dpr;
+    ctx.setTransform(scale, 0, 0, scale, (w - 480 * scale) / 2, (h - 340 * scale) / 2);
     return ctx;
   }
 
   function drawFloor(t) {
     const ctx = floorCtx(); ctx.imageSmoothingEnabled = false;
-    ctx.clearRect(0, 0, 480, 340);
+    ctx.clearRect(0, 0, 480, 340);   // the letterbox is repainted in floorCtx
     hits = []; zones = [];                   // rebuilt every frame; the pointer tests against them
     // room
     const wall = ctx.createLinearGradient(0, 0, 0, 150); wall.addColorStop(0, '#0d1220'); wall.addColorStop(1, '#101828'); ctx.fillStyle = wall; ctx.fillRect(0, 0, 480, 150);

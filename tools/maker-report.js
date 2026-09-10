@@ -8,7 +8,10 @@ const m = (x) => `${x < 0 ? '-' : '+'}$${Math.abs(x).toFixed(2)}`;
 (async () => {
   const st = await (await fetch(`http://localhost:${cfg.port}/api/state`)).json();
   const S = st.maker || {};
-  const mk = Object.entries(S.markets || {});
+  // The snapshot used to be an object keyed by ticker and is now a shaped array. Object.entries on
+  // an array yields "0", "1", "2" as the keys, which is why this printed index numbers where the
+  // market names belong.
+  const mk = Array.isArray(S.markets) ? S.markets.map((m) => [m.ticker, m]) : Object.entries(S.markets || {});
   if (!mk.length) return console.log('the maker desk has no book yet');
 
   let fills = 0, inv = 0, cost = 0, mtm = 0, quoted = 0;
@@ -18,7 +21,8 @@ const m = (x) => `${x < 0 ? '-' : '+'}$${Math.abs(x).toFixed(2)}`;
     const mark = (x.inv || 0) * (x.mid ?? 0.5);
     mtm += mark;
     if (x.quotes && (x.quotes.bid != null || x.quotes.ask != null)) quoted++;
-    if (x.fills) rows.push({ t, fills: x.fills, inv: x.inv, cost: x.cost, pl: mark - (x.cost || 0), q: x.queue || {} });
+    if (x.fills) rows.push({ t, name: x.sub || x.title || t, fills: x.fills, inv: x.inv, cost: x.cost,
+      pl: mark - (x.cost || 0), q: { bid: x.qBid, ask: x.qAsk } });
   }
   const equity = S.equity ?? cfg.initialBalance;
   console.log(`MAKER DESK · ${cfg.mode.toUpperCase()}\n`);
@@ -31,7 +35,7 @@ const m = (x) => `${x < 0 ? '-' : '+'}$${Math.abs(x).toFixed(2)}`;
   if (S.halted) console.log(`  HALTED                    ${S.halted}`);
   if (!rows.length) return console.log('\n  no fills yet');
   rows.sort((a, b) => b.pl - a.pl);
-  console.log(`\n  ticker                             fills    inv     paid      marked P&L   queue left`);
-  for (const r of rows) console.log('  ' + r.t.padEnd(34) + String(r.fills).padStart(5) + String(Math.round(r.inv)).padStart(7)
+  console.log(`\n  market                             fills    inv     paid      marked P&L   queue left`);
+  for (const r of rows) console.log('  ' + String(r.name).slice(0, 33).padEnd(34) + String(r.fills).padStart(5) + String(Math.round(r.inv)).padStart(7)
     + m(r.cost).padStart(10) + m(r.pl).padStart(13) + `   ${Math.round(r.q.bid || 0)}/${Math.round(r.q.ask || 0)}`);
 })();

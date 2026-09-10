@@ -79,8 +79,11 @@ h1 { font: 800 22px/1 var(--sans); margin: 0; letter-spacing: -0.01em; }
 /* The floor IS the page. It is sized to the viewport rather than to the content, because as long
    as the document has anything to scroll the wheel keeps reaching it -- and a list inside a canvas
    can never win that fight. Nothing sits below it now. */
-#floorc { display: block; margin: 0 auto; background: #0b0e14; image-rendering: pixelated;
-  height: 100%; width: auto; max-width: 100%; aspect-ratio: 480 / 340; }
+/* The canvas takes the width it is given and derives its own height from the room's shape, so the
+   panel ends exactly where the room ends -- no dead band inside the border. floorCtx still enforces
+   a single uniform scale internally, so a stylesheet can never stretch the room again. */
+#floorc { display: block; background: #0b0e14; image-rendering: pixelated;
+  width: 100%; height: auto; aspect-ratio: 480 / 340; }
 
 .agents { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
 .card { min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px 12px; transition: border-color .3s, box-shadow .3s; }
@@ -154,12 +157,12 @@ footer { color: var(--dim); font-size: 10px; text-align: center; padding-top: 6p
 
 /* No page scroll: the floor is sized to fit, so the only things that scroll are the lists on it. */
 html, body { height: 100%; overflow: hidden; }
-.wrap { height: 100%; max-width: 1900px; padding: 8px 12px 10px; gap: 8px; }
+.wrap { height: 100%; max-width: 1900px; padding: 8px 12px 10px; gap: 8px; justify-content: center; }
 header { padding: 2px 2px 0; flex: 0 0 auto; }
 h1 { font-size: 18px; }
 .brand svg { width: 26px; height: 26px; }
 /* The floor takes every pixel the header leaves, and the canvas takes every pixel of that -- as
    large as it can be in both directions while keeping its shape. */
-#floor { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+#floor { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 #floor .ph { flex: 0 0 auto; }
 footer { display: none; }
