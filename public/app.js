@@ -43,43 +43,9 @@
   // found no edge -- so the page opened on "$10,000.00 / +$0.00" while the maker desk was trading.
   // A prominent number describing the wrong desk is worse than no number.
 
-  // ------------------------------------------------------------ log
-  function renderLog() {
-    const el = $('log');
-    const atTop = el.scrollTop < 8;
-    el.innerHTML = S.log.map((e) => {
-      const pnl = e.pnl == null ? '' : `<span class="pnl ${e.pnl >= 0 ? 'pos' : 'neg'}">${signed(e.pnl)}</span>`;
-      return `<div class="lr ${e.kind}" title="${esc(e.text)}"><span class="t">${hhmm(e.t)}</span><span class="dot" style="background:${agentColor(e.agent)}"></span><span class="ag">${e.agent}</span><span class="k ${e.kind}">${e.kind}</span>${pnl || '<span></span>'}<span class="tx ${e.kind === 'FILL' || e.kind === 'SETTLE' ? 'hi' : ''}">${esc(e.text)}</span></div>`;
-    }).join('') || '<div class="empty">waiting for the first cycle…</div>';
-    if (atTop) el.scrollTop = 0;
-    $('log-meta').textContent = `${S.wins + S.losses} resolved · ${S.log.length} lines`;
-  }
-
-  // renderFeed, renderAgents and renderPositions are gone with their panels. The feed listed
-  // top-volume markets on both venues and the matched-pair gaps; the positions table showed the
-  // convergence book, which is empty by design. The agent cards duplicated the seven agents already
-  // sitting at their desks on the floor. All of it was page furniture around the one thing that
-  // trades, so it now lives on the floor or not at all.
-
-  // The balance chart plotted the convergence desk's equity: a flat line at the opening balance,
-  // because that desk has never opened a position. The maker's numbers are on the wall screen.
-
-  // The floor is pixel art drawn in a fixed 480x260 coordinate space, but DISPLAYED at whatever
-  // width the panel is -- 856 css px on a 2x screen. Left alone, every drawn pixel landed on 3.57
-  // screen pixels and every label was a smear; `image-rendering: pixelated` kept the edges hard but
-  // could not invent resolution that was never rendered. So: a backing store at true device
-  // resolution with the context scaled to match. The coordinates below are unchanged, blocks stay
-  // blocks, and text is drawn as vectors at final size instead of being upscaled.
-  let floorSized = '';
-  function floorCtx() {
-    const cv = $('floorc'), r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
-    const w = Math.max(1, Math.round(r.width * dpr)), h = Math.max(1, Math.round(r.height * dpr));
-    const key = `${w}x${h}`;
-    if (key !== floorSized) { cv.width = w; cv.height = h; floorSized = key; }
-    const ctx = cv.getContext('2d');
-    ctx.setTransform(w / 480, 0, 0, h / 260, 0, 0);   // keep the 480x260 drawing space
-    return ctx;
-  }
+  // The activity log moved onto the floor. It was the last panel under the canvas, and while it
+  // sat there the page had something to scroll -- which is the whole reason the wheel kept moving
+  // the document instead of the list under the pointer.
 
   // ------------------------------------------------------------ floor interaction
   // The floor is a control surface, not a picture. Every frame rebuilds a list of hit regions in
@@ -92,12 +58,12 @@
   // more rows than fit, and a canvas has no native scrolling -- so the wheel fell through to the
   // page and moved the whole document instead of the list under the pointer.
   let zones = [];                // rebuilt each frame: { x, y, w, h, id, max }
-  const scroll = { book: 0, tape: 0, agentlog: 0 };
+  const scroll = { book: 0, tape: 0, agentlog: 0, log: 0 };
   const zoneAt = (p) => zones.find((z) => p.x >= z.x && p.x <= z.x + z.w && p.y >= z.y && p.y <= z.y + z.h) || null;
 
   function floorPoint(ev) {
     const cv = $('floorc'), r = cv.getBoundingClientRect();
-    return { x: (ev.clientX - r.left) / r.width * 480, y: (ev.clientY - r.top) / r.height * 260 };
+    return { x: (ev.clientX - r.left) / r.width * 480, y: (ev.clientY - r.top) / r.height * 340 };
   }
   const hitAt = (p) => hits.find((h) => p.x >= h.x && p.x <= h.x + h.w && p.y >= h.y && p.y <= h.y + h.h) || null;
   const same = (a, b) => a && b && a.kind === b.kind && a.key === b.key;
@@ -232,16 +198,35 @@
     if (line) text(ctx, line, x, y + n * lh, col, size);
   }
 
+  // Kept immediately beside drawFloor on purpose. Twice now this has been swallowed by a
+  // marker-to-marker deletion of a neighbouring block, and the failure is silent in the source and
+  // fatal in the browser: the whole floor goes black sixty times a second.
+  //
+  // The art is drawn in a fixed 480x340 space but DISPLAYED at whatever size the viewport allows,
+  // so the canvas gets a backing store at true device resolution and the context is scaled to
+  // match. Coordinates below are unchanged; text draws as vectors at final size rather than being
+  // upscaled into a smear.
+  let floorSized = '';
+  function floorCtx() {
+    const cv = $('floorc'), r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    const w = Math.max(1, Math.round(r.width * dpr)), h = Math.max(1, Math.round(r.height * dpr));
+    const key = `${w}x${h}`;
+    if (key !== floorSized) { cv.width = w; cv.height = h; floorSized = key; }
+    const ctx = cv.getContext('2d');
+    ctx.setTransform(w / 480, 0, 0, h / 340, 0, 0);   // keep the 480x340 drawing space
+    return ctx;
+  }
+
   function drawFloor(t) {
     const ctx = floorCtx(); ctx.imageSmoothingEnabled = false;
-    ctx.clearRect(0, 0, 480, 260);
+    ctx.clearRect(0, 0, 480, 340);
     hits = []; zones = [];                   // rebuilt every frame; the pointer tests against them
     // room
     const wall = ctx.createLinearGradient(0, 0, 0, 150); wall.addColorStop(0, '#0d1220'); wall.addColorStop(1, '#101828'); ctx.fillStyle = wall; ctx.fillRect(0, 0, 480, 150);
-    px(ctx, 0, 150, 480, 110, '#0a0d13'); px(ctx, 0, 149, 480, 2, '#1c2434');
-    for (let x = 0; x < 480; x += 24) px(ctx, x, 150, 1, 110, '#0f131b');
-    for (let y = 162; y < 260; y += 14) px(ctx, 0, y, 480, 1, '#0f131b');
-    if (!S) { text(ctx, 'CONNECTING TO THE DESK…', 240, 120, '#4b5563', 8, 'center'); return; }
+    px(ctx, 0, 150, 480, 112, '#0a0d13'); px(ctx, 0, 149, 480, 2, '#1c2434');
+    for (let x = 0; x < 480; x += 24) px(ctx, x, 150, 1, 112, '#0f131b');
+    for (let y = 162; y < 262; y += 14) px(ctx, 0, y, 480, 1, '#0f131b');
+    if (!S) { text(ctx, 'CONNECTING TO THE DESK', 240, 120, '#4b5563', 8, 'center'); return; }
 
     // ---- everything below is the MAKER desk, because the maker desk is the one that trades ----
     // The boards used to show convergence pairs and convergence thresholds: the desk that measured
@@ -437,12 +422,36 @@
       else px(ctx, rightward ? lx - 2 : lx + w, by2 + 4, 2, 2, '#0d1119');
       text(ctx, s2, lx + 4, by2 + 2, '#9aa3b5', 6);
     }
+
+    drawLog(ctx);
   }
+  // ---- the tape along the bottom of the room: every agent's activity, scrollable in place
+  function drawLog(ctx) {
+    px(ctx, 0, 262, 480, 78, '#07090e'); px(ctx, 0, 262, 480, 1, '#1c2434');
+    const rows = S.log || [];
+    const LROWS = 8;
+    const maxG = Math.max(0, rows.length - LROWS);
+    scroll.log = Math.min(scroll.log, maxG);
+    zones.push({ x: 0, y: 262, w: 480, h: 78, id: 'log', max: maxG });
+    text(ctx, 'ACTIVITY', 10, 266, '#4b5563', 5);
+    if (maxG) text(ctx, `${scroll.log + 1}-${Math.min(rows.length, scroll.log + LROWS)} of ${rows.length}`, 470, 266, '#3d4350', 5, 'right');
+    rows.slice(scroll.log, scroll.log + LROWS).forEach((e, i) => {
+      const y = 275 + i * 8;
+      text(ctx, hhmm(e.t), 10, y, '#3d4350', 5);
+      px(ctx, 34, y + 1, 3, 3, agentColor(e.agent));
+      text(ctx, e.agent, 40, y, agentColor(e.agent), 5);
+      text(ctx, e.kind, 66, y, '#4b5563', 5);
+      if (e.pnl != null) text(ctx, signed(e.pnl), 128, y, e.pnl >= 0 ? '#22c55e' : '#ef4444', 5, 'right');
+      text(ctx, clip(e.text, 112), 132, y, e.kind === 'FILL' ? '#c7cdd8' : '#7c869a', 5);
+    });
+    if (!rows.length) text(ctx, 'waiting for the first cycle', 240, 300, '#243044', 6, 'center');
+  }
+
   function loop(ts) { drawFloor(ts / 1000); requestAnimationFrame(loop); }
   requestAnimationFrame(loop);
 
   // ------------------------------------------------------------ wiring
-  function render() { renderHeader(); renderLog(); }
+  function render() { renderHeader(); }
   function connect() {
     const es = new EventSource('/api/stream');
     es.onmessage = (ev) => { try { S = JSON.parse(ev.data); S._rx = S.now; S._rxPerf = performance.now(); render(); } catch (e) { console.error(e); } };
