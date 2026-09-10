@@ -1,0 +1,33 @@
+# Fly.io deployment. Chosen over the alternatives for three reasons that matter here: it has US
+# regions (Kalshi's API is US-facing and a European box is a needless risk), it gives a persistent
+# volume on the cheap tier so the journals survive a restart, and a machine can idle without being
+# killed — a market maker that gets suspended between requests is not a market maker.
+app = "hexagon-desk"
+primary_region = "iad"          # Ashburn, Virginia — close to the exchange, and US-domiciled
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  MODE = "paper"                # DASH_PASS is set as a secret, never here
+  BIND_HOST = "0.0.0.0"
+  PORT = "8787"
+  DATA_DIR = "/data"
+
+# The ledger, the journals and the tick tape. Without this a redeploy silently resets the evidence.
+[[mounts]]
+  source = "hexagon_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8787
+  force_https = true
+  # The desk must keep running between page views. auto_stop would suspend the machine when nobody
+  # is looking at the dashboard, which is exactly when it should be quoting.
+  auto_stop_machines = false
+  auto_start_machines = false
+  min_machines_running = 1
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"              # the tick recorder and journals are the only real consumers

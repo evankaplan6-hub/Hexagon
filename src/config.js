@@ -75,6 +75,11 @@ module.exports = {
   // serving. Default to loopback: /api/positions and the full activity log are unauthenticated,
   // and on a live account that is not something to expose to the local network by default.
   bindHost: env('BIND_HOST', '127.0.0.1'),
+  // Dashboard password. Empty is fine on loopback; binding anywhere else without one is refused at
+  // startup. /api/positions and the whole activity log are unauthenticated otherwise, and a desk
+  // with live-trading code in it is not something to leave open on a public address.
+  dashUser: env('DASH_USER', 'hexagon'),
+  dashPass: env('DASH_PASS', ''),
   // Shared secret for POST /api/flatten, the manual kill switch. Empty disables the endpoint
   // entirely -- there is no default token, because a guessable one is worse than no switch.
   flattenToken: env('FLATTEN_TOKEN', ''),

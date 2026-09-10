@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const crypto = require('crypto');
 
 loadEnv(path.join(__dirname, '.env'));
 const cfg = require('./src/config');
@@ -38,9 +39,35 @@ function json(res, obj) {
   res.end(JSON.stringify(obj));
 }
 
+// Anything not on loopback must carry a password. This is the same shape as the live-mode guard:
+// a refusal at startup rather than a warning nobody reads, because the failure mode is silent --
+// a public address serves the whole book and log to anyone who finds the port.
+const LOOPBACK = ['127.0.0.1', '::1', 'localhost'];
+if (!LOOPBACK.includes(cfg.bindHost) && !cfg.dashPass) {
+  console.error(`Refusing to start: BIND_HOST=${cfg.bindHost} is not loopback and DASH_PASS is empty.`);
+  console.error('  /api/positions and the full activity log are unauthenticated.');
+  console.error('  Set DASH_PASS in .env, or bind to 127.0.0.1 and reach it over an SSH tunnel.');
+  process.exit(1);
+}
+
+// Basic auth: the browser prompts once and remembers. Compared in constant time so the answer
+// cannot be recovered a character at a time.
+function authed(req) {
+  if (!cfg.dashPass) return true;
+  const h = String(req.headers.authorization || '');
+  if (!h.startsWith('Basic ')) return false;
+  const want = Buffer.from(`${cfg.dashUser}:${cfg.dashPass}`);
+  const got = Buffer.from(Buffer.from(h.slice(6), 'base64').toString('utf8'));
+  return want.length === got.length && crypto.timingSafeEqual(want, got);
+}
+
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const p = url.pathname;
+  if (!authed(req)) {
+    res.writeHead(401, { 'www-authenticate': 'Basic realm="The Hexagon", charset="UTF-8"' });
+    return res.end('authentication required');
+  }
   // Manual kill switch. TESS's drawdown halt stops NEW risk while leaving every open position
   // running -- halted is not the same as flat. This is the button for getting out of everything.
   // POST only (a GET would fire from a stray link or a prefetch), shared secret required, and
@@ -89,7 +116,7 @@ setInterval(() => {
 // Loopback by default: /api/positions and the whole activity log are unauthenticated, and on a
 // live account that is not something to hand the local network. BIND_HOST=0.0.0.0 to override.
 server.listen(cfg.port, cfg.bindHost, () => {
-  console.log(`The Hexagon  →  http://localhost:${cfg.port}   mode=${cfg.mode.toUpperCase()}${cfg.demo ? ' (DEMO quotes)' : ''}   bound to ${cfg.bindHost}${cfg.flattenToken ? '   flatten switch armed' : ''}`);
+  console.log(`The Hexagon  →  http://localhost:${cfg.port}   mode=${cfg.mode.toUpperCase()}${cfg.demo ? ' (DEMO quotes)' : ''}   bound to ${cfg.bindHost}${cfg.dashPass ? '   password set' : ''}${cfg.flattenToken ? '   flatten switch armed' : ''}`);
 });
 
 engine.start().catch((e) => { console.error('engine failed to start:', e); process.exit(1); });
