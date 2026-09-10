@@ -57,6 +57,10 @@ module.exports = {
   // inside a day returned +$357, everything slower returned about zero. So this is the primary
   // filter and the primary ranking, ahead of spread, volume and trade rate alike.
   makerMaxClearDays: num('MAKER_MAX_CLEAR_DAYS', 1),
+  // Inventory held into resolution is not a spread capture, it is a coin flip settled at 0 or 1.
+  // Nothing currently quoted resolves inside 114 days, so this costs nothing today -- which is
+  // exactly when to put it in, rather than after the universe rotates into something expiring.
+  makerMinDaysToClose: num('MAKER_MIN_DAYS_TO_CLOSE', 7),
   makerRateProbe: num('MAKER_RATE_PROBE', 40),  // how many prefiltered markets to measure per refresh
   makerMinMid: num('MAKER_MIN_MID', 0.08),
   makerMaxMid: num('MAKER_MAX_MID', 0.92),

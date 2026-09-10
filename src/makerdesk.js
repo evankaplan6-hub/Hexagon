@@ -84,7 +84,11 @@ function makeMakerDesk(cfg) {
           if (mid < cfg.makerMinMid || mid > cfg.makerMaxMid) continue;
           if (a - b < cfg.makerMinSpread - 1e-9) continue;
           if (v < cfg.makerMinVol24) continue;
-          rows.push({ ticker: m.ticker, series: s, vol: v, spread: a - b, title: m.title });
+          // Do not be carrying inventory when the market settles: that is a 0-or-1 coin flip, not
+          // a spread. Cheap to check here -- close_time is already in the listing we just fetched.
+          const days = m.close_time ? (Date.parse(m.close_time) - Date.now()) / 86400000 : 0;
+          if (!(days >= cfg.makerMinDaysToClose)) continue;
+          rows.push({ ticker: m.ticker, series: s, vol: v, spread: a - b, days, title: m.title });
         }
       } catch (e) { failed.push(s); }
       await sleep(150);                    // pace the scan; it runs once every 15 minutes
