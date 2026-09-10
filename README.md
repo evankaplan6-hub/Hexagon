@@ -279,6 +279,32 @@ day**, not `volume_24h`, which is a snapshot a single block trade can inflate. O
 top-12-by-trade-rate returned +$454 against +$259 for top-12-by-volume. Trade rate is now the
 secondary rail behind queue clearance, with a floor of 10 trades/day.
 
+### Measuring the live desk against the model
+
+`tools/fillcheck.js` answers the only question a week of paper trading exists to answer: does the
+desk fill at the rate the model says it should? It replays the same wall-clock window through the
+desk's own fill logic with each market's real measured queue, and compares against the journal.
+
+```
+node tools/fillcheck.js 24      # last 24 hours, or since this build started -- whichever is shorter
+```
+
+Under 50% of the modelled rate means the backtest is *still* too optimistic and the strategy is
+worth less than it measures. Over 150% means the queue model is too harsh and it is worth more.
+Between them, the held-out +$144 stands. Every run appends to `data/fillcheck.jsonl`, so a week of
+readings accumulates without anyone having to remember to write them down.
+
+It only counts fills produced by the currently running process. Mixing builds was the first thing
+this tool got wrong — the journal spans every build of the day, and the pre-queue builds filled a
+completely different way, which flattered the comparison to 131%.
+
+### Keeping it running
+
+A week of evidence needs the process to survive a week, and a `nohup`'d shell job does not survive
+a reboot. `ops/install-autostart.sh` installs a LaunchAgent that starts the desk at login and
+restarts it if it exits. It refuses to install while `MODE=live`: an always-on job is for paper
+measurement. `ops/uninstall-autostart.sh` removes it.
+
 ### Rails
 
 Its ledger is separate from the taker book on purpose — one blended equity number makes it
