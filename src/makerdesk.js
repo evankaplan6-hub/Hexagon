@@ -186,8 +186,25 @@ function makeMakerDesk(cfg) {
       const { fills, queue } = maker.fillsFrom(trades, m.quotes, m.inv, cfg, seen, m.queue);
       m.queue = queue;                                     // what is still ahead of us, carried forward
       for (const f of fills) {
+        // REALISED profit, which is the only number that is actually money.
+        //
+        // `cash` is not profit and never was: it falls when we buy and rises when we sell, so a
+        // net-short book shows a large positive cash balance that is simply proceeds from
+        // contracts we still owe. Calling that "banked from spread" was wrong, and it read as
+        // +$51 of earnings on a book that had earned nothing. Profit only exists when a fill
+        // CLOSES part of a position, and it is the difference between what that slice was opened
+        // at and what it was closed at.
+        const dir = f.side === 'buy' ? 1 : -1;
+        const closing = Math.min(Math.abs(m.inv), f.qty) * (Math.sign(m.inv) === -dir ? 1 : 0);
+        if (closing > 0) {
+          const avg = Math.abs(m.cost / m.inv);              // weighted average of the open side
+          const pnl = m.inv > 0 ? (f.px - avg) * closing : (avg - f.px) * closing;
+          m.realized = r2((m.realized || 0) + pnl);
+          S.realized = r2((S.realized || 0) + pnl);
+        }
         if (f.side === 'buy') { S.cash = r2(S.cash - f.qty * f.px); m.inv += f.qty; m.cost = r2(m.cost + f.qty * f.px); }
         else { S.cash = r2(S.cash + f.qty * f.px); m.inv -= f.qty; m.cost = r2(m.cost - f.qty * f.px); }
+        if (m.inv === 0) m.cost = 0;                          // flat means no basis to carry
         m.fills++; S.fills = (S.fills || 0) + 1; filled++; netQty += f.qty;
         // remembered for the dashboard: "nothing is happening" and "something happened four
         // minutes ago" look identical unless the page can say which.
@@ -236,7 +253,7 @@ function makeMakerDesk(cfg) {
     S.hist = S.hist || [];
     const last = S.hist[S.hist.length - 1];
     if (!last || nowMs - last.t >= 60000) {
-      S.hist.push({ t: nowMs, c: r2(S.cash - cfg.initialBalance), m: r2(mtm), e: r2(S.equity - cfg.initialBalance) });
+      S.hist.push({ t: nowMs, c: r2(S.realized || 0), m: r2(mtm), e: r2(S.equity - cfg.initialBalance) });
       const cutoff = nowMs - 12 * 3600 * 1000;
       while (S.hist.length && S.hist[0].t < cutoff) S.hist.shift();
       if (S.hist.length > 800) S.hist.splice(0, S.hist.length - 800);
@@ -298,7 +315,7 @@ function makeMakerDesk(cfg) {
       };
     }).sort((a, b) => (b.quoting - a.quoting) || (b.fills - a.fills) || Math.abs(b.inv) - Math.abs(a.inv));
     return {
-      cash: S.cash, equity: S.equity, fills: S.fills || 0, halted: S.halted || null,
+      cash: S.cash, equity: S.equity, realized: S.realized || 0, fills: S.fills || 0, halted: S.halted || null,
       lastFill: S.lastFill || null, recent: (S.recent || []).slice(0, 12), lastScanAt: lastUniverseAt || null,
       hist: S.hist || [],
       initial: cfg.initialBalance, enabled: cfg.makerEnabled,

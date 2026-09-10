@@ -352,7 +352,7 @@
     // no edge and correctly does nothing. Reading them told you nothing about whether the machine
     // was working, which is the only question the floor should answer at a glance.
     const M = S.maker || {};
-    const banked = (M.cash ?? M.initial ?? 0) - (M.initial ?? 0);
+    const banked = M.realized || 0;      // REALISED, not cash: see makerdesk.step
     const marked = M.mark || 0;
     const mEq = (M.equity ?? M.initial ?? 0) - (M.initial ?? 0);
     const halted = S.halt || M.halted;
@@ -409,7 +409,7 @@
       text(ctx, `MAKER DESK 07 · ${S.mode.toUpperCase()}`, 144, 15, '#c7cdd8', 6);
       text(ctx, `${M.fills || 0} FILLS`, 336, 15, '#7c869a', 6, 'right');
       // three numbers, and they mean different things on purpose
-      [['BANKED', banked, 'from spread'], ['ON INVENTORY', marked, `${M.inv || 0} contracts`], ['NET', mEq, 'if closed now']]
+      [['REALISED', banked, 'closed round trips'], ['ON INVENTORY', marked, `${M.inv || 0} contracts`], ['NET', mEq, 'if closed now']]
         .forEach(([lab, v, sub], i) => {
           const cx = 168 + i * 68;
           text(ctx, lab, cx, 22, '#5b6270', 5, 'center');
@@ -627,10 +627,11 @@
     drawLog(ctx, 200, 268, 274, 84);
   }
 
-  // A continuous picture of the two numbers that matter, and why they are drawn differently.
-  // Banked cash only ever climbs -- a maker is paid the spread on every round trip -- so on its own
-  // it flatters. The mark on open inventory is what pulls against it. NET is the pair together, and
-  // it is the only line worth reading as P&L.
+  // REALISED is profit from round trips that actually closed. NET is that plus the mark on whatever
+  // is still open. The earlier version charted CASH and called it banked, which was wrong: cash
+  // falls when we buy and rises when we sell, so a net-short book shows a big positive balance that
+  // is only proceeds from contracts still owed. It read as +$51 of earnings on a book that had
+  // earned nothing.
   function drawPnl(ctx, x, y, w, h) {
     const H = (S.maker && S.maker.hist) || [];
     text(ctx, 'P&L', x + 4, y, '#4b5563', 5);
@@ -686,7 +687,7 @@
     text(ctx, mins < 90 ? `last ${mins}m` : `last ${(mins / 60).toFixed(1)}h`, x + 22, y + h - 4, '#39404e', 4.5);
     text(ctx, 'NET', x + w - 34, y, now.e >= 0 ? '#22c55e' : '#ef4444', 4.5, 'right');
     text(ctx, signed(now.e), x + w - 6, y, now.e >= 0 ? '#22c55e' : '#ef4444', 5, 'right');
-    text(ctx, 'banked', x + w - 34, y + h - 4, '#2f6b45', 4.5, 'right');
+    text(ctx, 'realised', x + w - 34, y + h - 4, '#2f6b45', 4.5, 'right');
     text(ctx, signed(now.c), x + w - 6, y + h - 4, '#2f6b45', 4.5, 'right');
   }
 
