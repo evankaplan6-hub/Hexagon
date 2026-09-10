@@ -19,6 +19,28 @@ async function getWithBackoff(url, tries = 3) {
   }
 }
 
+// Observed trade rate, from the last 100 prints. `volume_24h` is a snapshot one block trade can
+// inflate; this is the thing that actually pays us, because a resting quote only reaches the front
+// of the queue in a market that trades. Cached for six hours -- it is a property of the market, not
+// of the minute -- and the span is floored at half an hour so a single burst cannot report a rate of
+// six figures a day.
+const rateCache = new Map();
+async function tradesPerDay(ticker) {
+  const hit = rateCache.get(ticker);
+  if (hit && Date.now() - hit.at < 6 * 3600 * 1000) return hit.rate;
+  let rate = 0;
+  try {
+    const d = await getWithBackoff(`${ks.BASE}/markets/trades?ticker=${ticker}&limit=100`);
+    const ts = (d.trades || []).map((t) => Date.parse(t.created_time)).filter(Number.isFinite);
+    if (ts.length >= 10) {
+      const span = Math.max((Math.max(...ts) - Math.min(...ts)) / 86400000, 1 / 48);
+      rate = ts.length / span;
+    }
+  } catch { rate = 0; }                  // unmeasurable is not tradeable
+  rateCache.set(ticker, { rate, at: Date.now() });
+  return rate;
+}
+
 const r2 = (x) => Math.round(x * 100) / 100;
 const r4 = (x) => Math.round(x * 10000) / 10000;
 const c = (x) => `${(x * 100).toFixed(1)}c`;
@@ -56,16 +78,21 @@ function makeMakerDesk(cfg) {
     }
     // A partial scan silently narrows the universe to whatever survived, so say so.
     if (failed.length) E.log('MAKR', 'OPS', null, `universe scan incomplete: ${failed.length}/${eligible.length} series failed to load (${failed.slice(0, 3).join(', ')}) · quoting from the rest`);
-    // Rank by ACTIVITY, not spread. This was backwards in the first version and it matters more
-    // than any other choice here: over 34 backtested markets P&L correlates +0.82 with trade count
-    // and -0.33 with median spread. Ranking by spread selects the dead markets, which is exactly
-    // what it did on the first live run -- six markets quoted at 10-14c, zero fills.
+    // Rank by ACTIVITY, not spread -- that was backwards in the first version and it matters more
+    // than any other choice here: P&L correlates +0.82 with trade count and -0.33 with median
+    // spread, and ranking by spread put six dead markets at 10-14c on the book with zero fills.
+    // Activity now means MEASURED trades per day, not the 24h volume snapshot: on 48 markets held
+    // out of development, top-12-by-volume returned +$259 and top-12-by-trade-rate +$454. Probe the
+    // most promising `makerRateProbe` by volume so the extra calls stay bounded.
     rows.sort((x, y) => (y.vol - x.vol) || (y.spread - x.spread));
-    universe = rows.slice(0, cfg.makerMarkets);
+    const probe = rows.slice(0, cfg.makerRateProbe);
+    for (const r of probe) { r.tpd = await tradesPerDay(r.ticker); await sleep(90); }
+    const live = probe.filter((r) => r.tpd >= cfg.makerMinTradesPerDay).sort((x, y) => y.tpd - x.tpd);
+    universe = live.slice(0, cfg.makerMarkets);
     lastUniverseAt = Date.now();
     E.log('MAKR', 'SCAN', null, universe.length
-      ? `quoting ${universe.length} markets · ${universe.slice(0, 3).map((r) => `${r.ticker.split('-').slice(-2).join('-')} ${c(r.spread)} $${Math.round(r.vol / 1000)}k`).join(', ')}${universe.length > 3 ? '…' : ''}`
-      : `no market meets the bar (spread >= ${c(cfg.makerMinSpread)}, vol24 >= $${cfg.makerMinVol24}, mid ${cfg.makerMinMid}-${cfg.makerMaxMid})`);
+      ? `quoting ${universe.length} of ${live.length} live markets (${probe.length} probed, ${rows.length} passed the cheap filters) · ${universe.slice(0, 3).map((r) => `${r.ticker.split('-').slice(-2).join('-')} ${r.tpd.toFixed(0)}/day ${c(r.spread)}`).join(', ')}${universe.length > 3 ? '…' : ''}`
+      : `no market meets the bar (spread >= ${c(cfg.makerMinSpread)}, vol24 >= ${cfg.makerMinVol24}, mid ${cfg.makerMinMid}-${cfg.makerMaxMid}, >= ${cfg.makerMinTradesPerDay} trades/day)`);
   }
 
   function book(E) {
@@ -95,8 +122,17 @@ function makeMakerDesk(cfg) {
     }
     if (!universe.length || Date.now() - lastUniverseAt > 15 * 60 * 1000) await refreshUniverse(E);
 
+    // Anything we still hold stays in the loop even after it drops out of the universe. Otherwise
+    // rotating the book strands inventory: no quotes, no fills, and a mark that freezes at whatever
+    // the mid was the last time we looked. Pinned markets are quoted on the REDUCING side only, so
+    // a name we no longer want to make gets worked off rather than added to.
+    const pinned = Object.entries(S.markets)
+      .filter(([t, m]) => m.inv !== 0 && !universe.some((u) => u.ticker === t))
+      .map(([ticker, m]) => ({ ticker, series: m.series, reduceOnly: true }));
+    if (pinned.length) E.touch('MAKR', `${pinned.length} pinned to work off`);
+
     let filled = 0, netQty = 0;
-    for (const u of universe) {
+    for (const u of [...universe, ...pinned]) {
       const m = S.markets[u.ticker] || (S.markets[u.ticker] = { series: u.series, inv: 0, cost: 0, realized: 0, fills: 0, quotes: { bid: null, ask: null }, seen: [] });
       let trades = [], bk = null;
       try {
@@ -121,7 +157,10 @@ function makeMakerDesk(cfg) {
       // 2) rest a fresh quote for the next cycle
       await sleep(80);                     // pace per-market polling too
       const q = maker.desiredQuotes(bk, m.inv, cfg);
-      m.quotes = { bid: q.bid, ask: q.ask };
+      // reduce-only: drop whichever side would grow the position
+      m.quotes = u.reduceOnly
+        ? { bid: m.inv < 0 ? q.bid : null, ask: m.inv > 0 ? q.ask : null }
+        : { bid: q.bid, ask: q.ask };
       m.mid = q.mid ?? m.mid;
       m.spread = q.spread ?? null;
       m.why = q.why || null;

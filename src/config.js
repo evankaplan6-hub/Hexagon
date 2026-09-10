@@ -37,7 +37,14 @@ module.exports = {
   // trades, and every wide-spread market lost money. A wide book on Kalshi means an illiquid one,
   // and when an illiquid market trades it is usually because the taker knows something.
   makerMinSpread: num('MAKER_MIN_SPREAD', 0.01),
-  makerMinVol24: num('MAKER_MIN_VOL24', 5000),  // fills are the revenue; no flow, no business
+  makerMinVol24: num('MAKER_MIN_VOL24', 5000),  // cheap prefilter only; the real rail is the rate below
+  // Flow, measured properly. `volume_24h` is a snapshot that a single block trade can inflate, and
+  // ranking on it picks the wrong markets: over 48 markets never used in development, the top 12 by
+  // 24h volume returned +$259 while the top 12 by observed trades-per-day returned +$454 on the same
+  // pool. The floor matters as much as the ranking -- below roughly 20 trades a day the edge does not
+  // survive a realistic queue, because the queue only clears if the market actually trades.
+  makerMinTradesPerDay: num('MAKER_MIN_TPD', 20),
+  makerRateProbe: num('MAKER_RATE_PROBE', 40),  // how many prefiltered markets to measure per refresh
   makerMinMid: num('MAKER_MIN_MID', 0.08),
   makerMaxMid: num('MAKER_MAX_MID', 0.92),
   makerEveryCycles: num('MAKER_EVERY_CYCLES', 2), // 2 x priceEvery seconds between requotes

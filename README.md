@@ -198,6 +198,39 @@ an illiquid market trades it is usually because the taker knows something. Every
 **1c spread** (the minimum tick) with 7,000–15,000 trades. Ranking by spread, as the first version
 did, picked six dead markets at 10–14c and took zero fills.
 
+### The honest out-of-sample number
+
+Those 34 markets are the ones the strategy was *built* on, and they were sampled as the five most
+active markets in each series — a liquidity-biased set. So the whole thing was re-run on **48
+markets never touched during development**: every market in the 38 configured series that clears the
+live desk's own filters, minus the 34 above, with every parameter frozen before the tape was pulled.
+
+```
+development set (34)   +$2187 on $1348 peak   27/34 positive   162% on peak capital
+out of sample   (48)    +$679 on $2549 peak   37/48 positive    27% on peak capital
+```
+
+Still positive, still positive in three markets out of four — but a **sixth of the return per dollar
+of capital**, and that gap is the real finding. Out of sample the stress tests bite where they did
+not before: 10,000 contracts queued ahead takes it to **−$16**, and the all-pessimistic combination
+to **−$18**, where the development set held +$642 and +$480. The edge is not evenly distributed. It
+lives entirely in flow, and the held-out markets are much thinner (median 16 trades/day against 44).
+
+Two things came out of that, one adopted and one rejected:
+
+**Adopted — rank on measured trade rate, not the volume snapshot.** `volume_24h` is a number a
+single block trade can inflate. Ranking the held-out pool by observed trades-per-day instead
+returned **+$454 for the top 12** against **+$259 for the top 12 by volume**, on the same markets
+and the same capital. A floor was fitted on the development set alone and then applied blind: below
+roughly **20 trades a day** the edge stops surviving a realistic queue, because a resting order only
+reaches the front of the queue in a market that actually trades. Both are now in the desk.
+
+**Rejected — a per-market stop loss.** One held-out market lost $53: a trending book where the maker
+kept buying all the way down to the inventory cap. A stop is the obvious rail, so it was measured
+before it was built, and it loses money at every threshold tried — −$30 at $40, −$22 at $25, −$52 at
+$15 — while not even reliably improving the worst market. Stopping out a mean-reverting book locks
+in the loss and forfeits the recovery. It was not built.
+
 ### Rails
 
 Its ledger is separate from the taker book on purpose — one blended equity number makes it
