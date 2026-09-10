@@ -76,7 +76,7 @@ h1 { font: 800 22px/1 var(--sans); margin: 0; letter-spacing: -0.01em; }
    actual numbers below the fold on a short window. The canvas carries its own device-resolution
    backing store (see floorCtx in app.js); `pixelated` keeps the block art hard-edged, it is no
    longer being asked to hide an upscale. */
-#floorc { width: 100%; aspect-ratio: 12 / 5; max-height: 62vh; display: block; image-rendering: pixelated; background: #0b0e14; }
+#floorc { width: 100%; aspect-ratio: 12 / 6.5; max-height: 72vh; display: block; image-rendering: pixelated; background: #0b0e14; }
 
 .agents { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
 .card { min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px 12px; transition: border-color .3s, box-shadow .3s; }
