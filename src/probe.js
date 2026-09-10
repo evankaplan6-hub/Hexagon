@@ -22,6 +22,10 @@ const ks = require('./venues/kalshi');
 
 const r3 = (x) => Math.round(x * 1000) / 1000;
 const r2 = (x) => Math.round(x * 100) / 100;
+const c = (x) => `${(x * 100).toFixed(1)}c`;
+// How long the probe may take nothing before it says so. One hour: long enough that a quiet
+// stretch is not chatter, short enough that a miscalibrated threshold is caught the same session.
+const DARK_SEC = 3600;
 const ET_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' });
 
 // Contracts and dollars resting within `within` of the touch. This is the number that decides it:
@@ -42,8 +46,17 @@ function makeProbe(cfg) {
   if (!cfg.record) return async () => {};       // probes ride along with the tape; off together
   const last = new Map();                        // pairId -> last probe time
   let warnedAt = 0;
+  let firedAt = 0;                               // last time ANY probe was taken
+  let startedAt = 0;                             // first cycle, so a fresh desk is not "dark for 1h"
+  let widestSeen = 0;                            // widest pre-game gap since the last dark report
   return async (E) => {
     const now = Date.now();
+    if (!startedAt) startedAt = now;
+    for (const p of E.pairs) {
+      if (p.inPlay || !p.q) continue;
+      const g = Math.abs(p.q.ksMid - p.q.pmMid);
+      if (g > widestSeen) widestSeen = g;
+    }
     const due = E.pairs
       // In-play games are excluded, and this is the whole point of the filter rather than a
       // detail. The first four probes ever taken all landed on live MLB games, where Kalshi's
@@ -59,7 +72,22 @@ function makeProbe(cfg) {
       .filter((p) => now - (last.get(p.id) || 0) >= cfg.probeEverySec * 1000)
       .sort((a, b) => Math.abs(b.q.ksMid - b.q.pmMid) - Math.abs(a.q.ksMid - a.q.pmMid))
       .slice(0, cfg.probesPerCycle);            // bound the extra API calls per cycle
-    if (!due.length) return;
+    // A probe that never fires is indistinguishable from a probe that keeps finding nothing, and
+    // the difference is the whole value of the instrument. PROBE_GAP sat at 10c against a
+    // pre-game book whose widest recorded gap was 3c, so this probe took zero samples for its
+    // entire life and reported that fact nowhere -- the same silent-failure shape as a gate that
+    // rejects with a bare `continue`. Say when the instrument is dark, and say which number would
+    // end it, so the next miscalibration is a log line rather than an archaeology exercise.
+    if (!due.length) {
+      // measured from the last probe, or from boot if there has never been one -- otherwise a desk
+      // that started thirty seconds ago reports an hour of darkness
+      if (widestSeen && now - Math.max(firedAt, startedAt) > DARK_SEC * 1000 && E.due('probe-dark', DARK_SEC)) {
+        E.log('TESS', 'OPS', null, `probe has taken nothing in ${(DARK_SEC / 3600).toFixed(0)}h \u00b7 widest pre-game gap seen ${c(widestSeen)} against PROBE_GAP ${c(cfg.probeGap)}${widestSeen < cfg.probeGap ? ' \u00b7 the threshold is above anything this book offers' : ''}`);
+        widestSeen = 0;
+      }
+      return;
+    }
+    firedAt = now;
 
     const lines = [];
     for (const p of due) {

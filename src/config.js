@@ -13,7 +13,18 @@ module.exports = {
   // Thin-market probe (src/probe.js): when the venues disagree by this much, dump BOTH full order
   // books. A gap this wide is either a real opportunity or a price with no size behind it, and
   // only the book can tell the difference. Read-only: probing never signals or trades.
-  probeGap: num('PROBE_GAP', 0.10),
+  //
+  // This was 0.10 and it never fired once. Replaying probe.js's own selection over the recorded
+  // tape, the threshold is a cliff: 10c, 5c and 4c all take ZERO probes, because the widest
+  // pre-game gap in 17,649 non-in-play ticks is 3.00c. Every probe on disk predates the in-play
+  // filter. The instrument was dark for its whole life.
+  //
+  // 0.03 is not a tuned number, it is minGap -- the bar at which the desk itself calls a pair
+  // interesting. A gap under minGap cannot produce a trade, so probing it answers a question
+  // nobody asked; a gap over it is exactly the case the probe exists to validate. Measured cost
+  // at this bar: ~6 probes/day, 13 API calls. The next step down is not a small one -- 0.02 takes
+  // 136 probes/day, a 20x jump, all of it on gaps the desk would refuse anyway.
+  probeGap: num('PROBE_GAP', 0.03),
   probeEverySec: num('PROBE_EVERY_SEC', 600),   // per-pair cooldown, so one wide pair cannot spam
   probesPerCycle: num('PROBES_PER_CYCLE', 2),   // bound the extra API calls per cycle
 

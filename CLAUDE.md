@@ -43,7 +43,8 @@ src/agents.js     the six desks         src/matcher.js   cross-venue matching
 src/broker.js     paper broker + live Kalshi adapter
 src/venues/       Polymarket (Gamma + CLOB) and Kalshi public data
 src/recorder.js   tick tape writer      public/          dashboard
-tools/            edge-scan, replay, maker-report, fillcheck, history-scan, golden, decide-test, api
+tools/            edge-scan, replay, maker-report, fillcheck, history-scan, golden, decide-test,
+                  probe-test, api
 ops/              Fly deploy + launchd autostart (not currently installed)
 data/             gitignored: state.json, journal-*.jsonl, ticks-*.jsonl, desk.log
 ```

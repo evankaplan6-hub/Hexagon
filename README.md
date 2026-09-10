@@ -177,6 +177,27 @@ without them rather than pretending to know. `src/probe.js` settles it going for
 gap over `PROBE_GAP` dumps both full ladders to `data/probes-*.jsonl`. Real depth means a strategy
 (a different one than this desk trades). An empty book closes the thread.
 
+**`PROBE_GAP` was 0.10 and it never fired once.** Replaying the probe's own selection over the
+recorded tape, the threshold is a cliff — 10c, 5c and 4c all take **zero** probes, because the
+widest pre-game gap in 17,649 non-in-play ticks is 3.00c. Every probe currently on disk predates
+the in-play filter. The instrument was dark for its entire life, and nothing said so.
+
+It is now `MIN_GAP` (3c), which is not a tuned number: a gap under `MIN_GAP` cannot produce a
+trade, so probing it validates nothing, and a gap over it is exactly the case the probe exists
+for. Measured cost at that bar is ~6 probes/day — 13 API calls. The step down to 2c is a 20×
+jump to 136 probes/day, all of it on gaps the desk would refuse anyway.
+
+And because a probe that never fires looks identical to a probe that keeps finding nothing, TESS
+now reports the difference:
+
+```
+TESS OPS  probe has taken nothing in 1h · widest pre-game gap seen 0.8c against PROBE_GAP 3.0c
+```
+
+One caveat on the calibration: the tape behind it is 7.6 **overnight** hours. NCAAF — the source of
+the unresolved 20c cases — is a Saturday-daytime market, so 3.00c may be a property of that window
+rather than of the book. The darkness line is what will say so, rather than another silent year.
+
 The in-play exclusion was learned the hard way. The first four probes ever taken all landed on live
 MLB games showing 13–22c gaps — and the books said both venues agreed. Kalshi's *listing* quote was
 lagging its own order book: listing 0.425 against a book of 0.63/0.65. Since probes are ranked by
@@ -355,6 +376,7 @@ public/                dashboard (index.html, style.css, app.js)
 data/state.json        persisted account (created on first run)
 data/ticks-*.jsonl     tick tape, one line per priced pair per cycle (RECORD=1)
 tools/decide-test.js   assertions for the decision core
+tools/probe-test.js    assertions for the thin-market probe (stubbed venues, frozen clock)
 tools/golden.js        fixed-fixture output diff, for refactors meant to change nothing
 ```
 
@@ -364,5 +386,6 @@ guard it, and both are worth running after any change to the gates:
 
 ```bash
 node tools/decide-test.js     # gate behaviour: ranking, vetoes, sizing rails, exits
+node tools/probe-test.js      # probe threshold, in-play exclusion, cooldown, darkness reporting
 node tools/golden.js          # fixed fixtures; diff before/after a refactor
 ```
