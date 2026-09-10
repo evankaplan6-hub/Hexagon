@@ -61,7 +61,10 @@ module.exports = {
   // Nothing currently quoted resolves inside 114 days, so this costs nothing today -- which is
   // exactly when to put it in, rather than after the universe rotates into something expiring.
   makerMinDaysToClose: num('MAKER_MIN_DAYS_TO_CLOSE', 7),
-  makerRateProbe: num('MAKER_RATE_PROBE', 40),  // how many prefiltered markets to measure per refresh
+  // Doubled once the probe stopped making a second call per candidate for depth it already had.
+  // How many markets QUALIFY is what limits this desk -- widening the search is the only lever
+  // that is not just leverage.
+  makerRateProbe: num('MAKER_RATE_PROBE', 80),
   makerMinMid: num('MAKER_MIN_MID', 0.08),
   makerMaxMid: num('MAKER_MAX_MID', 0.92),
   makerEveryCycles: num('MAKER_EVERY_CYCLES', 2), // 2 x priceEvery seconds between requotes

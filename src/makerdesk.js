@@ -21,7 +21,12 @@ async function getWithBackoff(url, tries = 3) {
 
 // What a resting order is actually up against, measured rather than assumed.
 //
-// Two numbers, from one trades page and one book snapshot:
+// Two numbers, from ONE trades page. The depth used to cost a second call to
+// /markets/{t}/orderbook per candidate -- but `yes_bid_size_fp` and `yes_ask_size_fp` come back
+// with the per-series listing the scan already fetches, and they are the same numbers to the
+// hundredth (checked against a full orderbook call: 42.96 and 1142.12, both exact). Halving the
+// per-candidate cost is what lets the probe cover twice as many candidates, and how many markets
+// qualify is the binding constraint on this desk -- not capital, and not compute.
 //   tpd    -- observed trades per day, from the last 100 prints. `volume_24h` is a snapshot one
 //             block trade can inflate; this is closer to the flow that pays us.
 //   clear  -- days for the size ALREADY resting at the touch to trade through, at this market's own
@@ -31,7 +36,7 @@ async function getWithBackoff(url, tries = 3) {
 //             remaining edge in markets that clear inside a day.
 // Cached an hour: depth moves faster than the rate does, and the scan runs every fifteen minutes.
 const statCache = new Map();
-async function marketStats(ticker) {
+async function marketStats(ticker, depth) {
   const hit = statCache.get(ticker);
   if (hit && Date.now() - hit.at < 3600 * 1000) return hit.v;
   const v = { tpd: 0, clear: Infinity, queue: 0 };
@@ -44,8 +49,7 @@ async function marketStats(ticker) {
       const span = Math.max((Math.max(...ts) - Math.min(...ts)) / 86400000, 1 / 48);
       v.tpd = tr.length / span;
       const cpd = tr.reduce((a, x) => a + x.n, 0) / span;
-      const bk = await ks.fetchBook(ticker);
-      v.queue = ((bk.yesBids[0] ? bk.yesBids[0].size : 0) + (bk.yesAsks[0] ? bk.yesAsks[0].size : 0)) / 2;
+      v.queue = depth;
       v.clear = v.queue / Math.max(1, cpd);
     }
   } catch { /* unmeasurable is not tradeable: tpd 0 and clear Infinity both fail the filter */ }
@@ -88,7 +92,9 @@ function makeMakerDesk(cfg) {
           // a spread. Cheap to check here -- close_time is already in the listing we just fetched.
           const days = m.close_time ? (Date.parse(m.close_time) - Date.now()) / 86400000 : 0;
           if (!(days >= cfg.makerMinDaysToClose)) continue;
-          rows.push({ ticker: m.ticker, series: s, vol: v, spread: a - b, days,
+          // top-of-book depth, free with this listing -- see marketStats
+          const depth = ((parseFloat(m.yes_bid_size_fp) || 0) + (parseFloat(m.yes_ask_size_fp) || 0)) / 2;
+          rows.push({ ticker: m.ticker, series: s, vol: v, spread: a - b, days, depth,
             title: m.title || '', sub: m.yes_sub_title || '' });
         }
       } catch (e) { failed.push(s); }
@@ -104,7 +110,7 @@ function makeMakerDesk(cfg) {
     // +$160 out of sample, against +$199 / +$109 for ranking on trade rate alone.
     rows.sort((x, y) => (y.vol - x.vol) || (y.spread - x.spread));
     const probe = rows.slice(0, cfg.makerRateProbe);
-    for (const r of probe) { Object.assign(r, await marketStats(r.ticker)); await sleep(90); }
+    for (const r of probe) { Object.assign(r, await marketStats(r.ticker, r.depth)); await sleep(80); }
     const live = probe
       .filter((r) => r.tpd >= cfg.makerMinTradesPerDay && r.clear <= cfg.makerMaxClearDays)
       .sort((x, y) => x.clear - y.clear);
