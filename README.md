@@ -216,6 +216,26 @@ with real depth it returns **+$240 development / +$160 out of sample**, against 
 for ranking on trade rate alone. Live, it moved the book from markets queued 15,700 deep to markets
 queued 9, 29 and 30 deep — clearing in minutes rather than weeks.
 
+### How much of this depends on the 10% guess
+
+Participation — the share of a crossing trade we win once the queue ahead of us is exhausted — was
+a flat 10% assumption. Scored with real queues under the live selection rule:
+
+```
+ participation   cap      development       out of sample     oos capital
+      5%         100          +$173             +$111            $1076
+     10%         100          +$240             +$160            $1073
+     25%         100          +$371             +$230            $1019
+     50%         100          +$517             +$322             $999
+     10%         300          +$371             +$179            $3019
+     25%         300          +$675             +$475            $3229
+     50%         300         +$1040             +$583            $3305
+```
+
+Roughly linear, and positive in sign at every setting with 14–15 of 21 held-out markets positive
+throughout. So the conclusion does not hinge on the guess — only the magnitude does. The desk runs
+the most conservative cell (10%, cap 100), which is also the one the live paper book is testing.
+
 ### Two things that were tested and not built
 
 **A per-market stop loss.** One held-out market lost $53: a trending book where the maker kept
