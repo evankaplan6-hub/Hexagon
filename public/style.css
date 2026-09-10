@@ -142,3 +142,8 @@ footer { color: var(--dim); font-size: 10px; text-align: center; padding-top: 6p
 .stx b { color: var(--text); font-weight: 700; }
 .stx b.pos { color: var(--green); } .stx b.neg { color: var(--red); }
 @media (max-width: 720px) { .status { grid-template-columns: 1fr; } }
+
+/* The activity log scrolls on its own; without this the browser chains the wheel to the document
+   as soon as the list hits an end, so the page jumps while the pointer is still over the log. */
+.log { overscroll-behavior: contain; }
+#floorc { touch-action: none; }   /* the canvas handles its own wheel; do not let the page steal it */

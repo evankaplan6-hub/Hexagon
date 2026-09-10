@@ -88,6 +88,12 @@
   // the big display becomes the focus view rather than a second panel competing for room.
   let hits = [];                 // rebuilt each frame: { x, y, w, h, kind, key }
   let hover = null, sel = null;
+  // Scrollable regions inside the canvas. The book, the fill tape and an agent's history all hold
+  // more rows than fit, and a canvas has no native scrolling -- so the wheel fell through to the
+  // page and moved the whole document instead of the list under the pointer.
+  let zones = [];                // rebuilt each frame: { x, y, w, h, id, max }
+  const scroll = { book: 0, tape: 0, agentlog: 0 };
+  const zoneAt = (p) => zones.find((z) => p.x >= z.x && p.x <= z.x + z.w && p.y >= z.y && p.y <= z.y + z.h) || null;
 
   function floorPoint(ev) {
     const cv = $('floorc'), r = cv.getBoundingClientRect();
@@ -106,7 +112,17 @@
     cv.addEventListener('click', (ev) => {
       const h = hitAt(floorPoint(ev));
       sel = same(h, sel) ? null : h;          // clicking the selected thing again closes it
+      scroll.agentlog = 0; scroll.book = 0;   // a new view starts at the top
     });
+    // Scroll the list under the pointer, and only then let the page have the event. passive:false
+    // is required -- without it the browser ignores preventDefault and scrolls the document anyway.
+    cv.addEventListener('wheel', (ev) => {
+      const z = zoneAt(floorPoint(ev));
+      if (!z || z.max <= 0) return;                       // nothing to scroll here: page scrolls
+      const next = Math.max(0, Math.min(z.max, scroll[z.id] + (ev.deltaY > 0 ? 1 : -1)));
+      if (next !== scroll[z.id]) { scroll[z.id] = next; ev.preventDefault(); }
+      else if ((next === 0 && ev.deltaY < 0) || (next === z.max && ev.deltaY > 0)) return; // hand back at the ends
+    }, { passive: false });
     // clicking empty floor clears; so does Escape
     window.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') sel = null; });
   }
@@ -157,9 +173,14 @@
   }
   function drawAgentFocus(ctx, a, M) {
     focusHeader(ctx, `${a.n} · ${a.key} · ${a.role}`, ROLE[a.key] || '');
-    const mine = (S.log || []).filter((e) => e.agent === a.key).slice(0, 8);
+    const all = (S.log || []).filter((e) => e.agent === a.key);
+    const LROWS = 8;
+    const maxL = Math.max(0, all.length - LROWS);
+    scroll.agentlog = Math.min(scroll.agentlog, maxL);
+    zones.push({ x: 144, y: 43, w: 192, h: 95, id: 'agentlog', max: maxL });
+    const mine = all.slice(scroll.agentlog, scroll.agentlog + LROWS);
     text(ctx, 'RECENT', 150, 37, '#4b5563', 5);
-    text(ctx, `${a.runs || 0} runs`, 330, 37, '#4b5563', 5, 'right');
+    text(ctx, maxL ? `${scroll.agentlog + 1}-${scroll.agentlog + mine.length} of ${all.length}` : `${a.runs || 0} runs`, 330, 37, '#4b5563', 5, 'right');
     if (!mine.length) text(ctx, 'nothing logged yet', 240, 80, '#3d4350', 6, 'center');
     mine.forEach((e, i) => {
       const y = 46 + i * 11.4;
@@ -196,6 +217,8 @@
     return clip(sub && !title.toLowerCase().includes(sub.toLowerCase()) ? `${title}: ${sub}` : title, n);
   }
 
+  const byTicker = (M, t) => (M.markets || []).find((x) => x.ticker === t);
+
   // canvas has no word wrap
   function wrap(ctx, str, x, y, maxw, lh, col, size) {
     ctx.font = `${size}px JetBrains Mono, monospace`;
@@ -212,7 +235,7 @@
   function drawFloor(t) {
     const ctx = floorCtx(); ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, 480, 260);
-    hits = [];                              // rebuilt every frame; the pointer tests against it
+    hits = []; zones = [];                   // rebuilt every frame; the pointer tests against them
     // room
     const wall = ctx.createLinearGradient(0, 0, 0, 150); wall.addColorStop(0, '#0d1220'); wall.addColorStop(1, '#101828'); ctx.fillStyle = wall; ctx.fillRect(0, 0, 480, 150);
     px(ctx, 0, 150, 480, 110, '#0a0d13'); px(ctx, 0, 149, 480, 2, '#1c2434');
@@ -282,10 +305,13 @@
       text(ctx, 'FLOW', 254, 54, '#4b5563', 5, 'right');
       text(ctx, 'BID', 282, 54, '#4b5563', 5, 'right');
       text(ctx, 'ASK', 310, 54, '#4b5563', 5, 'right');
-      text(ctx, 'HELD', 336, 54, '#4b5563', 5, 'right');
+      text(ctx, 'HELD', 331, 54, '#4b5563', 5, 'right');
       const book = (M.markets || []).filter((m) => m.quoting || m.inv);
       const ROWS = 12;   // inner screen is y 12-142; 12 rows from 61 ends at 135
-      book.slice(0, ROWS).forEach((m, i) => {
+      const maxB = Math.max(0, book.length - ROWS);
+      scroll.book = Math.min(scroll.book, maxB);          // the book shrinks; the offset must too
+      zones.push({ x: 144, y: 58, w: 192, h: 78, id: 'book', max: maxB });
+      book.slice(scroll.book, scroll.book + ROWS).forEach((m, i) => {
         const y = 61 + i * 6.2;
         hits.push({ x: 144, y: y - 1, w: 192, h: 6.2, kind: 'market', key: m.ticker });
         const hot = (hover && hover.kind === 'market' && hover.key === m.ticker);
@@ -295,11 +321,17 @@
         text(ctx, m.tpd ? `${m.tpd}/d` : '—', 254, y, '#4b5563', 5, 'right');
         text(ctx, m.bid == null ? '—' : cents(m.bid), 282, y, '#7c869a', 5, 'right');
         text(ctx, m.ask == null ? '—' : cents(m.ask), 310, y, '#7c869a', 5, 'right');
-        text(ctx, m.inv ? String(m.inv) : '·', 336, y, m.inv > 0 ? '#22c55e' : m.inv < 0 ? '#ef4444' : '#3d4350', 5, 'right');
+        text(ctx, m.inv ? String(m.inv) : '·', 331, y, m.inv > 0 ? '#22c55e' : m.inv < 0 ? '#ef4444' : '#3d4350', 5, 'right');
       });
-      if (!book.length) text(ctx, M.quoting ? 'quoting — no inventory yet' : 'scanning for markets…', 240, 90, '#3d4350', 6, 'center');
-      else if (book.length > ROWS) text(ctx, `+${book.length - ROWS} more quoting`, 336, 61 + ROWS * 6.2, '#3d4350', 5, 'right');
-      text(ctx, 'click a market or an agent', 144, 135, '#243044', 5);
+      if (!book.length) text(ctx, M.quoting ? 'quoting — no inventory yet' : 'scanning for markets', 240, 90, '#3d4350', 6, 'center');
+      else if (maxB) {
+        text(ctx, `${scroll.book + 1}-${Math.min(book.length, scroll.book + ROWS)} of ${book.length}`, 336, 136, '#3d4350', 5, 'right');
+        // a thumb on the right edge, so it is obvious the list has more in it
+        const th = Math.max(6, 78 * ROWS / book.length);
+        px(ctx, 336, 58, 1, 78, '#141b28');
+        px(ctx, 336, 58 + (78 - th) * (scroll.book / maxB), 1, th, '#4b5563');
+      }
+      text(ctx, 'click a market or an agent', 144, 136, '#243044', 5);
     }
     px(ctx, 236, 146, 8, 8, '#1a2030'); // mount
 
@@ -322,14 +354,20 @@
       text(ctx, M.fills ? `${M.fills} before` : 'none yet', 421, 84, '#2f5a3f', 6, 'center');
       text(ctx, M.fills ? 'this restart' : 'waiting to be', 421, 92, '#2f5a3f', 6, 'center');
       if (!M.fills) text(ctx, 'traded against', 421, 100, '#2f5a3f', 6, 'center');
-    } else tape.slice(0, 10).forEach((f, i) => {
+    } else {
+      const TROWS = 10;
+      const maxT = Math.max(0, tape.length - TROWS);
+      scroll.tape = Math.min(scroll.tape, maxT);
+      zones.push({ x: 372, y: 46, w: 98, h: 96, id: 'tape', max: maxT });
+      tape.slice(scroll.tape, scroll.tape + TROWS).forEach((f, i) => {
       const y = 49 + i * 9.4;
       const buy = f.side === 'buy';
       px(ctx, 376, y + 1, 3, 3, buy ? '#22c55e' : '#ef4444');
       text(ctx, `${buy ? 'BUY' : 'SELL'} ${f.qty}`, 382, y, buy ? '#4ade80' : '#f87171', 5);
       text(ctx, cents(f.px), 466, y, '#86efac', 5, 'right');
-      text(ctx, f.ticker.replace(/^KX/, '').slice(0, 17), 382, y + 4.4, '#3f6b4f', 4.5);
-    });
+      text(ctx, marketLabel(byTicker(M, f.ticker) || f, 20), 382, y + 4.4, '#3f6b4f', 4.5);
+      });
+    }
 
     // desks + agents
     // advance the shared clock between SSE frames so the stagger animates smoothly
