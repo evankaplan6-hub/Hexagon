@@ -78,9 +78,17 @@ function makeMakerDesk(cfg) {
     if (!cfg.makerEnabled) return;
     const S = book(E);
 
-    // A halt means stop QUOTING. Existing inventory is still marked and still exits; withdrawing
-    // quotes is the maker equivalent of KETT standing down.
-    if (E.halt) {
+    // Own drawdown rail. TESS watches the taker book and would never see this desk bleeding,
+    // because the two ledgers are separate on purpose.
+    const dd = (cfg.initialBalance - (S.equity ?? cfg.initialBalance)) / cfg.initialBalance;
+    if (dd >= cfg.makerMaxDrawdownPct && !S.halted) {
+      S.halted = `maker drawdown ${(dd * 100).toFixed(1)}% hit the ${(cfg.makerMaxDrawdownPct * 100).toFixed(0)}% limit`;
+      E.log('MAKR', 'OPS', null, `HALT · ${S.halted} · quotes withdrawn, inventory held and marked`);
+      E.journal(E, 'MAKER_HALT', { reason: S.halted, equity: S.equity });
+    }
+    // A halt means stop QUOTING. Existing inventory is still marked; withdrawing quotes is the
+    // maker equivalent of KETT standing down.
+    if (E.halt || S.halted) {
       for (const m of Object.values(S.markets)) m.quotes = { bid: null, ask: null };
       E.touch('MAKR', 'quotes withdrawn');
       return;
@@ -133,7 +141,35 @@ function makeMakerDesk(cfg) {
     E.dirty = true;
   }
 
-  return { step, snapshot: (E) => ({ ...(E.state.maker || {}), universe: universe.map((u) => u.ticker) }) };
+  // Flatten every market's inventory at the touch, paying the TAKER fee -- getting out means
+  // crossing, and pretending otherwise is how the first backtest flattered itself. Called by
+  // engine.flattenAll so one kill switch covers both desks.
+  async function flatten(E, reason) {
+    const S = book(E);
+    let closed = 0, contracts = 0;
+    for (const [ticker, m] of Object.entries(S.markets)) {
+      m.quotes = { bid: null, ask: null };
+      if (!m.inv) continue;
+      let px = m.mid ?? 0.5;
+      try {
+        const bk = await ks.fetchBook(ticker);
+        px = m.inv > 0 ? (bk.yesBids[0] ? bk.yesBids[0].price : px) : (bk.yesAsks[0] ? bk.yesAsks[0].price : px);
+      } catch { /* fall back to the last mark */ }
+      const fee = ks.fee(Math.abs(m.inv), px, cfg.ksFeeRate, ticker);
+      S.cash = r2(S.cash + m.inv * px - fee);
+      E.journal(E, 'MAKER_FLATTEN', { ticker, qty: m.inv, px, fee, reason });
+      contracts += Math.abs(m.inv); closed++;
+      m.inv = 0; m.cost = 0;
+    }
+    S.equity = r2(S.cash);
+    S.halted = `flattened by operator (${reason})`;
+    if (closed) E.log('MAKR', 'OPS', null, `flattened ${closed} market${closed > 1 ? 's' : ''}, ${Math.round(contracts)} contracts · cash ${money(S.cash)}`);
+    return { markets: closed, contracts };
+  }
+
+  function resume(E) { const S = book(E); S.halted = null; }
+
+  return { step, flatten, resume, snapshot: (E) => ({ ...(E.state.maker || {}), universe: universe.map((u) => u.ticker) }) };
 }
 
 module.exports = { makeMakerDesk };

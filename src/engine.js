@@ -264,14 +264,17 @@ class Engine {
       const px = pair && pair.q ? this.markPrice(pos, pair.q) : (pos.mark ?? pos.entry);
       await this.close(pos, px, `flatten: ${reason}`).catch(() => {});
     }
+    // one switch covers both desks: maker inventory is real risk too
+    const mk = await this.maker.flatten(this, reason).catch(() => ({ markets: 0, contracts: 0 }));
     const left = this.state.positions.length;
     this.log('TESS', 'OPS', null, left ? `flatten incomplete \u00b7 ${left} position(s) would not fill, flagged stuck` : 'flatten complete \u00b7 book is empty \u00b7 new risk stays disabled until /api/resume');
-    return { requested: open.length, remaining: left, halted: this.operatorHalt };
+    return { requested: open.length, remaining: left, halted: this.operatorHalt, makerMarketsFlattened: mk.markets, makerContracts: Math.round(mk.contracts) };
   }
 
   resume() {
     const was = this.operatorHalt;
     this.operatorHalt = null;
+    this.maker.resume(this);
     this.journal(this, 'RESUMED', { was });
     this.log('TESS', 'OPS', null, 'operator halt cleared \u00b7 automatic risk checks resume control');
     return { resumed: !!was };

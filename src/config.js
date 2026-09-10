@@ -35,6 +35,9 @@ module.exports = {
   makerMinMid: num('MAKER_MIN_MID', 0.08),
   makerMaxMid: num('MAKER_MAX_MID', 0.92),
   makerEveryCycles: num('MAKER_EVERY_CYCLES', 2), // 2 x priceEvery seconds between requotes
+  // The maker keeps its own drawdown rail. TESS's watches the TAKER book's equity and would never
+  // notice this desk bleeding, because the two ledgers are deliberately separate.
+  makerMaxDrawdownPct: num('MAKER_MAX_DRAWDOWN_PCT', 0.10),
 
   // serving. Default to loopback: /api/positions and the full activity log are unauthenticated,
   // and on a live account that is not something to expose to the local network by default.
