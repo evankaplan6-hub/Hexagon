@@ -22,11 +22,14 @@ module.exports = {
   // charge makers nothing -- on series that DO charge makers the fee is ~73% of the profit, so the
   // filter is hard rather than a preference. Candidates are screened for that at startup.
   makerEnabled: env('MAKER', '1') !== '0',
-  makerSeries: env('MAKER_SERIES', 'CONTROLH,KXPRESNOMD,SENATEME,SENATETX,SENATEOHS,KXBALANCEPOWERCOMBO,KXHOUSERACE,KXPRESPERSON,KXOSCARPIC,KXGOVBAL,KXNFLWINS').split(',').map((s) => s.trim()).filter(Boolean),
+  // Every liquid plain-`quadratic` series found by an exchange-wide screen: 38 series carrying 91
+  // markets that clear the desk's own volume and mid filters. Candidates only -- the desk ranks
+  // them by 24h volume and quotes the top makerMarkets, because flow is the revenue.
+  makerSeries: env('MAKER_SERIES', 'CONTROLH,SENATEME,KXNFLWINS,KXBALANCEPOWERCOMBO,SENATETX,SENATEOHS,KXHOUSERACE,SENATENE,SENATEMN,KXPRESNOMD,KXGOVBAL,SENATEMI,SENATEIA,KXNFLPLAYOFF,KXMOBILETEU,SENATENC,KXPRIMARYTURNOUT,SENATENH,KXRECORDNFLBEST,CONTROLS,KXOSCARNOMPIC,KXRECORDNFLWORST,KXPRESPERSON,KXNEXTPRESSEC,KXNFLLASTTOLOSE,KXNFL1SEED,KXBOND,KXNECORNYIELD,GOVPARTYIA,KXPRESNOMR,KXTRUMPADMINLEAVE,KXOSCARPIC,GOVPARTYOH,KXVOTEPRIMARY,KXBLUETSUNAMICOMBO,KXMLBDEBUT,GOVPARTYFL,KXNHMAPLE').split(',').map((s) => s.trim()).filter(Boolean),
   // More markets is more flow and therefore faster evidence, and the risk is capped PER market by
   // makerCap, so widening the book does not widen the per-name exposure. The binding constraint is
   // Kalshi's rate limit: each quoted market costs two calls per maker cycle.
-  makerMarkets: num('MAKER_MARKETS', 10),
+  makerMarkets: num('MAKER_MARKETS', 12),
   makerCap: num('MAKER_CAP', 100),              // inventory cap per market, in contracts
   makerParticipation: num('MAKER_PARTICIPATION', 0.10), // share of crossing volume we expect to win
   // One tick IS the target, not a fallback. Measured across 34 markets, P&L correlates -0.33 with
