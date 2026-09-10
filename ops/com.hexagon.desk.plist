@@ -5,11 +5,13 @@
   <key>Label</key>
   <string>com.hexagon.desk</string>
 
+  <!-- Run through ops/run-desk.sh rather than calling node directly. launchd hands jobs a minimal
+       PATH that does not include nvm, so `/usr/bin/env node` exits 127 and the job silently never
+       starts. The launcher finds node the way a login shell would. -->
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/bin/env</string>
-    <string>node</string>
-    <string>__HEXDIR__/server.js</string>
+    <string>/bin/bash</string>
+    <string>__HEXDIR__/ops/run-desk.sh</string>
   </array>
 
   <key>WorkingDirectory</key>
@@ -18,8 +20,7 @@
   <!-- Start at login and restart if it ever exits. A week of paper evidence is only worth
        collecting if the process actually survives a week, and a nohup'd shell job does not
        survive a reboot -- which is how a week of measurement quietly becomes an afternoon
-       of it. Paper mode only; see ops/install-autostart.sh, which refuses to install this
-       if MODE=live. -->
+       of it. Paper mode only; install-autostart.sh refuses to install this if MODE=live. -->
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
