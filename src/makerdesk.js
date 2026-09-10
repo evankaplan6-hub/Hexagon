@@ -19,26 +19,38 @@ async function getWithBackoff(url, tries = 3) {
   }
 }
 
-// Observed trade rate, from the last 100 prints. `volume_24h` is a snapshot one block trade can
-// inflate; this is the thing that actually pays us, because a resting quote only reaches the front
-// of the queue in a market that trades. Cached for six hours -- it is a property of the market, not
-// of the minute -- and the span is floored at half an hour so a single burst cannot report a rate of
-// six figures a day.
-const rateCache = new Map();
-async function tradesPerDay(ticker) {
-  const hit = rateCache.get(ticker);
-  if (hit && Date.now() - hit.at < 6 * 3600 * 1000) return hit.rate;
-  let rate = 0;
+// What a resting order is actually up against, measured rather than assumed.
+//
+// Two numbers, from one trades page and one book snapshot:
+//   tpd    -- observed trades per day, from the last 100 prints. `volume_24h` is a snapshot one
+//             block trade can inflate; this is closer to the flow that pays us.
+//   clear  -- days for the size ALREADY resting at the touch to trade through, at this market's own
+//             contract rate. Joining the touch means joining the back of that queue, and in the
+//             median market it is ~15,700 contracts deep. Scoring the backtest with each market's
+//             real depth took it from +$2187 to +$210; splitting by this number put the entire
+//             remaining edge in markets that clear inside a day.
+// Cached an hour: depth moves faster than the rate does, and the scan runs every fifteen minutes.
+const statCache = new Map();
+async function marketStats(ticker) {
+  const hit = statCache.get(ticker);
+  if (hit && Date.now() - hit.at < 3600 * 1000) return hit.v;
+  const v = { tpd: 0, clear: Infinity, queue: 0 };
   try {
     const d = await getWithBackoff(`${ks.BASE}/markets/trades?ticker=${ticker}&limit=100`);
-    const ts = (d.trades || []).map((t) => Date.parse(t.created_time)).filter(Number.isFinite);
-    if (ts.length >= 10) {
+    const tr = (d.trades || []).map((t) => ({ t: Date.parse(t.created_time), n: parseFloat(t.count_fp) || 0 })).filter((x) => Number.isFinite(x.t));
+    if (tr.length >= 10) {
+      const ts = tr.map((x) => x.t);
+      // floor the span at half an hour so one burst cannot report a six-figure daily rate
       const span = Math.max((Math.max(...ts) - Math.min(...ts)) / 86400000, 1 / 48);
-      rate = ts.length / span;
+      v.tpd = tr.length / span;
+      const cpd = tr.reduce((a, x) => a + x.n, 0) / span;
+      const bk = await ks.fetchBook(ticker);
+      v.queue = ((bk.yesBids[0] ? bk.yesBids[0].size : 0) + (bk.yesAsks[0] ? bk.yesAsks[0].size : 0)) / 2;
+      v.clear = v.queue / Math.max(1, cpd);
     }
-  } catch { rate = 0; }                  // unmeasurable is not tradeable
-  rateCache.set(ticker, { rate, at: Date.now() });
-  return rate;
+  } catch { /* unmeasurable is not tradeable: tpd 0 and clear Infinity both fail the filter */ }
+  statCache.set(ticker, { v, at: Date.now() });
+  return v;
 }
 
 const r2 = (x) => Math.round(x * 100) / 100;
@@ -79,21 +91,23 @@ function makeMakerDesk(cfg) {
     }
     // A partial scan silently narrows the universe to whatever survived, so say so.
     if (failed.length) E.log('MAKR', 'OPS', null, `universe scan incomplete: ${failed.length}/${eligible.length} series failed to load (${failed.slice(0, 3).join(', ')}) · quoting from the rest`);
-    // Rank by ACTIVITY, not spread -- that was backwards in the first version and it matters more
-    // than any other choice here: P&L correlates +0.82 with trade count and -0.33 with median
-    // spread, and ranking by spread put six dead markets at 10-14c on the book with zero fills.
-    // Activity now means MEASURED trades per day, not the 24h volume snapshot: on 48 markets held
-    // out of development, top-12-by-volume returned +$259 and top-12-by-trade-rate +$454. Probe the
-    // most promising `makerRateProbe` by volume so the extra calls stay bounded.
+    // Rank by how fast the queue in front of us clears, not by spread and not by volume. Spread
+    // was backwards in the first version -- P&L correlates -0.33 with it, and ranking on it put six
+    // dead markets at 10-14c on the book with zero fills. Volume was better but still wrong: it is
+    // a snapshot, and it says nothing about how many orders are already ahead of us at that price.
+    // Scored with each market's real measured depth, this rule returns +$240 in development and
+    // +$160 out of sample, against +$199 / +$109 for ranking on trade rate alone.
     rows.sort((x, y) => (y.vol - x.vol) || (y.spread - x.spread));
     const probe = rows.slice(0, cfg.makerRateProbe);
-    for (const r of probe) { r.tpd = await tradesPerDay(r.ticker); await sleep(90); }
-    const live = probe.filter((r) => r.tpd >= cfg.makerMinTradesPerDay).sort((x, y) => y.tpd - x.tpd);
+    for (const r of probe) { Object.assign(r, await marketStats(r.ticker)); await sleep(90); }
+    const live = probe
+      .filter((r) => r.tpd >= cfg.makerMinTradesPerDay && r.clear <= cfg.makerMaxClearDays)
+      .sort((x, y) => x.clear - y.clear);
     universe = live.slice(0, cfg.makerMarkets);
     lastUniverseAt = Date.now();
     E.log('MAKR', 'SCAN', null, universe.length
-      ? `quoting ${universe.length} of ${live.length} live markets (${probe.length} probed, ${rows.length} passed the cheap filters) · ${universe.slice(0, 3).map((r) => `${r.ticker.split('-').slice(-2).join('-')} ${r.tpd.toFixed(0)}/day ${c(r.spread)}`).join(', ')}${universe.length > 3 ? '…' : ''}`
-      : `no market meets the bar (spread >= ${c(cfg.makerMinSpread)}, vol24 >= ${cfg.makerMinVol24}, mid ${cfg.makerMinMid}-${cfg.makerMaxMid}, >= ${cfg.makerMinTradesPerDay} trades/day)`);
+      ? `quoting ${universe.length} of ${live.length} workable markets (${probe.length} probed, ${rows.length} passed the cheap filters) · ${universe.slice(0, 3).map((r) => `${r.ticker.split('-').slice(-2).join('-')} ${r.tpd.toFixed(0)}/day, queue ${Math.round(r.queue)} clears in ${r.clear < 1 ? `${(r.clear * 24).toFixed(1)}h` : `${r.clear.toFixed(1)}d`}`).join(' · ')}${universe.length > 3 ? '…' : ''}`
+      : `no market meets the bar (spread >= ${c(cfg.makerMinSpread)}, >= ${cfg.makerMinTradesPerDay} trades/day, queue clearing inside ${cfg.makerMaxClearDays}d)`);
   }
 
   function book(E) {

@@ -171,20 +171,67 @@ Kalshi's 13,951 series whose `fee_type` is plain `quadratic`** and therefore cha
 That filter is hard, not a preference: on series that do charge makers, the fee is ~73% of the
 profit (the same twelve game markets score +$94 with real maker fees and +$354 at zero).
 
-Backtested over ~68 days of real Kalshi trade tape across 34 fee-free markets:
+### The headline number was wrong by an order of magnitude
+
+Backtested over ~68 days of real Kalshi trade tape across 34 fee-free markets, this reported
+**+$2187 on ~$1350 of peak capital**, positive in 27 of 34 markets and robust to every stress
+applied to it. That number is wrong, and the reason is worth more than the number was.
+
+The simulation filled us whenever a taker crossed our price. Live, a resting order joins the **back
+of the queue** at that price and fills only after everything already sitting there. So the actual
+resting depth was measured, market by market, at the top of book:
 
 ```
-spread captured   +$3230
-adverse selection  -$643
-fees                 -$26      (vs -$290 on fee-charging series)
-NET               +$2187 on ~$1350 peak capital · 27 of 34 markets positive
+queue ahead of a fresh order, across the 24 markets the desk was quoting
+  min 9    p25 396    median 15705    p75 45491    max 231474  contracts
 ```
 
-Robust in every direction tested: **+$642** with 10,000 contracts queued ahead of us at every
-price; **+$480** with queue *and* 2.5% participation *and* stale quotes *and* a 50-contract cap
-applied together; **+$2083** when forced to requote only every ten minutes.
+The median quoted market had **15,700 contracts already ahead of us**. Re-scoring every backtested
+market against its own measured depth:
 
-### Two things that were backwards, and the measurements that caught them
+```
+                        as backtested        with the real queue
+development (34)      +$2187 / 105k fills    +$210 / 15k fills
+out of sample (48)     +$679 /  57k fills    +$144 / 11k fills
+```
+
+**A 90% haircut**, and the largest correction this project has made. The edge is real — both sets
+stay positive, out of sample included — but it is roughly **$150–250 per 68 days on under $1,000 of
+working capital**, not two thousand dollars. Everything below is written against the corrected
+numbers.
+
+### Where the surviving edge actually lives
+
+Split the same markets by how long the queue in front of us takes to trade through:
+
+```
+queue clears in < 1 day      +$357    29/49 positive
+queue clears in 1-7 days      -$11    11/28 positive
+queue clears in > 7 days       +$7     2/5  positive
+```
+
+All of it is in one bucket. That is now the desk's primary filter *and* its primary ranking, ahead
+of spread, volume and trade rate alike: quote the markets where the queue clears fastest. Scored
+with real depth it returns **+$240 development / +$160 out of sample**, against **+$199 / +$109**
+for ranking on trade rate alone. Live, it moved the book from markets queued 15,700 deep to markets
+queued 9, 29 and 30 deep — clearing in minutes rather than weeks.
+
+### Two things that were tested and not built
+
+**A per-market stop loss.** One held-out market lost $53: a trending book where the maker kept
+buying down to the inventory cap. A stop is the obvious rail, so it was measured before being
+built — and it loses money at every threshold (−$30 at $40, −$22 at $25, −$52 at $15) while not
+reliably improving the worst market. Stopping out a mean-reverting book locks in the loss and
+forfeits the recovery.
+
+**Quoting inside the spread.** Improving the touch by a tick creates a new price level where we are
+first in queue — the obvious answer to a 15,700-deep queue. It gives up two ticks to buy priority,
+and the trade is a wash: at a 5c threshold it is *worse* in development (+$176 vs +$210) and
+*better* out of sample (+$196 vs +$144), which is noise rather than edge. At tighter thresholds it
+is clearly negative. Not adopted.
+
+
+### Two things that were backwards
 
 **Lookahead.** The first backtest set its quote from the trade currently arriving and then filled on
 that same trade — so it could never be run over. That deletes adverse selection, which is the
@@ -198,38 +245,19 @@ an illiquid market trades it is usually because the taker knows something. Every
 **1c spread** (the minimum tick) with 7,000–15,000 trades. Ranking by spread, as the first version
 did, picked six dead markets at 10–14c and took zero fills.
 
-### The honest out-of-sample number
+### Holding markets out of development
 
-Those 34 markets are the ones the strategy was *built* on, and they were sampled as the five most
-active markets in each series — a liquidity-biased set. So the whole thing was re-run on **48
-markets never touched during development**: every market in the 38 configured series that clears the
-live desk's own filters, minus the 34 above, with every parameter frozen before the tape was pulled.
+The 34 markets above are the ones the strategy was *built* on, and they were sampled as the five
+most active in each series — a liquidity-biased set. So it was re-run on **48 markets never touched
+during development**: every market in the 38 configured series clearing the live desk's own filters,
+minus the original 34, with every parameter frozen before the tape was pulled. That held-out set is
+the second column in the table above, and it is what makes the surviving edge believable rather than
+fitted. It is also thinner — median 16 trades/day against 44 — which is why it earns less.
 
-```
-development set (34)   +$2187 on $1348 peak   27/34 positive   162% on peak capital
-out of sample   (48)    +$679 on $2549 peak   37/48 positive    27% on peak capital
-```
-
-Still positive, still positive in three markets out of four — but a **sixth of the return per dollar
-of capital**, and that gap is the real finding. Out of sample the stress tests bite where they did
-not before: 10,000 contracts queued ahead takes it to **−$16**, and the all-pessimistic combination
-to **−$18**, where the development set held +$642 and +$480. The edge is not evenly distributed. It
-lives entirely in flow, and the held-out markets are much thinner (median 16 trades/day against 44).
-
-Two things came out of that, one adopted and one rejected:
-
-**Adopted — rank on measured trade rate, not the volume snapshot.** `volume_24h` is a number a
-single block trade can inflate. Ranking the held-out pool by observed trades-per-day instead
-returned **+$454 for the top 12** against **+$259 for the top 12 by volume**, on the same markets
-and the same capital. A floor was fitted on the development set alone and then applied blind: below
-roughly **20 trades a day** the edge stops surviving a realistic queue, because a resting order only
-reaches the front of the queue in a market that actually trades. Both are now in the desk.
-
-**Rejected — a per-market stop loss.** One held-out market lost $53: a trending book where the maker
-kept buying all the way down to the inventory cap. A stop is the obvious rail, so it was measured
-before it was built, and it loses money at every threshold tried — −$30 at $40, −$22 at $25, −$52 at
-$15 — while not even reliably improving the worst market. Stopping out a mean-reverting book locks
-in the loss and forfeits the recovery. It was not built.
+One selection change came out of it and survived the queue correction: rank on **measured trades per
+day**, not `volume_24h`, which is a snapshot a single block trade can inflate. On the held-out pool,
+top-12-by-trade-rate returned +$454 against +$259 for top-12-by-volume. Trade rate is now the
+secondary rail behind queue clearance, with a floor of 10 trades/day.
 
 ### Rails
 
