@@ -517,7 +517,7 @@
     // desks + agents
     // advance the shared clock between SSE frames so the stagger animates smoothly
     S.now = Math.max(S.now, (S._rx || 0) + (performance.now() - (S._rxPerf || performance.now())));
-    const bubbles = [];
+    const bubbles = [], labels = [];
     S.agents.forEach((a, i) => {
       if (!DESKS[i]) return;                 // more agents than seats: skip rather than throw
       const [x, y] = DESKS[i];
@@ -557,7 +557,17 @@
       const blink = Math.floor(t * 1.3 + i * 0.7) % 6 === 0 && ((t * 1.3 + i * 0.7) % 1) < 0.18;
       if (blink) { px(ctx, bx - 4, by - 3, 3, 1, '#fff'); px(ctx, bx + 1, by - 3, 3, 1, '#fff'); }
       else { px(ctx, bx - 4, by - 4, 3, 3, '#fff'); px(ctx, bx + 1, by - 4, 3, 3, '#fff'); px(ctx, bx - 3, by - 3, 1, 1, '#111'); px(ctx, bx + 2, by - 3, 1, 1, '#111'); }
-      text(ctx, a.key, bx, y + 36, (hot || picked) ? a.color : (act ? '#e6e8ee' : '#5b6270'), 6, 'center');
+      // QUEUED, for exactly the reason the bubbles below are: drawn inside this loop, a back-row
+      // name landed at y+36 = 194 and the front row's desks were painted over it a few iterations
+      // later. BRAM, KETT and RIGO -- the three agents the activity feed talks about most -- sat
+      // unlabelled on the floor, while TESS, HOLT, ILSA and MAKR in front were fine. The original
+      // line labelled all seven, so the intent was always to name everybody.
+      //
+      // The back row also cannot use the floor in FRONT of it, because the next row of desks
+      // occupies that space -- so its name goes up onto the wall screen behind it instead, at the
+      // same y=152 the back-row bubbles clamp to. A bubble covers the name while that agent is
+      // speaking, which is three seconds and is the more useful of the two.
+      labels.push({ key: a.key, bx, y: y + (i < 3 ? -6 : 36), color: (hot || picked) ? a.color : (act ? '#e6e8ee' : '#5b6270') });
       // Speech bubbles are QUEUED, not drawn here. Drawing one inside this loop put it under the
       // next agent's desk, which is why they read "budget $20" and "22 pairs /" -- the box was
       // being painted over a few iterations later. They go on top, after every desk is down.
@@ -571,6 +581,9 @@
     shadow(ctx, 12, 206, 22, 8, 0.45);
     px(ctx, 16, 186, 12, 24, '#241d14'); px(ctx, 16, 186, 3, 24, '#332918');
     px(ctx, 10, 170, 24, 18, '#153f26'); px(ctx, 14, 164, 16, 10, '#1d5c34'); px(ctx, 14, 164, 16, 1, '#2a7d47');
+
+    // ---- names, after every desk is down so no later row can paint over one
+    for (const l of labels) text(ctx, l.key, l.bx, l.y, l.color, 6, 'center');
 
     // ---- speech bubbles, last of everything so nothing can cover them
     // They used to be solid white blocks with black text: the brightest thing in a dark room, for
