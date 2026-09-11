@@ -11,6 +11,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { Engine } = require('../src/engine');
+const { KETT } = require('../src/agents');
 const base = require('../src/config');
 
 let pass = 0, fail = 0;
@@ -106,6 +107,33 @@ const position = (over = {}) => ({
     ok('journalled as CLOSE', (E.journalled || []).some((j) => j.type === 'CLOSE'), (E.journalled || []).map((j) => j.type));
   }
 
+  group('partial exit P&L stays with the group on final close');
+  {
+    // The group is only scored once its last leg closes. Previously the partial slice was real
+    // money in stats.realized but absent from state.closed, so this +2c arb appeared as a loss.
+    const E = engine();
+    const logs = [];
+    E.log = (...args) => logs.push(args);
+    let n = 0;
+    E.broker = { sell: async ({ qty, px }) => {
+      n++;
+      if (n === 1) return { filled: 30, avg: px, fee: 0.28, proceeds: 18.32 };
+      if (n === 2) return { filled: qty, avg: px, fee: 0, proceeds: 43.00 };
+      return { filled: qty, avg: px, fee: 0, proceeds: 60.50 };
+    } };
+    const first = position({ id: 'a', group: 'arb-partial', strategy: 'arb' });
+    const second = position({ id: 'b', group: 'arb-partial', strategy: 'arb' });
+    E.state.positions = [first, second];
+    await E.close(first, 0.62, 'partial');
+    await E.close(first, 0.62, 'final');
+    await E.close(second, 0.62, 'final');
+
+    ok('the first closed leg carries its earlier partial P&L', Math.abs(E.state.closed.find((p) => p.id === 'a').pnl - 0.42) < 0.001, E.state.closed);
+    ok('the group is scored from all realised slices', E.state.stats.wins === 1 && E.state.stats.losses === 0, E.state.stats);
+    ok('the global realised total agrees with the group net', Math.abs(E.state.stats.realized - 0.02) < 0.001, E.state.stats.realized);
+    ok('the arb narration reports the complete positive net', logs.some((x) => String(x[3]).includes('arb pair net +$0.02')), logs);
+  }
+
   group('one close per position, however many callers arrive');
   {
     // `pos.exitSeq++` and the broker round trip both run before the ownership check, so two
@@ -146,6 +174,103 @@ const position = (over = {}) => ({
     await E.close(pos, 0.62, 'retry');
     ok('the retry is not blocked by the guard', E.state.positions.length === 0, E.state.positions.length);
     ok('and both attempts were counted', pos.exitSeq === 2, pos.exitSeq);
+  }
+
+  group('an unknown exit waits for reconciliation instead of retrying');
+  {
+    const E = engine();
+    let calls = 0;
+    const intent = { action: 'sell', ref: 'KXTEST-A', side: 'yes', qty: 100, clientOrderId: 'unknown-exit' };
+    E.broker = { sell: async () => {
+      calls++;
+      E.state.pendingOrders = [intent]; // the live broker writes this before its POST
+      const err = new Error('request response lost');
+      err.code = 'KALSHI_ORDER_UNKNOWN'; err.ambiguousOrder = true;
+      err.clientOrderId = intent.clientOrderId; err.intent = intent;
+      throw err;
+    } };
+    const pos = position();
+    E.state.positions = [pos];
+    await E.close(pos, 0.62, 'first try');
+    await E.close(pos, 0.62, 'must not retry');
+    ok('only the original sell reaches the broker', calls === 1, calls);
+    ok('the position is not tagged for RIGO auto-retry', !pos.orphan && pos.pendingExit && pos.pendingExit.clientOrderId === intent.clientOrderId, pos);
+    ok('the desk is held out of live entries', E.liveReady === false, E.liveReady);
+    ok('the pending marker is synchronously durable', readState(E.cfg.dataDir).positions[0].pendingExit.clientOrderId === intent.clientOrderId, readState(E.cfg.dataDir));
+    ok('the uncertainty is journalled explicitly', (E.journalled || []).some((j) => j.type === 'EXIT_UNKNOWN'), E.journalled);
+  }
+
+  group('a flatten that lands during KETT book fetch sends no buy');
+  {
+    const E = engine();
+    E.halt = null;
+    const pair = { id: 'race-pair', label: 'race pair', pm: { id: 'pm-race' }, ks: { ticker: 'KXRACE' }, q: {} };
+    E.signals = [{ pair, type: 'arb', edge: 0.10, gap: 0.10, legs: [{ venue: 'KS', side: 'yes', px: 0.50 }] }];
+    let bookStarted, releaseBook;
+    const started = new Promise((resolve) => { bookStarted = resolve; });
+    E.book = async () => {
+      bookStarted();
+      return new Promise((resolve) => { releaseBook = resolve; });
+    };
+    let buys = 0;
+    E.broker = { buy: async () => { buys++; return { filled: 10, avg: 0.50, fee: 0, cost: 5 }; } };
+    const run = KETT(E);
+    await started;
+    await E.flattenAll('KETT book race');
+    releaseBook({ asks: [{ price: 0.50, size: 100 }], yesBid: 0.49, yesAsk: 0.50 });
+    await run;
+    ok('the direct operator halt check prevents the pending buy', buys === 0, buys);
+    ok('the book remains empty', E.state.positions.length === 0, E.state.positions);
+  }
+
+  group('a fill already in flight at flatten is accounted and unwound');
+  {
+    const E = engine();
+    E.halt = null;
+    const pair = { id: 'inflight-pair', label: 'inflight pair', pm: { id: 'pm-inflight' }, ks: { ticker: 'KXINFLIGHT' }, q: { ksBid: 0.49, ksAsk: 0.50 } };
+    E.signals = [{ pair, type: 'arb', edge: 0.10, gap: 0.10, legs: [{ venue: 'KS', side: 'yes', px: 0.50 }] }];
+    E.book = async () => ({ asks: [{ price: 0.50, size: 100 }], yesBid: 0.49, yesAsk: 0.50 });
+    let releaseBuy, buys = 0, sells = 0;
+    const buyStarted = new Promise((resolve) => {
+      E.broker = {
+        buy: async () => { buys++; resolve(); return new Promise((done) => { releaseBuy = done; }); },
+        sell: async ({ qty, px }) => { sells++; return { filled: qty, avg: px, fee: 0, proceeds: qty * px }; },
+      };
+    });
+    const run = KETT(E);
+    await buyStarted;
+    await E.flattenAll('KETT order race');
+    releaseBuy({ filled: 10, avg: 0.50, fee: 0, cost: 5 });
+    await run;
+    ok('only the buy submitted before flatten reached the broker', buys === 1, buys);
+    ok('that known fill is unwound rather than left untracked', sells === 1 && E.state.positions.length === 0, { sells, positions: E.state.positions });
+  }
+
+  group('an unknown KETT entry is not unwound or retried');
+  {
+    const E = engine();
+    E.cfg.mode = 'live'; E.liveReady = true; E.halt = null;
+    const pair = { id: 'unknown-pair', label: 'unknown pair', pm: { id: 'pm-unknown' }, ks: { ticker: 'KXUNKNOWN' }, q: {} };
+    E.signals = [{ pair, type: 'arb', edge: 0.10, gap: 0.10, legs: [{ venue: 'KS', side: 'yes', px: 0.50 }] }];
+    E.book = async () => ({ asks: [{ price: 0.50, size: 100 }], yesBid: 0.49, yesAsk: 0.50 });
+    let buys = 0, sells = 0;
+    const intent = { action: 'buy', ref: 'KXUNKNOWN', side: 'yes', qty: 10, clientOrderId: 'unknown-entry' };
+    E.broker = {
+      buy: async () => {
+        buys++; E.state.pendingOrders = [intent];
+        const err = new Error('request response lost');
+        err.code = 'KALSHI_ORDER_UNKNOWN'; err.ambiguousOrder = true;
+        err.clientOrderId = intent.clientOrderId; err.intent = intent;
+        throw err;
+      },
+      sell: async () => { sells++; return { filled: 0 }; },
+    };
+    await KETT(E);
+    await KETT(E);
+    ok('the unknown order is submitted once only', buys === 1, buys);
+    ok('no unknown entry is automatically unwound', sells === 0, sells);
+    ok('the live desk remains blocked pending reconciliation', E.liveReady === false, E.liveReady);
+    ok('the uncertainty is journalled and saved with the broker intent', (E.journalled || []).some((j) => j.type === 'ENTRY_UNKNOWN') && readState(E.cfg.dataDir).pendingOrders[0].clientOrderId === intent.clientOrderId, { journal: E.journalled, saved: readState(E.cfg.dataDir) });
   }
 
   for (const d of dirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch {} }

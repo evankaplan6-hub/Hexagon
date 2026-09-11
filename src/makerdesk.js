@@ -133,6 +133,15 @@ function makeMakerDesk(cfg) {
     if (!cfg.makerEnabled) return;
     const S = book(E);
 
+    // TESS's computed halt is refreshed on the taker cadence. An operator flatten is immediate,
+    // so it must be read directly here and again after this function's awaits before we install a
+    // fresh resting quote.
+    const withdraw = () => {
+      for (const m of Object.values(S.markets)) m.quotes = { bid: null, ask: null };
+      E.touch('MAKR', 'quotes withdrawn');
+    };
+    if (E.operatorHalt || E.halt || S.halted) { withdraw(); return; }
+
     // Own drawdown rail. TESS watches the taker book and would never see this desk bleeding,
     // because the two ledgers are separate on purpose.
     //
@@ -151,11 +160,7 @@ function makeMakerDesk(cfg) {
     }
     // A halt means stop QUOTING. Existing inventory is still marked; withdrawing quotes is the
     // maker equivalent of KETT standing down.
-    if (E.halt || S.halted) {
-      for (const m of Object.values(S.markets)) m.quotes = { bid: null, ask: null };
-      E.touch('MAKR', 'quotes withdrawn');
-      return;
-    }
+    if (E.operatorHalt || E.halt || S.halted) { withdraw(); return; }
     // The scan costs 38 series listings plus 40 trade-rate probes -- about 23 seconds, against a
     // 15-second tick. Awaiting it made the whole desk skip ticks every fifteen minutes, taker side
     // included. The first one has to block (there is nothing to quote yet); after that it runs in
@@ -167,6 +172,7 @@ function makeMakerDesk(cfg) {
         .catch((e) => E.log('MAKR', 'OPS', null, `universe refresh failed (${String(e.message).slice(0, 80)}) · still quoting the previous ${universe.length}`))
         .finally(() => { refreshing = null; });
     }
+    if (E.operatorHalt || E.halt || S.halted) { withdraw(); return; }
 
     // Anything we still hold stays in the loop even after it drops out of the universe. Otherwise
     // rotating the book strands inventory: no quotes, no fills, and a mark that freezes at whatever
@@ -190,6 +196,7 @@ function makeMakerDesk(cfg) {
       E.log('MAKR', 'OPS', null, `market data failed (${String(e.message).slice(0, 80)}) · quotes left as they are`);
       return;
     }
+    if (E.operatorHalt || E.halt || S.halted) { withdraw(); return; }
     if (tapeRes.gap && E.due('makr-gap', 300)) {
       E.log('MAKR', 'OPS', null, `tape gap: the exchange traded more than one page between polls (${tapeRes.gaps} so far) · some fills were not seen`);
     }

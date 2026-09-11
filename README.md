@@ -381,6 +381,7 @@ tools/probe-test.js    assertions for the thin-market probe (stubbed venues, fro
 tools/maker-test.js    assertions for the maker core: quoting, queue, fills, realised P&L
 tools/broker-test.js   assertions for fills, incl. the live Kalshi order path (no network)
 tools/matcher-test.js  assertions for cross-venue matching
+tools/engine-test.js   assertions for the ledger: operator latch, partial exits, and close serialization
 tools/golden.js        fixed-fixture output diff, for refactors meant to change nothing
 ```
 
@@ -389,7 +390,7 @@ tape and a synthetic clock (`tools/replay.js`) instead of a network and a wall c
 guard it, and both are worth running after any change to the gates:
 
 ```bash
-npm test                      # all 224 assertions across five suites
+npm test                      # all 287 assertions across six suites
 node tools/maker-test.js      # ...or one suite at a time while working on one file
 ```
 

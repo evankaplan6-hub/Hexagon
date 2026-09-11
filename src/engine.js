@@ -23,6 +23,10 @@ const AGENTS = [
 const r2 = (x) => Math.round(x * 100) / 100;
 const r3 = (x) => Math.round(x * 1000) / 1000;
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+// A POST whose response was lost is neither a failed order nor a safe retry. The live broker
+// persists the intent before sending it; the engine keeps the affected position out of RIGO's
+// retry loop until reconciliation can say whether the exchange accepted it.
+const ambiguousOrder = (e) => !!(e && (e.ambiguousOrder || e.code === 'KALSHI_ORDER_UNKNOWN'));
 
 class Engine {
   constructor(cfg) {
@@ -235,6 +239,12 @@ class Engine {
   // same contracts. Kalshi cannot dedupe two different client_order_ids. Paper hides it entirely:
   // PaperBroker.sell does no I/O, so the loop drains before anything can interleave.
   async close(pos, px, reason, resolved = false) {
+    // An uncertain sell may have filled at the exchange. Do not turn its next scheduled RIGO pass
+    // into a new client-order ID and a possible oversell; reconciliation owns this position now.
+    if (pos.pendingExit) {
+      if (this.due(`exit-pending-${pos.id}`, 300)) this.log('RIGO', 'HALT', null, `${pos.label}: exit ${pos.pendingExit.clientOrderId || 'order'} is awaiting reconciliation · not retrying`);
+      return;
+    }
     if (this.closing.has(pos.id)) return;
     this.closing.add(pos.id);
     try { return await this._close(pos, px, reason, resolved); }
@@ -250,6 +260,17 @@ class Engine {
       pos.exitSeq = (pos.exitSeq || 0) + 1;
       try { fill = await this.broker.sell({ venue: pos.venue, ref: pos.ref, side: pos.side, qty: pos.qty, px, key: `${pos.id}-out-${pos.exitSeq}` }); }
       catch (e) {
+        if (ambiguousOrder(e)) {
+          // The broker has already durably recorded the order intent. Keep the same local marker
+          // alongside the position so a later cycle cannot manufacture a fresh exit key before
+          // that record has been reconciled against Kalshi.
+          pos.pendingExit = { clientOrderId: e.clientOrderId || `${pos.id}-out-${pos.exitSeq}`, intent: e.intent || null, at: Date.now() };
+          this.liveReady = false;
+          this.journal(this, 'EXIT_UNKNOWN', { id: pos.id, group: pos.group, label: pos.label, venue: pos.venue, side: pos.side, qty: pos.qty, attempt: pos.exitSeq, clientOrderId: pos.pendingExit.clientOrderId, intent: pos.pendingExit.intent, reason: String(e.message || 'order response unknown').slice(0, 120) });
+          this.log('RIGO', 'HALT', null, `${pos.label}: exit response unknown · awaiting reconciliation before any retry`);
+          this.save(); // persist the local no-retry marker with the broker's pending intent now
+          return;
+        }
         pos.orphan = true; this.journal(this, 'EXIT_FAIL', { id: pos.id, reason: String(e.message).slice(0, 120), attempt: pos.exitSeq });
         if (this.due(`exit-fail-${pos.id}`, 120)) this.log('RIGO', 'PASS', null, `${pos.label}: exit failed (${e.message.slice(0, 80)}) \u00b7 flagged stuck, will retry`);
         return;
@@ -275,6 +296,7 @@ class Engine {
       pos.qty -= sold;
       pos.cost = r2(pos.cost - costShare);
       pos.orphan = true;                                   // RIGO retries the remainder every cycle
+      pos.partialPnl = r2((pos.partialPnl || 0) + pnl);     // carried into the group score on final close
       this.state.cash = r2(this.state.cash + fill.proceeds);
       this.state.stats.fees = r2(this.state.stats.fees + fill.fee);
       this.state.stats.realized = r2(this.state.stats.realized + pnl);
@@ -289,11 +311,16 @@ class Engine {
     this.cooldown.set(pos.pairId, Date.now());
     this.state.cash = r2(this.state.cash + fill.proceeds);
     this.state.stats.fees = r2(this.state.stats.fees + fill.fee);
-    const pnl = r2(fill.proceeds - pos.cost);
-    const closed = { ...pos, exit: fill.avg, exitAt: Date.now(), pnl, reason };
+    const exitPnl = r2(fill.proceeds - pos.cost);
+    // `closed` contains one record per leg, not one per fill. A partial close has already moved
+    // cash and global realised P&L, so roll it into this final leg total before group scoring (and
+    // before the dashboard presents the leg as closed).
+    const partialPnl = r2(pos.partialPnl || 0);
+    const pnl = r2(partialPnl + exitPnl);
+    const closed = { ...pos, exit: fill.avg, exitAt: Date.now(), pnl, exitPnl, partialPnl, reason };
     this.state.closed.push(closed);
     if (this.state.closed.length > 2000) this.state.closed.splice(0, this.state.closed.length - 2000);
-    this.state.stats.realized = r2(this.state.stats.realized + pnl);
+    this.state.stats.realized = r2(this.state.stats.realized + exitPnl);
     // score a group (arb = 2 legs, converge = 1 leg) once its last leg closes
     const stillOpen = this.state.positions.some((p) => p.group === pos.group);
     let text = `${pos.label} · sold ${pos.qty} ${pos.side.toUpperCase()} @ ${pos.venue === 'PM' ? 'Polymarket' : 'Kalshi'} ${fill.avg.toFixed(3)} (in ${pos.entry.toFixed(3)}) · ${reason}`;
@@ -303,8 +330,8 @@ class Engine {
       if (gpnl >= 0) this.state.stats.wins++; else this.state.stats.losses++;
       if (pos.strategy === 'arb') text += ` · arb pair net ${gpnl >= 0 ? '+' : '−'}$${Math.abs(gpnl).toFixed(2)}`;
     }
-    this.journal(this, resolved ? 'SETTLE' : 'CLOSE', { id: pos.id, group: pos.group, label: pos.label, venue: pos.venue, side: pos.side, qty: pos.qty, entry: pos.entry, exit: fill.avg, fee: fill.fee, proceeds: fill.proceeds, pnl, reason, strategy: pos.strategy, heldMs: Date.now() - pos.openedAt, cash: this.state.cash });
-    this.log('RIGO', 'SETTLE', pnl, text);
+    this.journal(this, resolved ? 'SETTLE' : 'CLOSE', { id: pos.id, group: pos.group, label: pos.label, venue: pos.venue, side: pos.side, qty: pos.qty, entry: pos.entry, exit: fill.avg, fee: fill.fee, proceeds: fill.proceeds, pnl: exitPnl, legPnl: pnl, partialPnl, reason, strategy: pos.strategy, heldMs: Date.now() - pos.openedAt, cash: this.state.cash });
+    this.log('RIGO', 'SETTLE', exitPnl, text);
     this.dirty = true;
   }
 

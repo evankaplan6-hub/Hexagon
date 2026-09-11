@@ -6,6 +6,21 @@ const ks = require('./venues/kalshi');
 
 const r2 = (x) => Math.round(x * 100) / 100;
 const r4 = (x) => Math.round(x * 10000) / 10000;
+const MAX_RECONCILE_PAGES = 50;
+
+// A POST whose response is lost is not an ordinary failed order: the exchange may have accepted
+// and filled it. Callers must stop rather than mint a new client id and accidentally double it.
+class AmbiguousOrderError extends Error {
+  constructor(intent, cause) {
+    super(`Kalshi ${intent.action} outcome unknown for ${intent.clientOrderId} · refusing further live orders until reconciliation`);
+    this.name = 'AmbiguousOrderError';
+    this.code = 'KALSHI_ORDER_UNKNOWN';
+    this.ambiguousOrder = true;
+    this.clientOrderId = intent.clientOrderId;
+    this.intent = { ...intent };
+    if (cause) this.cause = cause;
+  }
+}
 
 // Walk an ask ladder (best first) up to a limit price.
 function walk(asks, qty, limit) {
@@ -48,16 +63,19 @@ class LiveKalshiBroker extends PaperBroker {
     this.key = crypto.createPrivateKey(fs.readFileSync(cfg.kalshiKeyPath, 'utf8'));
     this.host = 'https://api.elections.kalshi.com';
   }
-  headers(method, fullPath) {
+  headers(method, signingPath) {
     const ts = Date.now().toString();
-    const sig = crypto.sign('sha256', Buffer.from(ts + method + fullPath), {
+    const sig = crypto.sign('sha256', Buffer.from(ts + method + signingPath), {
       key: this.key, padding: crypto.constants.RSA_PKCS1_PSS_PADDING, saltLength: crypto.constants.RSA_PSS_SALTLEN_DIGEST,
     }).toString('base64');
     return { 'KALSHI-ACCESS-KEY': this.keyId, 'KALSHI-ACCESS-SIGNATURE': sig, 'KALSHI-ACCESS-TIMESTAMP': ts, 'content-type': 'application/json', accept: 'application/json' };
   }
   async request(method, p, body) {
-    const fullPath = '/trade-api/v2' + p;
-    const r = await fetch(this.host + fullPath, { method, headers: this.headers(method, fullPath), body: body ? JSON.stringify(body) : undefined });
+    const requestPath = '/trade-api/v2' + p;
+    // Kalshi signs the pathname from the API root, specifically excluding query parameters. The
+    // cursor still belongs in the URL -- only the signature omits it.
+    const signingPath = requestPath.split('?')[0];
+    const r = await fetch(this.host + requestPath, { method, headers: this.headers(method, signingPath), body: body ? JSON.stringify(body) : undefined });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(`Kalshi ${r.status}: ${JSON.stringify(j).slice(0, 200)}`);
     return j;
@@ -76,8 +94,17 @@ class LiveKalshiBroker extends PaperBroker {
   // exchange reports matches what the book says, so a mismatch surfaces before it costs money
   // rather than after.
   async reconcile() {
+    // A failed re-check must never leave a formerly-ready live session trading. This is also the
+    // latch an ambiguous order uses until an operator has reconciled its persisted intent.
+    this.E.liveReady = false;
     let remote;
     try {
+      const pending = this.pendingOrders();
+      if (pending.length) {
+        const ids = pending.slice(0, 3).map((o) => o.clientOrderId).join(', ');
+        this.E.log('TESS', 'OPS', null, `unresolved Kalshi order intent${pending.length === 1 ? '' : 's'} (${ids}${pending.length > 3 ? ', …' : ''}) · staying halted until reconciled`);
+        return;
+      }
       // FOLLOW THE CURSOR. Reading one page and treating it as the whole account is only safe in
       // the direction that finds too FEW remote positions -- and that is the dangerous one: an
       // empty first page against an empty local book reconciles clean and enables trading while
@@ -85,13 +112,15 @@ class LiveKalshiBroker extends PaperBroker {
       remote = new Map();
       let cursor = null, pages = 0;
       do {
+        if (pages >= MAX_RECONCILE_PAGES) throw new Error(`position pagination reached ${MAX_RECONCILE_PAGES} pages with a cursor still remaining`);
         const r = await this.request('GET', `/portfolio/positions${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`);
+        pages++;
         for (const p of (r.market_positions || [])) {
           const n = Math.round(+(p.position_fp ?? p.position ?? 0));
           if (n !== 0) remote.set(p.ticker, n);
         }
         cursor = r.cursor || null;
-      } while (cursor && ++pages < 50);
+      } while (cursor);
     } catch (e) {
       this.E.log('TESS', 'OPS', null, `reconciliation failed (${String(e.message).slice(0, 90)}) · staying halted rather than trading against an unverified book`);
       return; // liveReady stays false: TESS halts on 'live venue not authenticated'
@@ -114,10 +143,56 @@ class LiveKalshiBroker extends PaperBroker {
     this.E.liveReady = true;
     this.E.log('TESS', 'OPS', null, `reconciled · exchange and local book agree on ${remote.size} open Kalshi position(s)`);
   }
+
+  // Persist intent before a live POST. If the response disappears, state.json survives the
+  // restart and blocks every later order until the operator reconciles the exchange outcome.
+  pendingOrders() {
+    if (!this.E || !this.E.state) throw new Error('live broker has no engine ledger for order intent');
+    if (this.E.state.pendingOrders == null) this.E.state.pendingOrders = [];
+    if (!Array.isArray(this.E.state.pendingOrders)) throw new Error('pending order ledger is malformed');
+    return this.E.state.pendingOrders;
+  }
+  persist() {
+    this.E.dirty = true;
+    if (typeof this.E.save === 'function') this.E.save();
+  }
+  audit(kind, payload) {
+    if (typeof this.E.journal === 'function') this.E.journal(this.E, kind, payload);
+  }
+  assertNoPendingOrder() {
+    const pending = this.pendingOrders();
+    if (!pending.length) return;
+    this.E.liveReady = false;
+    throw new AmbiguousOrderError(pending[0]);
+  }
+  recordIntent(intent) {
+    this.pendingOrders().push(intent);
+    this.audit('ORDER_INTENT', intent);
+    this.persist();
+  }
+  clearIntent(clientOrderId, orderId) {
+    const pending = this.pendingOrders();
+    const at = pending.findIndex((o) => o.clientOrderId === clientOrderId);
+    if (at < 0) throw new Error(`missing persisted intent for acknowledged Kalshi order ${clientOrderId}`);
+    pending.splice(at, 1);
+    this.audit('ORDER_ACK', { clientOrderId, orderId });
+    this.persist();
+  }
+  markUnknown(intent, cause) {
+    const saved = this.pendingOrders().find((o) => o.clientOrderId === intent.clientOrderId) || intent;
+    saved.unknownAt = new Date().toISOString();
+    saved.error = String(cause && cause.message || cause || 'unknown order outcome').slice(0, 180);
+    this.E.liveReady = false;
+    this.audit('ORDER_UNKNOWN', { clientOrderId: saved.clientOrderId, action: saved.action, ref: saved.ref, side: saved.side, qty: saved.qty, error: saved.error });
+    this.persist();
+    return new AmbiguousOrderError(saved, cause);
+  }
+
   // `key` is the caller's idempotency key, derived from the group and leg rather than random.
   // A fresh UUID per attempt -- the old behaviour -- means a request retried after a timeout
   // opens a SECOND position, because the exchange has no way to recognise it as the same order.
   async place({ ref, action, side, qty, limit, key }) {
+    this.assertNoPendingOrder();
     const clientId = key ? crypto.createHash('sha256').update(String(key)).digest('hex').replace(/(.{8})(.{4})(.{4})(.{4})(.{12}).*/, '$1-$2-$3-$4-$5') : crypto.randomUUID();
     const body = { ticker: ref, action, side, type: 'limit', count: qty, time_in_force: 'immediate_or_cancel', client_order_id: clientId };
     // Kalshi prices are integer cents. ROUNDING can cross the caller's limit -- a buy limit of
@@ -126,8 +201,22 @@ class LiveKalshiBroker extends PaperBroker {
     // for a sell. The 1..99 clamp stays; the exchange rejects 0 and 100.
     const cents = action === 'buy' ? Math.floor(limit * 100 + 1e-9) : Math.ceil(limit * 100 - 1e-9);
     body[side === 'yes' ? 'yes_price' : 'no_price'] = Math.max(1, Math.min(99, cents));
-    const res = await this.request('POST', '/portfolio/orders', body);
-    const o = res.order || {};
+    const intent = {
+      clientOrderId: clientId, action, ref, side, qty,
+      limitCents: body[side === 'yes' ? 'yes_price' : 'no_price'], submittedAt: new Date().toISOString(),
+    };
+    this.recordIntent(intent);
+    let res;
+    try {
+      res = await this.request('POST', '/portfolio/orders', body);
+      // An OK status with no order is no proof that the POST did not reach the matching engine.
+      // Treat it exactly like a lost response rather than returning a fake zero fill.
+      if (!res || !res.order || !res.order.order_id) throw new Error('Kalshi POST response did not include an order id');
+    } catch (e) {
+      throw this.markUnknown(intent, e);
+    }
+    const o = res.order;
+    this.clearIntent(clientId, o.order_id);
     const filled = Math.floor(+(o.fill_count_fp ?? o.fill_count ?? 0));
     const fillCost = o.taker_fill_cost_dollars != null ? +o.taker_fill_cost_dollars : null;
     const fee = o.taker_fees_dollars != null ? +o.taker_fees_dollars : null;

@@ -23,6 +23,22 @@ const VEN = { PM: 'Polymarket', KS: 'Kalshi' };
 const other = (v) => (v === 'PM' ? 'KS' : 'PM');
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 const ET_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' });
+const ambiguousOrder = (e) => !!(e && (e.ambiguousOrder || e.code === 'KALSHI_ORDER_UNKNOWN'));
+
+// TESS updates E.halt once per cycle, but an operator flatten can arrive while KETT is awaiting a
+// fresh book or exchange response. Consult the latched field directly at every await boundary.
+function entryHalt(E) {
+  if (E.operatorHalt) return E.operatorHalt;
+  if (E.halt) return E.halt;
+  if (E.cfg.mode === 'live' && !E.liveReady) return 'live venue not authenticated';
+  return null;
+}
+
+function standDown(E) {
+  const halt = entryHalt(E);
+  if (halt) E.touch('KETT', 'standing down');
+  return halt;
+}
 
 // ---------------------------------------------------------------- HOLT
 function HOLT(E) {
@@ -177,10 +193,11 @@ function BRAM(E) {
 
 // ---------------------------------------------------------------- KETT
 async function KETT(E) {
-  if (E.halt) { E.touch('KETT', 'standing down'); return; }
+  if (standDown(E)) return;
   const live = E.cfg.mode === 'live';
   let considered = 0;
   for (const s of E.signals) {
+    if (standDown(E)) return;
     if (considered >= 2) break; // pace: at most two new positions per cycle
     if (E.state.positions.some((p) => p.pairId === s.pair.id)) continue;
     if (Date.now() - (E.cooldown.get(s.pair.id) || 0) < 10 * 60 * 1000) continue; // no churn after an exit
@@ -208,11 +225,13 @@ async function KETT(E) {
     let books;
     try { books = await Promise.all(s.legs.map((l) => E.book(l.venue, s.pair, l.side))); }
     catch (e) { E.log('KETT', 'PASS', null, `${s.pair.label}: book fetch failed (${e.message.slice(0, 60)})`); continue; }
+    if (standDown(E)) return;
     if (s.type === 'converge') {
       const leg = s.legs[0];
       let far;
       try { far = await E.book(other(leg.venue), s.pair, 'yes'); }
       catch (e) { E.log('KETT', 'PASS', null, `${s.pair.label}: ${VEN[other(leg.venue)]} book fetch failed (${e.message.slice(0, 60)})`); continue; }
+      if (standDown(E)) return;
       const near = books[0];
       if ([near.yesBid, near.yesAsk, far.yesBid, far.yesAsk].some((x) => x == null)) { E.log('KETT', 'PASS', null, `${s.pair.label}: one-sided book, no fill`); continue; }
       const q = s.pair.q;
@@ -249,17 +268,39 @@ async function KETT(E) {
     const group = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
     const fills = [];
     let failed = null;
+    let uncertain = null;
     let spent = 0; // legs are only booked (and cash debited) once ALL of them fill
     for (let i = 0; i < s.legs.length; i++) {
       const l = s.legs[i];
       let f;
+      // This check must be immediately adjacent to the money-moving call: flatten can land after
+      // the book fetch but before the first (or a later arb leg) is submitted.
+      if (entryHalt(E)) { failed = 'operator halt'; break; }
       // deterministic idempotency key: a retried request for THIS leg of THIS group dedupes at
       // the exchange instead of opening a second position
       try { f = await E.broker.buy({ venue: l.venue, ref: refs[i], side: l.side, qty, limit: l.px + E.cfg.slipLimit, book: books[i].asks, key: `${group}-${l.venue}${l.side[0]}-in` }); }
-      catch (e) { f = { filled: 0, reason: e.message.slice(0, 80) }; }
+      catch (e) {
+        if (ambiguousOrder(e)) { uncertain = e; break; }
+        f = { filled: 0, reason: e.message.slice(0, 80) };
+      }
+      if (uncertain) break;
       if (!f.filled || f.cost > E.state.cash - spent) { failed = f.reason || 'insufficient cash'; break; }
       spent += f.cost;
       fills.push({ leg: l, f });
+      // An order already in flight cannot be un-sent. If flatten landed while awaiting its response,
+      // account for the known fill below and unwind it, but never send the next leg.
+      if (entryHalt(E)) { failed = 'operator halt'; break; }
+    }
+    if (uncertain) {
+      // The broker persisted the uncertain intent before its POST. Known earlier legs are made
+      // visible to the ledger, but nothing is unwound or retried: the unknown order might itself
+      // have filled, and reconciliation must establish the exchange truth before another trade.
+      for (const { leg, f } of fills) E.open(s, leg, f, group, `${s.type} leg; sibling order pending reconciliation`);
+      E.liveReady = false;
+      E.journal(E, 'ENTRY_UNKNOWN', { group, label: s.pair.label, strategy: s.type, clientOrderId: uncertain.clientOrderId || null, intent: uncertain.intent || null, knownLegs: fills.map(({ leg, f }) => ({ venue: leg.venue, side: leg.side, qty: f.filled, orderId: f.orderId || null })), reason: String(uncertain.message || 'order response unknown').slice(0, 120) });
+      E.log('KETT', 'HALT', null, `${s.pair.label}: entry response unknown · awaiting reconciliation before any unwind or retry`);
+      E.save();
+      return;
     }
     if (failed) {
       for (const { leg, f } of fills) {

@@ -92,7 +92,12 @@ async function live() {
   const { privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
   fs.writeFileSync(keyPath, privateKey.export({ type: 'pkcs8', format: 'pem' }));
 
-  const E = { state: { positions: [] }, liveReady: false, logs: [], log(a, k, p, t) { this.logs.push(t); } };
+  const E = {
+    state: { positions: [], pendingOrders: [] }, liveReady: false, logs: [], journals: [], saves: 0,
+    log(a, k, p, t) { this.logs.push(t); },
+    journal(e, kind, payload) { this.journals.push({ kind, payload }); },
+    save() { this.saves++; },
+  };
   const cfg = { ...base, mode: 'live', kalshiKeyId: 'test-key-id', kalshiKeyPath: keyPath };
   const b = makeBroker(cfg, E);
 
@@ -108,6 +113,29 @@ async function live() {
     Buffer.from(h['KALSHI-ACCESS-SIGNATURE'], 'base64'));
   ok('the signature verifies over ts + method + path', verified === true);
 
+  // The cursor must travel over HTTP but must NOT be part of Kalshi's signature payload.
+  const realRequest = b.request.bind(b);
+  const priorFetch = global.fetch;
+  let request, requestError;
+  global.fetch = async (url, opts) => {
+    request = { url: String(url), opts };
+    return { ok: true, json: async () => ({}) };
+  };
+  try { await realRequest('GET', '/portfolio/positions?cursor=page-two'); }
+  catch (e) { requestError = e; }
+  finally { global.fetch = priorFetch; }
+  const qh = request && request.opts.headers;
+  const pathOnlyVerifies = qh && crypto.verify('sha256',
+    Buffer.from(qh['KALSHI-ACCESS-TIMESTAMP'] + 'GET' + '/trade-api/v2/portfolio/positions'),
+    { key: crypto.createPublicKey(privateKey), padding: crypto.constants.RSA_PKCS1_PSS_PADDING, saltLength: crypto.constants.RSA_PSS_SALTLEN_DIGEST },
+    Buffer.from(qh['KALSHI-ACCESS-SIGNATURE'], 'base64'));
+  const queryAlsoVerifies = qh && crypto.verify('sha256',
+    Buffer.from(qh['KALSHI-ACCESS-TIMESTAMP'] + 'GET' + '/trade-api/v2/portfolio/positions?cursor=page-two'),
+    { key: crypto.createPublicKey(privateKey), padding: crypto.constants.RSA_PKCS1_PSS_PADDING, saltLength: crypto.constants.RSA_PSS_SALTLEN_DIGEST },
+    Buffer.from(qh['KALSHI-ACCESS-SIGNATURE'], 'base64'));
+  ok('the cursor remains in the request URL', !requestError && /positions\?cursor=page-two$/.test(request && request.url), request);
+  ok('the signature omits the request query', pathOnlyVerifies === true && queryAlsoVerifies === false);
+
   group('a retried order cannot open a second position');
   {
     const sent = [];
@@ -121,6 +149,7 @@ async function live() {
       return sent[2].body.client_order_id !== sent[0].body.client_order_id;
     })());
     ok('the id is UUID-shaped', /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(sent[0].body.client_order_id), sent[0].body.client_order_id);
+    ok('a definite exchange response clears the persisted intent', E.state.pendingOrders.length === 0, E.state.pendingOrders);
   }
 
   group('the order body says what it should');
@@ -216,11 +245,73 @@ async function live() {
     ok('a position on page two is not missed', E.liveReady === false, E.logs.slice(-1));
     ok('...and is named in the mismatch', /KXGHOST/.test(E.logs[E.logs.length - 1]), E.logs.slice(-1));
 
+    // A capped walk that still has a cursor has not verified the whole remote book. Enabling live
+    // trading here would recreate the one-page bug at a larger account size.
+    E.liveReady = false;
+    E.state.positions = [];
+    let pages = 0;
+    b.request = async () => { pages++; return { market_positions: [], cursor: 'still-more' }; };
+    await b.reconcile();
+    ok('a remaining cursor at the page cap stays halted', E.liveReady === false, E.logs.slice(-1));
+    ok('the cap makes exactly 50 requests, never a quiet partial reconcile', pages === 50, pages);
+    ok('...and reports the pagination failure', /pagination reached 50 pages/.test(E.logs[E.logs.length - 1]), E.logs.slice(-1));
+
     E.liveReady = false;
     b.request = async () => { throw new Error('network down'); };
     await b.reconcile();
     ok('an unreachable exchange stays halted', E.liveReady === false);
     ok('...rather than assuming the book is right', /staying halted/.test(E.logs[E.logs.length - 1]), E.logs.slice(-1));
+  }
+
+  group('an ambiguous live POST stops both entry and exit retries');
+  {
+    E.state.pendingOrders = [];
+    E.liveReady = true;
+    E.journals = [];
+    E.saves = 0;
+    let posts = 0, intentWasPersisted = false;
+    b.request = async (m, p, body) => {
+      posts++;
+      intentWasPersisted = m === 'POST' && E.saves > 0 && E.state.pendingOrders.length === 1
+        && E.state.pendingOrders[0].clientOrderId === body.client_order_id
+        && E.journals.some((x) => x.kind === 'ORDER_INTENT');
+      throw new Error('socket closed after write');
+    };
+    let entryError;
+    try { await b.buy({ venue: 'KS', ref: 'KXTEST-A', side: 'yes', qty: 3, limit: 0.50, key: 'unknown-entry' }); }
+    catch (e) { entryError = e; }
+    ok('entry intent is persisted before its POST', intentWasPersisted && posts === 1, { intentWasPersisted, posts });
+    ok('an unknown entry is typed for the engine', entryError && entryError.code === 'KALSHI_ORDER_UNKNOWN' && entryError.ambiguousOrder === true, entryError && { code: entryError.code, intent: entryError.intent });
+    ok('an unknown entry disables live readiness and leaves its intent', E.liveReady === false && E.state.pendingOrders.length === 1 && E.journals.some((x) => x.kind === 'ORDER_UNKNOWN'), { liveReady: E.liveReady, pending: E.state.pendingOrders, journals: E.journals });
+
+    let blockedPosts = 0, blockedError;
+    b.request = async () => { blockedPosts++; return { order: { order_id: 'must-not-send', fill_count: 0 } }; };
+    try { await b.buy({ venue: 'KS', ref: 'KXTEST-A', side: 'yes', qty: 3, limit: 0.50, key: 'new-key-must-not-send' }); }
+    catch (e) { blockedError = e; }
+    ok('a later entry cannot send a new client id while outcome is unknown', blockedError && blockedError.code === 'KALSHI_ORDER_UNKNOWN' && blockedPosts === 0, { code: blockedError && blockedError.code, blockedPosts });
+
+    // A restart calls reconcile; an unresolved persisted intent must block that path before a
+    // positions request can quietly declare the account clean.
+    let reconcileRequests = 0;
+    b.request = async () => { reconcileRequests++; return { market_positions: [] }; };
+    await b.reconcile();
+    ok('startup reconciliation refuses an unresolved intent without querying positions', E.liveReady === false && reconcileRequests === 0 && /unresolved Kalshi order intent/.test(E.logs[E.logs.length - 1]), E.logs.slice(-1));
+
+    // Simulate the operator having reconciled and cleared the previous intent, then verify that
+    // the same rail covers an exit -- the dangerous case because RIGO otherwise keeps retrying.
+    E.state.pendingOrders = [];
+    E.liveReady = true;
+    let exitError;
+    b.request = async () => { throw new Error('connection reset after exit write'); };
+    try { await b.sell({ venue: 'KS', ref: 'KXTEST-A', side: 'yes', qty: 3, px: 0.50, key: 'unknown-exit' }); }
+    catch (e) { exitError = e; }
+    ok('an unknown exit carries the same typed rail and saved sell intent', exitError && exitError.code === 'KALSHI_ORDER_UNKNOWN' && exitError.intent.action === 'sell' && E.state.pendingOrders.length === 1, exitError && exitError.intent);
+
+    let afterExitPosts = 0;
+    b.request = async () => { afterExitPosts++; return { order: { order_id: 'must-not-send', fill_count: 0 } }; };
+    try { await b.sell({ venue: 'KS', ref: 'KXTEST-A', side: 'yes', qty: 3, px: 0.50, key: 'new-exit-must-not-send' }); }
+    catch {}
+    ok('an unknown exit blocks a later automatic sell retry', afterExitPosts === 0, afterExitPosts);
   }
 
   fs.rmSync(dir, { recursive: true, force: true });
