@@ -12,6 +12,7 @@ const SUITES = [
   ['maker', 'the maker core: quoting, queue and fills, and the realised-P&L invariant'],
   ['broker', 'fills: ladder walking, paper fees, and the live Kalshi order path'],
   ['matcher', 'cross-venue matching: names, dates, sports, and the price-agreement guard'],
+  ['engine', 'the ledger: the operator latch, partial exits, and one close per position'],
 ];
 
 let failed = 0, totalPassed = 0;

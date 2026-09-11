@@ -38,7 +38,17 @@ class Engine {
     // Operator halt, distinct from TESS's automatic one. TESS recomputes its halt from scratch
     // every cycle, so anything written to this.halt is gone within 15s -- a kill switch that
     // un-sets itself is not a kill switch. This latches until a human clears it.
-    this.operatorHalt = null;
+    //
+    // ...and it must survive a RESTART, or it is not a latch either. save() serialises only
+    // `this.state`, so an instance field here was gone on the next boot: an operator flattens the
+    // book, the machine restarts (fly deploy, --restart=always, a crash), and the desk quietly
+    // re-arms itself with nobody having called /api/resume. The maker's equivalent lives in
+    // state.maker.halted and always did survive, so ONE operator action left the two desks in
+    // opposite states -- which is how this surfaced at all.
+    this.operatorHalt = this.state.operatorHalt || null;
+    // Positions with a close in flight. Process-local on purpose: a restart must NOT believe a
+    // close is still running, or a genuinely stuck position could never be retried.
+    this.closing = new Set();
     this.pinned = new Map(); // positions' markets, kept alive when they drop out of the universe
     this.quotes = { pm: new Map(), ks: new Map() };
     this.pairs = [];
@@ -90,6 +100,7 @@ class Engine {
     try {
       fs.mkdirSync(this.cfg.dataDir, { recursive: true });
       const tmp = `${this.file}.tmp`;
+      this.state.operatorHalt = this.operatorHalt || null;   // latched across restarts
       fs.writeFileSync(tmp, JSON.stringify(this.state));
       fs.renameSync(tmp, this.file);
       this.dirty = false;
@@ -218,7 +229,19 @@ class Engine {
     return pos;
   }
 
+  // `pos.exitSeq++` and the broker round trip below both happen BEFORE the ownership check further
+  // down, so two concurrent entrants -- two POSTs to /api/flatten, or a flatten landing inside
+  // RIGO's await -- each minted a DIFFERENT idempotency key and sent a separate real sell for the
+  // same contracts. Kalshi cannot dedupe two different client_order_ids. Paper hides it entirely:
+  // PaperBroker.sell does no I/O, so the loop drains before anything can interleave.
   async close(pos, px, reason, resolved = false) {
+    if (this.closing.has(pos.id)) return;
+    this.closing.add(pos.id);
+    try { return await this._close(pos, px, reason, resolved); }
+    finally { this.closing.delete(pos.id); }
+  }
+
+  async _close(pos, px, reason, resolved = false) {
     let fill;
     if (resolved) fill = { filled: pos.qty, avg: px, fee: 0, proceeds: r2(pos.qty * px) };
     else {
@@ -236,6 +259,29 @@ class Engine {
         if (this.due(`exit-fail-${pos.id}`, 120)) this.log('RIGO', 'PASS', null, `${pos.label}: exit unfilled (${fill.reason || 'no fill'}) \u00b7 flagged stuck, will retry`);
         return;
       }
+    }
+    // A PARTIAL fill is not a close. `!fill.filled` above only catches a ZERO fill, so a sell that
+    // got 30 of 100 used to splice the WHOLE position out, credit the 30 lots' proceeds, and book
+    // the P&L against the full 100-lot cost -- stranding 70 real contracts with no local record:
+    // unmarked by RIGO, uncounted against maxOpenPositions, invisible to the drawdown rail, and
+    // past the reach of the orphan retry because the position object was already gone. open() has
+    // always sized from fill.filled (`qty: fill.filled`); the exit path never learned to. Paper
+    // never partial-fills, so this could only ever bite in live mode.
+    if (fill.filled < pos.qty) {
+      const sold = fill.filled;
+      const costShare = r2(pos.cost * (sold / pos.qty));
+      const pnl = r2(fill.proceeds - costShare);
+      const before = pos.qty;
+      pos.qty -= sold;
+      pos.cost = r2(pos.cost - costShare);
+      pos.orphan = true;                                   // RIGO retries the remainder every cycle
+      this.state.cash = r2(this.state.cash + fill.proceeds);
+      this.state.stats.fees = r2(this.state.stats.fees + fill.fee);
+      this.state.stats.realized = r2(this.state.stats.realized + pnl);
+      this.journal(this, 'CLOSE_PARTIAL', { id: pos.id, group: pos.group, label: pos.label, venue: pos.venue, side: pos.side, sold, remaining: pos.qty, entry: pos.entry, exit: fill.avg, fee: fill.fee, proceeds: fill.proceeds, pnl, reason, attempt: pos.exitSeq, cash: this.state.cash });
+      this.log('RIGO', 'SETTLE', pnl, `${pos.label} \u00b7 sold ${sold} of ${before} ${pos.side.toUpperCase()} @ ${pos.venue === 'PM' ? 'Polymarket' : 'Kalshi'} ${fill.avg.toFixed(3)} \u00b7 ${pos.qty} left unsold, flagged stuck and retried \u00b7 ${reason}`);
+      this.dirty = true;
+      return;
     }
     const idx = this.state.positions.indexOf(pos);
     if (idx < 0) return;
@@ -268,6 +314,7 @@ class Engine {
   async flattenAll(reason = 'manual flatten') {
     const open = [...this.state.positions];
     this.operatorHalt = `flattened by operator (${reason}) \u2014 POST /api/resume to re-enable`;
+    this.save();   // a kill switch that waits for the next 10s save is not a kill switch
     this.journal(this, 'FLATTEN_REQUESTED', { reason, positions: open.length });
     this.log('TESS', 'OPS', null, `FLATTEN ALL requested (${reason}) \u00b7 ${open.length} position${open.length === 1 ? '' : 's'} to close`);
     for (const pos of open) {
