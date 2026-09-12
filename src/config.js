@@ -74,14 +74,6 @@ module.exports = {
   // pool. The floor matters as much as the ranking -- below roughly 20 trades a day the edge does not
   // survive a realistic queue, because the queue only clears if the market actually trades.
   makerMinTradesPerDay: num('MAKER_MIN_TPD', 10),
-  // The number that decides everything. Joining the touch means joining the BACK of the queue at
-  // that price, and the median quoted market has ~15,700 contracts already resting there. Feeding
-  // every backtested market its OWN measured top-of-book depth cut the headline result from +$2187
-  // to +$210 -- a 90% haircut, and the single largest correction this project has made. Split by
-  // how fast that queue trades through, the whole edge is in one bucket: markets whose queue clears
-  // inside a day returned +$357, everything slower returned about zero. So this is the primary
-  // filter and the primary ranking, ahead of spread, volume and trade rate alike.
-  makerMaxClearDays: num('MAKER_MAX_CLEAR_DAYS', 1),
   // Inventory held into resolution is not a spread capture, it is a coin flip settled at 0 or 1.
   // Nothing currently quoted resolves inside 114 days, so this costs nothing today -- which is
   // exactly when to put it in, rather than after the universe rotates into something expiring.

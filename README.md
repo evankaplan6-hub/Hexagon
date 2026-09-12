@@ -259,11 +259,12 @@ queue clears in 1-7 days      -$11    11/28 positive
 queue clears in > 7 days       +$7     2/5  positive
 ```
 
-All of it is in one bucket. That is now the desk's primary filter *and* its primary ranking, ahead
-of spread, volume and trade rate alike: quote the markets where the queue clears fastest. Scored
-with real depth it returns **+$240 development / +$160 out of sample**, against **+$199 / +$109**
-for ranking on trade rate alone. Live, it moved the book from markets queued 15,700 deep to markets
-queued 9, 29 and 30 deep — clearing in minutes rather than weeks.
+All of it is in one bucket. For two days that was the desk's primary filter *and* its primary
+ranking: quote the markets where the queue clears fastest. Scored with real depth on the original
+fixed set it returned **+$240 development / +$160 out of sample**, against **+$199 / +$109** for
+ranking on trade rate alone, and live it moved the book from markets queued 15,700 deep to markets
+queued 9, 29 and 30 deep. Then it was scored walk-forward on 66 days of tape, below, and lost to
+trade rate in every setting. **The live rule is trade rate again.**
 
 ### How much of this depends on the 10% guess
 
@@ -311,7 +312,7 @@ one that matches.
 
 ### The ranking, re-scored walk-forward
 
-The clear-time rule above was scored with each market's measured depth on a fixed set of markets.
+The clear-time rule above was scored with each market's measured depth on a fixed set of markets, once.
 The rework plan's worry about it was simple: a queue that clears fast is a level that gets swept,
 and a sweep through a resting quote is a run-over, which is where this desk's money went (59% of
 filled contracts in its first 2.25 days). `tools/maker-rank.js` puts three rankings against each
@@ -342,11 +343,11 @@ sample everywhere, negative out of sample in all three folds at real depth. And 
 each market carrying its own measured queue, the whole 681-pick pool nets **+$0.02 a pick** over
 a fortnight at 10% participation. The ranking decides the sign of a small number.
 
-What this instrument cannot see, so the rule is not changed on it alone: the book is reconstructed
-from prints; the depth is today's, applied to July; the pool is the markets that are still open,
-so every fold is scored on survivors. Shorter windows (14 days ranked, 7 scored, seven folds) and
-fewer picks (12) give the same ordering. The live rule stays clear-time until the next tape says
-the same thing.
+What this instrument cannot see: the book is reconstructed from prints; the depth is today's,
+applied to July; the pool is the markets that are still open, so every fold is scored on
+survivors. Shorter windows (14 days ranked, 7 scored, seven folds) and fewer picks (12) give the
+same ordering. So the live rule went back to trade rate on 2026-09-12: `MAKER_MAX_CLEAR_DAYS` is
+gone, the queue is still measured and shown, and it no longer picks the book.
 
 ### Three things that were tested and not built
 

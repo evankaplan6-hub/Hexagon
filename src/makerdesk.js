@@ -33,8 +33,9 @@ async function getWithBackoff(url, tries = 3) {
 //   clear  -- days for the size ALREADY resting at the touch to trade through, at this market's own
 //             contract rate. Joining the touch means joining the back of that queue, and in the
 //             median market it is ~15,700 contracts deep. Scoring the backtest with each market's
-//             real depth took it from +$2187 to +$210; splitting by this number put the entire
-//             remaining edge in markets that clear inside a day.
+//             real depth took it from +$2187 to +$210. It ranked the book for two days and was
+//             scored out of it (see refreshUniverse); kept because the dashboard and the scan log
+//             say what a quote is up against.
 // Cached an hour: depth moves faster than the rate does, and the scan runs every fifteen minutes.
 const statCache = new Map();
 async function marketStats(ticker, depth) {
@@ -53,7 +54,7 @@ async function marketStats(ticker, depth) {
       v.queue = depth;
       v.clear = v.queue / Math.max(1, cpd);
     }
-  } catch { /* unmeasurable is not tradeable: tpd 0 and clear Infinity both fail the filter */ }
+  } catch { /* unmeasurable is not tradeable: tpd 0 fails the filter */ }
   statCache.set(ticker, { v, at: Date.now() });
   return v;
 }
@@ -104,23 +105,27 @@ function makeMakerDesk(cfg) {
     }
     // A partial scan silently narrows the universe to whatever survived, so say so.
     if (failed.length) E.log('MAKR', 'OPS', null, `universe scan incomplete: ${failed.length}/${eligible.length} series failed to load (${failed.slice(0, 3).join(', ')}) · quoting from the rest`);
-    // Rank by how fast the queue in front of us clears, not by spread and not by volume. Spread
-    // was backwards in the first version -- P&L correlates -0.33 with it, and ranking on it put six
-    // dead markets at 10-14c on the book with zero fills. Volume was better but still wrong: it is
-    // a snapshot, and it says nothing about how many orders are already ahead of us at that price.
-    // Scored with each market's real measured depth, this rule returns +$240 in development and
-    // +$160 out of sample, against +$199 / +$109 for ranking on trade rate alone.
+    // Rank by observed trade rate, busiest first. Not by spread (backwards: P&L correlates -0.33
+    // with it, and ranking on it put six dead markets at 10-14c on the book), not by volume (a
+    // snapshot one block trade inflates), and no longer by how fast the queue at the touch clears.
+    // Clear-time was the rule from 2026-09-10 to 2026-09-12, chosen because the backtest's whole
+    // surviving edge sat in markets whose queue cleared inside a day. Scored walk-forward on 66
+    // days of tape (tools/maker-rank.js) it was the worst of three rankings in every setting and
+    // carried the most run-over in every setting: a queue that clears fast is a level that gets
+    // swept, and a sweep through a resting quote is the fill this desk loses money on. Trade rate
+    // was best or tied everywhere, with a third of the run-over at real depth. The queue is still
+    // measured and logged; it just no longer picks the book.
     rows.sort((x, y) => (y.vol - x.vol) || (y.spread - x.spread));
     const probe = rows.slice(0, cfg.makerRateProbe);
     for (const r of probe) { Object.assign(r, await marketStats(r.ticker, r.depth)); await sleep(80); }
     const live = probe
-      .filter((r) => r.tpd >= cfg.makerMinTradesPerDay && r.clear <= cfg.makerMaxClearDays)
-      .sort((x, y) => x.clear - y.clear);
+      .filter((r) => r.tpd >= cfg.makerMinTradesPerDay)
+      .sort((x, y) => y.tpd - x.tpd);
     universe = live.slice(0, cfg.makerMarkets);
     lastUniverseAt = Date.now();
     E.log('MAKR', 'SCAN', null, universe.length
       ? `quoting ${universe.length} of ${live.length} workable markets (${probe.length} probed, ${rows.length} passed the cheap filters) · ${universe.slice(0, 3).map((r) => `${r.ticker.split('-').slice(-2).join('-')} ${r.tpd.toFixed(0)}/day, queue ${Math.round(r.queue)} clears in ${r.clear < 1 ? `${(r.clear * 24).toFixed(1)}h` : `${r.clear.toFixed(1)}d`}`).join(' · ')}${universe.length > 3 ? '…' : ''}`
-      : `no market meets the bar (spread >= ${c(cfg.makerMinSpread)}, >= ${cfg.makerMinTradesPerDay} trades/day, queue clearing inside ${cfg.makerMaxClearDays}d)`);
+      : `no market meets the bar (spread >= ${c(cfg.makerMinSpread)}, >= ${cfg.makerMinTradesPerDay} trades/day)`);
   }
 
   function book(E) {
