@@ -47,6 +47,20 @@ module.exports = {
   // each quoted market costs two calls and ~80ms of pacing per maker cycle.
   makerMarkets: num('MAKER_MARKETS', 24),
   makerCap: num('MAKER_CAP', 100),              // inventory cap per market, in contracts
+  // The fraction of makerCap at which the GROWING side is withdrawn. The hard cap is where a fill
+  // is refused; this is where the desk stops inviting one. The live book carried 1,344 contracts
+  // of net one-sided inventory across 33 markets against 3,590 filled, with the spread captured
+  // on the 1,123 contracts that did round-trip at -$1.72 -- inventory was building, not turning
+  // over. README rejected price SKEW as an overfit; this is withdrawal, the mechanism the desk
+  // already uses at the cap, applied earlier.
+  //
+  // Replayed against the same 2.25 days of prints (tools/maker-replay.js), on top of the tail and
+  // toxicity changes: 0.5 takes 24% off net one-sided inventory (1,614 to 1,230 contracts) and 17%
+  // off at-touch fills, leaves run-over contracts where they were (2,110 to 2,169 -- a sweep runs
+  // over the reducing side as readily as the growing one), and costs $6 of realized on a +$59
+  // base. 0.25 costs $8, 0.75 costs $3. So this buys less inventory, not less run-over, and it is
+  // not free; 1 switches it off.
+  makerSoftCap: num('MAKER_SOFT_CAP', 0.5),
   makerParticipation: num('MAKER_PARTICIPATION', 0.10), // share of crossing volume we expect to win
   // One tick IS the target, not a fallback. Measured across 34 markets, P&L correlates -0.33 with
   // median spread and +0.82 with trade count: the earners all sit at a 1c spread with 7,000-15,000

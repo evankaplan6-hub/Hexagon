@@ -51,9 +51,14 @@ function desiredQuotes(book, inv, cfg) {
   if (mid < cfg.makerMinMid || mid > cfg.makerMaxMid) {
     return { bid: inv < 0 ? bid : null, ask: inv > 0 ? ask : null, spread, mid, why: inv ? 'price in the tails · reducing only' : 'price in the tails' };
   }
+  // Withdraw the GROWING side at a fraction of the cap, not at the cap. A quote resting at the
+  // touch while already long half the cap is an invitation to the next sweep to fill the other
+  // half, at our stale price; the reducing side stays up, so the position can only get smaller
+  // from here. makerCap itself is still enforced in fillsFrom, on every fill.
+  const soft = cfg.makerCap * (cfg.makerSoftCap ?? 1);
   return {
-    bid: inv < cfg.makerCap ? bid : null,   // stop bidding once long the cap
-    ask: inv > -cfg.makerCap ? ask : null,  // stop offering once short the cap
+    bid: inv < soft ? bid : null,   // stop bidding once long the soft cap
+    ask: inv > -soft ? ask : null,  // stop offering once short the soft cap
     spread, mid,
   };
 }

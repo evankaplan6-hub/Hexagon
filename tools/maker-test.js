@@ -67,7 +67,7 @@ group('a book we will not QUOTE is still a book we can MARK');
 
 group('the inventory cap withdraws a side rather than skewing price');
 {
-  const c = cfg({ makerCap: 100 });
+  const c = cfg({ makerCap: 100, makerSoftCap: 1 });   // soft cap off: the hard cap alone
   const atLongCap = maker.desiredQuotes(book(0.44, 0.45), 100, c);
   ok('long at the cap stops bidding', atLongCap.bid === null, atLongCap);
   ok('...but keeps offering, so it can get flat', atLongCap.ask === 0.45, atLongCap);
@@ -102,6 +102,28 @@ group('inventory in the tails is worked off, not stranded');
 
   // the mid is still reported, so the mark keeps moving while the position is worked off
   ok('the reducing quote still reports a mid', Math.abs(shortInTail.mid - 0.935) < 1e-9, shortInTail);
+}
+
+group('the growing side is withdrawn at the soft cap, before the hard one');
+{
+  // The hard cap is where a fill is REFUSED; the soft cap is where the desk stops inviting one.
+  // Live, 1,344 of 3,590 filled contracts were still held one-sided, and the round trips that did
+  // complete captured -$1.72: the book was building inventory, not turning it over.
+  const c = cfg({ makerCap: 100, makerSoftCap: 0.5 });
+  const halfLong = maker.desiredQuotes(book(0.44, 0.45), 50, c);
+  ok('long half the cap stops bidding', halfLong.bid === null, halfLong);
+  ok('...but keeps offering, so the position can only shrink', halfLong.ask === 0.45, halfLong);
+  const halfShort = maker.desiredQuotes(book(0.44, 0.45), -50, c);
+  ok('short half the cap stops offering', halfShort.ask === null, halfShort);
+  ok('...and keeps bidding', halfShort.bid === 0.44, halfShort);
+  const inside = maker.desiredQuotes(book(0.44, 0.45), 49, c);
+  ok('one contract inside the soft cap still quotes both sides', inside.bid === 0.44 && inside.ask === 0.45, inside);
+  ok('a soft cap of 1 is the old behaviour', maker.desiredQuotes(book(0.44, 0.45), 99, cfg({ makerCap: 100, makerSoftCap: 1 })).bid === 0.44);
+
+  // the hard cap is still the hard cap: a fill that would cross it is refused in fillsFrom
+  const q = { bid: 0.44, ask: 0.45 };
+  const over = maker.fillsFrom([{ trade_id: 's1', taker_book_side: 'ask', yes_price_dollars: '0.44', count_fp: '100' }], q, 60, cfg({ makerParticipation: 1, makerCap: 100, makerSoftCap: 0.5 }), new Set(), { bid: 0, ask: 0 });
+  ok('the soft cap does not move the hard cap', over.fills.length === 0, over.fills);
 }
 
 // ---------------------------------------------------------------- fillsFrom
