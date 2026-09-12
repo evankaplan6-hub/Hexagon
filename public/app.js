@@ -68,12 +68,20 @@
 
   let hits = [];                 // rebuilt each frame: { x, y, w, h, kind, key }
   let hover = null, sel = null;
+  // The chart is inside the room too: hover reads a point, click pins it for comparison.
+  // Store timestamps rather than array offsets because the server trims history over time.
+  let chartBox = null, chartHoverT = null, chartPinnedT = null;
   // Scrollable regions inside the canvas. The book, the fill tape and an agent's history all hold
   // more rows than fit, and a canvas has no native scrolling -- so the wheel fell through to the
   // page and moved the whole document instead of the list under the pointer.
   let zones = [];                // rebuilt each frame: { x, y, w, h, id, max }
   const scroll = { book: 0, tape: 0, agentlog: 0, log: 0, pos: 0 };
   const zoneAt = (p) => zones.find((z) => p.x >= z.x && p.x <= z.x + z.w && p.y >= z.y && p.y <= z.y + z.h) || null;
+
+  const chartAt = (p) => {
+    if (!chartBox || p.x < chartBox.left || p.x > chartBox.right || p.y < chartBox.top || p.y > chartBox.bottom) return null;
+    return chartBox.history.reduce((best, point) => Math.abs(chartBox.xFor(point.t) - p.x) < Math.abs(chartBox.xFor(best.t) - p.x) ? point : best, chartBox.history[0]);
+  };
 
   function floorPoint(ev) {
     const cv = $('floorc'), r = cv.getBoundingClientRect();
@@ -88,12 +96,17 @@
   function wireFloor() {
     const cv = $('floorc');
     cv.addEventListener('mousemove', (ev) => {
-      hover = hitAt(floorPoint(ev));
-      cv.style.cursor = hover ? 'pointer' : 'default';
+      const p = floorPoint(ev);
+      hover = hitAt(p);
+      const point = chartAt(p);
+      chartHoverT = point ? point.t : null;
+      cv.style.cursor = hover || point ? 'pointer' : 'default';
     });
-    cv.addEventListener('mouseleave', () => { hover = null; });
+    cv.addEventListener('mouseleave', () => { hover = null; chartHoverT = null; });
     cv.addEventListener('click', (ev) => {
-      const h = hitAt(floorPoint(ev));
+      const p = floorPoint(ev), point = chartAt(p);
+      if (point) { chartPinnedT = chartPinnedT === point.t ? null : point.t; return; }
+      const h = hitAt(p);
       sel = same(h, sel) ? null : h;          // clicking the selected thing again closes it
       scroll.agentlog = 0; scroll.book = 0; scroll.pos = 0;   // a new view starts at the top
     });
@@ -107,7 +120,7 @@
       else if ((next === 0 && ev.deltaY < 0) || (next === z.max && ev.deltaY > 0)) return; // hand back at the ends
     }, { passive: false });
     // clicking empty floor clears; so does Escape
-    window.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') sel = null; });
+    window.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') { sel = null; chartPinnedT = null; } });
   }
 
   const DESKS = [[132, 158], [216, 158], [300, 158], [132, 200], [216, 200], [300, 200], [384, 200]];
@@ -362,6 +375,11 @@
     const mEq = (M.equity ?? M.initial ?? 0) - (M.initial ?? 0);
     const halted = S.halt || M.halted;
     const working = !halted && M.quoting > 0;
+    // The room has a single shared "what is happening now" signal. This is not a fake
+    // activity loop: it comes from the newest durable desk log entry and lets the office
+    // visibly hand attention from scanner → pricing → execution → settlement.
+    const command = (S.log || [])[0] || null;
+    const commandText = command ? clip(`${command.agent} · ${command.kind} · ${command.text}`, 24) : 'waiting for the first desk cycle';
 
     // emblem
     hexagon(ctx, 58, 30, 20, '#7c869a'); hexagon(ctx, 58, 30, 13, '#7c869a'); hexagon(ctx, 58, 30, 6, '#7c869a', true);
@@ -374,10 +392,11 @@
     const stCol = gone ? '#ef4444' : halted ? '#ef4444' : working ? '#22c55e' : '#d4a72c';
     px(ctx, 14, 71, 4, 4, stCol);
     text(ctx, gone ? 'NO SIGNAL' : halted ? 'STOPPED' : working ? 'WORKING' : 'IDLE', 22, 70, stCol, 8);
-    text(ctx, gone ? `desk stopped answering` : working ? `quoting ${M.quoting} markets` : (halted ? 'trading stopped' : 'waiting for scan'),
+    text(ctx, gone ? `desk stopped answering` : halted ? 'trading stopped' : commandText,
       14, 82, gone ? '#f87171' : '#aab3c5', 6);
     const nHeld = (M.markets || []).filter((m) => m.inv).length;
-    text(ctx, nHeld ? `holding ${M.inv} contracts in ${nHeld}` : 'flat — nothing held', 14, 90, nHeld ? '#c7cdd8' : '#5b6270', 5);
+    text(ctx, working ? `quoting ${M.quoting} markets` : 'not quoting', 14, 90, working ? '#c7cdd8' : '#5b6270', 5);
+    text(ctx, nHeld ? `holding ${M.inv} contracts in ${nHeld}` : 'flat — nothing held', 14, 96, nHeld ? '#c7cdd8' : '#5b6270', 5);
     px(ctx, 14, 98, 100, 1, '#141b28');
     const lf = M.lastFill;
     // The ledger survives a restart but the last-fill detail does not, so "no fills yet" beside a
@@ -550,6 +569,36 @@
       if (act) glow(ctx, x + 32, y - 4, 30, a.color, 0.20);
       px(ctx, x + 30, y + 8, 4, 3, '#1a2029');
       if (act && Math.floor(t * 6) % 2) px(ctx, x + 47, y - 12, 2, 2, a.color);
+      // Every animation means the desk's real job. They only light while that agent's
+      // engine step is current, and KETT's order packet appears only for a real FILL.
+      const latest = (S.log || []).find((e) => e.agent === a.key);
+      const beat = (Math.sin(t * 7 + i * 1.7) + 1) / 2;
+      if (act && a.key === 'HOLT') { // scanner sweep
+        ctx.save(); ctx.strokeStyle = a.color; ctx.globalAlpha = 0.65; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(x + 32, y - 8, 12, -Math.PI / 2, -Math.PI / 2 + beat * Math.PI * 2); ctx.stroke(); ctx.restore();
+      }
+      if (act && a.key === 'ILSA') { // incoming-flow pulses
+        for (let n = 0; n < 3; n++) { const r = 3 + ((beat * 12 + n * 4) % 12); ctx.save(); ctx.globalAlpha = 0.35 - n * 0.08; ctx.strokeStyle = a.color; ctx.beginPath(); ctx.arc(x + 32, y - 4, r, 0, Math.PI * 2); ctx.stroke(); ctx.restore(); }
+      }
+      if (act && a.key === 'BRAM') { // pricing comparison running to the shared wall
+        ctx.save(); ctx.globalAlpha = 0.7; ctx.strokeStyle = a.color; ctx.setLineDash([2, 2]); ctx.lineDashOffset = -t * 12;
+        ctx.beginPath(); ctx.moveTo(x + 32, y - 17); ctx.lineTo(238, 145); ctx.stroke(); ctx.restore();
+      }
+      if (act && a.key === 'KETT' && latest && latest.kind === 'FILL') { // confirmed order heads to the fill tape
+        const run = (t * 2.5) % 1, ox = x + 32 + (421 - (x + 32)) * run, oy = y - 6 + (70 - (y - 6)) * run;
+        px(ctx, ox - 1, oy - 1, 3, 3, latest.pnl != null && latest.pnl < 0 ? '#ef4444' : '#22c55e'); glow(ctx, ox, oy, 7, a.color, 0.7);
+      }
+      if (act && a.key === 'RIGO') { // settlement ledger strokes
+        px(ctx, x + 17, y - 11, 8 + Math.round(beat * 8), 1, latest && latest.pnl < 0 ? '#ef4444' : '#22c55e');
+        px(ctx, x + 17, y - 8, 14 - Math.round(beat * 5), 1, '#5b6270');
+      }
+      if (act && a.key === 'TESS') { // the risk beacon always has a state
+        const risk = halted ? '#ef4444' : '#ec4899'; px(ctx, x + 4, y + 3, 3, 3, risk); glow(ctx, x + 5, y + 4, 8, risk, 0.5 + beat * 0.3);
+      }
+      if (act && a.key === 'MAKR') { // two-sided maker quotes blink independently
+        px(ctx, x + 18, y - 12, 4, 2, '#22c55e'); px(ctx, x + 42, y - 12, 4, 2, '#ef4444');
+        if (Math.floor(t * 5) % 2) px(ctx, x + 26, y - 10, 12, 1, '#a855f7');
+      }
       // desk: lit top edge, dark front face, legs
       px(ctx, x, y + 11, 64, 9, '#33291d'); px(ctx, x, y + 11, 64, 1, '#6b5942'); px(ctx, x, y + 19, 64, 1, '#1b150e');
       px(ctx, x + 2, y + 20, 4, 8, '#221b13'); px(ctx, x + 58, y + 20, 4, 8, '#221b13');
@@ -657,6 +706,7 @@
     const H = (S.maker && S.maker.hist) || [];
     text(ctx, 'P&L', x + 4, y, '#4b5563', 5);
     if (H.length < 2) {
+      chartBox = null;
       text(ctx, H.length ? 'collecting — one point a minute' : 'no history yet', x + w / 2, y + h / 2 - 4, '#243044', 5, 'center');
       return;
     }
@@ -670,6 +720,7 @@
     const L = x + 22, R = x + w - 6, T = y + 8, B = y + h - 8;
     const px_ = (t) => L + (R - L) * ((t - t0) / (t1 - t0));
     const py_ = (v) => B - (B - T) * ((v - lo) / (hi - lo));
+    chartBox = { left: L, right: R, top: T, bottom: B, history: H, xFor: px_ };
 
     // zero line: the break-even the whole thing is measured against
     const zy = py_(0);
@@ -704,12 +755,29 @@
     px(ctx, nx - 1, ny - 1, 2.5, 2.5, now.e >= 0 ? '#4ade80' : '#f87171');
     glow(ctx, nx, ny, 8, now.e >= 0 ? '#22c55e' : '#ef4444', 0.5);
 
+    // A chart should answer "what happened here?", not merely decorate the room.
+    // Hover previews a point; clicking pins it so live updates do not move the comparison away.
+    const focusT = chartPinnedT || chartHoverT;
+    if (focusT != null) {
+      const focus = H.reduce((best, point) => Math.abs(point.t - focusT) < Math.abs(best.t - focusT) ? point : best, H[0]);
+      const fx = px_(focus.t), fy = py_(focus.e), pin = chartPinnedT != null;
+      ctx.save(); ctx.setLineDash([1, 2]); ctx.strokeStyle = pin ? '#5ec8e0' : '#737a88'; ctx.lineWidth = 0.7;
+      ctx.beginPath(); ctx.moveTo(fx, T); ctx.lineTo(fx, B); ctx.stroke(); ctx.restore();
+      px(ctx, fx - 2, fy - 2, 4, 4, pin ? '#5ec8e0' : (focus.e >= 0 ? '#4ade80' : '#f87171'));
+      const label = `${new Date(focus.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}  ${signed(focus.e)}`;
+      ctx.font = '5px JetBrains Mono, monospace'; const lw = Math.ceil(ctx.measureText(label).width) + 8;
+      const lx = Math.min(Math.max(fx - lw / 2, L), R - lw), ly = T + 2;
+      px(ctx, lx, ly, lw, 9, '#0d1119'); px(ctx, lx, ly, lw, 1, pin ? '#5ec8e0' : '#434d5b');
+      text(ctx, label, lx + 4, ly + 2, pin ? '#93dcec' : '#c3c9d6', 5);
+      text(ctx, pin ? 'pinned · click to clear' : 'click to pin', x + w - 6, y + h - 4, pin ? '#5ec8e0' : '#4b5563', 4.5, 'right');
+    } else text(ctx, 'hover graph · click to pin', x + w - 6, y + h - 4, '#39404e', 4.5, 'right');
+
     const mins = Math.round((t1 - t0) / 60000);
     text(ctx, mins < 90 ? `last ${mins}m` : `last ${(mins / 60).toFixed(1)}h`, x + 22, y + h - 4, '#39404e', 4.5);
     text(ctx, 'NET', x + w - 34, y, now.e >= 0 ? '#22c55e' : '#ef4444', 4.5, 'right');
     text(ctx, signed(now.e), x + w - 6, y, now.e >= 0 ? '#22c55e' : '#ef4444', 5, 'right');
-    text(ctx, 'realised', x + w - 34, y + h - 4, '#2f6b45', 4.5, 'right');
-    text(ctx, signed((S.maker && S.maker.realized) || 0), x + w - 6, y + h - 4, '#2f6b45', 4.5, 'right');
+    text(ctx, 'realised', x + w - 34, y + h - 10, '#2f6b45', 4.5, 'right');
+    text(ctx, signed((S.maker && S.maker.realized) || 0), x + w - 6, y + h - 10, '#2f6b45', 4.5, 'right');
   }
 
   function drawLog(ctx, x, y, w, h) {
