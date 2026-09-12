@@ -80,6 +80,30 @@ group('the inventory cap withdraws a side rather than skewing price');
   ok('one contract inside the cap still quotes both sides', inside.bid === 0.44 && inside.ask === 0.45, inside);
 }
 
+group('inventory in the tails is worked off, not stranded');
+{
+  // The refusal for `price in the tails` ran BEFORE makerdesk's reduce-only logic, and returned
+  // null on both sides, so a market with inventory whose mid drifted out of band could never be
+  // closed: the cloud desk sat short 38 at a 91c mid with both quotes withdrawn, marking a $10
+  // loss it had no way out of. The reducing side must survive the refusal.
+  const shortInTail = maker.desiredQuotes(book(0.93, 0.94), -38, cfg({ makerMaxMid: 0.92 }));
+  ok('short 38 at a 93c mid keeps its bid', shortInTail.bid === 0.93, shortInTail);
+  ok('...and does not offer, which would grow the short', shortInTail.ask === null, shortInTail);
+  ok('...and says why', /tails/.test(shortInTail.why) && /reducing/.test(shortInTail.why), shortInTail.why);
+
+  const longInTail = maker.desiredQuotes(book(0.04, 0.05), 25, cfg({ makerMinMid: 0.08 }));
+  ok('long 25 at a 4.5c mid keeps its offer', longInTail.ask === 0.05, longInTail);
+  ok('...and does not bid', longInTail.bid === null, longInTail);
+
+  // no inventory, no reason to be in a tail at all -- unchanged
+  const flatInTail = maker.desiredQuotes(book(0.93, 0.94), 0, cfg({ makerMaxMid: 0.92 }));
+  ok('flat in the tails still quotes nothing', flatInTail.bid === null && flatInTail.ask === null, flatInTail);
+  ok('...under the plain reason', flatInTail.why === 'price in the tails', flatInTail.why);
+
+  // the mid is still reported, so the mark keeps moving while the position is worked off
+  ok('the reducing quote still reports a mid', Math.abs(shortInTail.mid - 0.935) < 1e-9, shortInTail);
+}
+
 // ---------------------------------------------------------------- fillsFrom
 const trade = (id, side, px, n, extra = {}) => ({ trade_id: id, taker_book_side: side, yes_price_dollars: String(px), count_fp: String(n), ...extra });
 const QUOTES = { bid: 0.44, ask: 0.45 };

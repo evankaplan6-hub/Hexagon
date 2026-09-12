@@ -40,7 +40,17 @@ function desiredQuotes(book, inv, cfg) {
   const spread = ask - bid;
   const mid = (bid + ask) / 2;
   if (spread < cfg.makerMinSpread - 1e-9) return { bid: null, ask: null, spread, mid, why: `spread ${c(spread)} under ${c(cfg.makerMinSpread)}` };
-  if (mid < cfg.makerMinMid || mid > cfg.makerMaxMid) return { bid: null, ask: null, spread, mid, why: 'price in the tails' };
+  // The tails are where a one-tick spread is worth least against the risk, so a market priced
+  // there gets no NEW position. It used to get no quote at all, and that was the ordering bug:
+  // this refusal ran before makerdesk's reduce-only logic ever saw the market, so inventory that
+  // drifted into the tails could never be worked off -- the desk sat short 38 at a 91c mid with
+  // both sides withdrawn, marking a $10 loss it had no way to close, and every market it had
+  // rotated out of was in the same position once its price moved. A tail is precisely where a
+  // position is on its way to resolving at 0 or 1, which is the coin flip this desk is not paid to
+  // take. So the reducing side stays up: a short keeps bidding, a long keeps offering.
+  if (mid < cfg.makerMinMid || mid > cfg.makerMaxMid) {
+    return { bid: inv < 0 ? bid : null, ask: inv > 0 ? ask : null, spread, mid, why: inv ? 'price in the tails · reducing only' : 'price in the tails' };
+  }
   return {
     bid: inv < cfg.makerCap ? bid : null,   // stop bidding once long the cap
     ask: inv > -cfg.makerCap ? ask : null,  // stop offering once short the cap
