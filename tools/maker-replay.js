@@ -43,36 +43,37 @@ const maker = require('../src/maker');
 const ks = require('../src/venues/kalshi');
 const base = require('../src/config');
 
-const args = process.argv.slice(2);
+const args = require.main === module ? process.argv.slice(2) : [];
 const BARE = ['--fetch', '--markets', '--quiet'];               // flags that take no value
 const files = args.filter((a, i) => !a.startsWith('--') && !(i > 0 && args[i - 1].startsWith('--') && !BARE.includes(args[i - 1])));
 const flag = (name) => { const i = args.indexOf(`--${name}`); return i >= 0 ? args[i + 1] : undefined; };
 const has = (name) => args.includes(`--${name}`);
 // contracts ahead of a quote that has just moved to a new price -- see the note on the queue above
 const QUEUE = flag('queue') !== undefined ? parseFloat(flag('queue')) : 0;
-if (!files.length) { console.error('usage: node tools/maker-replay.js [--fetch] <kstrades.jsonl> <journal-*.jsonl...> [--<makerKnob> value] [--markets]'); process.exit(1); }
-
 const r2 = (x) => Math.round(x * 100) / 100;
 const money = (x) => `${x < 0 ? '-' : '+'}$${Math.abs(x).toFixed(2)}`;
 const pct = (a, b) => (b ? `${(100 * a / b).toFixed(0)}%` : '-');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------------------------------------------------------------- inputs
+// Only when run as a script. tools/maker-rank.js requires this file for touchFrom and
+// replayMarket and brings its own tape and its own windows.
 const tradesFile = files.find((f) => !/journal/.test(f));
 const journalFiles = files.filter((f) => /journal/.test(f));
-if (!tradesFile || !journalFiles.length) { console.error('need one trades file and at least one journal file'); process.exit(1); }
-
-const journal = [];
-for (const f of journalFiles) for (const l of fs.readFileSync(f, 'utf8').split('\n')) {
-  if (!l.trim()) continue;
-  try { const r = JSON.parse(l); if (r.kind === 'MAKER_FILL') journal.push({ ...r, at: Date.parse(r.t) }); } catch { /* skip */ }
+const firstFill = new Map();   // when each market entered the book, as far as the journal can say
+let t0 = 0, t1 = 0;
+function loadJournal() {
+  if (!tradesFile || !journalFiles.length) { console.error('usage: node tools/maker-replay.js [--fetch] <kstrades.jsonl> <journal-*.jsonl...> [--<makerKnob> value] [--markets]'); process.exit(1); }
+  const journal = [];
+  for (const f of journalFiles) for (const l of fs.readFileSync(f, 'utf8').split('\n')) {
+    if (!l.trim()) continue;
+    try { const r = JSON.parse(l); if (r.kind === 'MAKER_FILL') journal.push({ ...r, at: Date.parse(r.t) }); } catch { /* skip */ }
+  }
+  journal.sort((a, b) => a.at - b.at);
+  if (!journal.length) { console.error('no MAKER_FILL rows in the journal'); process.exit(1); }
+  for (const f of journal) if (!firstFill.has(f.ticker)) firstFill.set(f.ticker, f.at);
+  t0 = journal[0].at; t1 = journal[journal.length - 1].at;
 }
-journal.sort((a, b) => a.at - b.at);
-if (!journal.length) { console.error('no MAKER_FILL rows in the journal'); process.exit(1); }
-// when each market entered the book, as far as the journal can say
-const firstFill = new Map();
-for (const f of journal) if (!firstFill.has(f.ticker)) firstFill.set(f.ticker, f.at);
-const t0 = journal[0].at, t1 = journal[journal.length - 1].at;
 
 // ---------------------------------------------------------------- fetch
 async function fetchTrades() {
@@ -131,17 +132,16 @@ function touchFrom(book, t) {
   else if (t.taker_book_side === 'ask') { b.bid = p; if (b.ask != null && b.ask <= p) b.ask = r2(p + 0.01); }
   return b;
 }
-const asBook = (b) => ({
-  yesBids: b.bid == null ? [] : [{ price: b.bid, size: QUEUE }],
-  yesAsks: b.ask == null ? [] : [{ price: b.ask, size: QUEUE }],
-});
 
-function run(cfg, byTicker) {
-  const every = cfg.makerEverySec * 1000;
-  const totals = { fills: 0, qty: 0, roFills: 0, roQty: 0, roCost: 0, realized: 0, cooled: 0 };
-  const rows = [];
-  for (const [ticker, trades] of byTicker) {
-    const since = firstFill.get(ticker);
+// One market, from `since` to `until`, quoting throughout. Trades before `since` only warm the
+// book. `queue` is the size assumed ahead of a quote that moves to a new price. Exported so
+// tools/maker-rank.js can score rankings on the same engine.
+function replayMarket(trades, cfg, { since, until, queue = QUEUE }) {
+    const every = cfg.makerEverySec * 1000;
+    const bookOf = (b) => ({
+      yesBids: b.bid == null ? [] : [{ price: b.bid, size: queue }],
+      yesAsks: b.ask == null ? [] : [{ price: b.ask, size: queue }],
+    });
     const m = { inv: 0, cost: 0, realized: 0, quotes: { bid: null, ask: null }, queue: { bid: 0, ask: 0 }, tox: [], cooledUntil: 0 };
     const seen = new Set();
     let book = { bid: null, ask: null };
@@ -149,12 +149,43 @@ function run(cfg, byTicker) {
     // warm the book on everything before the market entered the desk's universe
     while (i < trades.length && trades[i]._t < since) book = touchFrom(book, trades[i++]);
     const s = { bought: 0, boughtCost: 0, sold: 0, soldProceeds: 0, fills: 0, qty: 0, roFills: 0, roQty: 0, roCost: 0, cooled: 0 };
+    // 2) rest a fresh quote off the book as it now stands, exactly as makerdesk does
+    const requote = (at) => {
+      const q = maker.desiredQuotes(bookOf(book), m.inv, cfg);
+      let next = { bid: q.bid, ask: q.ask };
+      const g = maker.toxicGate(m, cfg, at);
+      m.tox = g.tox; m.cooledUntil = g.cooledUntil;
+      if (g.cooled) { next = { bid: null, ask: null }; if (g.tripped) s.cooled++; }
+      // queue position, as makerdesk keeps it: a new price joins the back, the same price keeps
+      // whatever has already been worked down
+      const bk = bookOf(book);
+      const prev = m.queue;
+      m.queue = {
+        bid: next.bid == null ? 0 : (next.bid === m.quotes.bid ? prev.bid : (bk.yesBids[0] ? bk.yesBids[0].size : 0)),
+        ask: next.ask == null ? 0 : (next.ask === m.quotes.ask ? prev.ask : (bk.yesAsks[0] ? bk.yesAsks[0].size : 0)),
+      };
+      m.quotes = next;
+      m.mid = q.mid ?? m.mid;
+    };
+    // the desk was quoting before the window opened, so the first print finds a quote resting
+    requote(since);
     let now = since;
-    while (i < trades.length || now <= t1) {
+    while (true) {
       const end = now + every;
       // 1) fill what was resting, against the prints that arrived this cycle
       const batch = [];
-      while (i < trades.length && trades[i]._t < end) batch.push(trades[i++]);
+      while (i < trades.length && trades[i]._t < end && trades[i]._t < until) batch.push(trades[i++]);
+      if (!batch.length) {
+        // Nothing printed this cycle, so nothing fills and the book has not moved: skip straight
+        // to the cycle holding the next print. A 66-day window is 2.8M two-second cycles, and
+        // most markets print a few times an hour. The one thing time alone changes is a cooldown
+        // ending, so requote at that moment if the skip passes it.
+        if (i >= trades.length || trades[i]._t >= until) break;
+        const target = since + Math.floor((trades[i]._t - since) / every) * every;
+        if (m.cooledUntil && target >= m.cooledUntil) requote(m.cooledUntil);
+        now = target;
+        continue;
+      }
       const { fills, queue } = maker.fillsFrom(batch, m.quotes, m.inv, cfg, seen, m.queue);
       m.queue = queue;
       for (const f of fills) {
@@ -166,31 +197,23 @@ function run(cfg, byTicker) {
         m.tox = maker.toxWindow(m.tox, f);
       }
       for (const t of batch) book = touchFrom(book, t);
-      // 2) requote off the book as it now stands, exactly as makerdesk does
-      const q = maker.desiredQuotes(asBook(book), m.inv, cfg);
-      let next = { bid: q.bid, ask: q.ask };
-      const g = maker.toxicGate(m, cfg, end);
-      m.tox = g.tox; m.cooledUntil = g.cooledUntil;
-      if (g.cooled) { next = { bid: null, ask: null }; if (g.tripped) s.cooled++; }
-      // queue position, as makerdesk keeps it: a new price joins the back, the same price keeps
-      // whatever has already been worked down
-      const bk = asBook(book);
-      const prev = m.queue;
-      m.queue = {
-        bid: next.bid == null ? 0 : (next.bid === m.quotes.bid ? prev.bid : (bk.yesBids[0] ? bk.yesBids[0].size : 0)),
-        ask: next.ask == null ? 0 : (next.ask === m.quotes.ask ? prev.ask : (bk.yesAsks[0] ? bk.yesAsks[0].size : 0)),
-      };
-      m.quotes = next;
-      m.mid = q.mid ?? m.mid;
+      requote(end);
       now = end;
-      if (i >= trades.length && now > t1) break;
     }
     const mid = m.mid ?? 0.5;
     const rt = Math.min(s.bought, s.sold);
     const captured = rt > 0 ? rt * (s.soldProceeds / s.sold - s.boughtCost / s.bought) : 0;
-    rows.push({ ticker, ...s, rt, captured, inv: m.inv, cost: m.cost, realized: m.realized, mark: m.inv * mid, mid });
-    totals.fills += s.fills; totals.qty += s.qty; totals.roFills += s.roFills; totals.roQty += s.roQty; totals.roCost += s.roCost;
-    totals.realized += m.realized; totals.cooled += s.cooled;
+    return { ...s, rt, captured, inv: m.inv, cost: m.cost, realized: m.realized, mark: m.inv * mid, mid, total: m.realized + m.inv * mid - m.cost };
+}
+
+function run(cfg, byTicker) {
+  const totals = { fills: 0, qty: 0, roFills: 0, roQty: 0, roCost: 0, realized: 0, cooled: 0 };
+  const rows = [];
+  for (const [ticker, trades] of byTicker) {
+    const r = replayMarket(trades, cfg, { since: firstFill.get(ticker), until: t1 });
+    rows.push({ ticker, ...r });
+    totals.fills += r.fills; totals.qty += r.qty; totals.roFills += r.roFills; totals.roQty += r.roQty; totals.roCost += r.roCost;
+    totals.realized += r.realized; totals.cooled += r.cooled;
   }
   totals.rt = rows.reduce((a, r) => a + r.rt, 0);
   totals.captured = rows.reduce((a, r) => a + r.captured, 0);
@@ -221,7 +244,9 @@ function report(label, { totals: T, rows }, showMarkets) {
 }
 
 // ---------------------------------------------------------------- go
-(async () => {
+module.exports = { touchFrom, replayMarket };
+if (require.main === module) (async () => {
+  loadJournal();
   if (has('fetch')) { await fetchTrades(); return; }
   const cfg = { ...base };
   for (let i = 0; i < args.length; i++) {
