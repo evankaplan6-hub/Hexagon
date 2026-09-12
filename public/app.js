@@ -383,7 +383,10 @@
       : (M.fills ? 'waiting for the next' : 'waiting to be traded against'), 14, 112, '#7c869a', 5);
     px(ctx, 14, 120, 100, 1, '#141b28');
     text(ctx, `up ${dur(S.now - S.startedAt)}`, 14, 125, '#7c869a', 5);
-    text(ctx, `scanned ${ago(M.lastScanAt)}`, 14, 133, '#7c869a', 5);
+    // where the tape comes from: the socket, or the two-second poll it falls back to
+    const feed = M.feed || {};
+    const feedTxt = feed.mode === 'stream' ? (feed.connected ? 'tape: socket' : 'tape: polling') : 'tape: polling';
+    text(ctx, `scanned ${ago(M.lastScanAt)} · ${feedTxt}`, 14, 133, '#7c869a', 5);
     text(ctx, 'PAPER · no real money', 14, 141, '#4b5563', 5);
 
     // ---- wall screen : the book, or whatever you clicked on

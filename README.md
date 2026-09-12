@@ -16,7 +16,7 @@ Every 15 seconds the engine pulls the top 300 Polymarket markets by volume and e
 
 | # | Agent | Desk | Job |
 |---|-------|------|-----|
-| 05 | **HOLT** | Scanner | Matches the same outcome on both venues (Fed brackets by month/code; games and matches by team/player name plus US/Eastern date). Rejects any match where the venues disagree by 30c+, which means the match is wrong. |
+| 05 | **HOLT** | Scanner | Matches the same outcome on both venues (Fed brackets by month/code; games and matches by team/player name plus US/Eastern date). Rejects any match where a figure in the text — a year, a date, a percentage, a bps count, a dollar amount, a bare number like a doubleheader's game number — differs between the venues, and any match where the venues disagree by 30c+; either means the match is wrong. |
 | 06 | **ILSA** | Sentiment | Tracks each pair's price drift and whether the venue gap is narrowing or widening. Execution skips trades ILSA reads as diverging and sizes up ones it reads as converging. |
 | 04 | **TESS** | Ops | Health and risk: halts new risk on stale quotes, API error storms, or a daily drawdown past the limit. Sets the per-trade budget. |
 | 03 | **RIGO** | Settlement | Marks positions, exits convergence trades (gap closed, stop, max hold, or event going in-play), settles resolved markets at $1/$0, realizes P&L, scores wins/losses. |
@@ -301,6 +301,27 @@ Roughly linear, and positive in sign at every setting with 14–15 of 21 held-ou
 throughout. So the conclusion does not hinge on the guess — only the magnitude does. The desk runs
 the most conservative cell (10%, cap 100), which is also the one the live paper book is testing.
 
+### Reading the tape over a socket
+
+The desk sees its fills by reading the exchange-wide trade tape. It read that tape by polling
+`/markets/trades` every two seconds: 1000 prints a page against an exchange running ~160 a second,
+so a busy stretch outran a page, and every such poll was a window in which a resting quote could
+have filled unseen — 145 of them in the first two days on the cloud box, before the poll learned to
+page back by cursor. Since 2026-09-12 the same prints arrive over Kalshi's WebSocket trade channel
+as they happen, each with a sequence number, so a missed print is *known* rather than suspected
+(`src/kalshi-ws.js`). The poll is the fallback and runs for any round the socket cannot vouch for —
+it was down, it reconnected, it skipped a number, its buffer overflowed — and because the poll pages
+back to the last print already seen, the hole is filled rather than counted. `tools/stream-test.js`
+asserts the framing, the trade shape, and the fallback.
+
+Kalshi signs the socket handshake with the same key that signs live orders (an unsigned upgrade is
+refused with a 401, public channel or not), and Node's built-in client cannot send handshake
+headers, so the client is hand-rolled — the client side of RFC 6455 is small — rather than an npm
+dependency. It is read-only: the key signs the handshake and nothing else. A box with no key polls
+exactly as before, which is the cloud box by design (`ops/DEPLOY.md`); the dashboard's status board
+says which (`tape: socket` or `tape: polling`). Checked live 2026-09-12: both documented hosts accept
+the signed upgrade, and a 12-second sample carried ~1,070 prints with contiguous sequence numbers.
+
 ### Replaying the maker
 
 `tools/replay.js` scores the taker desks against the tick tape, and the tick tape carries no maker
@@ -461,6 +482,8 @@ src/decide.js          the decision core: pure gate/rank/size/exit logic, no I/O
 src/matcher.js         cross-venue matching
 src/broker.js          paper broker + live Kalshi adapter
 src/venues/            Polymarket (Gamma + CLOB) and Kalshi public data
+src/tape.js            the maker's batched market data: the trade tape (socket first, poll as fallback) and top of book
+src/kalshi-ws.js       Kalshi's trade channel over WebSocket, dependency-free and read-only
 public/                dashboard (index.html, style.css, app.js)
 data/state.json        persisted account (created on first run)
 data/ticks-*.jsonl     tick tape, one line per priced pair per cycle (RECORD=1)
@@ -473,6 +496,7 @@ tools/probe-test.js    assertions for the thin-market probe (stubbed venues, fro
 tools/maker-test.js    assertions for the maker core: quoting, queue, fills, realised P&L
 tools/broker-test.js   assertions for fills, incl. the live Kalshi order path (no network)
 tools/matcher-test.js  assertions for cross-venue matching
+tools/stream-test.js   assertions for the trade socket and the tape's fallback to the poll
 tools/engine-test.js   assertions for the ledger: operator latch, partial exits, and close serialization
 tools/golden.js        fixed-fixture output diff, for refactors meant to change nothing
 ```
@@ -482,7 +506,7 @@ tape and a synthetic clock (`tools/replay.js`) instead of a network and a wall c
 guard it, and both are worth running after any change to the gates:
 
 ```bash
-npm test                      # all 361 assertions across six suites
+npm test                      # all 446 assertions across seven suites
 node tools/maker-test.js      # ...or one suite at a time while working on one file
 ```
 

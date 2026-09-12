@@ -61,7 +61,10 @@ function HOLT(E) {
     let txt = `${pairs.length} pairs live across ${seriesN} series · ${E.quotes.pm.size} PM + ${E.quotes.ks.size} KS markets scanned`;
     if (added.length) txt += ` · +${added.length} new: ${added.slice(0, 2).map((p) => p.label).join(', ')}${added.length > 2 ? '…' : ''}`;
     if (dropped.length) txt += ` · −${dropped.length} closed`;
-    if (rejected.length) txt += ` · ${rejected.length} rejected on 30c+ disagreement`;
+    if (rejected.length) {
+      const figs = rejected.filter((r) => r.why === 'figures').length;
+      txt += ` · ${rejected.length} rejected (${rejected.length - figs} on 30c+ disagreement, ${figs} on a mismatched figure)`;
+    }
     E.log('HOLT', 'SCAN', null, txt);
   }
 }

@@ -14,7 +14,7 @@ the venue gap is not the edge. `ops/DEPLOY.md` covers cloud deployment (Fly app 
 ## Running it
 
 ```bash
-npm test                                      # 361 assertions, no network, no clock
+npm test                                      # 446 assertions, no network, no clock
 node server.js                                # paper account, live market data → localhost:8787
 DEMO=1 DATA_DIR=./data-demo node server.js    # synthetic fills/settles, separate account
 npm run reset                                 # wipe the paper account
@@ -44,6 +44,7 @@ src/agents.js     the six desks         src/matcher.js   cross-venue matching
 src/broker.js     paper broker + live Kalshi adapter
 src/venues/       Polymarket (Gamma + CLOB) and Kalshi public data
 src/recorder.js   tick tape writer      public/          dashboard
+src/tape.js       maker market data     src/kalshi-ws.js Kalshi trade socket (read-only; needs the key, else the tape polls)
 tools/            edge-scan, replay, maker-replay, maker-rank, pm-maker-scan, maker-report, fillcheck,
                   history-scan, golden, api
                   tests: test.js (npm test) + decide/probe/maker/broker/matcher/engine-test.js
@@ -61,5 +62,6 @@ the fast working copy.
 
 - Branch `main`. A second branch `worktree-hexagon-research` is checked out as a git worktree at
   `.claude/worktrees/hexagon-research` (locked, gitignored).
-- **There is no git remote.** The local `.git` is the only copy of the history — take that into
-  account before any destructive git operation.
+- Remote `origin` is `git@github.com:evankaplan6-hub/Hexagon.git` (added 2026-09-12, SSH).
+  `data/`, `.env`, and `*.pem` are gitignored, so the working copy is still the only place those
+  exist — back them up separately.

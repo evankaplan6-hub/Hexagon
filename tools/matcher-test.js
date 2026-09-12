@@ -7,7 +7,7 @@
 // position that can lose $1/contract on both legs at once.
 //
 //   node tools/matcher-test.js
-const { matchPairs, nameMatch, tickerDate, etDate } = require('../src/matcher');
+const { matchPairs, nameMatch, tickerDate, etDate, figures, figuresConflict } = require('../src/matcher');
 
 let pass = 0, fail = 0;
 const ok = (name, cond, got) => {
@@ -186,6 +186,71 @@ group('matchPairs: the price-agreement guard, and what it does NOT catch');
     ks({ ticker: `KXMLBGAME-${date}PHI`, eventTicker: `KXMLBGAME-${date}`, subTitle: 'Philadelphia Phillies', title: 'Philadelphia Phillies' }),
   ]);
   ok('an unpriced KALSHI leg is not paired', nullKs.pairs.length === 0, nullKs.pairs);
+}
+
+group('figures: the numbers in a question, by kind');
+{
+  const f = figures('Will CPI be above 3.0% for September 2026?');
+  ok('a percentage is a percentage', f.pct.has(3) && f.pct.size === 1, [...f.pct]);
+  ok('a year is a year, not a bare number', f.years.has(2026) && f.nums.size === 0, { years: [...f.years], nums: [...f.nums] });
+  ok('a month with no day is not a date', f.dates.size === 0, [...f.dates]);
+  const g = figures('Fed cuts by 25bps or 50 basis points before Oct 1st, 2026; unemployment over 4.5?');
+  ok('glued and spaced bps both count', g.bps.has(25) && g.bps.has(50), [...g.bps]);
+  ok('an ordinal date parses', g.dates.has('10/1'), [...g.dates]);
+  ok('a bare decimal is a number', g.nums.has(4.5), [...g.nums]);
+  const h = figures('Will Bitcoin close above $1,500,000 or $2.5m on 2026-12-31?');
+  ok('dollar amounts scale and lose their commas', h.money.has(1500000) && h.money.has(2500000), [...h.money]);
+  ok('an ISO date yields a year and a day', h.years.has(2026) && h.dates.has('12/31'), { years: [...h.years], dates: [...h.dates] });
+  // the names that carry digits
+  const n = figures('76ers vs. 49ers, B53.5 bracket, 1st half');
+  ok('a number glued to letters is a name, not a figure', n.nums.size === 0 && n.years.size === 0, { nums: [...n.nums], years: [...n.years] });
+  ok('an empty question has no figures', Object.values(figures('')).every((s) => s.size === 0));
+  ok('null is fine', Object.values(figures(null)).every((s) => s.size === 0));
+}
+
+group('figuresConflict: both sides speak and disagree');
+{
+  ok('a tenth of a percent is a different outcome', /pct/.test(figuresConflict('CPI above 3.0%?', 'CPI above 3.1%')), figuresConflict('CPI above 3.0%?', 'CPI above 3.1%'));
+  ok('the same figure written differently agrees', figuresConflict('CPI above 3.0%?', 'CPI above 3 percent') === null);
+  ok('a different deadline is a different outcome', /dates/.test(figuresConflict('by September 30?', 'before Sep 30')) === false && /dates/.test(figuresConflict('by September 30?', 'before October 1')), figuresConflict('by September 30?', 'before October 1'));
+  ok('a different year is a different outcome', /years/.test(figuresConflict('Will X happen in 2026?', 'X in 2027')));
+  ok('game 1 is not game 2', /nums/.test(figuresConflict('Astros vs. Phillies (Game 2)', 'Houston Astros at Philadelphia Phillies (Game 1)')));
+  ok('one side silent is not a conflict', figuresConflict('Astros vs. Phillies', 'Houston at Philadelphia (Sep 8)') === null);
+  ok('no figures anywhere is not a conflict', figuresConflict('Astros vs. Phillies', 'Houston Astros') === null);
+  ok('a partial overlap is still a conflict', /bps/.test(figuresConflict('cut 25 bps', 'cut 25bps or 50bps')));
+}
+
+group('matchPairs: the figure guard');
+{
+  const date = '26SEP08';
+  const market = pm({ question: 'Astros vs. Phillies (Game 2)', sport: 'moneyline', outcomes: ['Houston Astros', 'Philadelphia Phillies'], gameStart: '2026-09-08T23:05:00Z' });
+  // a doubleheader: the same two teams, the same date, two Kalshi events -- the first one listed
+  // is game 1, and without the guard the name-and-date match takes it
+  const gameOne = mlbEvent(date, 'Houston Astros', 'Philadelphia Phillies').map((k) => ({ ...k, title: `${k.title} (Game 1)` }));
+  const r = matchPairs([market], gameOne);
+  ok('game 2 does not pair to a game 1 listing', r.pairs.length === 0, r.pairs);
+  ok('...and the rejection says why', r.rejected.length === 1 && r.rejected[0].why === 'figures' && /nums/.test(r.rejected[0].detail), r.rejected);
+  const gameTwo = mlbEvent(date, 'Houston Astros', 'Philadelphia Phillies').map((k) => ({ ...k, title: `${k.title} (Game 2)`, ticker: `${k.ticker}-G2`, eventTicker: `${k.eventTicker}-G2` }));
+  ok('game 2 pairs to game 2', matchPairs([market], gameTwo).pairs.length === 1);
+  // both games listed, game 1 first: the guard has to skip game 1 and go on to game 2, not reject
+  // the first name match and leave the right row unpaired
+  const both = matchPairs([market], [...gameOne, ...gameTwo]);
+  ok('with both games listed, game 2 finds game 2', both.pairs.length === 1 && /G2$/.test(both.pairs[0].ks.ticker), both);
+  ok('...and nothing is reported rejected', both.rejected.length === 0, both.rejected);
+  const gameOnePm = pm({ ...market, id: 'pm2', question: 'Astros vs. Phillies (Game 1)' });
+  const twoPm = matchPairs([market, gameOnePm], [...gameOne, ...gameTwo]);
+  ok('two PM games, two Kalshi games: each pairs to its own', twoPm.pairs.length === 2 && twoPm.pairs.every((p) => (/Game 2/.test(p.pm.question)) === /G2$/.test(p.ks.ticker)), twoPm.pairs.map((p) => [p.pm.question, p.ks.ticker]));
+  // the price guard's rejection is labelled too, so the log can count them apart
+  const far = matchPairs([pm({ ...market, question: 'Astros vs. Phillies' })], mlbEvent(date, 'Houston Astros', 'Philadelphia Phillies', { aBid: 0.89, aAsk: 0.91 }));
+  ok('a price rejection is labelled as one', far.rejected.length === 1 && far.rejected[0].why === 'price', far.rejected);
+  // Fed brackets are matched by code, and Kalshi's label for a code is a RANGE, so the figures on
+  // the two sides legitimately differ. The guard must not undo the bracket mapping.
+  const hikeKs = [
+    ks({ ticker: 'KXFEDDECISION-26SEP-H25', eventTicker: 'KXFEDDECISION-26SEP', title: 'Fed decision, September 2026', subTitle: 'Hike 25bps' }),
+    ks({ ticker: 'KXFEDDECISION-26SEP-H26', eventTicker: 'KXFEDDECISION-26SEP', title: 'Fed decision, September 2026', subTitle: 'Hike >25bps' }),
+  ];
+  const fifty = matchPairs([pm({ question: 'Will the Fed increase interest rates by 50 bps after the September 2026 meeting?' })], hikeKs);
+  ok('a Fed pair is exempt: "50 bps" still pairs to the >25 bracket', fifty.pairs.length === 1 && /H26$/.test(fifty.pairs[0].ks.ticker), fifty);
 }
 
 group('matchPairs: shape of what it returns');

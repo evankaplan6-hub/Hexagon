@@ -5,6 +5,7 @@ const ks = require('./venues/kalshi');
 const http = require('./http');
 const maker = require('./maker');
 const { makeTape } = require('./tape');
+const { openTradeStream } = require('./kalshi-ws');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // Kalshi rate-limits, and a throttled scan is worse than a slow one: the first live run silently
@@ -70,6 +71,35 @@ function makeMakerDesk(cfg) {
   let lastUniverseAt = 0;
   let refreshing = null;     // in-flight refresh, so the scan never runs twice or blocks the tick
   const tape = makeTape({ maxPages: cfg.makerTapePages });   // batched exchange-wide trades + per-series books
+  let stream = null, streamTried = false, streamRetryAt = 0;
+
+  // The trade socket, opened once, on the first cycle rather than at construction so that building
+  // a desk never opens a connection. Kalshi signs the handshake, so without a key there is nothing
+  // to open it with and the desk polls as before -- said in the log, because a silent fallback
+  // looks exactly like the feature working. The key signs the handshake and nothing else.
+  // An open that throws (an unreadable key file, a bad PEM) is retried a minute later rather than
+  // written off for the life of the process; the socket's own reconnects handle everything after.
+  function ensureStream(E) {
+    if (streamTried || Date.now() < streamRetryAt) return;
+    streamTried = true;
+    if (!cfg.makerStream) { E.log('MAKR', 'OPS', null, `trade stream off (MAKER_STREAM=0) · polling the tape every ${cfg.makerEverySec}s`); return; }
+    if (!cfg.kalshiKeyId || !cfg.kalshiKeyPath) { E.log('MAKR', 'OPS', null, `no Kalshi key configured, and the socket handshake has to be signed · polling the tape every ${cfg.makerEverySec}s`); return; }
+    try {
+      stream = openTradeStream({
+        keyId: cfg.kalshiKeyId, keyPath: cfg.kalshiKeyPath, url: cfg.kalshiWsUrl,
+        onEvent: (type, d) => {
+          if (type === 'open') E.log('MAKR', 'OPS', null, d.reconnects ? `trade stream reconnected (${d.reconnects} so far) · this round polls back over the gap` : 'trade stream connected · prints arrive as they happen; the poll is the fallback');
+          else if (type === 'close' && E.due('makr-stream-close', 120)) E.log('MAKR', 'OPS', null, `trade stream dropped (${d.reason}) · polling until it is back`);
+          else if (type === 'auth') E.log('MAKR', 'OPS', null, `trade stream refused (HTTP ${d.status}): the key did not sign the handshake · polling, retry in 60s`);
+          else if (type === 'gap' && E.due('makr-stream-gap', 300)) E.log('MAKR', 'OPS', null, `trade stream skipped seq ${d.expected} → ${d.got} · this round polls back over it`);
+        },
+      });
+      tape.setStream(stream);
+    } catch (e) {
+      streamTried = false; streamRetryAt = Date.now() + 60000;
+      E.log('MAKR', 'OPS', null, `trade stream not started (${String(e.message).slice(0, 80)}) · polling the tape every ${cfg.makerEverySec}s, retry in 60s`);
+    }
+  }
 
   // Pick the most liquid mid-priced markets from the fee-free series.
   async function refreshUniverse(E) {
@@ -136,6 +166,7 @@ function makeMakerDesk(cfg) {
 
   async function step(E) {
     if (!cfg.makerEnabled) return;
+    ensureStream(E);
     const S = book(E);
 
     // TESS's computed halt is refreshed on the taker cadence. An operator flatten is immediate,
@@ -377,6 +408,8 @@ function makeMakerDesk(cfg) {
       cash: S.cash, equity: S.equity, realized: S.realized || 0, fills: S.fills || 0, halted: S.halted || null,
       lastFill: S.lastFill || null, recent: (S.recent || []).slice(0, 12), lastScanAt: lastUniverseAt || null,
       hist: S.hist || [],
+      // where the tape is coming from, so "no fills" can be told apart from "not listening"
+      feed: stream ? { mode: 'stream', ...stream.health(), ...tape.stats() } : { mode: 'poll', ...tape.stats() },
       initial: cfg.initialBalance, enabled: cfg.makerEnabled,
       quoting: universe.length, tracked: markets.length,
       inv: markets.reduce((a, m) => a + Math.abs(m.inv || 0), 0),

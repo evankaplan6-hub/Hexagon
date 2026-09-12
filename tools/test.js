@@ -11,7 +11,8 @@ const SUITES = [
   ['probe', 'the thin-market probe: threshold, in-play exclusion, cooldown, darkness'],
   ['maker', 'the maker core: quoting, queue and fills, and the realised-P&L invariant'],
   ['broker', 'fills: ladder walking, paper fees, and the live Kalshi order path'],
-  ['matcher', 'cross-venue matching: names, dates, sports, and the price-agreement guard'],
+  ['matcher', 'cross-venue matching: names, dates, sports, the figure guard and the price guard'],
+  ['stream', 'the Kalshi trade socket: framing, trade shape, and the tape falling back to the poll'],
   ['engine', 'the ledger: the operator latch, partial exits, and one close per position'],
 ];
 
