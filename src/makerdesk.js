@@ -68,7 +68,7 @@ function makeMakerDesk(cfg) {
   let eligible = null;       // series that actually charge makers nothing
   let lastUniverseAt = 0;
   let refreshing = null;     // in-flight refresh, so the scan never runs twice or blocks the tick
-  const tape = makeTape();   // batched exchange-wide trades + per-series books
+  const tape = makeTape({ maxPages: cfg.makerTapePages });   // batched exchange-wide trades + per-series books
 
   // Pick the most liquid mid-priced markets from the fee-free series.
   async function refreshUniverse(E) {
@@ -198,7 +198,7 @@ function makeMakerDesk(cfg) {
     }
     if (E.operatorHalt || E.halt || S.halted) { withdraw(); return; }
     if (tapeRes.gap && E.due('makr-gap', 300)) {
-      E.log('MAKR', 'OPS', null, `tape gap: the exchange traded more than one page between polls (${tapeRes.gaps} so far) · some fills were not seen`);
+      E.log('MAKR', 'OPS', null, `tape gap: the exchange traded more than ${cfg.makerTapePages} pages between polls (${tapeRes.gaps} so far) · some fills were not seen`);
     }
     if (bookRes.failed && E.due('makr-bookfail', 300)) {
       E.log('MAKR', 'OPS', null, `${bookRes.failed} book(s) failed to load · those markets keep their last quote`);

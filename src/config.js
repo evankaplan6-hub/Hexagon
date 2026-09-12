@@ -88,6 +88,14 @@ module.exports = {
   // a second, so a page covers roughly six seconds. Polling every five left no margin and dropped
   // trades during busy stretches. At two seconds a page holds three times what we need.
   makerEverySec: num('MAKER_EVERY_SEC', 2),
+  // How many pages of the exchange-wide tape one poll may read before giving up and counting a
+  // gap. One page is 1000 prints. At two-second polling the page should hold three times what is
+  // needed, and still the first two days on the cloud box counted 145 polls where the oldest print
+  // on the page was newer than the last one seen -- bursts, not the average rate. Every one of
+  // those was a window in which a resting quote could have filled unseen, so the fill model and
+  // fillcheck both undercounted. Five pages is thirty seconds of the whole exchange; a poll that
+  // far behind has a bigger problem than pagination, and is still counted as a gap.
+  makerTapePages: Math.max(1, Math.round(num('MAKER_TAPE_PAGES', 5))),
   // The maker keeps its own drawdown rail. TESS's watches the TAKER book's equity and would never
   // notice this desk bleeding, because the two ledgers are deliberately separate.
   makerMaxDrawdownPct: num('MAKER_MAX_DRAWDOWN_PCT', 0.10),

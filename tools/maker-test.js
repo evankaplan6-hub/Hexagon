@@ -293,5 +293,94 @@ group('applyFill: cash moves in the direction it should');
   ok('selling raises cash', s.cashDelta === 4, s);
 }
 
-console.log(`\n${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+// ---------------------------------------------------------------- tape pagination
+group('the tape poller pages back until it overlaps what it already returned');
+{
+  // src/tape.js since() read ONE page of 1000 exchange-wide prints per poll. When the exchange
+  // traded more than a page between polls, the oldest print on the page was newer than the newest
+  // already seen, and everything in between was lost -- counted as a gap (145 times in two days on
+  // the cloud box) and then forgotten. Every one of those was a window in which a resting quote
+  // could have filled unseen. The endpoint pages by cursor, so the poll now follows it.
+  const http = require('../src/http');
+  const { makeTape } = require('../src/tape');
+  const T = (id, secs, ticker = 'A') => ({ trade_id: id, ticker, created_time: new Date(1000000000000 + secs * 1000).toISOString(), yes_price_dollars: '0.50', count_fp: '1', taker_book_side: 'bid' });
+  // serve pages keyed by cursor; each page is newest-first, as the exchange returns them
+  const serve = (pages) => {
+    const calls = [];
+    http.getJSON = async (url) => {
+      calls.push(url);
+      const m = url.match(/cursor=([^&]+)/);
+      const key = m ? m[1] : 'first';
+      const p = pages[key];
+      if (!p) throw new Error(`no page for cursor ${key}`);
+      return { trades: p.trades, cursor: p.next || '' };
+    };
+    return calls;
+  };
+  const real = http.getJSON;
+  const run = async () => {
+    // poll 1: prints at t=10..12, nothing seen yet -> one page, no cursor followed
+    let tape = makeTape({ maxPages: 5 });
+    let calls = serve({ first: { trades: [T('c', 12), T('b', 11), T('a', 10, 'Z')], next: 'p2' } });
+    let r = await tape.since(['A']);
+    ok('the first poll reads one page', calls.length === 1, calls);
+    ok('...returns only the wanted tickers, oldest first', r.trades.map((t) => t.trade_id).join() === 'b,c', r.trades);
+    ok('...and is not a gap', r.gap === false, r);
+
+    // poll 2: the page reaches back past t=12 -> overlap, one request, only the new prints
+    calls = serve({ first: { trades: [T('e', 14), T('d', 13), T('c', 12), T('b', 11)], next: 'p2' } });
+    r = await tape.since(['A']);
+    ok('an overlapping page needs no second request', calls.length === 1, calls);
+    ok('...and returns only prints newer than the last poll', r.trades.map((t) => t.trade_id).join() === 'd,e', r.trades);
+    ok('...with no gap', r.gap === false, r);
+
+    // poll 3: the first page is ALL newer than t=14 -> follow the cursor; page 2 overlaps
+    calls = serve({
+      first: { trades: [T('h', 17), T('g', 16)], next: 'p2' },
+      p2: { trades: [T('f', 15), T('e', 14), T('d', 13)], next: 'p3' },
+      p3: { trades: [T('c', 12)], next: '' },
+    });
+    r = await tape.since(['A']);
+    ok('a page with nothing already seen on it is followed by its cursor', calls.length === 2 && /cursor=p2/.test(calls[1]), calls);
+    ok('...and stops at the first page that overlaps', !calls.some((u) => /cursor=p3/.test(u)), calls);
+    ok('...returning both pages, oldest first', r.trades.map((t) => t.trade_id).join() === 'f,g,h', r.trades);
+    ok('...which was not a gap: nothing was missed', r.gap === false && r.gaps === 0, r);
+
+    // a print repeated across two pages is returned once
+    calls = serve({
+      first: { trades: [T('k', 20), T('j', 19)], next: 'p2' },
+      p2: { trades: [T('j', 19), T('i', 18), T('h', 17)], next: '' },
+    });
+    r = await tape.since(['A']);
+    ok('a print on two pages is returned once', r.trades.map((t) => t.trade_id).join() === 'i,j,k', r.trades);
+
+    // the cap: five pages and still nothing already seen -> that IS a gap, and the only kind left
+    const deep = { first: { trades: [T('z1', 100)], next: 'q1' } };
+    for (let i = 1; i <= 6; i++) deep[`q${i}`] = { trades: [T(`z${i + 1}`, 100 - i)], next: `q${i + 1}` };
+    calls = serve(deep);
+    r = await tape.since(['A']);
+    ok('the poll stops at maxPages', calls.length === 5, calls.length);
+    ok('...and only then counts a gap', r.gap === true && r.gaps === 1, r);
+    ok('...still returning everything it did read', r.trades.length === 5, r.trades.length);
+    ok('stats() reports the gap and the pages read', tape.stats().gaps === 1 && tape.stats().pages === 11, tape.stats());
+
+    // a non-overlapping page with no cursor is the end of the tape, not a gap
+    tape = makeTape({ maxPages: 5 });
+    serve({ first: { trades: [T('a', 10)], next: '' } });
+    await tape.since(['A']);
+    calls = serve({ first: { trades: [T('b', 11)], next: '' } });
+    r = await tape.since(['A']);
+    ok('no cursor means no older page to read, and no gap', calls.length === 1 && r.gap === false, r);
+
+    // an empty tape is not a gap either
+    serve({ first: { trades: [], next: '' } });
+    r = await tape.since(['A']);
+    ok('an empty page returns nothing and no gap', r.trades.length === 0 && r.gap === false, r);
+  };
+  const done = run().catch((e) => { fail++; console.log(`  FAIL  tape pagination threw: ${e.message}`); }).finally(() => { http.getJSON = real; });
+  // the suite is otherwise synchronous; hold the summary until this group has run
+  done.then(() => {
+    console.log(`\n${pass} passed, ${fail} failed`);
+    process.exit(fail ? 1 : 0);
+  });
+}

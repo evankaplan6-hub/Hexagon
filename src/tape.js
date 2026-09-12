@@ -33,25 +33,44 @@ async function getWithBackoff(url, tries = 3) {
   }
 }
 
-function makeTape() {
+function makeTape({ maxPages = 5 } = {}) {
   let lastNewest = 0;      // newest trade timestamp we have already returned
-  let gaps = 0;
+  let gaps = 0, pages = 0;
 
   // Trades since the last call, for the tickers we care about, oldest first.
   //
-  // The gap check matters: if the OLDEST trade in the response is newer than the newest we saw
-  // last time, the exchange traded more than a page between polls and we silently lost fills.
-  // Missing trades do not look like an error, they look like a quiet market, so it is counted.
+  // One page is 1000 prints, and a poll that falls more than a page behind used to lose the rest:
+  // if the OLDEST trade on the page was newer than the newest we had already seen, everything in
+  // between had traded unobserved. That was counted as a gap and left at that -- 145 times in the
+  // first two days on the cloud box, each one a window in which a resting quote may have filled
+  // and the ledger would never know. Missing trades do not look like an error, they look like a
+  // quiet market, which is why they were counted; but a count is not a fix.
+  //
+  // The endpoint pages by `cursor`, so now the poll keeps reading older pages until one reaches
+  // back to (or past) the last trade it already returned. The cap is the only case that still
+  // counts as a gap: five pages is 5000 prints, about thirty seconds of the whole exchange at its
+  // usual rate, and a poll that far behind has a bigger problem than pagination.
   async function since(tickers) {
     const want = tickers instanceof Set ? tickers : new Set(tickers);
-    const d = await getWithBackoff(`${ks.BASE}/markets/trades?limit=1000`);
-    const all = (d.trades || [])
-      .map((t) => ({ ...t, _t: Date.parse(t.created_time) }))
-      .filter((t) => Number.isFinite(t._t))
-      .sort((a, b) => a._t - b._t);
-    if (!all.length) return { trades: [], gap: false };
+    const byId = new Map();
+    let cursor = '', oldest = Infinity, capped = false;
+    for (let page = 0; page < maxPages; page++) {
+      const d = await getWithBackoff(`${ks.BASE}/markets/trades?limit=1000${cursor ? `&cursor=${cursor}` : ''}`);
+      pages++;
+      const batch = (d.trades || [])
+        .map((t) => ({ ...t, _t: Date.parse(t.created_time) }))
+        .filter((t) => Number.isFinite(t._t));
+      for (const t of batch) if (!byId.has(t.trade_id)) byId.set(t.trade_id, t);
+      for (const t of batch) if (t._t < oldest) oldest = t._t;
+      // reached overlap, an empty page, or the end of the tape: nothing older is missing
+      if (!batch.length || lastNewest === 0 || oldest <= lastNewest || !d.cursor) break;
+      cursor = d.cursor;
+      capped = page === maxPages - 1;
+    }
+    const all = [...byId.values()].sort((a, b) => a._t - b._t);
+    if (!all.length) return { trades: [], gap: false, gaps, scanned: 0 };
 
-    const gap = lastNewest > 0 && all[0]._t > lastNewest;
+    const gap = capped && all[0]._t > lastNewest;
     if (gap) gaps++;
     const fresh = all.filter((t) => t._t > lastNewest && want.has(t.ticker));
     lastNewest = all[all.length - 1]._t;
@@ -89,7 +108,7 @@ function makeTape() {
     return { books: out, failed };
   }
 
-  return { since, books, stats: () => ({ gaps }) };
+  return { since, books, stats: () => ({ gaps, pages }) };
 }
 
 module.exports = { makeTape };
