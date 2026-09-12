@@ -47,8 +47,11 @@ const money = (x) => `${x < 0 ? '-' : '+'}$${Math.abs(x).toFixed(2)}`;
     catch { continue; }
     const win = trades.filter((x) => { const ts = Date.parse(x.created_time); return ts >= t0 && ts <= t1; });
     // how many trades even COULD have hit a quote at the touch during the window
-    const m = live.markets[t];
-    const q = { bid: m.quotes.bid, ask: m.quotes.ask };
+    // `markets` is a shaped array now, and the snapshot flattens each market's resting quotes to
+    // top-level `bid`/`ask` (qBid/qAsk are the QUEUE sizes, not prices). This read `markets[t]` and
+    // `.quotes.bid` -- the old keyed-object shape -- and crashed before printing a single row.
+    const m = (Array.isArray(live.markets) ? live.markets.find((x) => x.ticker === t) : live.markets[t]) || {};
+    const q = { bid: m.bid ?? (m.quotes && m.quotes.bid) ?? null, ask: m.ask ?? (m.quotes && m.quotes.ask) ?? null };
     const f = maker.fillsFrom(win, q, 0, cfg, new Set(), { bid: 0, ask: 0 }).fills;
     const lf = jrows.filter((r) => r.ticker === t && r.kind === 'MAKER_FILL');
     crossings += win.length; simFills += f.length; simQty += f.reduce((a, x) => a + x.qty, 0);
