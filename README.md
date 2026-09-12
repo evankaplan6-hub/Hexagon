@@ -309,6 +309,45 @@ through our level does not care who was ahead of us and an at-touch fill does. N
 collapsed to a quarter -- so the default is 0, where the number the desk is losing money on is the
 one that matches.
 
+### The ranking, re-scored walk-forward
+
+The clear-time rule above was scored with each market's measured depth on a fixed set of markets.
+The rework plan's worry about it was simple: a queue that clears fast is a level that gets swept,
+and a sweep through a resting quote is a run-over, which is where this desk's money went (59% of
+filled contracts in its first 2.25 days). `tools/maker-rank.js` puts three rankings against each
+other **walk-forward**: rank on 21 days of tape, score on the 14 that follow, three folds over
+the 66 days of Kalshi history behind the 440 mid-band markets open in the maker's series today.
+Only the score window counts.
+
+```bash
+node tools/maker-rank.js data/fly/rank-listing.json data/fly/rank-trades.jsonl                 # no queue
+node tools/maker-rank.js data/fly/rank-listing.json data/fly/rank-trades.jsonl --queue depth   # each market's own touch size
+```
+
+Out of sample, per market picked, 24 picks a fold:
+
+```
+                       queue 0            queue = own depth       queue 2000
+clear-time (live)   +$4.31   16% run-over   -$0.54   24% run-over   +$1.71   15%
+trades per day     +$20.16    8%            +$0.79   20%           +$10.92    4%
+own replayed P&L   +$21.58    6%            -$0.69   22%           +$11.14    3%
+```
+
+Three things to read off that. **Clear-time is the worst of the three in every setting**, and
+its run-over share is the highest in every setting, which is the plan's hypothesis measured: it
+picks the levels that get swept. **Trades per day is best or tied in every setting** and beats
+clear-time in every one of the three folds at real depth, on total and on run-over cost, with a
+third of the run-over. **Ranking on a market's own past P&L is the textbook overfit**: best in
+sample everywhere, negative out of sample in all three folds at real depth. And the level: with
+each market carrying its own measured queue, the whole 681-pick pool nets **+$0.02 a pick** over
+a fortnight at 10% participation. The ranking decides the sign of a small number.
+
+What this instrument cannot see, so the rule is not changed on it alone: the book is reconstructed
+from prints; the depth is today's, applied to July; the pool is the markets that are still open,
+so every fold is scored on survivors. Shorter windows (14 days ranked, 7 scored, seven folds) and
+fewer picks (12) give the same ordering. The live rule stays clear-time until the next tape says
+the same thing.
+
 ### Three things that were tested and not built
 
 **Inventory skew.** The desk rests at the touch on both sides and only withdraws a side at the cap.
@@ -400,6 +439,7 @@ public/                dashboard (index.html, style.css, app.js)
 data/state.json        persisted account (created on first run)
 data/ticks-*.jsonl     tick tape, one line per priced pair per cycle (RECORD=1)
 tools/maker-replay.js  the maker desk against Kalshi's own trade history, same pure functions as live
+tools/maker-rank.js    three market rankings for the maker, scored walk-forward on that history
 tools/test.js          every suite in one command (npm test)
 tools/decide-test.js   assertions for the taker decision core
 tools/probe-test.js    assertions for the thin-market probe (stubbed venues, frozen clock)

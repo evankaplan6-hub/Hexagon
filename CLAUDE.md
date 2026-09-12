@@ -44,10 +44,11 @@ src/agents.js     the six desks         src/matcher.js   cross-venue matching
 src/broker.js     paper broker + live Kalshi adapter
 src/venues/       Polymarket (Gamma + CLOB) and Kalshi public data
 src/recorder.js   tick tape writer      public/          dashboard
-tools/            edge-scan, replay, maker-replay, maker-report, fillcheck, history-scan, golden, api
+tools/            edge-scan, replay, maker-replay, maker-rank, maker-report, fillcheck, history-scan, golden, api
                   tests: test.js (npm test) + decide/probe/maker/broker/matcher/engine-test.js
 data/fly/         gitignored: journals, state and tick tapes copied down from the Fly box, plus
-                  kstrades.jsonl, the Kalshi trade history tools/maker-replay.js scores against
+                  kstrades.jsonl (the trade history maker-replay scores against) and
+                  rank-listing.json + rank-trades.jsonl (the 440-market pool maker-rank scores)
 ops/              Fly deploy + launchd autostart (not currently installed)
 data/             gitignored: state.json, journal-*.jsonl, ticks-*.jsonl, desk.log
 ```
