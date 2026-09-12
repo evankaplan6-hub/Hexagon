@@ -4,14 +4,14 @@
 //   node tools/maker-rank.js data/fly/rank-listing.json data/fly/rank-trades.jsonl
 //   node tools/maker-rank.js data/fly/rank-listing.json data/fly/rank-trades.jsonl --queue depth --top 24
 //
-// The live rule (makerdesk.refreshUniverse) ranks on how fast the queue at the touch clears:
+// The live rule (makerdesk.refreshUniverse) ranked, for two days, on how fast the queue at the touch clears:
 // contracts already resting there, divided by this market's contracts per day. The rework plan's
 // worry is that a queue which clears fast is a level that gets swept, and a sweep through a
 // resting quote is a run-over -- the fill that has cost this desk its money. So three rankings
 // are scored against each other here, each choosing `--top` markets from the same pool:
 //
-//   clear     today's rule: trades/day >= makerMinTradesPerDay, queue clears inside
-//             makerMaxClearDays, fastest first
+//   clear     the rule of 2026-09-10 to 09-12: trades/day >= makerMinTradesPerDay, queue clears
+//             inside a day, fastest first
 //   tpd       trades per day, busiest first (the rule before clear-time, README's +$454 / +$259)
 //   pnl       the market's own replayed P&L net of run-over over the ranking window, best first
 //
@@ -89,7 +89,7 @@ console.log(`${folds.length} folds: rank on ${RANK_DAYS}d, score on the next ${S
 console.log(`\x1b[2mbook reconstructed from prints; pool is today's open markets; read the rankings against each other, not the level\x1b[0m`);
 
 const RANKINGS = {
-  clear: (f) => f.tpd >= cfg.makerMinTradesPerDay && f.clear <= cfg.makerMaxClearDays ? -f.clear : null,
+  clear: (f) => f.tpd >= cfg.makerMinTradesPerDay && f.clear <= 1 ? -f.clear : null,   // one day, as MAKER_MAX_CLEAR_DAYS was
   tpd: (f) => f.tpd >= cfg.makerMinTradesPerDay ? f.tpd : null,
   pnl: (f) => f.tpd >= cfg.makerMinTradesPerDay ? f.pnlIn : null,
 };
