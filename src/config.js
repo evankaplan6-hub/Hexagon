@@ -102,6 +102,15 @@ module.exports = {
   // fillcheck both undercounted. Five pages is thirty seconds of the whole exchange; a poll that
   // far behind has a bigger problem than pagination, and is still counted as a gap.
   makerTapePages: Math.max(1, Math.round(num('MAKER_TAPE_PAGES', 5))),
+  // Read the exchange-wide tape over Kalshi's WebSocket trade channel instead of polling it
+  // (src/kalshi-ws.js), where a key is configured -- the handshake has to be signed, so a box
+  // without KALSHI_API_KEY_ID and KALSHI_PRIVATE_KEY_PATH polls exactly as before. The poll is
+  // the fallback either way: any round the socket cannot vouch for is polled and paged back.
+  // The key signs the handshake and nothing else; this is read-only market data in paper mode.
+  makerStream: env('MAKER_STREAM', '1') !== '0',
+  // Kalshi's AsyncAPI spec names external-api-ws.kalshi.com as the production socket; the REST
+  // host also answers on the same path. Both were checked on 2026-09-12.
+  kalshiWsUrl: env('KALSHI_WS_URL', 'wss://external-api-ws.kalshi.com/trade-api/ws/v2'),
   // The run-over toxicity gate. A run-over fill is one where the tape traded THROUGH a resting
   // quote -- we sold below the print, or bought above it -- and it is where this desk's money
   // went: over the first 2.25 days on the cloud box, 43% of fills and 59% of filled contracts were

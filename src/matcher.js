@@ -61,6 +61,47 @@ function startMs(gameStart) {
 
 function series(ticker) { return String(ticker).split('-')[0]; }
 
+// ---------------------------------------------------------------- figures
+// The numbers in a question ARE the outcome. "CPI above 3.0%" and "CPI above 3.1%" share every
+// word and resolve differently; so do "by September 30" and "by October 1", "2026" and "2027",
+// "Game 1" and "Game 2" of a doubleheader. Name matching cannot see that, and the price guard
+// below cannot either: two brackets a tenth apart price within a cent of each other, which is
+// exactly the case it is blind to. So the figures on each side are pulled out BY KIND -- years,
+// month-day dates, percentages, basis points, dollar amounts, bare numbers -- and compared kind by
+// kind. Where both sides carry a figure of the same kind and the sets differ, the pair is wrong.
+// One side saying nothing is not a conflict: a Kalshi title rarely repeats the date its ticker
+// carries. A number glued to letters ("76ers", "49ers", "B53.5") is a name, not a figure.
+const MONTHS = 'jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec';
+const MONNUM2 = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+const SCALE = { '': 1, k: 1e3, thousand: 1e3, m: 1e6, mm: 1e6, million: 1e6, b: 1e9, bn: 1e9, billion: 1e9, t: 1e12, trillion: 1e12 };
+// built once: figures() runs twice per candidate pair, every scan
+const MONTH_DAY = new RegExp(`\\b(${MONTHS})[a-z]*\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b(?![\\d.:%])`, 'g');
+const DAY_MONTH = new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${MONTHS})[a-z]*\\b`, 'g');
+function figures(text) {
+  let s = ` ${String(text || '')} `.toLowerCase().replace(/(\d),(?=\d{3}\b)/g, '$1');   // "1,000" -> "1000"
+  const out = { years: new Set(), dates: new Set(), pct: new Set(), bps: new Set(), money: new Set(), nums: new Set() };
+  // each kind consumes what it matched, so a figure is counted once and under its most specific kind
+  const take = (re, f) => { s = s.replace(re, (...m) => { f(m); return ' '; }); };
+  take(/\b(\d{4})-(\d{2})-(\d{2})\b/g, (m) => { out.years.add(+m[1]); out.dates.add(`${+m[2]}/${+m[3]}`); });
+  take(MONTH_DAY, (m) => out.dates.add(`${MONNUM2[m[1]]}/${+m[2]}`));
+  take(DAY_MONTH, (m) => out.dates.add(`${MONNUM2[m[2]]}/${+m[1]}`));
+  take(/(?<!\w|\d\.)(\d+(?:\.\d+)?)\s*(?:%|percent)(?!\w)/g, (m) => out.pct.add(+m[1]));
+  take(/(?<!\w|\d\.)(\d+(?:\.\d+)?)\s*(?:bps?|basis\s+points?)(?!\w)/g, (m) => out.bps.add(+m[1]));
+  take(/\$\s*(\d+(?:\.\d+)?)\s*(k|thousand|mm|m|million|bn|b|billion|t|trillion)?(?!\w)/g, (m) => out.money.add(+m[1] * SCALE[m[2] || '']));
+  take(/(?<!\w|\d\.)((?:19|20)\d{2})(?!\w|\.\d)/g, (m) => out.years.add(+m[1]));
+  take(/(?<!\w|\d\.)(\d+(?:\.\d+)?)(?!\w|\.\d)/g, (m) => out.nums.add(+m[1]));
+  return out;
+}
+// The first kind on which both sides speak and disagree, described; null when nothing conflicts.
+function figuresConflict(a, b) {
+  const A = figures(a), B = figures(b);
+  for (const k of Object.keys(A)) {
+    if (!A[k].size || !B[k].size) continue;
+    if (A[k].size !== B[k].size || [...A[k]].some((x) => !B[k].has(x))) return `${k}: ${[...A[k]].join(',')} vs ${[...B[k]].join(',')}`;
+  }
+  return null;
+}
+
 // Sport classification so "Seattle" (Sounders) can never match "Seattle" (Mariners).
 const SPORT_SERIES = {
   mlb: ['KXMLBGAME'], nfl: ['KXNFLGAME'], nba: ['KXNBAGAME'], tennis: ['KXATPMATCH', 'KXWTAMATCH'],
@@ -124,6 +165,16 @@ function matchPairs(pmList, ksList) {
       if (k) hit = { ks: k, tokenIndex: 0, kind: 'fed', label: `Fed ${mon3} ${yr.slice(2)} · ${k.subTitle}` };
     }
 
+    // The figure guard, applied to each CANDIDATE rather than to the winner: a doubleheader lists
+    // two Kalshi events for the same teams on the same date, and if game 1 is listed first, a
+    // guard that ran only on the first name match would reject it and leave game 2 -- the right
+    // row, sitting next to it -- unpaired for the whole scan. A candidate whose figures conflict is
+    // skipped and the search goes on; the conflict is reported only if nothing else pairs. Fed
+    // brackets are matched by CODE and Kalshi's label for a code is a range (">25bps" backs
+    // Polymarket's "50 bps"), so the figures legitimately differ there and it is not checked.
+    const conflictWith = (k) => figuresConflict(q, `${k.title} ${k.subTitle}`);
+    let figRej = null;
+
     // 2) Two-way moneylines: "A vs B" on PM  <->  Kalshi game/match event on the same ET date, same sport
     if (!hit && m.sport === 'moneyline' && m.outcomes.length === 2 && m.gameStart) {
       const d = etDate(m.gameStart);
@@ -138,7 +189,10 @@ function matchPairs(pmList, ksList) {
         const ia = sides.findIndex((x) => nameMatch(x.subTitle, A, people));
         const ib = sides.findIndex((x) => nameMatch(x.subTitle, B, people));
         if (ia < 0 || ib < 0 || ia === ib) continue;
-        hit = { ks: sides[ia], tokenIndex: 0, kind: 'game', label: `${TAG[ser] || ser} ${short(A)} v ${short(B)} · ${short(A)}` };
+        const label = `${TAG[ser] || ser} ${short(A)} v ${short(B)} · ${short(A)}`;
+        const conflict = conflictWith(sides[ia]);
+        if (conflict) { figRej = { label, detail: conflict, ks: sides[ia].title }; continue; }
+        hit = { ks: sides[ia], tokenIndex: 0, kind: 'game', label };
         break;
       }
     }
@@ -150,11 +204,20 @@ function matchPairs(pmList, ksList) {
         if (!SPORT_SERIES.soccer.includes(ser)) continue;
         if (!ms.some((x) => /^tie\b/i.test(x.subTitle) || /^tie\b/i.test(x.title))) continue;
         const k = ms.find((x) => !/^tie\b/i.test(x.subTitle) && nameMatch(x.subTitle, r[1]));
-        if (k) { hit = { ks: k, tokenIndex: 0, kind: 'game', label: `${TAG[ser] || ser} ${short(r[1])} win ${r[2].slice(5)}` }; break; }
+        if (!k) continue;
+        const label = `${TAG[ser] || ser} ${short(r[1])} win ${r[2].slice(5)}`;
+        const conflict = conflictWith(k);
+        if (conflict) { figRej = { label, detail: conflict, ks: k.title }; continue; }
+        hit = { ks: k, tokenIndex: 0, kind: 'game', label };
+        break;
       }
     }
 
-    if (!hit || usedKs.has(hit.ks.ticker)) continue;
+    if (!hit) {
+      if (figRej) rejected.push({ ...figRej, why: 'figures', pm: q });
+      continue;
+    }
+    if (usedKs.has(hit.ks.ticker)) continue;
 
     // sanity: venues should roughly agree; a 30c+ disagreement means we matched the wrong thing
     // Validate the LEGS, not the average. `null + null` is 0 in JS and Number.isFinite(0) is true,
@@ -165,7 +228,7 @@ function matchPairs(pmList, ksList) {
     if (!legs.every((x) => typeof x === 'number' && Number.isFinite(x))) continue;
     const pmMid = (m.bestBid + m.bestAsk) / 2;
     const ksMid = (hit.ks.yesBid + hit.ks.yesAsk) / 2;
-    if (Math.abs(pmMid - ksMid) > 0.30) { rejected.push({ label: hit.label, pm: m.question, ks: hit.ks.title, pmMid, ksMid }); continue; }
+    if (Math.abs(pmMid - ksMid) > 0.30) { rejected.push({ label: hit.label, why: 'price', pm: m.question, ks: hit.ks.title, pmMid, ksMid }); continue; }
 
     usedKs.add(hit.ks.ticker);
     pairs.push({
@@ -181,4 +244,4 @@ function matchPairs(pmList, ksList) {
   return { pairs, rejected };
 }
 
-module.exports = { matchPairs, nameMatch, tickerDate, etDate };
+module.exports = { matchPairs, nameMatch, tickerDate, etDate, figures, figuresConflict };

@@ -6,10 +6,12 @@ cloud box fixes that.
 
 ## The two things that make this safe
 
-**Paper mode needs no credentials at all.** The Kalshi API key and private key are only ever read
-in live mode (`src/broker.js`, `LiveKalshiBroker`). A paper deployment carries no secrets, so
-there is nothing on that box worth stealing. Nothing here uploads `.env` or `*.pem`, and both are
-gitignored.
+**Paper mode needs no credentials at all.** The Kalshi API key and private key sign live orders
+in live mode (`src/broker.js`, `LiveKalshiBroker`) and, in any mode *if they are present*, the
+handshake for the read-only market-data socket (`src/kalshi-ws.js`). Absent, the maker desk polls
+the trade tape every two seconds as it always did, and the poll pages back so nothing is lost. A
+paper deployment carries no secrets, so there is nothing on that box worth stealing. Nothing here
+uploads `.env` or `*.pem`, and both are gitignored.
 
 **The dashboard has a password now, and the server refuses to start without one** on any address
 that is not loopback. `/api/positions` and the full activity log are unauthenticated otherwise,
@@ -67,7 +69,9 @@ fly ssh console -C "node tools/maker-report.js"
 machine, reachable by a web process, is a different risk from a key on a laptop — and the desk has
 not earned it: live fills are running at 50% of the modelled rate and the held-out edge is a few
 dollars a day. If that changes, the right shape is a separate, locked-down machine that runs no
-web server at all, not this one with more environment variables.
+web server at all, not this one with more environment variables. That includes putting the key
+there just for the trade socket: the socket is a Mac-side improvement, and the cloud box keeps
+polling — the tape reports `tape: polling` on its dashboard, and that is the intended state.
 
 **Both boxes will trade the same markets.** Two desks quoting the same book compete with each
 other and each one's fills look better than the pair deserves. Stop the Mac copy when the cloud one
