@@ -1,0 +1,42 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ['20', '22']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      # Zero npm dependencies by design — there is nothing to install.
+      - name: Assert the dependency-free invariant
+        run: |
+          node -e '
+            const p = require("./package.json");
+            for (const k of ["dependencies", "devDependencies"]) {
+              const n = Object.keys(p[k] || {}).length;
+              if (n) { console.error(`package.json has ${n} ${k}; this project is deliberately dependency-free`); process.exit(1); }
+            }
+            console.log("ok  zero dependencies");
+          '
+      - name: Assert the repo ships no live-mode switch
+        run: |
+          node -e '
+            const fs = require("fs");
+            const env = fs.readFileSync(".env.example", "utf8");
+            const bad = [/^\s*MODE\s*=\s*live/mi, /^\s*DEMO\s*=\s*1/mi, /^\s*LIVE_CONFIRM\s*=\s*\S/mi];
+            for (const re of bad) {
+              if (re.test(env)) { console.error(`.env.example arms live/demo mode: ${re}`); process.exit(1); }
+            }
+            console.log("ok  .env.example is safe by default");
+          '
+      # The suite is hermetic: no network, no wall clock.
+      - run: npm test

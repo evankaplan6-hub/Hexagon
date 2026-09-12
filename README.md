@@ -1,5 +1,7 @@
 # The Hexagon
 
+[![test](https://github.com/evankaplan6-hub/Hexagon/actions/workflows/test.yml/badge.svg)](https://github.com/evankaplan6-hub/Hexagon/actions/workflows/test.yml)
+
 A six-agent prediction-market trading desk that prices the same events across **Polymarket** and **Kalshi**, trades the disagreements, and streams everything to a live dashboard. Zero npm dependencies; Node 20+.
 
 ```bash
@@ -568,3 +570,8 @@ Named here rather than left in a transcript. None are reachable today; all are r
 - **Same-date bucketing cannot separate the two games of a doubleheader.**
 - **A market whose listing reports zero top-of-book size ranks first** (an empty queue looks like a
   queue that clears instantly) and is then modelled with no queue at all.
+
+## License
+
+MIT — see [LICENSE](LICENSE). This is research software for paper trading; live mode is
+Kalshi-only and has never been run against a funded account. Nothing here is financial advice.
