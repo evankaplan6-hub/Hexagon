@@ -96,6 +96,30 @@ module.exports = {
   // fillcheck both undercounted. Five pages is thirty seconds of the whole exchange; a poll that
   // far behind has a bigger problem than pagination, and is still counted as a gap.
   makerTapePages: Math.max(1, Math.round(num('MAKER_TAPE_PAGES', 5))),
+  // The run-over toxicity gate. A run-over fill is one where the tape traded THROUGH a resting
+  // quote -- we sold below the print, or bought above it -- and it is where this desk's money
+  // went: over the first 2.25 days on the cloud box, 43% of fills and 59% of filled contracts were
+  // run-over, costing $55.57 against the tape, on a book that captured -$1.72 of spread across
+  // every round trip it completed. Requoting every 2s instead of every 30s only moved that share
+  // from 69% to 59%, so latency is not the cause: some markets are simply ones whose touch gets
+  // swept, and the only defence is to stop resting there. The gate measures it PER MARKET, as the
+  // run-over share of the last 30 fills, and withdraws both quotes for a cooling period once it
+  // passes the bar. 0.40 sits just under the live book-wide share, so it names the markets that
+  // are worse than the book as a whole; 0.30 and 0.50 land within 2% of it on every number.
+  //
+  // Replayed against the same 2.25 days of Kalshi prints (tools/maker-replay.js) the gate trips
+  // ten times, takes 10% off run-over FILLS, nothing off run-over CONTRACTS (2,083 to 2,110), and
+  // adds $15 of realized on a +$45 base. The contracts it cannot reach are the sweeps -- one fill
+  // of several hundred contracts -- which a fill-counted share barely registers. A share counted
+  // in contracts is the obvious next thing to score; it is not what this is.
+  makerMaxRunOver: num('MAKER_MAX_RUNOVER', 0.40),
+  // Sixty minutes as planned. In the same replay 120 minutes took 9% off run-over contracts and
+  // added another $6 of realized, and 240 added nothing over 120 -- one tape, so noted, not set.
+  makerToxCooldownMin: num('MAKER_TOX_COOLDOWN_MIN', 60),
+  // Fills before the share means anything. One run-over fill out of one is a 100% share, which
+  // would cool every market on its first adverse print. 5, 10 and 15 replay within 2% of each
+  // other on run-over contracts and within $3 on realized.
+  makerToxMinFills: Math.max(1, Math.round(num('MAKER_TOX_MIN_FILLS', 10))),
   // The maker keeps its own drawdown rail. TESS's watches the TAKER book's equity and would never
   // notice this desk bleeding, because the two ledgers are deliberately separate.
   makerMaxDrawdownPct: num('MAKER_MAX_DRAWDOWN_PCT', 0.10),

@@ -239,6 +239,7 @@ function makeMakerDesk(cfg) {
         if (res.pnl) S.realized = r2((S.realized || 0) + res.pnl);
         S.cash = r2(S.cash + res.cashDelta);
         m.inv = res.inv; m.cost = res.cost; m.realized = res.realized;
+        m.tox = maker.toxWindow(m.tox, f);                 // the run-over gate's evidence
         m.fills++; S.fills = (S.fills || 0) + 1; filled++; netQty += f.qty;
         // remembered for the dashboard: "nothing is happening" and "something happened four
         // minutes ago" look identical unless the page can say which.
@@ -254,9 +255,18 @@ function makeMakerDesk(cfg) {
       // 2) rest a fresh quote for the next cycle. No sleep here any more -- there is no per-market
       // request left to pace, so the whole book requotes in one pass.
       const q = maker.desiredQuotes(bk, m.inv, cfg);
+      // The run-over gate: a market whose touch keeps getting swept is withdrawn from entirely,
+      // inventory included, for the cooling period. Said once per market per trip, and journalled,
+      // because a market that is quietly not being quoted looks exactly like a quiet market.
+      const g = maker.toxicGate(m, cfg, Date.now());
+      m.tox = g.tox; m.cooledUntil = g.cooledUntil;
+      if (g.tripped) {
+        E.log('MAKR', 'OPS', null, `${u.ticker} cooled ${cfg.makerToxCooldownMin}m: ${(g.rate * 100).toFixed(0)}% of its last ${m.fills < 30 ? m.fills : 30} fills were run over (limit ${(cfg.makerMaxRunOver * 100).toFixed(0)}%) · quotes withdrawn, ${Math.abs(m.inv)} held`);
+        E.journal(E, 'MAKER_COOL', { ticker: u.ticker, rate: r4(g.rate), inv: m.inv, until: new Date(g.cooledUntil).toISOString() });
+      }
       // reduce-only: drop whichever side would grow the position
-      const next = u.reduceOnly
-        ? { bid: m.inv < 0 ? q.bid : null, ask: m.inv > 0 ? q.ask : null }
+      const next = g.cooled ? { bid: null, ask: null }
+        : u.reduceOnly ? { bid: m.inv < 0 ? q.bid : null, ask: m.inv > 0 ? q.ask : null }
         : { bid: q.bid, ask: q.ask };
       // Queue position. Moving to a new price puts us at the back of whatever is resting there;
       // staying put keeps the position we have already worked down. A cancel-replace at the same
@@ -270,7 +280,7 @@ function makeMakerDesk(cfg) {
       m.quotes = next;
       m.mid = q.mid ?? m.mid;
       m.spread = q.spread ?? null;
-      m.why = q.why || null;
+      m.why = g.cooled ? `cooled until ${new Date(g.cooledUntil).toISOString().slice(11, 16)}Z · run-over ${(g.rate * 100).toFixed(0)}%` : (q.why || null);
     }
 
     // mark inventory at the current mid

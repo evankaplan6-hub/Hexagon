@@ -139,6 +139,31 @@ function applyFill(pos, f) {
   };
 }
 
+// ---------------------------------------------------------------- toxicity
+// Run-over is adverse selection made visible: the tape traded through a resting quote, so we sold
+// below the print or bought above it. It is where the maker's money went (43% of live fills, 59%
+// of contracts, $55.57 against the tape in 2.25 days), and a faster requote only moved it from
+// 69% to 59% -- some markets are simply ones whose touch gets swept. This measures that per
+// market over its last TOX_WINDOW fills, and cools a market that passes cfg.makerMaxRunOver for
+// cfg.makerToxCooldownMin minutes. Both pure: the window is a value, the gate returns the next
+// state, and makerdesk assigns it -- the same split as applyFill.
+const TOX_WINDOW = 30;
+function toxWindow(tox, fill) {
+  return [...(tox || []), fill.runOver ? 1 : 0].slice(-TOX_WINDOW);
+}
+function toxicGate(m, cfg, now) {
+  const tox = m.tox || [];
+  const n = tox.length;
+  const rate = n ? tox.reduce((a, x) => a + x, 0) / n : 0;
+  if (m.cooledUntil && now < m.cooledUntil) return { cooled: true, tripped: false, rate, cooledUntil: m.cooledUntil, tox };
+  // The window resets on a trip. Otherwise the same thirty fills re-trip the gate the moment the
+  // cooldown ends, and a market could never earn its way back with clean fills.
+  if (n >= cfg.makerToxMinFills && rate > cfg.makerMaxRunOver + 1e-9) {
+    return { cooled: true, tripped: true, rate, cooledUntil: now + cfg.makerToxCooldownMin * 60000, tox: [] };
+  }
+  return { cooled: false, tripped: false, rate, cooledUntil: 0, tox };
+}
+
 // ---------------------------------------------------------------- risk
 // Drawdown from the HIGH-WATER MARK, and the new mark. Pure, so the rail can be asserted.
 //
@@ -169,4 +194,4 @@ async function eligibleSeries(candidates) {
   return ok;
 }
 
-module.exports = { desiredQuotes, fillsFrom, applyFill, drawdownFrom, eligibleSeries };
+module.exports = { desiredQuotes, fillsFrom, applyFill, toxWindow, toxicGate, drawdownFrom, eligibleSeries };

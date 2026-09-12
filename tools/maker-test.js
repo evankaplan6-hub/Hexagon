@@ -285,6 +285,45 @@ group('the flatten path realises what it closes');
   ok('...that agrees with cash', Math.abs(loss.realized - loss.cash) < 0.005, loss);
 }
 
+group('the run-over gate cools a market whose touch keeps getting swept');
+{
+  // 43% of live fills were run over -- the tape traded through the quote -- and that is where the
+  // maker's money went. Latency was not the cause (2s requotes moved it from 69% to 59%), so the
+  // gate names the markets that are worse than the book as a whole and stops resting there.
+  const c = cfg({ makerMaxRunOver: 0.40, makerToxCooldownMin: 60, makerToxMinFills: 10 });
+  const ro = { runOver: true }, clean = { runOver: false };
+  const fillsOf = (...seq) => seq.reduce((tox, f) => maker.toxWindow(tox, f), []);
+
+  let tox = fillsOf(...Array(9).fill(ro));
+  let g = maker.toxicGate({ tox }, c, 1000);
+  ok('nine run-over fills are too few to judge', g.cooled === false, g);
+  tox = maker.toxWindow(tox, ro);
+  g = maker.toxicGate({ tox }, c, 1000);
+  ok('the tenth trips the gate', g.cooled === true && g.tripped === true, g);
+  ok('...for the configured cooldown', g.cooledUntil === 1000 + 60 * 60000, g);
+  ok('...and resets the window, so the same fills cannot trip it again', g.tox.length === 0, g);
+
+  const cooled = { tox: g.tox, cooledUntil: g.cooledUntil };
+  const during = maker.toxicGate(cooled, c, 1000 + 30 * 60000);
+  ok('halfway through it is still cooled, and not re-tripped', during.cooled === true && during.tripped === false, during);
+  const after = maker.toxicGate(cooled, c, 1000 + 60 * 60000);
+  ok('quotes come back when the cooldown ends', after.cooled === false, after);
+
+  tox = fillsOf(...Array(4).fill(ro), ...Array(6).fill(clean));
+  g = maker.toxicGate({ tox }, c, 0);
+  ok('a share AT the bar (4 of 10) does not trip', g.cooled === false && Math.abs(g.rate - 0.4) < 1e-9, g);
+  ok('one more run-over does', maker.toxicGate({ tox: maker.toxWindow(tox, ro) }, c, 0).tripped === true);
+
+  tox = fillsOf(...Array(30).fill(ro), ...Array(30).fill(clean));
+  ok('the window forgets fills older than the last 30', tox.length === 30 && maker.toxicGate({ tox }, c, 0).rate === 0, tox);
+
+  // the live book as a whole: 13 of 30 fills run over
+  tox = fillsOf(...Array(13).fill(ro), ...Array(17).fill(clean));
+  ok('the live book-wide share (43%) would have been cooled', maker.toxicGate({ tox }, c, 0).tripped === true);
+  ok('a market with no fills is never cooled', maker.toxicGate({}, c, 0).cooled === false);
+  ok('the gate can be switched off by raising the bar to 1', maker.toxicGate({ tox: fillsOf(...Array(30).fill(ro)) }, cfg({ makerMaxRunOver: 1 }), 0).cooled === false);
+}
+
 group('the drawdown rail measures from the peak, not from the opening balance');
 {
   const I = 10000;

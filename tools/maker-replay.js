@@ -163,16 +163,15 @@ function run(cfg, byTicker) {
         s.fills++; s.qty += f.qty;
         if (f.side === 'buy') { s.bought += f.qty; s.boughtCost += f.qty * f.px; } else { s.sold += f.qty; s.soldProceeds += f.qty * f.px; }
         if (f.runOver) { s.roFills++; s.roQty += f.qty; s.roCost += Math.abs(f.px - f.tradePx) * f.qty; }
-        if (maker.noteFill) maker.noteFill(m, f, cfg);
+        m.tox = maker.toxWindow(m.tox, f);
       }
       for (const t of batch) book = touchFrom(book, t);
       // 2) requote off the book as it now stands, exactly as makerdesk does
       const q = maker.desiredQuotes(asBook(book), m.inv, cfg);
       let next = { bid: q.bid, ask: q.ask };
-      if (maker.toxicGate) {
-        const g = maker.toxicGate(m, cfg, end);
-        if (g.cooled) { next = { bid: null, ask: null }; if (g.tripped) s.cooled++; }
-      }
+      const g = maker.toxicGate(m, cfg, end);
+      m.tox = g.tox; m.cooledUntil = g.cooledUntil;
+      if (g.cooled) { next = { bid: null, ask: null }; if (g.tripped) s.cooled++; }
       // queue position, as makerdesk keeps it: a new price joins the back, the same price keeps
       // whatever has already been worked down
       const bk = asBook(book);
