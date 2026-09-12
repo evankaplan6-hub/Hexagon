@@ -214,6 +214,51 @@ module.exports = {
   // cadence (seconds)
   priceEvery: num('PRICE_EVERY_SEC', 15),
   sentimentEveryCycles: 4,
+  // How long a pair is untouchable after an exit. Was hardcoded in KETT; it is a real knob now
+  // because src/minds.js has to honour the same bar -- a mind that could re-enter a pair the
+  // moment RIGO closed it would churn the book and pay the fee twice for one idea.
+  reentryCooldownMs: num('REENTRY_COOLDOWN_MIN', 10) * 60000,
+
+  // ---- the minds (src/brain.js, src/minds.js) ----
+  // The seven desks reason with Claude. Off without a key: every desk falls back to the
+  // deterministic path it had before, which is a complete trading system on its own.
+  brainEnabled: env('BRAIN', '1') !== '0',
+  // Two models, because the desks do two different jobs. BRAM prices and KETT executes -- those
+  // turns decide whether money moves, and are worth the better model. Scanning, sentiment, ops,
+  // settlement and making are summarising and noticing, which the cheaper model does well.
+  //
+  // Measured on a realistic 12-pair board: Opus ~$0.04-0.067/turn, Sonnet ~$0.013-0.030.
+  brainModelDeep: env('BRAIN_MODEL_DEEP', 'claude-opus-5'),
+  brainModelFast: env('BRAIN_MODEL_FAST', 'claude-sonnet-5'),
+  brainDeepAgents: env('BRAIN_DEEP_AGENTS', 'BRAM,KETT').split(',').map((s) => s.trim()).filter(Boolean),
+  // low | medium | high | xhigh | max.
+  brainEffort: env('BRAIN_EFFORT', 'medium'),
+  // THE COST RAIL. A hard ceiling on what the minds may spend in one Eastern day. When it is
+  // reached the brain stops calling entirely and every desk falls back to its deterministic path
+  // -- the desk keeps trading, it just stops reasoning out loud.
+  //
+  // This exists because the failure mode is not a slow leak, it is a stuck trigger: a condition
+  // that evaluates true every cycle turns a $5 day into a $400 one overnight with nothing on the
+  // dashboard to say so. Measured worst case at a 15s cycle is roughly $380/day PER DESK.
+  brainDailyUsd: num('BRAIN_DAILY_USD', 1),
+  // Floor between two turns for one desk, whatever its trigger says. The trigger decides IF a
+  // turn is worth buying; this stops a flapping quote from buying the same turn ten times a
+  // minute. Turns are event-driven, not scheduled -- there is deliberately no "every N seconds".
+  brainMinGapSec: num('BRAIN_MIN_GAP_SEC', 45),
+  // The gap at which a pair is worth an OPINION. Deliberately lower than minGap, which is the bar
+  // for a trade: this repo's own tape says the widest pre-game gap across 17,649 non-in-play ticks
+  // was 3.00c, so gating reasoning on minGap (3c) would leave the desks dormant for days. A cent
+  // is where a pair stops being noise and starts being a thing a trader would look at twice.
+  brainGapFloor: num('BRAIN_GAP_FLOOR', 0.01),
+  brainTimeoutMs: num('BRAIN_TIMEOUT_MS', 90000),
+  // Pairs per view. The whole board is usually 20-40 matched pairs; sending all of them every
+  // cycle is mostly cost, since the tail never moves.
+  brainPairs: Math.max(1, Math.round(num('BRAIN_PAIRS', 12))),
+  // The floor under a mind-originated trade. `edge` is already net of the spread crossed both
+  // ways and BOTH taker fees, so 0 is exact break-even -- a mind may take a thin trade on a
+  // thesis, but never one that is arithmetically certain to lose. This is the one threshold in
+  // the file a mind is not allowed to argue with.
+  llmMinEdge: num('LLM_MIN_EDGE', 0),
 
   // fees
   pmTakerFee: num('PM_TAKER_FEE', 0),

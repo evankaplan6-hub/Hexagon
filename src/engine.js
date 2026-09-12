@@ -10,6 +10,7 @@ const { makeProbe } = require('./probe');
 const { makeJournal } = require('./journal');
 const { makeMakerDesk } = require('./makerdesk');
 const agents = require('./agents');
+const { Brain } = require('./brain');
 
 const AGENTS = [
   { key: 'BRAM', n: '01', role: 'PRICING', color: '#3b82f6' },
@@ -38,6 +39,11 @@ class Engine {
     this.probe = makeProbe(cfg);
     this.journal = makeJournal(cfg);
     this.maker = makeMakerDesk(cfg);
+    // The minds. Constructed even without a key: `enabled()` is false and every desk
+    // falls straight through to its deterministic path.
+    this.brain = new Brain(cfg);
+    this.brainSignals = [];   // mind-originated signals, merged into the book after BRAM
+
     this.lastCycleMs = 0;
     // Operator halt, distinct from TESS's automatic one. TESS recomputes its halt from scratch
     // every cycle, so anything written to this.halt is gone within 15s -- a kill switch that
@@ -579,10 +585,15 @@ class Engine {
       if (this.cfg.demo) this.perturbDemo();
       for (const p of this.pairs) p.q = this.quote(p) || p.q || null;
       this.recordHistory();
-      if (this.cycle % this.cfg.sentimentEveryCycles === 1) agents.ILSA(this);
+      // Every cycle now, not every fourth. The deterministic half is cheap, and the Claude
+      // half is fired rather than awaited, so cadence here costs nothing but a `due` check.
+      agents.ILSA(this);
       agents.TESS(this);
       await agents.RIGO(this);
       agents.BRAM(this);
+      // Strictly after BRAM, which assigns this.signals wholesale, and strictly before
+      // KETT, which spends against it. See agents.mergeBrainSignals.
+      agents.mergeBrainSignals(this);
       this.recordTick(this); // durable tape of what BRAM just saw; never throws
       await this.probe(this);  // full order books whenever a gap looks too good; never throws
       await agents.KETT(this);
@@ -633,7 +644,10 @@ class Engine {
       closed: s.closed.slice(-80).map((c) => ({ t: c.exitAt, pnl: c.pnl, label: c.label, reason: c.reason, strategy: c.strategy })),
       log: s.log.slice(0, 150),
       balanceHistory: hist,
-      agents: AGENTS.map((a) => ({ ...a, ...this.agentStatus[a.key], active: now - this.agentStatus[a.key].lastActive < 4000 })),
+      // `thinking` is a live state the floor can draw: a desk with a Claude turn open right now.
+      // It is deliberately separate from `active`, which means the desk's engine step is current.
+      agents: AGENTS.map((a) => ({ ...a, ...this.agentStatus[a.key], active: now - this.agentStatus[a.key].lastActive < 4000, thinking: this.brain.thinking(a.key) })),
+      brain: this.brain.snapshot(),
       pairs: pairs.slice(0, 40),
       pairCount: this.pairs.length,
       cycleMs: this.lastCycleMs,
