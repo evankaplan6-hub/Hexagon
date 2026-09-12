@@ -172,6 +172,10 @@ async function RIGO(E) {
     const pair = E.pairs.find((p) => p.id === pos.pairId);
     const q = pair && pair.q;
     if (q) { pos.mark = E.markPrice(pos, q); marked++; }
+    // No pair any more: mark from the position's own market instead of freezing at the last
+    // value (engine.legQuote says why). `typeof` because the golden/replay harnesses pass a
+    // deliberately tiny engine-shaped object.
+    else if (typeof E.venueMark === 'function') { const vm = E.venueMark(pos); if (vm != null) { pos.mark = vm; marked++; } }
     // A stuck leg -- one whose exit failed or went unfilled -- is naked directional risk sitting
     // in the book. Retry it every cycle at the current mark, ahead of any strategy logic, until
     // it clears. Nothing here waits for a signal or a threshold.

@@ -11,7 +11,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { Engine } = require('../src/engine');
-const { KETT } = require('../src/agents');
+const { KETT, RIGO } = require('../src/agents');
 const base = require('../src/config');
 
 let pass = 0, fail = 0;
@@ -311,6 +311,81 @@ const position = (over = {}) => ({
     ok('no unknown entry is automatically unwound', sells === 0, sells);
     ok('the live desk remains blocked pending reconciliation', E.liveReady === false, E.liveReady);
     ok('the uncertainty is journalled and saved with the broker intent', (E.journalled || []).some((j) => j.type === 'ENTRY_UNKNOWN') && readState(E.cfg.dataDir).pendingOrders[0].clientOrderId === intent.clientOrderId, { journal: E.journalled, saved: readState(E.cfg.dataDir) });
+  }
+
+  group('a held arb whose two venues price the outcome far apart is not counted as locked');
+  {
+    // The live 2026-09-12 case: Kalshi's Everton (EPL) against Polymarket's Everton de Viña del
+    // Mar. Perfect shape -- one YES, one NO, one per venue, equal size -- and two different games.
+    const legs = (pmOver = {}) => [
+      position({ id: 'k', group: 'g', strategy: 'arb', venue: 'KS', ref: 'KXEPL-EVE', side: 'yes', qty: 224, cost: 63.58, mark: 0.26, pairId: 'pr' }),
+      position({ id: 'p', group: 'g', strategy: 'arb', venue: 'PM', pmId: 'pmx', tokenIndex: 0, side: 'no', qty: 224, cost: 134.40, mark: 0.19, pairId: 'pr', ...pmOver }),
+    ];
+    const setup = (ksQ, pmQ, pmOver) => {
+      const E = engine();
+      E.state.positions = legs(pmOver);
+      E.state.arbGroups.g = { pairId: 'pr', qty: 224, expectedPayout: 224, status: 'filled' };
+      if (ksQ) E.quotes.ks.set('KXEPL-EVE', ksQ);
+      if (pmQ) E.quotes.pm.set('pmx', pmQ);
+      return E;
+    };
+
+    const bad = setup({ yesBid: 0.02, yesAsk: 0.03 }, { bestBid: 0.99, bestAsk: 1.0 });
+    const g = bad.arbScorecard()[0], p = bad.pnlScorecard();
+    ok('two venues ~97c apart flag the group', g.integrity === 'venues_disagree', g);
+    ok('it reports how far apart', Math.abs(g.venueGap - 0.97) < 0.001, g.venueGap);
+    ok('it is not counted as locked profit', g.lockedPnl === null && p.arbLocked === 0, { g, arbLocked: p.arbLocked });
+    ok('it raises an integrity alert', p.integrityAlerts === 1, p.integrityAlerts);
+    // 224 x (0.26 + 0.19) = 100.80 against 197.98 of cost: it enters the settlement total at -97.18,
+    // not at zero.
+    ok('the settlement total counts it at liquidation, not at zero', Math.abs(p.totalAtSettlement - (-97.18)) < 0.001 && Math.abs(p.arbUnvouched - (-97.18)) < 0.001, p);
+
+    const good = setup({ yesBid: 0.60, yesAsk: 0.62 }, { bestBid: 0.60, bestAsk: 0.61 });
+    const gg = good.arbScorecard()[0];
+    ok('venues that agree stay valid and locked', gg.integrity === 'valid' && Math.abs(gg.lockedPnl - 26.02) < 0.001, gg);
+
+    // The design this scorecard exists for: a price that lags or leaves the book is not a loss.
+    const blind = setup({ yesBid: 0.02, yesAsk: 0.03 }, null);
+    ok('with one market unquoted the check is skipped, not failed', blind.arbScorecard()[0].integrity === 'valid', blind.arbScorecard()[0]);
+
+    // tokenIndex 1: the pair's outcome is Polymarket's SECOND token, so the book must be inverted
+    // before comparing. Kalshi 80c YES and Polymarket token-0 at 19/20c are the SAME price.
+    const flipped = setup({ yesBid: 0.80, yesAsk: 0.81 }, { bestBid: 0.19, bestAsk: 0.20 }, { tokenIndex: 1 });
+    ok('a second-token Polymarket leg is compared in the pair\'s terms', flipped.arbScorecard()[0].integrity === 'valid', flipped.arbScorecard()[0]);
+  }
+
+  group('a position whose pair is gone is marked from its own market, not frozen');
+  {
+    const E = engine();
+    E.quotes.ks.set('KA', { yesBid: 0.40, yesAsk: 0.43 });
+    E.quotes.pm.set('P0', { bestBid: 0.30, bestAsk: 0.32 });
+    E.quotes.pm.set('PNOBOOK', { bestBid: null, bestAsk: null, prices: [0.96, 0.04] });
+    E.quotes.ks.set('KCROSSED', { yesBid: 0.50, yesAsk: 0.40 });
+    const vm = (o) => E.venueMark(position(o));
+    ok('Kalshi YES sells at the bid', vm({ venue: 'KS', ref: 'KA', side: 'yes' }) === 0.40, vm({ venue: 'KS', ref: 'KA', side: 'yes' }));
+    ok('Kalshi NO sells at 1 - ask', vm({ venue: 'KS', ref: 'KA', side: 'no' }) === 0.57, vm({ venue: 'KS', ref: 'KA', side: 'no' }));
+    ok('Polymarket YES sells at the bid', vm({ venue: 'PM', pmId: 'P0', tokenIndex: 0, side: 'yes' }) === 0.30);
+    ok('Polymarket NO sells at 1 - ask', vm({ venue: 'PM', pmId: 'P0', tokenIndex: 0, side: 'no' }) === 0.68);
+    ok('a second-token leg inverts the book', vm({ venue: 'PM', pmId: 'P0', tokenIndex: 1, side: 'yes' }) === 0.68);
+    ok('a market with no book falls back to its last price', vm({ venue: 'PM', pmId: 'PNOBOOK', tokenIndex: 0, side: 'no' }) === 0.04, vm({ venue: 'PM', pmId: 'PNOBOOK', tokenIndex: 0, side: 'no' }));
+    ok('an unquoted market gives no mark rather than a wrong one', vm({ venue: 'KS', ref: 'NOPE', side: 'yes' }) === null);
+    ok('a crossed book gives no mark rather than a wrong one', vm({ venue: 'KS', ref: 'KCROSSED', side: 'yes' }) === null);
+
+    // Through RIGO itself: no pair on the board, the market is still quoted.
+    const R = engine();
+    R.pairs = [];
+    R.quotes.ks.set('KXTEST-A', { yesBid: 0.10, yesAsk: 0.12 });
+    R.state.positions = [position({ mark: 0.62 })];
+    await RIGO(R);
+    ok('RIGO re-marks a pairless position from its own venue', R.state.positions[0] && R.state.positions[0].mark === 0.10, R.state.positions[0]);
+
+    const F = engine();
+    F.pairs = [];
+    F.quotes.ks.set('OTHER', { yesBid: 0.10, yesAsk: 0.12 });   // held market not quoted at all
+    F.resolution = async () => null;                              // and not resolved
+    F.state.positions = [position({ mark: 0.62 })];
+    await RIGO(F);
+    ok('with nothing to read it keeps the last mark instead of inventing one', F.state.positions[0].mark === 0.62, F.state.positions[0]);
   }
 
   for (const d of dirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch {} }

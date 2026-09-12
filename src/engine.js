@@ -10,6 +10,7 @@ const { makeProbe } = require('./probe');
 const { makeJournal } = require('./journal');
 const { makeMakerDesk } = require('./makerdesk');
 const agents = require('./agents');
+const { MAX_VENUE_DISAGREE } = require('./matcher');
 const { Brain } = require('./brain');
 
 const AGENTS = [
@@ -175,13 +176,31 @@ class Engine {
       else if (venues.size !== 2 || !venues.has('PM') || !venues.has('KS')) integrity = 'venue_mismatch';
       else if (qtys.size !== 1) integrity = 'quantity_mismatch';
       else if (pairIds.size !== 1 || (meta.pairId && !pairIds.has(meta.pairId))) integrity = 'pair_mismatch';
+      // Everything above checks the SHAPE of the pair, and a mismatched pair has a perfect shape.
+      // On 2026-09-12 the desk held "EPL Mar win": Kalshi's Everton (Tottenham v Everton) against
+      // Polymarket's Everton de Viña del Mar. One YES, one NO, one per venue, equal size, one
+      // pairId -- valid on every line above, reported as +$26 locked, and heading for about -$198
+      // because both legs lost. The only evidence a held arb is two different events is that its
+      // two venues price the outcome very differently, so re-apply the matcher's own definition of
+      // "we matched the wrong thing" to each leg's live market. Where either market has no usable
+      // quote the check is skipped, not failed: a price that lags or briefly leaves the book is
+      // exactly what this scorecard exists NOT to mistake for a loss.
+      let venueGap = null;
+      if (integrity === 'valid') {
+        const ksLeg = legs.find((p) => p.venue === 'KS'), pmLeg = legs.find((p) => p.venue === 'PM');
+        const a = this.legQuote(ksLeg), b = this.legQuote(pmLeg);
+        if (a && b) {
+          venueGap = r3(Math.abs(a.mid - b.mid));
+          if (venueGap > MAX_VENUE_DISAGREE) integrity = 'venues_disagree';
+        }
+      }
       const entryCost = r2(legs.reduce((a, p) => a + p.cost, 0));
       const liquidationValue = r2(legs.reduce((a, p) => a + p.qty * (p.mark ?? p.entry), 0));
       const qty = legs.length ? Math.min(...legs.map((p) => p.qty)) : 0;
       const settlementValue = integrity === 'valid' ? qty : null;
       groups.push({
         id, label: legs[0] && legs[0].label, pairId: legs[0] && legs[0].pairId,
-        qty, legs: legs.length, integrity, entryCost, liquidationValue,
+        qty, legs: legs.length, integrity, venueGap, entryCost, liquidationValue,
         liquidationPnl: r2(liquidationValue - entryCost),
         settlementValue, lockedPnl: settlementValue == null ? null : r2(settlementValue - entryCost),
       });
@@ -192,14 +211,20 @@ class Engine {
     const groups = this.arbScorecard();
     const arbLiquidation = r2(groups.reduce((a, g) => a + g.liquidationPnl, 0));
     const arbLocked = r2(groups.reduce((a, g) => a + (g.lockedPnl || 0), 0));
+    // A group this scorecard cannot vouch for (any integrity other than 'valid') has no settlement
+    // figure, and "no figure" must not become $0 in a total. Counting it at zero reported the
+    // mismatched Everton arb as costing nothing at settlement (+$9.81 overall) while it was heading
+    // for -$198. What it is demonstrably worth is what it would sell for now, so it enters the
+    // settlement total at its liquidation P&L.
+    const arbUnvouched = r2(groups.filter((g) => g.lockedPnl == null).reduce((a, g) => a + g.liquidationPnl, 0));
     const convergenceUnrealized = r2(this.state.positions.filter((p) => p.strategy !== 'arb')
       .reduce((a, p) => a + p.qty * (p.mark ?? p.entry) - p.cost, 0));
     const maker = this.maker && this.maker.snapshot ? this.maker.snapshot(this) : {};
     const makerNet = Number.isFinite(maker.equity) && Number.isFinite(maker.initial) ? r2(maker.equity - maker.initial) : null;
     return {
-      realized: this.state.stats.realized, convergenceUnrealized, arbLocked, arbLiquidation, makerNet,
+      realized: this.state.stats.realized, convergenceUnrealized, arbLocked, arbUnvouched, arbLiquidation, makerNet,
       totalLiquidation: r2(this.state.stats.realized + arbLiquidation + convergenceUnrealized),
-      totalAtSettlement: r2(this.state.stats.realized + arbLocked + convergenceUnrealized),
+      totalAtSettlement: r2(this.state.stats.realized + arbLocked + arbUnvouched + convergenceUnrealized),
       integrityAlerts: groups.filter((g) => g.integrity !== 'valid').length,
     };
   }
@@ -248,6 +273,38 @@ class Engine {
       // this pair's OWN observation time, not the global clock: see refreshQuotes
       t: Math.min(m.at || this.lastQuoteAt, k.at || this.lastQuoteAt),
     };
+  }
+  // One leg's own market, in the PAIR's outcome terms ({bid, ask, mid} for YES), or null.
+  //
+  // RIGO marks positions through their pair, and a pair disappears the moment either market
+  // leaves the listing: a match ends, a Polymarket market closes awaiting resolution, or a bad
+  // pair is fixed in the matcher and never rebuilt. The mark then froze at its last value -- on
+  // 2026-09-12 the dashboard carried a Chilean football leg at 19c for hours after it was worth
+  // nothing, and showed a -$198 loss as -$97. pinPositions already keeps every held market in the
+  // quote map; this is what reads it.
+  legQuote(pos) {
+    if (!pos) return null;
+    let bid, ask;
+    if (pos.venue === 'KS') {
+      const k = this.quotes.ks.get(pos.ref);
+      if (!k) return null;
+      bid = k.yesBid; ask = k.yesAsk;
+    } else {
+      const m = this.quotes.pm.get(pos.pmId);
+      if (!m) return null;
+      if (Number.isFinite(m.bestBid) && Number.isFinite(m.bestAsk)) { bid = m.bestBid; ask = m.bestAsk; }
+      else if (Number.isFinite((m.prices || [])[0])) { bid = ask = m.prices[0]; } // no book: last price
+      if (pos.tokenIndex === 1 && Number.isFinite(bid) && Number.isFinite(ask)) [bid, ask] = [1 - ask, 1 - bid];
+    }
+    if (!Number.isFinite(bid) || !Number.isFinite(ask) || ask < bid || bid < 0 || ask > 1) return null;
+    return { bid, ask, mid: (bid + ask) / 2 };
+  }
+  // What this position would sell for on its own venue, or null. Same bid-side convention as
+  // markPrice, so a position marked either way is marked the same way.
+  venueMark(pos) {
+    const q = this.legQuote(pos);
+    if (!q) return null;
+    return pos.side === 'yes' ? r3(q.bid) : r3(1 - q.ask);
   }
   markPrice(pos, q) {
     if (pos.venue === 'PM') return pos.side === 'yes' ? q.pmBid : r3(1 - q.pmAsk);
