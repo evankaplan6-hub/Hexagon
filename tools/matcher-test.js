@@ -265,5 +265,43 @@ group('matchPairs: shape of what it returns');
   ok('an empty universe returns empty, not undefined', matchPairs([], []).pairs.length === 0);
 }
 
+group('matchPairs: a PM "Will X win" market must match BOTH clubs, not one shared name');
+{
+  // The live losing trade from 2026-09-12, rebuilt. Kalshi lists Tottenham v Everton (EPL). Two
+  // Polymarket markets ask "Will ... Everton ... win" that day: the real one, and Chile's Everton
+  // de Viña del Mar. "Everton" prefixes both, and the Chilean one used to pair first -- a "locked
+  // arb" on two different football matches, and the real market left unpaired behind it.
+  const eplEvent = [
+    ks({ ticker: 'KXEPLGAME-26SEP12TOTEVE-TOT', eventTicker: 'KXEPLGAME-26SEP12TOTEVE', subTitle: 'Tottenham', title: 'Tottenham wins' }),
+    ks({ ticker: 'KXEPLGAME-26SEP12TOTEVE-TIE', eventTicker: 'KXEPLGAME-26SEP12TOTEVE', subTitle: 'Tie', title: 'Tie' }),
+    ks({ ticker: 'KXEPLGAME-26SEP12TOTEVE-EVE', eventTicker: 'KXEPLGAME-26SEP12TOTEVE', subTitle: 'Everton', title: 'Everton wins' }),
+  ];
+  const chile = pm({ id: 'chile', question: 'Will Everton de Viña del Mar win on 2026-09-12?', eventTitle: 'Universidad de Chile vs. Everton de Viña del Mar', outcomes: ['Yes', 'No'] });
+  const real = pm({ id: 'real', question: 'Will Everton FC win on 2026-09-12?', eventTitle: 'Tottenham Hotspur FC vs. Everton FC', outcomes: ['Yes', 'No'] });
+
+  const alone = matchPairs([chile], eplEvent);
+  ok('the Chilean club does not pair with the EPL match', alone.pairs.length === 0, alone.pairs.map((p) => p.label));
+
+  const both = matchPairs([chile, real], eplEvent);
+  const eve = both.pairs.find((p) => p.ks.ticker === 'KXEPLGAME-26SEP12TOTEVE-EVE');
+  ok('the real Everton FC market is no longer blocked behind it', !!eve && eve.pm.id === 'real', both.pairs.map((p) => `${p.label}<-${p.pm.id}`));
+
+  const spurs = pm({ id: 'spurs', question: 'Will Tottenham Hotspur FC win on 2026-09-12?', eventTitle: 'Tottenham Hotspur FC vs. Everton FC', outcomes: ['Yes', 'No'] });
+  const s = matchPairs([spurs], eplEvent).pairs;
+  ok('the home side still pairs to its own leg', s.length === 1 && s[0].ks.ticker === 'KXEPLGAME-26SEP12TOTEVE-TOT', s.map((p) => p.ks.ticker));
+
+  // One club right, opponent wrong: a different fixture involving a same-named club.
+  const wrongOpp = pm({ id: 'x', question: 'Will Everton FC win on 2026-09-12?', eventTitle: 'Everton FC vs. Chelsea FC', outcomes: ['Yes', 'No'] });
+  ok('a matching club with the wrong opponent is refused', matchPairs([wrongOpp], eplEvent).pairs.length === 0);
+
+  // No "A vs. B" title to check the opponent against: refusing is the safe direction.
+  const noTitle = pm({ id: 'y', question: 'Will Everton FC win on 2026-09-12?', eventTitle: 'Will Everton FC win on 2026-09-12?', outcomes: ['Yes', 'No'] });
+  ok('a market with no two-sided event title is refused', matchPairs([noTitle], eplEvent).pairs.length === 0);
+
+  // Both legs naming the SAME side must not count as two matches.
+  const sameSide = pm({ id: 'z', question: 'Will Everton FC win on 2026-09-12?', eventTitle: 'Everton FC vs. Everton FC Women', outcomes: ['Yes', 'No'] });
+  ok('the opponent must be the other side, not the same one twice', matchPairs([sameSide], eplEvent).pairs.length === 0);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

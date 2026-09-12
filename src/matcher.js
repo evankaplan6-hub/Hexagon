@@ -102,6 +102,11 @@ function figuresConflict(a, b) {
   return null;
 }
 
+// How far apart two venues' prices for the SAME outcome can be before the pairing itself is the
+// likelier explanation. Used at match time (below) and on every held arb (engine.arbScorecard), so
+// "we matched the wrong thing" has one definition rather than one per file.
+const MAX_VENUE_DISAGREE = 0.30;
+
 // Sport classification so "Seattle" (Sounders) can never match "Seattle" (Mariners).
 const SPORT_SERIES = {
   mlb: ['KXMLBGAME'], nfl: ['KXNFLGAME'], nba: ['KXNBAGAME'], tennis: ['KXATPMATCH', 'KXWTAMATCH'],
@@ -205,6 +210,18 @@ function matchPairs(pmList, ksList) {
         if (!ms.some((x) => /^tie\b/i.test(x.subTitle) || /^tie\b/i.test(x.title))) continue;
         const k = ms.find((x) => !/^tie\b/i.test(x.subTitle) && nameMatch(x.subTitle, r[1]));
         if (!k) continue;
+        // The OPPONENT has to match too. A PM question names one club, and one club name is not
+        // an identity: "Everton" is a prefix of "Everton de Viña del Mar", so on 2026-09-12 a
+        // Chilean Primera match paired with Kalshi's Tottenham v Everton (EPL). Booked as a locked
+        // arb, it was two unrelated bets that both lost -- ~$198 on a 224-lot -- and because this
+        // loop takes the first PM market to claim a Kalshi ticker, it also blocked the real
+        // "Will Everton FC win" market from pairing. The event title carries both sides ("A vs.
+        // B"), so require each non-tie Kalshi leg to name a DIFFERENT side of it.
+        const sides = String(m.eventTitle || '').split(/\s+vs\.?\s+/i);
+        const other = ms.find((x) => x !== k && !/^tie\b/i.test(x.subTitle));
+        const sideK = sides.length === 2 ? sides.findIndex((s) => nameMatch(k.subTitle, s)) : -1;
+        const sideO = other && sideK >= 0 ? sides.findIndex((s, i) => i !== sideK && nameMatch(other.subTitle, s)) : -1;
+        if (sideK < 0 || sideO < 0) continue;
         const label = `${TAG[ser] || ser} ${short(r[1])} win ${r[2].slice(5)}`;
         const conflict = conflictWith(k);
         if (conflict) { figRej = { label, detail: conflict, ks: k.title }; continue; }
@@ -228,7 +245,7 @@ function matchPairs(pmList, ksList) {
     if (!legs.every((x) => typeof x === 'number' && Number.isFinite(x))) continue;
     const pmMid = (m.bestBid + m.bestAsk) / 2;
     const ksMid = (hit.ks.yesBid + hit.ks.yesAsk) / 2;
-    if (Math.abs(pmMid - ksMid) > 0.30) { rejected.push({ label: hit.label, why: 'price', pm: m.question, ks: hit.ks.title, pmMid, ksMid }); continue; }
+    if (Math.abs(pmMid - ksMid) > MAX_VENUE_DISAGREE) { rejected.push({ label: hit.label, why: 'price', pm: m.question, ks: hit.ks.title, pmMid, ksMid }); continue; }
 
     usedKs.add(hit.ks.ticker);
     pairs.push({
@@ -244,4 +261,4 @@ function matchPairs(pmList, ksList) {
   return { pairs, rejected };
 }
 
-module.exports = { matchPairs, nameMatch, tickerDate, etDate, figures, figuresConflict };
+module.exports = { matchPairs, nameMatch, tickerDate, etDate, figures, figuresConflict, MAX_VENUE_DISAGREE };
