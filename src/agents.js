@@ -140,13 +140,12 @@ async function RIGO(E) {
       E.log('RIGO', 'OPS', null, `${pos.label}: no live quote, holding at last mark ${(pos.mark ?? pos.entry).toFixed(3)} \u00b7 time exits still armed`);
     }
   }
-  // locked arbs: if both legs' bids ever sum past $1, take the free exit
+  // locked arbs: if both legs' bids sum past $1 by more than the exit fee, take the early exit
   const groups = new Map();
   for (const p of E.state.positions) if (p.strategy === 'arb') (groups.get(p.group) || groups.set(p.group, []).get(p.group)).push(p);
   for (const [, legs] of groups) {
-    if (legs.length !== 2 || !legs.every((l) => l.mark != null)) continue;
-    const bidSum = legs[0].mark + legs[1].mark;
-    if (bidSum > 1.005) for (const l of legs) await E.close(l, l.mark, `early unwind, bids sum ${bidSum.toFixed(3)}`);
+    const u = decide.arbUnwind(legs, E.cfg);
+    if (u) for (const l of legs) await E.close(l, l.mark, u.reason);
   }
   E.touch('RIGO', `${marked} marked · ${E.state.positions.length} open`);
   if (E.due('rigo-log', 300) && E.state.positions.length) {

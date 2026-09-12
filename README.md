@@ -64,6 +64,21 @@ the three — read that section before funding anything.
   contracts, and `MAX_POSITION_PCT` is a number nothing can lift. The old path applied `budget ×
   1.25` on top of a budget that already *was* the cap, putting a high-conviction position at 2.5%
   of equity against a documented 2%.
+- **A convergence trade needs a thick venue to lean on.** Fair value is volume-weighted, so when
+  the two venues carry similar volume it sits in the middle of the gap and the realisable move is
+  half of it. The desk's largest taker loss was exactly that: a Fed pair at near-equal volume,
+  1,175 contracts, −$11.75. A pair is now vetoed as `venues too even` unless the thick venue has
+  `CONV_MIN_VOL_RATIO` (3) times the thin one's 24h volume. On the 54 hours of tape from the
+  cloud box it removes every trade the sweep would have taken at a non-negative `MIN_EDGE`,
+  including the one winner.
+- **A locked arb is unwound early only when it beats holding, net of the exit fee.** Both legs
+  sold at their bids pay `bidSum` a pair now against $1 at resolution for free, and the Kalshi
+  leg pays a taker fee on the way out. The old `bidSum > 1.005` test ignored that fee and unwound
+  three pairs on the cloud box for $1–3 each that would have settled for $2–6. `decide.arbUnwind`
+  now requires `(bidSum − 1) × qty − fee` to clear `ARB_UNWIND_MARGIN` (0.5c) a contract.
+- The directional leg of a convergence trade already lands on Polymarket whenever the venues are
+  similarly off fair: `convEdge` nets each venue's fees, and Polymarket's is zero, so it wins by
+  exactly the Kalshi round trip. Pinned by a test rather than a rule.
 - A crossed or non-finite book is rejected, not priced. `convEdge` subtracts `spread/2`, so a
   negative spread does not fail loudly — it *manufactures* edge and ranks first. Zero of the 30,817
   recorded ticks contain one, which is the argument for the check being cheap, not for omitting it.

@@ -130,9 +130,16 @@ function pairSignals(p, cfg) {
   // minEdge, not minGap: fair value sits between the two venues, so the realisable edge is a
   // fraction of the gap. Testing it against minGap needed a 6-10c gap to clear a nominal 3c bar,
   // which is why the convergence book never opened a position.
+  //
+  // `venues too even` is structural too: fair value leans on the venue with more volume, and when
+  // neither has more, fair sits in the middle of the gap and the realisable move is half of it --
+  // the shape of the desk's largest taker loss. The edge itself is already measured from the entry
+  // price to fair (convEdge), never from the gap; this gate is about whether fair means anything.
   const conv = (() => {
     if (!(fair > cfg.minMid && fair < cfg.maxMid)) return { veto: 'mid outside band' };
     if (Math.abs(gap) < cfg.minGap) return { veto: 'gap under minGap' };
+    const thick = Math.max(q.pmVol || 0, q.ksVol || 0), thin = Math.min(q.pmVol || 0, q.ksVol || 0);
+    if (thick < cfg.convMinVolRatio * thin) return { veto: 'venues too even' };
     if (!tradable) return { veto: 'spread over maxSpread' };
     if (tradable.edge < cfg.minEdge) return { veto: 'edge under minEdge' };
     return { signal: { type: 'converge', pair: p, edge: tradable.edge, gap, fair, legs: [{ venue: tradable.venue, side: tradable.side, px: tradable.px }] } };
@@ -212,6 +219,21 @@ function exitIntent(pos, pair, cfg, now) {
   return null;
 }
 
+// Should a locked arb be unwound early? Both legs sold at their bids pay `bidSum` a pair now,
+// against $1 a pair at resolution for free -- so the gain from unwinding is (bidSum - 1) x qty,
+// LESS the taker fee the Kalshi leg pays on the way out. The old test, `bidSum > 1.005`, ignored
+// that fee: on the cloud box it unwound three pairs for $1-3 that would have settled for $2-6.
+// Pure, like exitIntent: returns what to do and why, or null.
+function arbUnwind(legs, cfg) {
+  if (legs.length !== 2 || !legs.every((l) => l.mark != null)) return null;
+  const qty = Math.min(legs[0].qty, legs[1].qty);
+  const bidSum = legs[0].mark + legs[1].mark;
+  const fee = legs.reduce((a, l) => a + (l.venue === 'KS' ? ks.fee(l.qty, l.mark, cfg.ksFeeRate, l.ref) : r2(cfg.pmTakerFee * l.qty * l.mark)), 0);
+  const gain = r2((bidSum - 1) * qty - fee);
+  if (gain < cfg.arbUnwindMargin * qty) return null;
+  return { gain, fee, bidSum, reason: `early unwind, bids sum ${bidSum.toFixed(3)}, +$${gain.toFixed(2)} over holding after $${fee.toFixed(2)} exit fee` };
+}
+
 // Which halt, if any, applies. The operator's latched halt outranks every automatic check.
 function riskState({ operatorHalt, age, drawdown, errs, mode, liveReady, cfg }) {
   if (operatorHalt) return operatorHalt;
@@ -263,4 +285,4 @@ function sizePlan(signal, { budget, sizeMult = 1, books, cfg }) {
   return { qty: Math.max(0, qty), unitCost, capped: wanted > budget, reason: limited ? `${limited} depth inside limit` : null };
 }
 
-module.exports = { fairValue, quoteFault, convEdge, pairSignals, scan, exitIntent, riskState, biasFor, sizePlan, rankSignals };
+module.exports = { fairValue, quoteFault, convEdge, pairSignals, scan, exitIntent, arbUnwind, riskState, biasFor, sizePlan, rankSignals };

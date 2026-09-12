@@ -9,6 +9,7 @@
 //
 //   node tools/decide-test.js
 const d = require('../src/decide');
+const ks = require('../src/venues/kalshi');
 const cfg = require('../src/config');
 
 let pass = 0, fail = 0;
@@ -18,9 +19,9 @@ const ok = (name, cond, got) => {
   console.log(`  FAIL  ${name}${got === undefined ? '' : `\n        got: ${JSON.stringify(got)}`}`);
 };
 const group = (n) => console.log(`\n${n}`);
-// vols default to a 5:4 PM:KS split, so `fair` sits nearer Polymarket -- the same asymmetry the
-// live book has, and the reason a convergence edge is always a fraction of the gap.
-const mk = (pmBid, pmAsk, ksBid, ksAsk, pmVol = 5e5, ksVol = 4e5) => ({
+// vols default to a 5:1 PM:KS split, so `fair` sits near Polymarket -- lopsided enough to clear
+// the venues-too-even gate, and the reason a convergence edge is always a fraction of the gap.
+const mk = (pmBid, pmAsk, ksBid, ksAsk, pmVol = 5e5, ksVol = 1e5) => ({
   id: 'x', label: 'fixture', ks: { ticker: 'KXTEST' },
   q: { pmBid, pmAsk, ksBid, ksAsk, pmMid: (pmBid + pmAsk) / 2, ksMid: (ksBid + ksAsk) / 2, pmVol, ksVol, t: 1 },
 });
@@ -37,8 +38,9 @@ group('a locked arb replaces the convergence trade on the same pair');
 
 group('convergence still fires on its own when no arb shadows it');
 {
-  // gap clears minGap but is too small for a locked arb to clear minArbEdge
-  const r = d.pairSignals(mk(0.05, 0.06, 0.07, 0.11), cfg);
+  // gap clears minGap but is too small for a locked arb to clear minArbEdge; Kalshi is the thick
+  // venue here, so fair leans its way and the cheap Polymarket YES is the trade
+  const r = d.pairSignals(mk(0.05, 0.06, 0.07, 0.11, 1e5, 5e5), cfg);
   ok('exactly one signal', r.signals.length === 1, r.signals.map((s) => s.type));
   ok('and it is the converge', r.signals[0].type === 'converge', r.signals[0].type);
 }
@@ -167,6 +169,55 @@ group('riskState and biasFor take their numbers from config');
   ok('the API-error rail stays inside the buffer that feeds it', cfg.maxApiErrors <= 200, cfg.maxApiErrors);
 }
 
+group('a convergence trade needs a thick venue to lean on');
+{
+  // 4c gap, tight books, and the two venues carrying the same volume. Fair sits in the middle of
+  // the gap, so the realisable move is half of it -- the shape of the desk's largest taker loss.
+  const even = d.pairSignals(mk(0.40, 0.41, 0.44, 0.45, 5e5, 5e5), { ...cfg, minArbEdge: 1 });
+  ok('even venues are vetoed by name', even.veto === 'venues too even', even.veto);
+  ok('...and emit nothing', even.signals.length === 0, even.signals);
+  ok('...but the near-miss is still priced for the tape', even.best && even.best.edge != null, even.best);
+  const lopsided = d.pairSignals(mk(0.40, 0.41, 0.44, 0.45, 15e5, 5e5), { ...cfg, minArbEdge: 1 });
+  ok('a 3:1 venue clears the gate', lopsided.veto !== 'venues too even', lopsided.veto);
+  const nearly = d.pairSignals(mk(0.40, 0.41, 0.44, 0.45, 14e5, 5e5), { ...cfg, minArbEdge: 1 });
+  ok('2.8:1 does not', nearly.veto === 'venues too even', nearly.veto);
+  // structural gates come first: a pair with no gap is reported as that, not as too even
+  const flat = d.pairSignals(mk(0.50, 0.51, 0.50, 0.51, 5e5, 5e5), cfg);
+  ok('no gap is still reported as no gap', flat.veto === 'gap under minGap', flat.veto);
+  ok('the ratio comes from config', d.pairSignals(mk(0.40, 0.41, 0.44, 0.45, 5e5, 5e5), { ...cfg, minArbEdge: 1, convMinVolRatio: 1 }).veto !== 'venues too even');
+  ok('a venue with no volume at all is infinitely thin', d.pairSignals(mk(0.40, 0.41, 0.44, 0.45, 5e5, 0), { ...cfg, minArbEdge: 1 }).veto !== 'venues too even');
+}
+
+group('a locked arb is unwound only when the gain clears the exit fee');
+{
+  // 202 pairs, marks summing to 1.010: $2.02 over holding, before a $3.30 Kalshi exit fee
+  // (ceil(0.07 x 202 x 0.36 x 0.64) = $3.26 -> $3.30 at the 0.37 mark below)
+  const leg = (venue, mark, qty = 202) => ({ venue, mark, qty, ref: 'KXTEST' });
+  const c = { ...cfg, ksFeeRate: 0.07, pmTakerFee: 0, arbUnwindMargin: 0.005 };
+  ok('the cloud box\'s three unwinds would not have happened', d.arbUnwind([leg('PM', 0.65), leg('KS', 0.36)], c) === null);
+  // bids summing to 1.03: $6.06 over holding, $3.30 of fee, $2.76 net = 1.37c a contract > 0.5c
+  const u = d.arbUnwind([leg('PM', 0.66), leg('KS', 0.37)], c);
+  ok('a sum that clears the fee and the margin unwinds', !!u, u);
+  ok('...netting the fee in the reason', u && /exit fee/.test(u.reason) && Math.abs(u.fee - 3.3) < 0.01, u);
+  ok('...and stating the gain over holding', u && Math.abs(u.gain - 2.76) < 0.02, u);
+  ok('the margin is per contract and from config', d.arbUnwind([leg('PM', 0.66), leg('KS', 0.37)], { ...c, arbUnwindMargin: 0.02 }) === null);
+  ok('a pair on Polymarket alone pays no exit fee', d.arbUnwind([leg('PM', 0.65), leg('PM', 0.36)], c) !== null);
+  ok('an unmarked leg is never unwound', d.arbUnwind([leg('PM', 0.66), { venue: 'KS', mark: null, qty: 202 }], c) === null);
+  ok('a lone leg is not a pair', d.arbUnwind([leg('PM', 0.9)], c) === null);
+}
+
+group('the Polymarket leg wins when both venues are similarly off fair');
+{
+  // Same gap either way: PM 0.40/0.41 against KS 0.48/0.49 with equal volume puts fair in the
+  // middle. Buying YES on PM and NO on KS are both 4c from fair before fees; PM pays none. (The
+  // even split is vetoed for trading, but `best` is priced regardless, which is what is tested.)
+  const r = d.pairSignals(mk(0.40, 0.41, 0.48, 0.49, 5e5, 5e5), { ...cfg, minArbEdge: 1 });
+  ok('the best candidate is on Polymarket', r.best && r.best.venue === 'PM', r.best);
+  const pm = d.convEdge('PM', 'yes', mk(0.40, 0.41, 0.48, 0.49, 5e5, 5e5).q, 0.445, cfg, 'KXTEST');
+  const ksn = d.convEdge('KS', 'no', mk(0.40, 0.41, 0.48, 0.49, 5e5, 5e5).q, 0.445, cfg, 'KXTEST');
+  ok('...by exactly the Kalshi fee, both ways', pm.edge > ksn.edge && Math.abs((pm.edge - ksn.edge) - (ks.feePerContract(0.52, 0.07, 'KXTEST') + ks.feePerContract(0.55, 0.07, 'KXTEST'))) < 1e-6, { pm: pm.edge, ks: ksn.edge });
+}
+
 group('property: the arb is the better signal wherever both are available');
 {
   let both = 0, convWon = 0, worst = 0;
@@ -178,7 +229,9 @@ group('property: the arb is the better signal wherever both are available');
           if (ksBid < 0.01 || ksAsk > 0.99) continue;
           const q = { pmBid, pmAsk, ksBid, ksAsk, pmMid, ksMid, pmVol: 5e5, ksVol: 4e5, t: 1 };
           if (d.quoteFault(q)) continue;
-          const r = d.pairSignals({ id: 'x', label: 'g', ks: { ticker: 'KXTEST' }, q }, cfg);
+          // the venues-too-even gate is switched off for this grid: the property is about the
+          // economics of the two signal kinds, and the README's numbers were measured at 5:4
+          const r = d.pairSignals({ id: 'x', label: 'g', ks: { ticker: 'KXTEST' }, q }, { ...cfg, convMinVolRatio: 0 });
           const arb = r.signals.find((s) => s.type === 'arb');
           if (!arb || r.veto !== null) continue;
           both++;

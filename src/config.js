@@ -173,6 +173,19 @@ module.exports = {
   // always well under G. Testing edge against minGap (the old behaviour) demanded 6-10c
   // gaps to clear a nominal "3c" threshold and made the convergence book unreachable.
   minEdge: num('MIN_EDGE', 0.005),
+  // A convergence trade is a bet that the THIN venue is the wrong one, and fair value only sits
+  // near the thick venue when there is a thick venue. The desk's single largest taker loss was a
+  // convergence trade on a Fed pair whose two venues carried near-equal volume: fair sat in the
+  // middle, the realisable move was half the gap, and that was inside the 1c slip allowance.
+  // Require the thick venue to carry this many times the thin venue's 24h volume, or the pair is
+  // vetoed as `venues too even` and BRAM's gate ledger says so.
+  convMinVolRatio: num('CONV_MIN_VOL_RATIO', 3),
+  // A locked arb pays $1 a pair at resolution for free. Selling both legs early at their bids pays
+  // bidSum a pair, minus a Kalshi taker fee on the Kalshi leg -- which the old `bidSum > 1.005`
+  // test ignored, so the three early unwinds on the cloud box netted $1-3 where holding would have
+  // netted $2-6. Unwind only when the gain over holding, net of the modelled exit fee, clears
+  // this much per contract. 0.005 is the old threshold's margin, now applied after the fee.
+  arbUnwindMargin: num('ARB_UNWIND_MARGIN', 0.005),
   exitGap: num('EXIT_GAP', 0.01),
   stopLoss: num('STOP_LOSS', 0.06),
   maxHoldMin: num('MAX_HOLD_MIN', 240),
