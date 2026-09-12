@@ -43,6 +43,43 @@ const position = (over = {}) => ({
 });
 
 (async () => {
+  group('locked arbs have a settlement scorecard separate from liquidation marks');
+  {
+    const E = engine();
+    E.state.positions = [
+      position({ id: 'arb-ks', group: 'locked', strategy: 'arb', venue: 'KS', side: 'yes', qty: 20, cost: 6.20, mark: 0.10, pairId: 'same' }),
+      position({ id: 'arb-pm', group: 'locked', strategy: 'arb', venue: 'PM', side: 'no', qty: 20, cost: 12.80, mark: 0.30, pairId: 'same' }),
+    ];
+    E.state.arbGroups.locked = { pairId: 'same', qty: 20, expectedPayout: 20, status: 'filled' };
+    const g = E.arbScorecard()[0];
+    const p = E.pnlScorecard();
+    ok('a complementary equal-quantity PM/KS pair is valid', g.integrity === 'valid', g);
+    ok('settlement P&L uses its $1-per-pair payout', Math.abs(g.lockedPnl - 1) < 0.001, g);
+    ok('liquidation P&L remains separate and conservative', Math.abs(g.liquidationPnl + 11) < 0.001, g);
+    ok('the API scorecard exposes both totals', p.arbLocked === 1 && p.arbLiquidation === -11, p);
+  }
+
+  group('arb integrity failures never claim a locked payout');
+  {
+    const E = engine();
+    E.state.positions = [
+      position({ id: 'bad-ks', group: 'bad', strategy: 'arb', venue: 'KS', side: 'yes', qty: 20, cost: 6, pairId: 'same' }),
+      position({ id: 'bad-pm', group: 'bad', strategy: 'arb', venue: 'PM', side: 'no', qty: 19, cost: 12, pairId: 'same' }),
+    ];
+    const g = E.arbScorecard()[0];
+    ok('unequal legs raise a quantity mismatch', g.integrity === 'quantity_mismatch', g);
+    ok('a broken pair has no locked settlement P&L', g.lockedPnl === null && E.pnlScorecard().integrityAlerts === 1, g);
+  }
+
+  group('arb intent validation journals the durable group record');
+  {
+    const E = engine();
+    const signal = { pair: { id: 'pair-a', label: 'paired event' } };
+    E.createArbGroup(signal, 'intent-a', [{ venue: 'KS', side: 'yes' }, { venue: 'PM', side: 'no' }], ['ks-ref', 'pm-ref'], 10);
+    ok('the intended payout is persisted', E.state.arbGroups['intent-a'].expectedPayout === 10, E.state.arbGroups);
+    ok('intent and validation are journalled', (E.journalled || []).some((j) => j.type === 'ARB_INTENT') && (E.journalled || []).some((j) => j.type === 'ARB_VALIDATED'), E.journalled);
+  }
+
   group('the operator kill switch survives a restart');
   {
     // The latch stops new risk. It used to live only on the instance, and save() serialises only
@@ -227,8 +264,9 @@ const position = (over = {}) => ({
   {
     const E = engine();
     E.halt = null;
-    const pair = { id: 'inflight-pair', label: 'inflight pair', pm: { id: 'pm-inflight' }, ks: { ticker: 'KXINFLIGHT' }, q: { ksBid: 0.49, ksAsk: 0.50 } };
-    E.signals = [{ pair, type: 'arb', edge: 0.10, gap: 0.10, legs: [{ venue: 'KS', side: 'yes', px: 0.50 }] }];
+    const pair = { id: 'inflight-pair', label: 'inflight pair', pm: { id: 'pm-inflight', tokenId: 'pm-yes', tokenIndex: 0 }, ks: { ticker: 'KXINFLIGHT' }, q: { ksBid: 0.49, ksAsk: 0.50 } };
+    E.quotes.pm.set('pm-inflight', { tokenIds: ['pm-yes', 'pm-no'] });
+    E.signals = [{ pair, type: 'arb', edge: 0.10, gap: 0.10, legs: [{ venue: 'KS', side: 'yes', px: 0.50 }, { venue: 'PM', side: 'no', px: 0.50 }] }];
     E.book = async () => ({ asks: [{ price: 0.50, size: 100 }], yesBid: 0.49, yesAsk: 0.50 });
     let releaseBuy, buys = 0, sells = 0;
     const buyStarted = new Promise((resolve) => {
@@ -250,9 +288,11 @@ const position = (over = {}) => ({
   {
     const E = engine();
     E.cfg.mode = 'live'; E.liveReady = true; E.halt = null;
-    const pair = { id: 'unknown-pair', label: 'unknown pair', pm: { id: 'pm-unknown' }, ks: { ticker: 'KXUNKNOWN' }, q: {} };
-    E.signals = [{ pair, type: 'arb', edge: 0.10, gap: 0.10, legs: [{ venue: 'KS', side: 'yes', px: 0.50 }] }];
-    E.book = async () => ({ asks: [{ price: 0.50, size: 100 }], yesBid: 0.49, yesAsk: 0.50 });
+    const pair = { id: 'unknown-pair', label: 'unknown pair', pm: { id: 'pm-unknown' }, ks: { ticker: 'KXUNKNOWN' }, q: { pmVol: 1000, ksVol: 1000 } };
+    E.signals = [{ pair, type: 'converge', edge: 0.10, gap: 0.10, legs: [{ venue: 'KS', side: 'yes', px: 0.50 }] }];
+    E.book = async (venue) => venue === 'PM'
+      ? ({ asks: [{ price: 0.80, size: 100 }], yesBid: 0.79, yesAsk: 0.80 })
+      : ({ asks: [{ price: 0.50, size: 100 }], yesBid: 0.49, yesAsk: 0.50 });
     let buys = 0, sells = 0;
     const intent = { action: 'buy', ref: 'KXUNKNOWN', side: 'yes', qty: 10, clientOrderId: 'unknown-entry' };
     E.broker = {

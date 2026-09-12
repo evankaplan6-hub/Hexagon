@@ -31,11 +31,16 @@
     const day = Math.floor((S.now - S.startedAt) / 86400000) + 1;
     const modeCls = S.halt ? 'halt' : 'live';
     const modeTxt = S.halt ? `HALT · ${esc(S.halt)}` : (S.mode === 'live' ? 'LIVE' : 'PAPER');
+    const P = S.pnl || {};
+    const arb = Number.isFinite(P.arbLocked) ? signed(P.arbLocked) : '—';
+    const alert = P.integrityAlerts ? `<span><span class="k">Arb check</span><b class="halt">${P.integrityAlerts} ALERT${P.integrityAlerts === 1 ? '' : 'S'}</b></span>` : '';
     $('meta').innerHTML =
       `<span><span class="k">Day</span><b>${day}</b></span>` +
       `<span><span class="k">Uptime</span><b>${dur(S.now - S.startedAt)}</b></span>` +
       `<span><span class="k">Pairs</span><b>${S.pairCount}</b></span>` +
       `<span><span class="k">Open</span><b>${S.positions.length}</b></span>` +
+      `<span><span class="k">Arb locked</span><b class="${P.arbLocked >= 0 ? 'live' : 'halt'}">${arb}</b></span>` +
+      alert +
       (S.demo ? `<span class="demo">● DEMO QUOTES</span>` : '') +
       `<span><span class="k">Position</span><b class="${modeCls}">● ${modeTxt}</b></span>`;
   }

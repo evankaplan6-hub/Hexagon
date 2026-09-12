@@ -152,8 +152,13 @@ async function RIGO(E) {
   }
   E.touch('RIGO', `${marked} marked · ${E.state.positions.length} open`);
   if (E.due('rigo-log', 300) && E.state.positions.length) {
-    const unreal = E.state.positions.reduce((a, p) => a + (p.qty * (p.mark ?? p.entry) - p.cost), 0);
-    E.log('RIGO', 'RESEARCH', null, `scorecard: ${E.state.positions.length} open, unrealized ${unreal >= 0 ? '+' : '−'}${money(unreal)} · realized ${E.state.stats.realized >= 0 ? '+' : '−'}${money(E.state.stats.realized)} · fees paid ${money(E.state.stats.fees)}`);
+    // Golden/replay harnesses pass a deliberately tiny engine-shaped object. Keep that pure
+    // decision harness useful while the real Engine supplies the richer group scorecard.
+    const pnl = typeof E.pnlScorecard === 'function' ? E.pnlScorecard() : (() => {
+      const unreal = E.state.positions.reduce((a, p) => a + (p.qty * (p.mark ?? p.entry) - p.cost), 0);
+      return { arbLocked: 0, totalLiquidation: unreal + E.state.stats.realized, realized: E.state.stats.realized, integrityAlerts: 0 };
+    })();
+    E.log('RIGO', 'RESEARCH', null, `scorecard: ${E.state.positions.length} open · arb locked ${pnl.arbLocked >= 0 ? '+' : '−'}${money(pnl.arbLocked)} · liquidation ${pnl.totalLiquidation >= 0 ? '+' : '−'}${money(pnl.totalLiquidation)} · realized ${pnl.realized >= 0 ? '+' : '−'}${money(pnl.realized)} · ${pnl.integrityAlerts} integrity alerts`);
   }
 }
 
@@ -268,6 +273,10 @@ async function KETT(E) {
 
     // execute legs; unwind on partial failure
     const group = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+    if (s.type === 'arb') {
+      try { E.createArbGroup(s, group, s.legs, refs, qty); }
+      catch (e) { E.log('KETT', 'PASS', null, `${s.pair.label}: arb validation failed (${String(e.message).slice(0, 80)})`); continue; }
+    }
     const fills = [];
     let failed = null;
     let uncertain = null;
@@ -312,9 +321,11 @@ async function KETT(E) {
         await E.close(pos, bid, 'unwound: second leg failed');
       }
       E.log('KETT', 'PASS', null, `${s.pair.label}: ${failed}${fills.length ? ', first leg unwound' : ''}`);
+      if (s.type === 'arb') E.journal(E, 'ARB_UNWOUND', { group, label: s.pair.label, reason: failed, knownLegs: fills.length });
       continue;
     }
     for (const { leg, f } of fills) E.open(s, leg, f, group, s.type === 'arb' ? 'locked arb leg' : `gap ${c(Math.abs(s.gap))}`);
+    if (s.type === 'arb') E.completeArbGroup(group);
     const totalCost = fills.reduce((a, x) => a + x.f.cost, 0);
     const q = s.pair.q;
     if (s.type === 'arb') {

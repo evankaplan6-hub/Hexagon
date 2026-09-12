@@ -85,12 +85,17 @@ class Engine {
       catch (e) { throw new Error(`state file ${this.file} is unreadable (${e.message}). Refusing to start and overwrite it \u2014 move it aside to begin a fresh account.`); }
       if (!s || s.version !== 1) throw new Error(`state file ${this.file} has unexpected version ${s && s.version}. Refusing to start.`);
       if (!s.maker) s.maker = { cash: this.cfg.initialBalance, equity: this.cfg.initialBalance, markets: {}, fills: 0 };
+      // Group metadata is additive. Older paper ledgers did not retain an explicit arb record,
+      // so retain them and derive their scorecard from the open legs instead of treating a
+      // restart as an accounting error.
+      if (!s.arbGroups) s.arbGroups = {};
       return s;
     }
     return {
       version: 1, startedAt: Date.now(), mode: this.cfg.mode,
       initial: this.cfg.initialBalance, cash: this.cfg.initialBalance,
       positions: [], closed: [], balanceHistory: [], log: [],
+      arbGroups: {},
       dayKey: null, dayStartEquity: this.cfg.initialBalance,
       stats: { wins: 0, losses: 0, realized: 0, fees: 0, groupsClosed: 0 },
       // the MAKER desk keeps its own cash and inventory. Separate on purpose: mixing a taker book
@@ -140,6 +145,83 @@ class Engine {
   }
   equity() { return r2(this.state.cash + this.state.positions.reduce((a, p) => a + p.qty * (p.mark ?? p.entry), 0)); }
   budget() { return r2(Math.max(0, Math.min(this.cfg.maxPositionPct * this.equity(), this.state.cash * 0.95))); }
+
+  // A locked arb has two useful valuations. Liquidation is what both legs would fetch at their
+  // current bids, and is deliberately what equity()/risk limits use. Settlement is the $1 payout
+  // of a verified complementary pair. Mixing them made healthy arbs look like losses whenever
+  // either venue's mark was stale or one side had temporarily disappeared from the book.
+  arbScorecard() {
+    const byGroup = new Map();
+    for (const pos of this.state.positions) if (pos.strategy === 'arb') {
+      const g = byGroup.get(pos.group) || [];
+      g.push(pos); byGroup.set(pos.group, g);
+    }
+    const groups = [];
+    for (const [id, legs] of byGroup) {
+      const meta = this.state.arbGroups[id] || {};
+      const sides = new Set(legs.map((p) => p.side));
+      const venues = new Set(legs.map((p) => p.venue));
+      const qtys = new Set(legs.map((p) => p.qty));
+      const pairIds = new Set(legs.map((p) => p.pairId));
+      let integrity = 'valid';
+      if (legs.length !== 2) integrity = legs.length < 2 ? 'orphan_leg' : 'too_many_legs';
+      else if (sides.size !== 2 || !sides.has('yes') || !sides.has('no')) integrity = 'missing_complement';
+      else if (venues.size !== 2 || !venues.has('PM') || !venues.has('KS')) integrity = 'venue_mismatch';
+      else if (qtys.size !== 1) integrity = 'quantity_mismatch';
+      else if (pairIds.size !== 1 || (meta.pairId && !pairIds.has(meta.pairId))) integrity = 'pair_mismatch';
+      const entryCost = r2(legs.reduce((a, p) => a + p.cost, 0));
+      const liquidationValue = r2(legs.reduce((a, p) => a + p.qty * (p.mark ?? p.entry), 0));
+      const qty = legs.length ? Math.min(...legs.map((p) => p.qty)) : 0;
+      const settlementValue = integrity === 'valid' ? qty : null;
+      groups.push({
+        id, label: legs[0] && legs[0].label, pairId: legs[0] && legs[0].pairId,
+        qty, legs: legs.length, integrity, entryCost, liquidationValue,
+        liquidationPnl: r2(liquidationValue - entryCost),
+        settlementValue, lockedPnl: settlementValue == null ? null : r2(settlementValue - entryCost),
+      });
+    }
+    return groups;
+  }
+  pnlScorecard() {
+    const groups = this.arbScorecard();
+    const arbLiquidation = r2(groups.reduce((a, g) => a + g.liquidationPnl, 0));
+    const arbLocked = r2(groups.reduce((a, g) => a + (g.lockedPnl || 0), 0));
+    const convergenceUnrealized = r2(this.state.positions.filter((p) => p.strategy !== 'arb')
+      .reduce((a, p) => a + p.qty * (p.mark ?? p.entry) - p.cost, 0));
+    const maker = this.maker && this.maker.snapshot ? this.maker.snapshot(this) : {};
+    const makerNet = Number.isFinite(maker.equity) && Number.isFinite(maker.initial) ? r2(maker.equity - maker.initial) : null;
+    return {
+      realized: this.state.stats.realized, convergenceUnrealized, arbLocked, arbLiquidation, makerNet,
+      totalLiquidation: r2(this.state.stats.realized + arbLiquidation + convergenceUnrealized),
+      totalAtSettlement: r2(this.state.stats.realized + arbLocked + convergenceUnrealized),
+      integrityAlerts: groups.filter((g) => g.integrity !== 'valid').length,
+    };
+  }
+  createArbGroup(signal, group, legs, refs, qty) {
+    const sides = new Set(legs.map((l) => l.side));
+    const venues = new Set(legs.map((l) => l.venue));
+    if (legs.length !== 2 || sides.size !== 2 || !sides.has('yes') || !sides.has('no') || venues.size !== 2 || !venues.has('PM') || !venues.has('KS') || !Number.isFinite(qty) || qty <= 0) {
+      const reason = 'arb legs are not one PM/KS YES/NO pair';
+      this.journal(this, 'ARB_REJECTED', { group, label: signal.pair.label, pairId: signal.pair.id, reason });
+      throw new Error(reason);
+    }
+    const record = { group, pairId: signal.pair.id, label: signal.pair.label, qty, expectedPayout: qty, refs: [...refs], status: 'intended', createdAt: Date.now(), validationVersion: 1 };
+    this.state.arbGroups[group] = record;
+    this.journal(this, 'ARB_INTENT', record);
+    this.journal(this, 'ARB_VALIDATED', { group, pairId: record.pairId, qty, expectedPayout: qty, validationVersion: 1 });
+    this.dirty = true;
+    return record;
+  }
+  completeArbGroup(group) {
+    const score = this.arbScorecard().find((g) => g.id === group);
+    const record = this.state.arbGroups[group];
+    if (!record || !score) return;
+    record.status = score.integrity === 'valid' ? 'filled' : 'alert';
+    record.integrity = score.integrity;
+    if (score.integrity === 'valid') this.journal(this, 'ARB_FILLED', { group, pairId: score.pairId, qty: score.qty, entryCost: score.entryCost, lockedPnl: score.lockedPnl });
+    else this.journal(this, 'ARB_INTEGRITY_ALERT', { group, pairId: score.pairId, integrity: score.integrity });
+    this.dirty = true;
+  }
 
   quote(pair) {
     const m = this.quotes.pm.get(pair.pm.id), k = this.quotes.ks.get(pair.ks.ticker);
@@ -328,7 +410,12 @@ class Engine {
       const gpnl = r2(this.state.closed.filter((c) => c.group === pos.group).reduce((a, c) => a + c.pnl, 0));
       this.state.stats.groupsClosed++;
       if (gpnl >= 0) this.state.stats.wins++; else this.state.stats.losses++;
-      if (pos.strategy === 'arb') text += ` · arb pair net ${gpnl >= 0 ? '+' : '−'}$${Math.abs(gpnl).toFixed(2)}`;
+      if (pos.strategy === 'arb') {
+        text += ` · arb pair net ${gpnl >= 0 ? '+' : '−'}$${Math.abs(gpnl).toFixed(2)}`;
+        const group = this.state.arbGroups[pos.group];
+        if (group) { group.status = resolved ? 'settled' : 'closed'; group.closedAt = Date.now(); group.realizedPnl = gpnl; }
+        this.journal(this, resolved ? 'ARB_SETTLED' : 'ARB_UNWOUND', { group: pos.group, label: pos.label, pnl: gpnl, reason });
+      }
     }
     this.journal(this, resolved ? 'SETTLE' : 'CLOSE', { id: pos.id, group: pos.group, label: pos.label, venue: pos.venue, side: pos.side, qty: pos.qty, entry: pos.entry, exit: fill.avg, fee: fill.fee, proceeds: fill.proceeds, pnl: exitPnl, legPnl: pnl, partialPnl, reason, strategy: pos.strategy, heldMs: Date.now() - pos.openedAt, cash: this.state.cash });
     this.log('RIGO', 'SETTLE', exitPnl, text);
@@ -522,6 +609,8 @@ class Engine {
     const now = Date.now();
     const s = this.state;
     const equity = this.equity();
+    const pnl = this.pnlScorecard();
+    const arbGroups = this.arbScorecard();
     const unrealized = r2(s.positions.reduce((a, p) => a + (p.qty * (p.mark ?? p.entry) - p.cost), 0));
     const deployed = r2(s.positions.reduce((a, p) => a + p.qty * (p.mark ?? p.entry), 0));
     let hist = s.balanceHistory;
@@ -537,9 +626,10 @@ class Engine {
     const top = (list, key) => list.sort((a, b) => b.vol24 - a.vol24).slice(0, 8);
     return {
       now, name: 'The Hexagon', mode: this.cfg.mode, demo: this.cfg.demo, startedAt: s.startedAt, halt: this.halt,
-      initial: s.initial, cash: s.cash, equity, deployed, unrealized, realized: s.stats.realized, fees: s.stats.fees,
+      initial: s.initial, cash: s.cash, equity, deployed, unrealized, realized: s.stats.realized, fees: s.stats.fees, pnl,
       wins: s.stats.wins, losses: s.stats.losses, liveBalance: this.liveBalance,
       positions: s.positions.map((p) => ({ id: p.id, label: p.label, venue: p.venue, side: p.side, qty: p.qty, entry: p.entry, mark: p.mark, cost: p.cost, pnl: r2(p.qty * (p.mark ?? p.entry) - p.cost), strategy: p.strategy, openedAt: p.openedAt })),
+      arbGroups,
       closed: s.closed.slice(-80).map((c) => ({ t: c.exitAt, pnl: c.pnl, label: c.label, reason: c.reason, strategy: c.strategy })),
       log: s.log.slice(0, 150),
       balanceHistory: hist,
