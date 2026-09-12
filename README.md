@@ -364,6 +364,16 @@ survivors. Shorter windows (14 days ranked, 7 scored, seven folds) and fewer pic
 same ordering. So the live rule went back to trade rate on 2026-09-12: `MAKER_MAX_CLEAR_DAYS` is
 gone, the queue is still measured and shown, and it no longer picks the book.
 
+### A Polymarket maker leg, measured and parked
+
+Measured on 2026-09-12 with `tools/pm-maker-scan.js`: on the 24 busiest political and macro
+markets, Polymarket's queue at the touch is a fifth of Kalshi's (median 2,771 against 15,372
+contracts) and its flow is twice Kalshi's, so a resting order is reached in hours rather than a
+day. Makers pay nothing and are rebated 25% of taker fees, which is 0.19c a contract at the mid;
+the real income is the daily liquidity-rewards pool, whose split is undisclosed. Not built: the
+CLOB measured is `polymarket.com`'s, which US persons cannot trade on, and `polymarket.us` lists
+none of these markets. `ops/pm-maker-2026-09-12.md` has the table and the reasoning.
+
 ### Three things that were tested and not built
 
 **Inventory skew.** The desk rests at the touch on both sides and only withdraws a side at the cap.
@@ -456,6 +466,7 @@ data/state.json        persisted account (created on first run)
 data/ticks-*.jsonl     tick tape, one line per priced pair per cycle (RECORD=1)
 tools/maker-replay.js  the maker desk against Kalshi's own trade history, same pure functions as live
 tools/maker-rank.js    three market rankings for the maker, scored walk-forward on that history
+tools/pm-maker-scan.js the same queue and trade-rate yardstick, on Polymarket's CLOB
 tools/test.js          every suite in one command (npm test)
 tools/decide-test.js   assertions for the taker decision core
 tools/probe-test.js    assertions for the thin-market probe (stubbed venues, frozen clock)
