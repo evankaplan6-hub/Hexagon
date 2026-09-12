@@ -14,6 +14,7 @@ const SUITES = [
   ['matcher', 'cross-venue matching: names, dates, sports, the figure guard and the price guard'],
   ['stream', 'the Kalshi trade socket: framing, trade shape, and the tape falling back to the poll'],
   ['engine', 'the ledger: the operator latch, partial exits, and one close per position'],
+  ['brain', 'the minds: the proposal clamp, request shaping, cost metering and backoff'],
 ];
 
 let failed = 0, totalPassed = 0;

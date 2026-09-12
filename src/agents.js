@@ -14,6 +14,7 @@ const ks = require('./venues/kalshi');
 const { matchPairs } = require('./matcher');
 const http = require('./http');
 const decide = require('./decide');
+const minds = require('./minds');
 const { fairValue, convEdge } = decide;
 
 const r2 = (x) => Math.round(x * 100) / 100;
@@ -70,6 +71,13 @@ function HOLT(E) {
 }
 
 // ---------------------------------------------------------------- ILSA
+// The first desk with a mind. The deterministic read below runs unconditionally and is what the
+// desk falls back to; Claude's read is an OVERLAY on top of it, never a replacement, so a missing
+// key or a timed-out turn costs nothing but the judgement.
+//
+// The call is fired, not awaited. `E.brain.advice` returns the last COMPLETED answer, which on a
+// 15s cycle and a multi-second turn is typically one or two cycles old -- fine for a flow read,
+// which is a claim about minutes, and the reason this desk went first.
 function ILSA(E) {
   let top = null;
   for (const p of E.pairs) {
@@ -79,6 +87,42 @@ function ILSA(E) {
     const move = Math.abs(bias.pmDrift) + Math.abs(bias.ksDrift);
     if (!top || move > top.move) top = { p, bias, move };
   }
+
+  if (E.brain && E.brain.enabled()) {
+    // No cadence check here on purpose. Whether a turn is worth buying is a question about the
+    // BOARD, not about the clock, and it is answered by the view -- which returns null on a quiet
+    // floor and a signature otherwise. src/brain.js owns the budget and the minimum gap.
+    E.brain.refresh('ILSA', () => minds.ILSA.view(E));
+    const answer = E.brain.advice('ILSA');
+    if (answer) {
+      const { reads, proposals, dropped } = minds.ILSA.apply(E, answer);
+      // Attach the mind's read to the deterministic one rather than overwriting it. KETT reads
+      // both and states which it acted on, so a bad turn is legible in the log afterwards.
+      for (const [id, r] of reads) {
+        const b = E.bias.get(id);
+        if (b) b.llm = r; else E.bias.set(id, { score: 0, reliable: false, llm: r });
+      }
+      E.brainSignals = proposals;
+      const note = String(answer.note || '').slice(0, 30);
+      E.touch('ILSA', note || 'reading flow');
+      if (answer.commentary && E.due('ilsa-mind', 90)) {
+        E.log('ILSA', 'RESEARCH', null, `${String(answer.commentary).slice(0, 300)}${proposals.length ? ` · proposing ${proposals.length}` : ''}`);
+      }
+      // Say when a proposal was thrown away and why. A mind that keeps proposing into a rail is
+      // either misreading the view or the view is lying to it, and neither shows up anywhere else.
+      if (dropped.length && E.due('ilsa-dropped', 300)) {
+        E.log('ILSA', 'PASS', null, `${dropped.length} proposal${dropped.length > 1 ? 's' : ''} dropped · ${dropped.map((d) => d.why).join(', ').slice(0, 160)}`);
+      }
+      for (const s of proposals) {
+        if (E.due(`ilsa-prop-${s.pair.id}`, 600)) {
+          E.log('ILSA', 'RESEARCH', null, `proposes ${s.legs[0].side.toUpperCase()} @ ${VEN[s.legs[0].venue]} ${s.pair.label} · edge ${c(s.edge)} · conviction ${(s.conviction * 100).toFixed(0)}% · ${s.thesis}`);
+        }
+      }
+      return;
+    }
+  }
+  E.brainSignals = [];
+
   E.touch('ILSA', top ? `${top.p.label} ${top.bias.score > 0 ? 'converging' : 'diverging'}` : 'reading flow');
   if (top && E.due('ilsa-log', 90)) {
     const { p, bias } = top;
@@ -198,6 +242,25 @@ function BRAM(E) {
   }
 }
 
+// ------------------------------------------------------- mind proposals into the signal book
+// ORDER HAZARD, and the reason this is its own exported step rather than a line inside ILSA:
+// BRAM assigns `E.signals` wholesale every cycle (`E.signals = sig`). ILSA runs BEFORE BRAM, so a
+// proposal written into the signal book by ILSA is thrown away a few lines later, silently, with
+// nothing in the log to say a trade was ever proposed. It has to be merged after BRAM and before
+// KETT, and the engine calls it exactly there.
+//
+// A proposal never displaces a deterministic signal on the same pair: KETT already refuses a
+// second position per pair, and between a scanner signal and a mind's argument for the same
+// event, the scanner's is the one with the arithmetic behind it.
+function mergeBrainSignals(E) {
+  const proposals = E.brainSignals || [];
+  if (!proposals.length) return;
+  const have = new Set(E.signals.map((s) => s.pair.id));
+  const added = proposals.filter((s) => !have.has(s.pair.id));
+  if (!added.length) return;
+  E.signals = [...E.signals, ...added].sort(decide.rankSignals);
+}
+
 // ---------------------------------------------------------------- KETT
 async function KETT(E) {
   if (standDown(E)) return;
@@ -207,7 +270,7 @@ async function KETT(E) {
     if (standDown(E)) return;
     if (considered >= 2) break; // pace: at most two new positions per cycle
     if (E.state.positions.some((p) => p.pairId === s.pair.id)) continue;
-    if (Date.now() - (E.cooldown.get(s.pair.id) || 0) < 10 * 60 * 1000) continue; // no churn after an exit
+    if (Date.now() - (E.cooldown.get(s.pair.id) || 0) < E.cfg.reentryCooldownMs) continue; // no churn after an exit
     if (live && s.legs.some((l) => l.venue !== 'KS')) continue; // live mode trades Kalshi legs only
     if (E.state.positions.length + s.legs.length > E.cfg.maxOpenPositions) {
       if (E.due('kett-full', 300)) E.log('KETT', 'PASS', null, `book full at ${E.state.positions.length} positions, passing on ${s.pair.label}`);
@@ -224,8 +287,18 @@ async function KETT(E) {
     let sizeMult = 1;
     if (s.type === 'converge') {
       const b = E.bias.get(s.pair.id);
-      if (b && b.reliable && b.score <= -0.5) { if (E.due(`kett-flow-${s.pair.id}`, 300)) E.log('KETT', 'PASS', null, `${s.pair.label}: gap ${c(Math.abs(s.gap))} but ILSA reads it widening off an already-tradeable gap, pass`); continue; }
-      sizeMult = b && b.reliable && b.score >= 0.5 ? 1 : E.cfg.baseSizeMult;
+      // ILSA's mind, where it has one, outranks the drift arithmetic -- the arithmetic measures
+      // that the gap moved, the mind is the only thing that argues about WHY. Both directions of
+      // that authority are real: a confident "diverging" kills the trade outright, and a
+      // confident "converging" takes it to the full per-position cap.
+      const mind = b && b.llm && b.llm.conviction >= 0.5 ? b.llm : null;
+      if (mind && mind.stance === 'diverging') {
+        if (E.due(`kett-flow-${s.pair.id}`, 300)) E.log('KETT', 'PASS', null, `${s.pair.label}: gap ${c(Math.abs(s.gap))} but ILSA reads it widening — ${mind.thesis}`);
+        continue;
+      }
+      if (!mind && b && b.reliable && b.score <= -0.5) { if (E.due(`kett-flow-${s.pair.id}`, 300)) E.log('KETT', 'PASS', null, `${s.pair.label}: gap ${c(Math.abs(s.gap))} but ILSA reads it widening off an already-tradeable gap, pass`); continue; }
+      if (mind) sizeMult = mind.stance === 'converging' ? 1 : E.cfg.baseSizeMult;
+      else sizeMult = b && b.reliable && b.score >= 0.5 ? 1 : E.cfg.baseSizeMult;
     }
 
     // real books at size — and for directional trades, re-verify the gap from live books on BOTH venues
@@ -252,8 +325,14 @@ async function KETT(E) {
       };
       const fairLive = fairValue(liveQ);
       const { px: pxLive, edge: edgeLive } = convEdge(leg.venue, leg.side, liveQ, fairLive, E.cfg, s.pair.ks.ticker);
-      if (edgeLive < E.cfg.minEdge) {
-        if (E.due(`kett-stale-${s.pair.id}`, 300)) E.log('KETT', 'PASS', null, `${s.pair.label}: listing showed ${c(s.edge)} edge but live books show ${c(edgeLive)}, listing was stale`);
+      // A mind-originated trade is held to `llmMinEdge` rather than `minEdge`. `minEdge` is the
+      // scanner's opinion about which gaps are worth the trouble, and a desk that can argue for a
+      // position is allowed to argue with that. `llmMinEdge` is a different kind of number: edge
+      // is already net of both spreads and both fees, so its default of 0 is exact break-even.
+      // There is no thesis that makes a negative-edge entry work -- it is arithmetic, not taste.
+      const bar = s.origin ? E.cfg.llmMinEdge : E.cfg.minEdge;
+      if (edgeLive < bar) {
+        if (E.due(`kett-stale-${s.pair.id}`, 300)) E.log('KETT', 'PASS', null, `${s.pair.label}: ${s.origin ? `${s.origin} proposed on ${c(s.edge)}` : `listing showed ${c(s.edge)} edge`} but live books show ${c(edgeLive)}${s.origin ? ', under break-even' : ', listing was stale'}`);
         continue;
       }
       s.edge = edgeLive; s.fair = fairLive; s.gap = liveQ.ksMid - liveQ.pmMid; leg.px = pxLive;
@@ -333,10 +412,13 @@ async function KETT(E) {
     } else {
       const leg = fills[0].leg, f = fills[0].f;
       const fairSide = leg.side === 'yes' ? s.fair : 1 - s.fair;
-      E.log('KETT', 'FILL', -totalCost, `${s.pair.label} · buy ${qty} ${leg.side.toUpperCase()} @ ${VEN[leg.venue]} ${f.avg.toFixed(3)} · fair ${fairSide.toFixed(3)} on live books (${VEN[other(leg.venue)]} mid ${(leg.venue === 'PM' ? q.ksMid : q.pmMid).toFixed(3)}) · edge ${c(s.edge)} · fee ${money(f.fee)}${sizeMult > E.cfg.baseSizeMult ? ' · sized up on ILSA flow' : ''}`);
+      // Name the desk that originated the trade and the argument it made. When a mind is
+      // spending money, the reason has to be in the permanent record next to the fill, not
+      // inferable from a research line logged some minutes earlier.
+      E.log('KETT', 'FILL', -totalCost, `${s.pair.label} · buy ${qty} ${leg.side.toUpperCase()} @ ${VEN[leg.venue]} ${f.avg.toFixed(3)} · fair ${fairSide.toFixed(3)} on live books (${VEN[other(leg.venue)]} mid ${(leg.venue === 'PM' ? q.ksMid : q.pmMid).toFixed(3)}) · edge ${c(s.edge)} · fee ${money(f.fee)}${sizeMult > E.cfg.baseSizeMult ? ' · sized up on ILSA flow' : ''}${s.origin ? ` · ${s.origin}'s call: ${s.thesis}` : ''}`);
     }
   }
   E.touch('KETT', E.signals.length ? `${E.signals.length} signals` : 'no signals');
 }
 
-module.exports = { HOLT, ILSA, TESS, RIGO, BRAM, KETT };
+module.exports = { HOLT, ILSA, TESS, RIGO, BRAM, KETT, mergeBrainSignals };
