@@ -14,7 +14,7 @@ the venue gap is not the edge. `ops/DEPLOY.md` covers cloud deployment (Fly app 
 ## Running it
 
 ```bash
-npm test                                      # 287 assertions, no network, no clock
+npm test                                      # 361 assertions, no network, no clock
 node server.js                                # paper account, live market data → localhost:8787
 DEMO=1 DATA_DIR=./data-demo node server.js    # synthetic fills/settles, separate account
 npm run reset                                 # wipe the paper account
@@ -44,8 +44,10 @@ src/agents.js     the six desks         src/matcher.js   cross-venue matching
 src/broker.js     paper broker + live Kalshi adapter
 src/venues/       Polymarket (Gamma + CLOB) and Kalshi public data
 src/recorder.js   tick tape writer      public/          dashboard
-tools/            edge-scan, replay, maker-report, fillcheck, history-scan, golden, api
+tools/            edge-scan, replay, maker-replay, maker-report, fillcheck, history-scan, golden, api
                   tests: test.js (npm test) + decide/probe/maker/broker/matcher/engine-test.js
+data/fly/         gitignored: journals, state and tick tapes copied down from the Fly box, plus
+                  kstrades.jsonl, the Kalshi trade history tools/maker-replay.js scores against
 ops/              Fly deploy + launchd autostart (not currently installed)
 data/             gitignored: state.json, journal-*.jsonl, ticks-*.jsonl, desk.log
 ```

@@ -285,6 +285,30 @@ Roughly linear, and positive in sign at every setting with 14–15 of 21 held-ou
 throughout. So the conclusion does not hinge on the guess — only the magnitude does. The desk runs
 the most conservative cell (10%, cap 100), which is also the one the live paper book is testing.
 
+### Replaying the maker
+
+`tools/replay.js` scores the taker desks against the tick tape, and the tick tape carries no maker
+rows: the maker fills off Kalshi's exchange-wide trade feed, which nothing recorded. So until
+2026-09-12 a change to the maker could only be scored by deploying it. `tools/maker-replay.js`
+closes that: `--fetch` pulls the full trade history for every market the desk has held over the
+window the journal says it ran, and the replay runs the same `desiredQuotes` / `fillsFrom` /
+`applyFill` on the same two-second cadence with the wall clock replaced by the tape.
+
+```bash
+node tools/maker-replay.js --fetch data/fly/kstrades.jsonl data/fly/journal-*.jsonl
+node tools/maker-replay.js data/fly/kstrades.jsonl data/fly/journal-*.jsonl --markets
+node tools/maker-replay.js data/fly/kstrades.jsonl data/fly/journal-*.jsonl --makerSoftCap 1 --queue 2000
+```
+
+Read the **difference** between two runs, not the level. The tape has prints but no book, so the
+touch is reconstructed from the last print on each side; and it has no queue, so by default there
+is none. Against the journal's first 2.25 days that reproduces the run-over fills within 2%
+(2,083 contracts against 2,126 live) and over-counts at-touch fills six-fold, because a sweep
+through our level does not care who was ahead of us and an at-touch fill does. No constant
+`--queue` reproduces both -- at 5,000 the at-touch count is right and the run-over count has
+collapsed to a quarter -- so the default is 0, where the number the desk is losing money on is the
+one that matches.
+
 ### Three things that were tested and not built
 
 **Inventory skew.** The desk rests at the touch on both sides and only withdraws a side at the cap.
@@ -375,6 +399,7 @@ src/venues/            Polymarket (Gamma + CLOB) and Kalshi public data
 public/                dashboard (index.html, style.css, app.js)
 data/state.json        persisted account (created on first run)
 data/ticks-*.jsonl     tick tape, one line per priced pair per cycle (RECORD=1)
+tools/maker-replay.js  the maker desk against Kalshi's own trade history, same pure functions as live
 tools/test.js          every suite in one command (npm test)
 tools/decide-test.js   assertions for the taker decision core
 tools/probe-test.js    assertions for the thin-market probe (stubbed venues, frozen clock)
@@ -390,7 +415,7 @@ tape and a synthetic clock (`tools/replay.js`) instead of a network and a wall c
 guard it, and both are worth running after any change to the gates:
 
 ```bash
-npm test                      # all 287 assertions across six suites
+npm test                      # all 361 assertions across six suites
 node tools/maker-test.js      # ...or one suite at a time while working on one file
 ```
 
