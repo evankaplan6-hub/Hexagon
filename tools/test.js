@@ -17,6 +17,7 @@ const SUITES = [
   ['brain', 'the minds: the proposal clamp, request shaping, cost metering and backoff'],
   ['lab', 'the strategy lab: fees, fills, settlement, and no strategy seeing the answer'],
   ['whale', 'whale watch: what counts as a bet, what the floor says, what copying pays'],
+  ['http', "the Kalshi pacer: calls spaced apart, the maker's calls first, nothing else waits"],
 ];
 
 let failed = 0, totalPassed = 0;
@@ -28,6 +29,9 @@ for (const [name, what] of SUITES) {
   const tail = out.trim().split('\n').filter(Boolean).pop() || '(no output)';
   const m = tail.match(/^(\d+) passed, (\d+) failed$/);
   if (m) totalPassed += +m[1];
+  // a suite that exits 0 without its summary line stopped early (a promise nobody resolved) and
+  // asserted less than it claims: that is a failure, not a pass
+  if (code === 0 && !m) code = 1;
   if (code !== 0) {
     failed++;
     console.log(`FAIL  ${name.padEnd(9)} ${tail}`);

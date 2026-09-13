@@ -603,7 +603,7 @@ tape and a synthetic clock (`tools/replay.js`) instead of a network and a wall c
 guard it, and both are worth running after any change to the gates:
 
 ```bash
-npm test                      # all 683 assertions across ten suites
+npm test                      # all 701 assertions across eleven suites
 node tools/maker-test.js      # ...or one suite at a time while working on one file
 ```
 

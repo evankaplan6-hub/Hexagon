@@ -94,6 +94,12 @@ module.exports = {
   // a second, so a page covers roughly six seconds. Polling every five left no margin and dropped
   // trades during busy stretches. At two seconds a page holds three times what we need.
   makerEverySec: num('MAKER_EVERY_SEC', 2),
+  // Minimum milliseconds between the starts of any two Kalshi REST calls (src/http.js makePacer).
+  // 80ms is 12.5 calls a second: the taker's eleven-listing burst spreads over under a second, and
+  // the maker's two calls a round still go first. The desk's steady load is under three a second,
+  // so the line is almost always empty. If refused calls (TESS's "api errs/5m") persist, raise it;
+  // 0 turns pacing off.
+  kalshiGapMs: Math.max(0, num('KALSHI_GAP_MS', 80)),
   // How many pages of the exchange-wide tape one poll may read before giving up and counting a
   // gap. One page is 1000 prints. At two-second polling the page should hold three times what is
   // needed, and still the first two days on the cloud box counted 145 polls where the oldest print
