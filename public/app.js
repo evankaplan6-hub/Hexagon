@@ -7,6 +7,7 @@
   // ------------------------------------------------------------ formatting
   const money = (x, d = 2) => `$${Math.abs(x).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d })}`;
   const signed = (x, d = 2) => `${x >= 0 ? '+' : '-'}${money(x, d)}`;
+  const r2 = (x) => Math.round(x * 100) / 100;
   const cents = (x) => `${(Math.abs(x) * 100).toFixed(1)}c`;
   const hhmm = (t) => { const d = new Date(t); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
   const dur = (ms) => { const h = Math.floor(ms / 3.6e6), m = Math.floor((ms % 3.6e6) / 6e4); return `${h}h ${String(m).padStart(2, '0')}m`; };
@@ -317,7 +318,7 @@
     ctx.fillStyle = glass; ctx.fillRect(140, 12, 200, 130);
 
     // The screen's words are HTML (placeBoards): the canvas draws only the glass and its light.
-    if (sel && sel.kind === 'market' && !(M.markets || []).some((x) => x.ticker === sel.key)) sel = null;
+    if (sel && sel.kind === 'market' && !sel.at && !(M.markets || []).some((x) => x.ticker === sel.key)) sel = null;
     if (sel && sel.kind === 'agent' && !S.agents.some((x) => x.key === sel.key)) sel = null;
     wallBox = { x: 140, y: 12, w: 200, h: 130 };
     scanlines(ctx, 140, 12, 200, 130, 0.16);
@@ -898,22 +899,31 @@
     return h;
   }
 
-  function wallMarket(m, M) {
-    let read, tone = '';
-    if (!m.quoting && m.inv) { read = 'Dropped from the book. Only quoting the side that works this position off.'; tone = 'warn'; }
-    else if (!m.inv) read = 'Nothing held here. Both quotes are resting, waiting to be traded against.';
-    else if (Math.abs(m.inv) > 60) { read = `${m.inv > 0 ? 'Long' : 'Short'} ${Math.abs(m.inv)}, close to the ${M.cap || 100}-contract limit. The flow has been one-sided.`; tone = 'bad'; }
-    else if (m.qAsk > 5000 || m.qBid > 5000) read = 'A long line of orders sits ahead of ours, so fills here come slowly.';
-    else read = 'Working normally: a small position and a short line ahead of us.';
-    const pl = m.inv ? m.mark - m.cost : null;
-    const clears = m.clear == null ? '—' : m.clear < 1 ? `${(m.clear * 24).toFixed(1)} hours` : `${m.clear.toFixed(1)} days`;
-    return `<div class="wh"><button class="wback" data-back="1">‹ Back</button><span>${esc(m.ticker.replace(/^KX/, ''))}</span></div>` +
-      `<div class="wtitle">${esc(OUTCOME(m) || QUESTION(m))}</div><div class="wq">${esc(m.title || QUESTION(m))}</div>` +
-      `<dl class="wfacts">` +
-      `<dt>Position</dt><dd>${m.inv ? `${sideTag(m.inv)} <span class="${pl >= 0 ? 'pos' : 'neg'}">${signed(pl)}</span>` : 'none'}</dd>` +
-      `<dt>Our quotes</dt><dd>${m.bid == null && m.ask == null ? 'not quoting' : `${m.bid == null ? '—' : cc(m.bid)} to buy · ${m.ask == null ? '—' : cc(m.ask)} to sell`}</dd>` +
-      `<dt>Trading</dt><dd>${m.tpd ? `${m.tpd} trades a day · line clears in ${clears}` : 'not measured yet'}</dd>` +
-      `</dl><p class="wread ${tone}">${esc(read)}</p>`;
+  // A clicked trade or position: what happened and whether it made money, in a few plain lines.
+  // `fill` is the trade that was clicked, or the latest one in this market when a position was.
+  const minsAgo = (t) => { const m = Math.round((S.now - t) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : `${Math.floor(m / 60)}h ${m % 60}m ago`; };
+  function wallRecap(ticker, at, M) {
+    const m = byTicker(M, ticker);
+    const fill = (M.recent || []).find((f) => f.ticker === ticker && (!at || f.at === at)) || null;
+    const name = m ? (OUTCOME(m) || QUESTION(m)) : marketName(ticker);
+    const open = m && m.inv ? r2(m.mark - m.cost) : 0;
+    const total = m ? r2((m.realized || 0) + open) : null;
+    let h = `<div class="wh"><button class="wback" data-back="1">‹ Back</button><span>${m ? `${m.fills} trade${m.fills === 1 ? '' : 's'} here` : ''}</span></div>`;
+    h += `<div class="wtitle">${esc(name)}</div>`;
+    if (m && QUESTION(m) && QUESTION(m) !== name) h += `<div class="wq">${esc(QUESTION(m))}</div>`;
+    if (total != null) h += `<div class="wbig ${total >= 0 ? 'pos' : 'neg'}">${signed(total)}</div><div class="wsub">profit on this market so far</div>`;
+    h += `<ul class="wrecap">`;
+    if (fill) {
+      const made = fill.pnl ? ` That trade ${fill.pnl > 0 ? 'made' : 'lost'} <b class="${fill.pnl > 0 ? 'pos' : 'neg'}">${money(fill.pnl)}</b>.` : '';
+      h += `<li>${fill.side === 'buy' ? 'Bought' : 'Sold'} ${fill.qty} at ${cc(fill.px)}, ${minsAgo(fill.at)}.${made}</li>`;
+    }
+    if (m) {
+      h += m.inv
+        ? `<li>Holding ${m.inv > 0 ? 'long' : 'short'} ${Math.abs(m.inv)}: paid ${money(Math.abs(m.cost))}, worth ${money(Math.abs(m.mark))} now (<b class="${open >= 0 ? 'pos' : 'neg'}">${signed(open)}</b>).</li>`
+        : `<li>Nothing held here now.</li>`;
+      if (m.realized) h += `<li>Already banked from closed trades: <b class="${m.realized >= 0 ? 'pos' : 'neg'}">${signed(m.realized)}</b>.</li>`;
+    } else h += `<li>This market is no longer on the desk's board, so its running profit isn't shown.</li>`;
+    return h + `</ul>`;
   }
 
   function wallAgent(a) {
@@ -939,14 +949,14 @@
       const el = $('wall');
       const wallFs = Math.max(10, Math.min(17, k * 5.6));
       fit(el, wallBox, null);             // type size is set on rebuild, where fitText may shrink it
-      const key = `${frameSeq}|${sel ? sel.kind + sel.key : ''}|${wallAll}|${Math.round(wallBox.w * k)}`;
+      const key = `${frameSeq}|${sel ? sel.kind + sel.key + (sel.at || '') : ''}|${wallAll}|${Math.round(wallBox.w * k)}`;
       if (key !== wallKey) {
         const list = el.querySelector('.wlist, .wlog'), top = list && key.split('|')[1] === wallKey.split('|')[1] ? list.scrollTop : 0;
         wallKey = key;
-        const m = sel && sel.kind === 'market' ? byTicker(M, sel.key) : null;
+        const m = sel && sel.kind === 'market';
         const a = sel && sel.kind === 'agent' ? S.agents.find((x) => x.key === sel.key) : null;
         el.style.fontSize = `${wallFs}px`;
-        el.innerHTML = m ? wallMarket(m, M) : a ? wallAgent(a) : wallHome(M);
+        el.innerHTML = sel && sel.kind === 'market' ? wallRecap(sel.key, sel.at, M) : a ? wallAgent(a) : wallHome(M);
         const list2 = el.querySelector('.wlist, .wlog');
         if (list2) list2.scrollTop = top;
         if (m) fitText(el, wallFs, 8);
@@ -956,8 +966,8 @@
     if (tapeBox) {
       const el = $('tape');
       fit(el, { x: tapeBox.x + 1, y: tapeBox.y + 1, w: tapeBox.w - 2, h: tapeBox.h - 2 }, Math.max(9.5, Math.min(15, k * 4.8)));
-      if (frameSeq + '' !== tapeKey) {
-        tapeKey = frameSeq + '';
+      if (`${frameSeq}|${sel && sel.at}` !== tapeKey) {
+        tapeKey = `${frameSeq}|${sel && sel.at}`;
         const groups = [];
         for (const f of M.recent || []) {            // newest first; a run of the same trade is one line
           const g = groups[groups.length - 1];
@@ -966,7 +976,7 @@
         }
         el.innerHTML = `<div class="th"><span>Fills</span><span>${M.fills || 0} total</span></div>` +
           (groups.length
-            ? `<ol>${groups.map((g) => `<li class="${g.side}"><span class="act">${g.side === 'buy' ? 'Bought' : 'Sold'} ${g.qty}</span><span class="px">${cc(g.val / g.qty)}</span>` +
+            ? `<ol>${groups.map((g) => `<li class="${g.side}${sel && sel.at === g.at ? ' on' : ''}" data-t="${esc(g.ticker)}" data-at="${g.at}"><span class="act">${g.side === 'buy' ? 'Bought' : 'Sold'} ${g.qty}</span><span class="px">${cc(g.val / g.qty)}</span>` +
               `<span class="nm">${esc(marketName(g.ticker))}</span><span class="ago">${ago(g.at).replace(' ago', '')}</span></li>`).join('')}</ol>`
             : `<p class="none">${M.fills ? `${M.fills} fills before the last restart` : 'No fills yet'}</p>`);
       }
@@ -981,6 +991,15 @@
       if (html !== clockTxt) { el.innerHTML = html; clockTxt = html; }
     }
   }
+
+  // A run of identical fills shows as one line; clicking it recaps the newest of them.
+  $('tape').addEventListener('click', (ev) => {
+    const li = ev.target.closest('li[data-t]');
+    if (!li) return;
+    const at = +li.dataset.at;
+    sel = sel && sel.at === at ? null : { kind: 'market', key: li.dataset.t, at };
+    wallKey = ''; tapeKey = '';
+  });
 
   $('wall').addEventListener('click', (ev) => {
     const b = ev.target.closest('button');

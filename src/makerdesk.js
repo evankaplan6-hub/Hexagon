@@ -279,7 +279,9 @@ function makeMakerDesk(cfg) {
         m.fills++; S.fills = (S.fills || 0) + 1; filled++; netQty += f.qty;
         // remembered for the dashboard: "nothing is happening" and "something happened four
         // minutes ago" look identical unless the page can say which.
-        S.lastFill = { ticker: u.ticker, side: f.side, qty: f.qty, px: f.px, at: Date.now() };
+        // `pnl` is what THIS fill realised (zero when it opened or added to a position), so a
+        // clicked trade on the dashboard can say whether it made or lost money on its own.
+        S.lastFill = { ticker: u.ticker, side: f.side, qty: f.qty, px: f.px, pnl: res.pnl, at: Date.now() };
         (S.recent = S.recent || []).unshift(S.lastFill);
         if (S.recent.length > 14) S.recent.length = 14;   // the floor shows ten; the journal keeps them all
         seen.add(f.id);
@@ -395,7 +397,7 @@ function makeMakerDesk(cfg) {
     const markets = Object.entries(S.markets || {}).map(([ticker, m]) => {
       const u = meta.get(ticker);
       return {
-        ticker, series: m.series, inv: m.inv, cost: m.cost, fills: m.fills,
+        ticker, series: m.series, inv: m.inv, cost: m.cost, fills: m.fills, realized: m.realized || 0,
         title: m.title || '', sub: m.sub || '',
         mid: m.mid ?? null, spread: m.spread ?? null, why: m.why || null,
         bid: m.quotes ? m.quotes.bid : null, ask: m.quotes ? m.quotes.ask : null,
