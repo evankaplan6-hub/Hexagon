@@ -69,14 +69,6 @@
 
   let hits = [];                 // rebuilt each frame: { x, y, w, h, kind, key }
   let hover = null, sel = null;
-  // The chart is inside the room too: hover reads a point, click pins it for comparison.
-  // Store timestamps rather than array offsets because the server trims history over time.
-  let chartBox = null, chartHoverT = null, chartPinnedT = null;
-  const chartAt = (p) => {
-    if (!chartBox || p.x < chartBox.left || p.x > chartBox.right || p.y < chartBox.top || p.y > chartBox.bottom) return null;
-    return chartBox.history.reduce((best, point) => Math.abs(chartBox.xFor(point.t) - p.x) < Math.abs(chartBox.xFor(best.t) - p.x) ? point : best, chartBox.history[0]);
-  };
-
   function floorPoint(ev) {
     const cv = $('floorc'), r = cv.getBoundingClientRect();
     return {
@@ -92,19 +84,15 @@
     cv.addEventListener('mousemove', (ev) => {
       const p = floorPoint(ev);
       hover = hitAt(p);
-      const point = chartAt(p);
-      chartHoverT = point ? point.t : null;
-      cv.style.cursor = hover || point ? 'pointer' : 'default';
+      cv.style.cursor = hover ? 'pointer' : 'default';
     });
-    cv.addEventListener('mouseleave', () => { hover = null; chartHoverT = null; });
+    cv.addEventListener('mouseleave', () => { hover = null; });
     cv.addEventListener('click', (ev) => {
-      const p = floorPoint(ev), point = chartAt(p);
-      if (point) { chartPinnedT = chartPinnedT === point.t ? null : point.t; return; }
-      const h = hitAt(p);
+      const h = hitAt(floorPoint(ev));
       sel = same(h, sel) ? null : h;          // clicking the selected thing again closes it
     });
     // clicking empty floor clears; so does Escape
-    window.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') { sel = null; chartPinnedT = null; } });
+    window.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') { sel = null; chart.band = null; } });
   }
 
   const DESKS = [[132, 158], [216, 158], [300, 158], [132, 200], [216, 200], [300, 200], [384, 200]];
@@ -427,7 +415,7 @@
 
     // P&L board, standing on the floor left of the desks (after the vignette, which would bury it)
     panel(ctx, 4, 153, 124, 105, '#080c14', '#243047');
-    drawPnl(ctx, 8, 158, 118, 96);
+    chartBox = { x: 5, y: 154, w: 122, h: 103 };   // the chart itself is HTML (drawChart)
 
     // a dead feed greys the room out entirely: no chance of reading a frozen board as a live one
     if (stale()) {
@@ -438,93 +426,11 @@
     }
   }
 
-  // REALISED is profit from round trips that actually closed. NET is that plus the mark on whatever
-  // is still open. The earlier version charted CASH and called it banked, which was wrong: cash
-  // falls when we buy and rises when we sell, so a net-short book shows a big positive balance that
-  // is only proceeds from contracts still owed. It read as +$51 of earnings on a book that had
-  // earned nothing.
-  function drawPnl(ctx, x, y, w, h) {
-    const H = (S.maker && S.maker.hist) || [];
-    text(ctx, 'P&L', x + 4, y, '#7c869a', 6);
-    if (H.length < 2) {
-      chartBox = null;
-      text(ctx, H.length ? 'collecting — one point a minute' : 'no history yet', x + w / 2, y + h / 2 - 4, '#243044', 5, 'center');
-      return;
-    }
-    const t0 = H[0].t, t1 = Math.max(H[H.length - 1].t, t0 + 1);
-    // Scale to NET alone. Banked cash is an order of magnitude larger and only ever climbs, so
-    // sharing an axis with it flattened the one line worth reading into a wobble along the bottom.
-    // It stays on the chart as a faint reference, clipped where it runs off, and as a number below.
-    const vals = H.map((p) => p.e).concat([0]);
-    let lo = Math.min(...vals), hi = Math.max(...vals);
-    const pad = Math.max(0.5, (hi - lo) * 0.15); lo -= pad; hi += pad;
-    const L = x + 22, R = x + w - 6, T = y + 8, B = y + h - 8;
-    const px_ = (t) => L + (R - L) * ((t - t0) / (t1 - t0));
-    const py_ = (v) => B - (B - T) * ((v - lo) / (hi - lo));
-    chartBox = { left: L, right: R, top: T, bottom: B, history: H, xFor: px_ };
-
-    // zero line: the break-even the whole thing is measured against
-    const zy = py_(0);
-    ctx.save(); ctx.setLineDash([2, 2]); ctx.strokeStyle = '#1f2937'; ctx.lineWidth = 0.5;
-    ctx.beginPath(); ctx.moveTo(L, zy); ctx.lineTo(R, zy); ctx.stroke(); ctx.restore();
-    text(ctx, '0', L - 3, zy - 2.5, '#39404e', 5.5, 'right');
-    text(ctx, signed(hi), L - 3, T - 1, '#39404e', 5.5, 'right');
-    text(ctx, signed(lo), L - 3, B - 4, '#39404e', 5.5, 'right');
-
-    const line = (key, col, width, fill) => {
-      ctx.save(); ctx.beginPath();
-      H.forEach((p, i) => { const X = px_(p.t), Y = py_(p[key]); i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y); });
-      if (fill) {
-        const last = H[H.length - 1];
-        ctx.lineTo(px_(last.t), zy); ctx.lineTo(px_(H[0].t), zy); ctx.closePath();
-        const grad = ctx.createLinearGradient(0, T, 0, B);
-        grad.addColorStop(0, fill); grad.addColorStop(1, 'transparent');
-        ctx.globalAlpha = 0.30; ctx.fillStyle = grad; ctx.fill(); ctx.globalAlpha = 1;
-        ctx.beginPath();
-        H.forEach((p, i) => { const X = px_(p.t), Y = py_(p[key]); i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y); });
-      }
-      ctx.strokeStyle = col; ctx.lineWidth = width; ctx.lineJoin = 'round'; ctx.stroke(); ctx.restore();
-    };
-    const now = H[H.length - 1];
-    // NET only. The second series is not drawn: points recorded before the realised-P&L correction
-    // stored CASH in that same field, so the line steps between two different quantities partway
-    // along and means nothing across the join. Net is correct for every point ever recorded.
-    line('e', now.e >= 0 ? '#22c55e' : '#ef4444', 1, now.e >= 0 ? '#22c55e' : '#ef4444');
-
-    // where it stands right now
-    const nx = px_(now.t), ny = py_(now.e);
-    px(ctx, nx - 1, ny - 1, 2.5, 2.5, now.e >= 0 ? '#4ade80' : '#f87171');
-    glow(ctx, nx, ny, 8, now.e >= 0 ? '#22c55e' : '#ef4444', 0.5);
-
-    // A chart should answer "what happened here?", not merely decorate the room.
-    // Hover previews a point; clicking pins it so live updates do not move the comparison away.
-    const focusT = chartPinnedT || chartHoverT;
-    if (focusT != null) {
-      const focus = H.reduce((best, point) => Math.abs(point.t - focusT) < Math.abs(best.t - focusT) ? point : best, H[0]);
-      const fx = px_(focus.t), fy = py_(focus.e), pin = chartPinnedT != null;
-      ctx.save(); ctx.setLineDash([1, 2]); ctx.strokeStyle = pin ? '#5ec8e0' : '#737a88'; ctx.lineWidth = 0.7;
-      ctx.beginPath(); ctx.moveTo(fx, T); ctx.lineTo(fx, B); ctx.stroke(); ctx.restore();
-      px(ctx, fx - 2, fy - 2, 4, 4, pin ? '#5ec8e0' : (focus.e >= 0 ? '#4ade80' : '#f87171'));
-      const label = `${new Date(focus.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}  ${signed(focus.e)}`;
-      ctx.font = '5px JetBrains Mono, monospace'; const lw = Math.ceil(ctx.measureText(label).width) + 8;
-      const lx = Math.min(Math.max(fx - lw / 2, L), R - lw), ly = T + 2;
-      px(ctx, lx, ly, lw, 9, '#0d1119'); px(ctx, lx, ly, lw, 1, pin ? '#5ec8e0' : '#434d5b');
-      text(ctx, label, lx + 4, ly + 2, pin ? '#93dcec' : '#c3c9d6', 5);
-    }
-
-    const mins = Math.round((t1 - t0) / 60000);
-    text(ctx, mins < 90 ? `last ${mins}m` : `last ${(mins / 60).toFixed(1)}h`, x + 22, y + h - 4, '#39404e', 5.5);
-    text(ctx, 'NET', x + w - 34, y, now.e >= 0 ? '#22c55e' : '#ef4444', 5.5, 'right');
-    text(ctx, signed(now.e), x + w - 6, y, now.e >= 0 ? '#22c55e' : '#ef4444', 6.5, 'right');
-    // one row under the chart, now that the board is narrow: the span on the left, banked on the right
-    text(ctx, `realised ${signed((S.maker && S.maker.realized) || 0)}`, x + w - 6, y + h - 4, '#3f8a5a', 5.5, 'right');
-  }
-
   // ------------------------------------------------------------ notices: what the desk is doing, in words
   // The bots move when their desk runs; these say WHY, in sentences a person can read from a chair.
   // Everything here is HTML laid over the canvas: bubbles above the bots, the feed on the ledge, and
   // the alert in the floor's title bar. Positions come from the same drawing coordinates as the art.
-  let seats = [], statusBox = null, wallBox = null, tapeBox = null, clockBox = null;
+  let seats = [], statusBox = null, wallBox = null, tapeBox = null, clockBox = null, chartBox = null;
   let frameSeq = 0;           // bumps on every SSE frame, so the boards rebuild only when data moves
   let seenKeys = null, feedHead = '';
   const said = {};        // agent -> { text, sub, level, until }   the bubble currently showing
@@ -870,6 +776,143 @@
     while (el.scrollHeight > el.clientHeight + 1 && fs > minFs) { fs -= 0.5; el.style.fontSize = `${fs}px`; }
   }
 
+  // ------------------------------------------------------------ the P&L chart
+  // A chart you can ask things of. Two series (the maker desk's net, or the whole account), four
+  // ranges, a hover readout that says how far a moment is from the start of the range, and a drag
+  // that measures the gain or loss between any two moments. The same chart opens large on the wall
+  // screen. It is HTML and SVG over the canvas board, so its text is sharp and it takes a mouse.
+  //
+  // Maker NET is realised plus the mark on what is still open -- the number that is actually money.
+  // The old canvas chart once plotted cash and called it banked; see makerdesk.step for why not.
+  const RANGES = [['1h', 36e5], ['6h', 216e5], ['24h', 864e5], ['All', Infinity]];
+  const chart = { series: 'maker', range: 'All', hoverT: null, band: null, dragFrom: null };
+  try {
+    const c = JSON.parse(localStorage.getItem('hex-chart') || '{}');
+    if (c.series === 'maker' || c.series === 'acct') chart.series = c.series;
+    if (RANGES.some(([r]) => r === c.range)) chart.range = c.range;
+  } catch { /* private window: defaults */ }
+  const saveChart = () => { try { localStorage.setItem('hex-chart', JSON.stringify({ series: chart.series, range: chart.range })); } catch { /* ignore */ } };
+
+  function chartPoints() {
+    const M = S.maker || {};
+    const pts = chart.series === 'acct'
+      ? (S.balanceHistory || []).map((p) => ({ t: p.t, v: r2(p.b - S.initial) }))
+      : (M.hist || []).map((p) => ({ t: p.t, v: p.e }));
+    // the history is sampled once a minute; end it on the live value so the line is never stale
+    const live = chart.series === 'acct' ? r2(S.equity - S.initial) : (Number.isFinite(M.equity) ? r2(M.equity - M.initial) : null);
+    if (live != null) pts.push({ t: S.now, v: live });
+    if (pts.length < 2) return pts;
+    const span = RANGES.find(([r]) => r === chart.range)[1];
+    const inRange = pts.filter((p) => p.t >= S.now - span);
+    return inRange.length >= 2 ? inRange : pts.slice(-2);
+  }
+  const nearest = (pts, t) => pts.reduce((b, p) => (Math.abs(p.t - t) < Math.abs(b.t - t) ? p : b), pts[0]);
+  const spanTxt = (ms) => { const m = Math.round(ms / 60000); return m < 60 ? `${m}m` : m < 1440 ? `${(m / 60).toFixed(m < 600 ? 1 : 0)}h` : `${(m / 1440).toFixed(1)}d`; };
+
+  function chartSkeleton(big) {
+    return `<div class="ct">` +
+      `<span class="seg">${[['maker', big ? 'Maker desk' : 'Maker'], ['acct', big ? 'Whole account' : 'Account']].map(([k, l]) => `<button data-series="${k}">${l}</button>`).join('')}</span>` +
+      `<span class="cv"></span>${big ? '' : '<button class="cx" data-expand="1" title="Open large on the wall screen">⤢</button>'}</div>` +
+      `<div class="cplot"><svg viewBox="0 0 1000 400" preserveAspectRatio="none"></svg><span class="yhi"></span><span class="ylo"></span>` +
+      `<i class="cdot" hidden></i><div class="ctip" hidden></div></div>` +
+      `<div class="cb"><span class="seg">${RANGES.map(([r]) => `<button data-range="${r}">${r}</button>`).join('')}</span><span class="cr"></span></div>`;
+  }
+
+  function drawChart(el, big) {
+    if (!S) return;
+    if (el.dataset.built !== (big ? 'big' : 'small')) { el.innerHTML = chartSkeleton(big); el.dataset.built = big ? 'big' : 'small'; }
+    el.querySelectorAll('[data-series]').forEach((b) => b.classList.toggle('on', b.dataset.series === chart.series));
+    el.querySelectorAll('[data-range]').forEach((b) => b.classList.toggle('on', b.dataset.range === chart.range));
+    const pts = chartPoints(), svg = el.querySelector('svg'), tip = el.querySelector('.ctip'), dot = el.querySelector('.cdot');
+    if (pts.length < 2) { svg.innerHTML = ''; el.querySelector('.cr').textContent = 'collecting, one point a minute'; return; }
+
+    const t0 = pts[0].t, t1 = Math.max(pts[pts.length - 1].t, t0 + 1);
+    let lo = Math.min(0, ...pts.map((p) => p.v)), hi = Math.max(0, ...pts.map((p) => p.v));
+    const pad = Math.max(0.25, (hi - lo) * 0.12); lo -= pad; hi += pad;
+    const X = (t) => ((t - t0) / (t1 - t0)) * 1000, Y = (v) => 400 - ((v - lo) / (hi - lo)) * 400;
+    const last = pts[pts.length - 1], first = pts[0], up = last.v >= 0;
+    const col = up ? '#22c55e' : '#ef4444';
+    const line = pts.map((p, i) => `${i ? 'L' : 'M'}${X(p.t).toFixed(1)},${Y(p.v).toFixed(1)}`).join('');
+    const zy = Y(0).toFixed(1);
+    let g = `<defs><linearGradient id="cg-${big ? 'b' : 's'}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${col}" stop-opacity=".32"/><stop offset="1" stop-color="${col}" stop-opacity="0"/></linearGradient></defs>`;
+    if (chart.band) {
+      const a = Math.min(chart.band[0], chart.band[1]), b = Math.max(chart.band[0], chart.band[1]);
+      g += `<rect x="${X(a).toFixed(1)}" y="0" width="${Math.max(2, X(b) - X(a)).toFixed(1)}" height="400" fill="#5ec8e0" fill-opacity=".12"/>`;
+    }
+    g += `<line x1="0" x2="1000" y1="${zy}" y2="${zy}" stroke="#334155" stroke-dasharray="6 6" vector-effect="non-scaling-stroke"/>`;
+    g += `<path d="${line}L${X(last.t).toFixed(1)},${zy}L${X(first.t).toFixed(1)},${zy}Z" fill="url(#cg-${big ? 'b' : 's'})"/>`;
+    g += `<path d="${line}" fill="none" stroke="${col}" stroke-width="${big ? 2 : 1.5}" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`;
+    if (chart.hoverT != null) g += `<line x1="${X(chart.hoverT).toFixed(1)}" x2="${X(chart.hoverT).toFixed(1)}" y1="0" y2="400" stroke="#94a3b8" stroke-opacity=".6" vector-effect="non-scaling-stroke"/>`;
+    svg.innerHTML = g;
+    el.querySelector('.yhi').textContent = signed(hi - pad < 0 ? 0 : hi - pad);
+    el.querySelector('.ylo').textContent = signed(lo + pad > 0 ? 0 : lo + pad);
+
+    const cv = el.querySelector('.cv');
+    cv.textContent = signed(last.v); cv.className = `cv ${up ? 'pos' : 'neg'}`;
+    const chg = r2(last.v - first.v);
+    let read = `<b class="${chg >= 0 ? 'pos' : 'neg'}">${signed(chg)}</b> in ${spanTxt(t1 - t0)}`;
+    if (chart.band) {
+      const a = nearest(pts, Math.min(...chart.band)), b = nearest(pts, Math.max(...chart.band)), d = r2(b.v - a.v);
+      read = `${hhmm(a.t)}→${hhmm(b.t)} <b class="${d >= 0 ? 'pos' : 'neg'}">${signed(d)}</b>`;
+    }
+    el.querySelector('.cr').innerHTML = read;
+
+    if (chart.hoverT != null) {
+      const p = nearest(pts, chart.hoverT), since = r2(p.v - first.v);
+      dot.hidden = false;
+      Object.assign(dot.style, { left: `${X(p.t) / 10}%`, top: `${Y(p.v) / 4}%`, background: p.v >= 0 ? '#4ade80' : '#f87171' });
+      tip.hidden = false;
+      tip.innerHTML = `<b>${hhmm(p.t)}</b> <span class="${p.v >= 0 ? 'pos' : 'neg'}">${signed(p.v)}</span><br><small>${signed(since)} since ${hhmm(first.t)}</small>`;
+      const leftPct = X(p.t) / 10;
+      Object.assign(tip.style, leftPct > 55 ? { left: '', right: `${100 - leftPct + 2}%` } : { right: '', left: `${leftPct + 2}%` });
+    } else { dot.hidden = true; tip.hidden = true; }
+  }
+
+  // One set of handlers serves both charts: they find their own container and redraw it at once,
+  // without waiting for the next frame from the desk.
+  function wireChart(root, big) {
+    const redraw = () => drawChart(root, big);
+    const tAt = (ev) => {
+      const pts = chartPoints(), r = root.querySelector('svg').getBoundingClientRect();
+      if (pts.length < 2 || !r.width) return null;
+      const f = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width));
+      return nearest(pts, pts[0].t + f * (pts[pts.length - 1].t - pts[0].t)).t;
+    };
+    root.addEventListener('click', (ev) => {
+      const b = ev.target.closest('button');
+      if (!b) return;
+      if (b.dataset.series) { chart.series = b.dataset.series; chart.band = null; saveChart(); }
+      if (b.dataset.range) { chart.range = b.dataset.range; chart.band = null; saveChart(); }
+      if (b.dataset.expand) { sel = { kind: 'chart', key: 'pnl' }; wallKey = ''; }
+      redraw();
+    });
+    root.addEventListener('pointermove', (ev) => {
+      if (!ev.target.closest('.cplot')) { if (chart.hoverT != null && chart.dragFrom == null) { chart.hoverT = null; redraw(); } return; }
+      const t = tAt(ev);
+      if (t == null) return;
+      chart.hoverT = t;
+      if (chart.dragFrom != null) chart.band = [chart.dragFrom, t];
+      redraw();
+    });
+    root.addEventListener('pointerleave', () => { chart.hoverT = null; chart.dragFrom = null; redraw(); });
+    root.addEventListener('pointerdown', (ev) => {
+      if (!ev.target.closest('.cplot')) return;
+      const t = tAt(ev);
+      if (t == null) return;
+      chart.dragFrom = t; chart.band = null;
+      root.querySelector('.cplot').setPointerCapture(ev.pointerId);
+      ev.preventDefault();
+    });
+    root.addEventListener('pointerup', (ev) => {
+      if (chart.dragFrom == null) return;
+      const t = tAt(ev);
+      // a click without a drag clears the measurement rather than leaving a zero-width band
+      chart.band = t != null && Math.abs(t - chart.dragFrom) > 0 ? [chart.dragFrom, t] : null;
+      chart.dragFrom = null;
+      redraw();
+    });
+  }
+
   // ------------------------------------------------------------ the wall screen, the fills board, the clock
   // The wall screen answers one question at a glance -- how is the maker desk doing -- and shows the
   // few positions worth watching. Everything else is one click away: a position or a bot opens its
@@ -956,11 +999,27 @@
         const m = sel && sel.kind === 'market';
         const a = sel && sel.kind === 'agent' ? S.agents.find((x) => x.key === sel.key) : null;
         el.style.fontSize = `${wallFs}px`;
-        el.innerHTML = sel && sel.kind === 'market' ? wallRecap(sel.key, sel.at, M) : a ? wallAgent(a) : wallHome(M);
-        const list2 = el.querySelector('.wlist, .wlog');
-        if (list2) list2.scrollTop = top;
-        if (m) fitText(el, wallFs, 8);
+        if (sel && sel.kind === 'chart') {
+          if (el.dataset.mode !== 'chart') {
+            el.innerHTML = `<div class="wh"><button class="wback" data-back="1">‹ Back</button><span>Profit and loss · drag to measure</span></div><div class="pnl big"></div>`;
+            wireChart(el.querySelector('.pnl'), true);
+          }
+          el.dataset.mode = 'chart';
+          drawChart(el.querySelector('.pnl'), true);
+        } else {
+          el.dataset.mode = '';
+          el.innerHTML = sel && sel.kind === 'market' ? wallRecap(sel.key, sel.at, M) : a ? wallAgent(a) : wallHome(M);
+          const list2 = el.querySelector('.wlist, .wlog');
+          if (list2) list2.scrollTop = top;
+          if (m) fitText(el, wallFs, 8);
+        }
       }
+    }
+
+    if (chartBox) {
+      const el = $('chart');
+      fit(el, chartBox, Math.max(9, Math.min(15, k * 4.6)));
+      if (el.dataset.frame !== String(frameSeq)) { el.dataset.frame = String(frameSeq); drawChart(el, false); }
     }
 
     if (tapeBox) {
@@ -1000,6 +1059,8 @@
     sel = sel && sel.at === at ? null : { kind: 'market', key: li.dataset.t, at };
     wallKey = ''; tapeKey = '';
   });
+
+  wireChart($('chart'), false);
 
   $('wall').addEventListener('click', (ev) => {
     const b = ev.target.closest('button');
