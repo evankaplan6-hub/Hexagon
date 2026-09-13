@@ -374,3 +374,31 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #wall .wrecap b { font-family: var(--mono); font-weight: 600; }
 #tape li[data-t] { cursor: pointer; border-radius: 4px; }
 #tape li[data-t]:hover, #tape li.on { background: rgba(80,200,120,.10); }
+
+/* ---- P&L chart (small on the floor, large on the wall) ------------------- */
+#chart { position: absolute; z-index: 1; pointer-events: auto; box-sizing: border-box; padding: .45em .5em .4em; }
+.pnl { display: flex; flex-direction: column; font-family: var(--sans); color: #aeb6c4; user-select: none; }
+#wall .pnl.big { flex: 1 1 auto; min-height: 0; margin-top: .5em; font-size: .95em; }
+.pnl button { font: inherit; background: none; border: 0; cursor: pointer; color: inherit; padding: 0; }
+.pnl .ct, .pnl .cb { flex: none; display: flex; align-items: center; gap: .5em; }
+.pnl .seg { display: inline-flex; background: rgba(255,255,255,.04); border: 1px solid #222b3a; border-radius: 6px; padding: 1px; }
+/* #wall button resets every button on the wall screen, so these need the id to win there too */
+.pnl .seg button, #wall .pnl .seg button { font: 600 .72em var(--sans); color: #7a8497; padding: .18em .5em; border-radius: 4px; }
+.pnl .seg button.on, #wall .pnl .seg button.on { background: #1d2636; color: #e6e8ee; }
+.pnl .seg button:hover:not(.on), #wall .pnl .seg button:hover:not(.on) { color: #c9cfd9; }
+#wall .pnl.big .seg button { font-size: .8em; padding: .25em .7em; }
+.pnl .cv { margin-left: auto; font: 700 1em var(--mono); }
+.pnl.big .cv { font-size: 1.6em; }
+.pnl .cx { color: #6b7690 !important; font-size: .95em !important; line-height: 1; }
+.pnl .cx:hover { color: #9cc3f0 !important; }
+.pnl .cplot { position: relative; flex: 1 1 auto; min-height: 0; margin: .35em 0; cursor: crosshair; touch-action: none; }
+.pnl svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.pnl .yhi, .pnl .ylo { position: absolute; left: 0; font: .62em var(--mono); color: #4f5a6e; pointer-events: none; }
+.pnl .yhi { top: 0; } .pnl .ylo { bottom: 0; }
+.pnl .cdot { position: absolute; width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; border-radius: 50%; box-shadow: 0 0 0 2px #0b0f17; pointer-events: none; }
+.pnl .ctip { position: absolute; top: 4%; padding: .3em .5em; border-radius: 6px; background: rgba(9,12,18,.95); border: 1px solid #2a3140;
+  font: .72em/1.35 var(--mono); color: #d5dae3; white-space: nowrap; pointer-events: none; }
+.pnl .ctip small { color: #7a8497; font-size: .92em; }
+.pnl .cr { margin-left: auto; font: .72em var(--mono); color: #7a8497; text-align: right; }
+.pnl.big .cr, .pnl.big .ctip { font-size: .85em; }
+.pnl .cr b { font-weight: 700; }
