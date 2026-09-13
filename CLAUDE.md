@@ -15,7 +15,7 @@ to Fly once tests pass (paper only; see ops/DEPLOY.md → Auto-deploy).
 ## Running it
 
 ```bash
-npm test                                      # 683 assertions, no network, no clock
+npm test                                      # 701 assertions, no network, no clock
 node server.js                                # paper account, live market data → localhost:8787
 DEMO=1 DATA_DIR=./data-demo node server.js    # synthetic fills/settles, separate account
 npm run reset                                 # wipe the paper account
@@ -50,7 +50,7 @@ src/whales.js     whale watch: top Polymarket sports wallets' big bets on the fl
 tools/            edge-scan, replay, maker-replay, maker-rank, pm-maker-scan, maker-report, fillcheck,
                   history-scan, golden, api, lab-fetch + lab (strategy tournament on settled markets),
                   whale-fetch + whale-lab (does copying top sports wallets pay? no, out of sample)
-                  tests: test.js (npm test) + decide/probe/maker/broker/matcher/stream/engine/brain/lab/whale-test.js
+                  tests: test.js (npm test) + decide/probe/maker/broker/matcher/stream/engine/brain/lab/whale/http-test.js
 data/fly/         gitignored: journals, state and tick tapes copied down from the Fly box, plus
                   kstrades.jsonl (the trade history maker-replay scores against) and
                   rank-listing.json + rank-trades.jsonl (the 440-market pool maker-rank scores)

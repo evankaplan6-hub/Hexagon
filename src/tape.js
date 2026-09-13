@@ -30,9 +30,10 @@ const http = require('./http');
 
 const num = (x) => { const n = parseFloat(x); return Number.isFinite(n) ? n : null; };
 
+// `priority`: the maker's tape and book go to the front of Kalshi's line (see src/http.js).
 async function getWithBackoff(url, tries = 3) {
   for (let i = 0; i < tries; i++) {
-    try { return await http.getJSON(url); }
+    try { return await http.getJSON(url, { priority: true }); }
     catch (e) {
       if (!/429/.test(String(e.message)) || i === tries - 1) throw e;
       await new Promise((r) => setTimeout(r, 400 * (i + 1) * (i + 1)));

@@ -70,6 +70,7 @@ function makeMakerDesk(cfg) {
   let eligible = null;       // series that actually charge makers nothing
   let lastUniverseAt = 0;
   let refreshing = null;     // in-flight refresh, so the scan never runs twice or blocks the tick
+  let blocked = false;       // did the last step wait on a scan? (the engine's slow-round warning asks)
   const tape = makeTape({ maxPages: cfg.makerTapePages });   // batched exchange-wide trades + per-series books
   let stream = null, streamTried = false, streamRetryAt = 0;
 
@@ -165,6 +166,7 @@ function makeMakerDesk(cfg) {
   }
 
   async function step(E) {
+    blocked = false;
     if (!cfg.makerEnabled) return;
     ensureStream(E);
     const S = book(E);
@@ -202,7 +204,7 @@ function makeMakerDesk(cfg) {
     // included. The first one has to block (there is nothing to quote yet); after that it runs in
     // the background off the previous universe, guarded so it can never overlap itself.
     const stale = Date.now() - lastUniverseAt > 15 * 60 * 1000;
-    if (!universe.length) await refreshUniverse(E);
+    if (!universe.length) { blocked = true; await refreshUniverse(E); }
     else if (stale && !refreshing) {
       refreshing = refreshUniverse(E)
         .catch((e) => E.log('MAKR', 'OPS', null, `universe refresh failed (${String(e.message).slice(0, 80)}) · still quoting the previous ${universe.length}`))
@@ -420,7 +422,7 @@ function makeMakerDesk(cfg) {
     };
   }
 
-  return { step, flatten, resume, snapshot };
+  return { step, flatten, resume, snapshot, blockedOnScan: () => blocked };
 }
 
 module.exports = { makeMakerDesk };

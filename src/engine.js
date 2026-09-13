@@ -627,6 +627,9 @@ class Engine {
 
   // ---------------------------------------------------------------- loop
   async start() {
+    // Kalshi's REST calls take turns from here on (src/http.js). Not in the constructor: tests
+    // build engines, and nothing that never starts should be paced.
+    http.paceHost(ks.BASE, this.cfg.kalshiGapMs);
     // per-series taker multipliers before anything prices: MLB bills at half, fourteen series at
     // zero, and a flat rate made the desk decline trades that were cheaper than it believed
     await ks.loadFeeMultipliers(this.cfg.ksSeries).catch(() => {});
@@ -647,7 +650,11 @@ class Engine {
       finally {
         running = false;
         this.lastMakerMs = Date.now() - t0;
-        if (this.lastMakerMs > this.cfg.makerEverySec * 1000 && this.due('makr-slow', 300)) {
+        // The first round after a start has to wait for the full universe scan (~20s) before
+        // there is anything to quote. That is expected, and warning about it made every deploy
+        // look like a latency problem.
+        const scanned = this.maker.blockedOnScan ? this.maker.blockedOnScan() : false;
+        if (!scanned && this.lastMakerMs > this.cfg.makerEverySec * 1000 && this.due('makr-slow', 300)) {
           this.log('MAKR', 'OPS', null, `requote took ${(this.lastMakerMs / 1000).toFixed(1)}s, longer than the ${this.cfg.makerEverySec}s target · quotes are going stale`);
         }
       }
