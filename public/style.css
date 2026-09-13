@@ -369,3 +369,8 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #clock b.on { color: #22c55e; }
 #clock small { font: .45em var(--mono); color: #4b5563; }
 #wall .wr .nm i { font-style: normal; color: #6b7690; font-size: .85em; }
+#wall .wrecap { flex: none; list-style: none; margin: .6em 0 0; padding: .5em 0 0; border-top: 1px solid rgba(120,150,200,.12); font-size: .92em; color: #c9cfd9; }
+#wall .wrecap li { padding: .22em 0; }
+#wall .wrecap b { font-family: var(--mono); font-weight: 600; }
+#tape li[data-t] { cursor: pointer; border-radius: 4px; }
+#tape li[data-t]:hover, #tape li.on { background: rgba(80,200,120,.10); }
