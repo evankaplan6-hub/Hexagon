@@ -15,6 +15,7 @@ const SUITES = [
   ['stream', 'the Kalshi trade socket: framing, trade shape, and the tape falling back to the poll'],
   ['engine', 'the ledger: the operator latch, partial exits, and one close per position'],
   ['brain', 'the minds: the proposal clamp, request shaping, cost metering and backoff'],
+  ['lab', 'the strategy lab: fees, fills, settlement, and no strategy seeing the answer'],
 ];
 
 let failed = 0, totalPassed = 0;
