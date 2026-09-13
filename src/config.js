@@ -268,6 +268,18 @@ module.exports = {
   // the file a mind is not allowed to argue with.
   llmMinEdge: num('LLM_MIN_EDGE', 0),
 
+  // Whale watch (src/whales.js): the top Polymarket sports wallets and what they just bought.
+  // Advisory only -- it logs and records, it never trades. Read-only public data, no key.
+  whaleWatch: env('WHALE_WATCH', '1') !== '0',
+  whaleTop: Math.max(1, Math.round(num('WHALE_TOP', 25))),          // wallets followed, by profit
+  whalePeriod: ['DAY', 'WEEK', 'MONTH', 'ALL'].includes(env('WHALE_PERIOD', 'MONTH')) ? env('WHALE_PERIOD', 'MONTH') : 'MONTH',
+  whaleMinUsd: num('WHALE_MIN_USD', 10000),       // a wallet's net buying on one outcome that counts as a bet
+  whaleWindowMin: num('WHALE_WINDOW_MIN', 360),   // ...summed over this trailing window
+  whaleFreshMin: num('WHALE_FRESH_MIN', 20),      // older bets are noted as seen, not announced
+  whaleEverySec: num('WHALE_EVERY_SEC', 15),
+  whalePerPoll: Math.max(1, Math.round(num('WHALE_PER_POLL', 5))),  // wallets read per poll: 25 wallets every 75s
+  whaleBoardMin: num('WHALE_BOARD_MIN', 30),      // leaderboard refresh
+
   // fees
   pmTakerFee: num('PM_TAKER_FEE', 0),
   ksFeeRate: num('KS_FEE_RATE', 0.07),

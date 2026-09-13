@@ -130,7 +130,7 @@
   // one-line job descriptions, because "RIGO · MANAGING" tells you nothing on its own
   const ROLE = {
     HOLT: 'finds and pairs markets across both venues',
-    ILSA: 'reads news and sentiment on live events',
+    ILSA: 'reads price moves, and what the top Polymarket sports bettors just bought',
     BRAM: 'looks for convergence signals worth trading',
     KETT: 'sizes and places the convergence trades',
     RIGO: 'manages open positions and exits them',
@@ -475,6 +475,12 @@
         if (m) return { text: `${m[1]}: price moved ${move(m[2])} on Polymarket, ${move(m[3])} on Kalshi`, sub: `venues ${+m[4]}¢ apart, ${m[5]}`, level: 'quiet' };
         break;
       }
+      // whale watch (src/whales.js): "<who> bought $54K on <outcome> at 55c · <market> · #6 in sports… · Kalshi 57c now"
+      case 'ILSA WHALE': {
+        const cent = (s) => s.replace(/(\d+)c\b/g, '$1¢');
+        return { text: `Big bet: ${cent(first)}`, sub: cent(rest), level: 'info' };
+      }
+      case 'ILSA SCAN': return { text: cap(first), sub: rest, level: 'info' };
       case 'BRAM RESEARCH': {
         const n = (t.match(/over (\d+) pairs/) || [])[1], sig = (S.signals || []).length;
         if (n) return { text: sig ? `Checked ${n} pairs: ${sig} worth a closer look` : `Checked ${n} pairs: no price gap big enough to trade`, level: sig ? 'info' : 'quiet' };

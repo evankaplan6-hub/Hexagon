@@ -15,7 +15,7 @@ to Fly once tests pass (paper only; see ops/DEPLOY.md → Auto-deploy).
 ## Running it
 
 ```bash
-npm test                                      # 635 assertions, no network, no clock
+npm test                                      # 683 assertions, no network, no clock
 node server.js                                # paper account, live market data → localhost:8787
 DEMO=1 DATA_DIR=./data-demo node server.js    # synthetic fills/settles, separate account
 npm run reset                                 # wipe the paper account
@@ -46,9 +46,11 @@ src/broker.js     paper broker + live Kalshi adapter
 src/venues/       Polymarket (Gamma + CLOB) and Kalshi public data
 src/recorder.js   tick tape writer      public/          dashboard
 src/tape.js       maker market data     src/kalshi-ws.js Kalshi trade socket (read-only; needs the key, else the tape polls)
+src/whales.js     whale watch: top Polymarket sports wallets' big bets on the floor (advisory, never trades; WHALE_WATCH=0 off)
 tools/            edge-scan, replay, maker-replay, maker-rank, pm-maker-scan, maker-report, fillcheck,
-                  history-scan, golden, api, lab-fetch + lab (strategy tournament on settled markets)
-                  tests: test.js (npm test) + decide/probe/maker/broker/matcher/stream/engine/brain/lab-test.js
+                  history-scan, golden, api, lab-fetch + lab (strategy tournament on settled markets),
+                  whale-fetch + whale-lab (does copying top sports wallets pay? no, out of sample)
+                  tests: test.js (npm test) + decide/probe/maker/broker/matcher/stream/engine/brain/lab/whale-test.js
 data/fly/         gitignored: journals, state and tick tapes copied down from the Fly box, plus
                   kstrades.jsonl (the trade history maker-replay scores against) and
                   rank-listing.json + rank-trades.jsonl (the 440-market pool maker-rank scores)
@@ -56,6 +58,8 @@ ops/              Fly deploy + launchd autostart (not currently installed)
 data/             gitignored: state.json, journal-*.jsonl, ticks-*.jsonl, desk.log
 data/lab/         gitignored: series-busy.json + universe.json (cached listings) and markets.jsonl (hourly bars)
                   for tools/lab.js; markets-volume-picked.jsonl is the biased first sample, kept as the counterexample
+data/lab/whales/  gitignored: pool, fills, conditions, markets for tools/whale-lab.js
+data/whales-*.jsonl  gitignored: every bet whale watch announced, for scoring once they settle
 ```
 
 `data/journal-YYYY-MM-DD.jsonl` is the append-only truth; `state.json` trims itself and is only

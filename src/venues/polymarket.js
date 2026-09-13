@@ -15,6 +15,7 @@ function normalize(m) {
   return {
     venue: 'PM',
     id: String(m.id),
+    conditionId: m.conditionId || null,   // what the public trade feed keys on (src/whales.js)
     question: m.question,
     slug: m.slug,
     outcomes,
@@ -95,4 +96,56 @@ async function fetchPrices(tokenIds) {
   return out;
 }
 
-module.exports = { fetchUniverse, fetchMarket, fetchBook, fetchPrices };
+// ---------------------------------------------------------------- the public trade feed
+// Every Polymarket fill is on-chain, and the data API serves it per wallet with no key. This is
+// all a "whale tracker" is: the sports leaderboard, and what the wallets on it just bought.
+const DATA = 'https://data-api.polymarket.com';
+
+// One leaderboard page. category SPORTS|OVERALL|..., period DAY|WEEK|MONTH|ALL, orderBy PNL|VOL.
+// The API serves at most 50 rows a call.
+async function fetchLeaderboard({ category = 'SPORTS', period = 'MONTH', orderBy = 'PNL', limit = 50, offset = 0 } = {}) {
+  const rows = await http.getJSON(`${DATA}/v1/leaderboard?category=${category}&timePeriod=${period}&orderBy=${orderBy}&limit=${Math.min(50, limit)}&offset=${offset}`);
+  return (Array.isArray(rows) ? rows : []).map((r) => ({
+    wallet: String(r.proxyWallet || '').toLowerCase(), name: r.userName || '', rank: +r.rank || null,
+    pnl: num(r.pnl) || 0, vol: num(r.vol) || 0,
+  })).filter((r) => r.wallet);
+}
+
+// A wallet's fills, newest first. `start`/`end` are unix seconds.
+async function fetchActivity(wallet, { limit = 100, offset = 0, start, end } = {}) {
+  let url = `${DATA}/activity?user=${wallet}&type=TRADE&limit=${limit}&offset=${offset}`;
+  if (start) url += `&start=${start}`;
+  if (end) url += `&end=${end}`;
+  const rows = await http.getJSON(url);
+  return (Array.isArray(rows) ? rows : []).map(normalizeFill).filter(Boolean);
+}
+
+function normalizeFill(t) {
+  const price = num(t.price), size = num(t.size);
+  if (!t.conditionId || price == null || size == null) return null;
+  return {
+    wallet: String(t.proxyWallet || '').toLowerCase(), name: t.name || t.pseudonym || '',
+    tx: t.transactionHash || '', ts: +t.timestamp, side: t.side === 'SELL' ? 'SELL' : 'BUY',
+    conditionId: t.conditionId, outcomeIndex: +t.outcomeIndex, outcome: t.outcome || '',
+    price, size, usd: num(t.usdcSize) ?? price * size,
+    title: t.title || '', slug: t.slug || '', eventSlug: t.eventSlug || '',
+  };
+}
+
+// Markets by condition id, open or settled. Settled ones carry outcomePrices of "1"/"0".
+async function fetchByConditions(ids) {
+  const out = [];
+  for (let i = 0; i < ids.length; i += 20) {
+    const q = ids.slice(i, i + 20).map((id) => `condition_ids=${id}`).join('&');
+    for (const closed of ['true', 'false']) {
+      const page = await http.getJSON(`${GAMMA}/markets?${q}&closed=${closed}&limit=100`);
+      for (const raw of Array.isArray(page) ? page : []) {
+        const m = normalize(raw);
+        if (m) out.push({ ...m, resolved: raw.umaResolutionStatus === 'resolved' });
+      }
+    }
+  }
+  return out;
+}
+
+module.exports = { fetchUniverse, fetchMarket, fetchBook, fetchPrices, fetchLeaderboard, fetchActivity, fetchByConditions, normalizeFill };
