@@ -71,13 +71,6 @@
   // The chart is inside the room too: hover reads a point, click pins it for comparison.
   // Store timestamps rather than array offsets because the server trims history over time.
   let chartBox = null, chartHoverT = null, chartPinnedT = null;
-  // Scrollable regions inside the canvas. The book, the fill tape and an agent's history all hold
-  // more rows than fit, and a canvas has no native scrolling -- so the wheel fell through to the
-  // page and moved the whole document instead of the list under the pointer.
-  let zones = [];                // rebuilt each frame: { x, y, w, h, id, max }
-  const scroll = { book: 0, tape: 0, agentlog: 0, pos: 0 };
-  const zoneAt = (p) => zones.find((z) => p.x >= z.x && p.x <= z.x + z.w && p.y >= z.y && p.y <= z.y + z.h) || null;
-
   const chartAt = (p) => {
     if (!chartBox || p.x < chartBox.left || p.x > chartBox.right || p.y < chartBox.top || p.y > chartBox.bottom) return null;
     return chartBox.history.reduce((best, point) => Math.abs(chartBox.xFor(point.t) - p.x) < Math.abs(chartBox.xFor(best.t) - p.x) ? point : best, chartBox.history[0]);
@@ -108,17 +101,7 @@
       if (point) { chartPinnedT = chartPinnedT === point.t ? null : point.t; return; }
       const h = hitAt(p);
       sel = same(h, sel) ? null : h;          // clicking the selected thing again closes it
-      scroll.agentlog = 0; scroll.book = 0; scroll.pos = 0;   // a new view starts at the top
     });
-    // Scroll the list under the pointer, and only then let the page have the event. passive:false
-    // is required -- without it the browser ignores preventDefault and scrolls the document anyway.
-    cv.addEventListener('wheel', (ev) => {
-      const z = zoneAt(floorPoint(ev));
-      if (!z || z.max <= 0) return;                       // nothing to scroll here: page scrolls
-      const next = Math.max(0, Math.min(z.max, scroll[z.id] + (ev.deltaY > 0 ? 1 : -1)));
-      if (next !== scroll[z.id]) { scroll[z.id] = next; ev.preventDefault(); }
-      else if ((next === 0 && ev.deltaY < 0) || (next === z.max && ev.deltaY > 0)) return; // hand back at the ends
-    }, { passive: false });
     // clicking empty floor clears; so does Escape
     window.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') { sel = null; chartPinnedT = null; } });
   }
@@ -154,63 +137,6 @@
     px(ctx, x, y, w, 1, edge);
     px(ctx, x, y + h - 1, w, 1, '#05070b');
     px(ctx, x, y, 1, h, edge); px(ctx, x + w - 1, y, 1, h, '#05070b');
-  }
-  // ------------------------------------------------------------ focus views
-  // What the wall screen shows when you click something. These are the "intelligent" part: not a
-  // dump of the fields, but the read on them -- what the position is, and what it means. A market
-  // that is 77 short with a 32,000-deep queue on the offer is a specific problem, and the screen
-  // should say so rather than leave you to work it out from four numbers.
-  function focusHeader(ctx, title, sub) {
-    text(ctx, title, 144, 15, '#c7cdd8', 6);
-    text(ctx, 'ESC ✕', 336, 15, '#3d4350', 5, 'right');
-    if (sub) text(ctx, sub, 144, 23, '#4b5563', 5);
-    px(ctx, 144, 31, 192, 1, '#141b28');
-  }
-  function drawMarketFocus(ctx, m, M) {
-    focusHeader(ctx, clip(OUTCOME(m) || QUESTION(m), 34), m.ticker.replace(/^KX/, ''));
-    if (m.title) wrap(ctx, QUESTION(m), 150, 37, 180, 7, '#9aa3b5', 5);
-    const rows = [
-      ['our quote', m.bid == null && m.ask == null ? 'not quoting' : `${m.bid == null ? '—' : cents(m.bid)} bid  /  ${m.ask == null ? '—' : cents(m.ask)} ask`],
-      ['flow', m.tpd ? `${m.tpd} trades a day` : 'unmeasured'],
-      ['queue ahead of us', m.qBid == null ? '—' : `${m.qBid} on our bid, ${m.qAsk} on our offer`],
-      ['clears in', m.clear == null ? '—' : (m.clear < 1 ? `${(m.clear * 24).toFixed(1)} hours` : `${m.clear.toFixed(1)} days`)],
-      ['position', m.inv ? `${m.inv > 0 ? 'long' : 'short'} ${Math.abs(m.inv)} contracts` : 'flat'],
-      ['paid', m.inv ? signed(m.cost) : '—'],
-      ['marked', m.inv ? signed(m.mark - m.cost) : '—'],
-      ['fills here', String(m.fills || 0)],
-    ];
-    rows.forEach(([k, v], i) => {
-      const y = 53 + i * 7.4;
-      text(ctx, k, 150, y, '#4b5563', 5);
-      text(ctx, v, 330, y, '#aab3c5', 5, 'right');
-    });
-    // the read
-    px(ctx, 144, 114, 192, 1, '#141b28');
-    let read, col = '#7c869a';
-    if (!m.quoting && m.inv) { read = 'Dropped from the book. Quoting one side only, to work it off.'; col = '#d4a72c'; }
-    else if (!m.inv) read = 'Flat here. Both sides resting, waiting to be traded against.';
-    else if (Math.abs(m.inv) > 60) { read = `${m.inv > 0 ? 'Long' : 'Short'} ${Math.abs(m.inv)} — near the ${M.cap || 100} cap. One-sided flow, not a round trip.`; col = '#f87171'; }
-    else if (m.qAsk > 5000 || m.qBid > 5000) read = 'Deep queue here. Fills come slowly; the crowd is served first.';
-    else read = 'Working normally — small position, queue clears fast.';
-    wrap(ctx, read, 150, 119, 180, 7, col, 5);
-  }
-  function drawAgentFocus(ctx, a, M) {
-    focusHeader(ctx, `${a.n} · ${a.key} · ${a.role}`, ROLE[a.key] || '');
-    const all = (S.log || []).filter((e) => e.agent === a.key);
-    const LROWS = 8;
-    const maxL = Math.max(0, all.length - LROWS);
-    scroll.agentlog = Math.min(scroll.agentlog, maxL);
-    zones.push({ x: 144, y: 43, w: 192, h: 95, id: 'agentlog', max: maxL });
-    const mine = all.slice(scroll.agentlog, scroll.agentlog + LROWS);
-    text(ctx, 'RECENT', 150, 37, '#4b5563', 5);
-    text(ctx, maxL ? `${scroll.agentlog + 1}-${scroll.agentlog + mine.length} of ${all.length}` : `${a.runs || 0} runs`, 330, 37, '#4b5563', 5, 'right');
-    if (!mine.length) text(ctx, 'nothing logged yet', 240, 80, '#3d4350', 6, 'center');
-    mine.forEach((e, i) => {
-      const y = 46 + i * 11.4;
-      text(ctx, hhmm(e.t), 150, y, '#3d4350', 5);
-      text(ctx, e.kind, 172, y, a.color, 5);
-      text(ctx, clip(String(e.text).split('·')[0], 48), 150, y + 5, '#7c869a', 4.5);
-    });
   }
   // one-line job descriptions, because "RIGO · MANAGING" tells you nothing on its own
   const ROLE = {
@@ -285,19 +211,6 @@
 
   const byTicker = (M, t) => (M.markets || []).find((x) => x.ticker === t);
 
-  // canvas has no word wrap
-  function wrap(ctx, str, x, y, maxw, lh, col, size) {
-    ctx.font = `${size}px JetBrains Mono, monospace`;
-    const words = String(str).split(' ');
-    let line = '', n = 0;
-    for (const w of words) {
-      const test = line ? line + ' ' + w : w;
-      if (ctx.measureText(test).width > maxw && line) { text(ctx, line, x, y + n * lh, col, size); line = w; n++; }
-      else line = test;
-    }
-    if (line) text(ctx, line, x, y + n * lh, col, size);
-  }
-
   // Kept immediately beside drawFloor on purpose. Twice now this has been swallowed by a
   // marker-to-marker deletion of a neighbouring block, and the failure is silent in the source and
   // fatal in the browser: the whole floor goes black sixty times a second.
@@ -338,7 +251,7 @@
   function drawFloor(t) {
     const ctx = floorCtx(); ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, 480, ROOM_H);   // the letterbox is repainted in floorCtx
-    hits = []; zones = [];                   // rebuilt every frame; the pointer tests against them
+    hits = [];                               // rebuilt every frame; the pointer tests against them
     // ---- the room -----------------------------------------------------------------------------
     // wall: darker at the corners, lifting toward the middle where the big screen hangs
     const wall = ctx.createLinearGradient(0, 0, 0, 150);
@@ -373,11 +286,7 @@
     // no edge and correctly does nothing. Reading them told you nothing about whether the machine
     // was working, which is the only question the floor should answer at a glance.
     const M = S.maker || {};
-    const banked = M.realized || 0;      // REALISED, not cash: see makerdesk.step
-    const marked = M.mark || 0;
-    const mEq = (M.equity ?? M.initial ?? 0) - (M.initial ?? 0);
     const halted = S.halt || M.halted;
-    const working = !halted && M.quoting > 0;
     // ---- status board (left) : the "is it working" answer, in words
     // The board is drawn here; its words are HTML laid over it (placeStatus), for the same reason
     // as the bubbles -- 5-unit canvas text was unreadable and its lines ran into each other.
@@ -397,122 +306,20 @@
     glass.addColorStop(0, 'rgba(70,120,190,0.10)'); glass.addColorStop(1, 'rgba(70,120,190,0.02)');
     ctx.fillStyle = glass; ctx.fillRect(140, 12, 200, 130);
 
-    if (sel && sel.kind === 'market') {
-      const m = (M.markets || []).find((x) => x.ticker === sel.key);
-      if (!m) sel = null; else drawMarketFocus(ctx, m, M);
-    } else if (sel && sel.kind === 'agent') {
-      const a2 = S.agents.find((x) => x.key === sel.key);
-      if (!a2) sel = null; else drawAgentFocus(ctx, a2, M);
-    }
-
-    if (!sel) {
-      text(ctx, `MAKER DESK 07 · ${S.mode.toUpperCase()}`, 144, 15, '#c7cdd8', 6);
-      text(ctx, `${M.fills || 0} FILLS`, 336, 15, '#7c869a', 6, 'right');
-      // three numbers, and they mean different things on purpose
-      [['REALISED', banked, 'closed round trips'], ['ON INVENTORY', marked, `${M.inv || 0} contracts`], ['NET', mEq, 'if closed now']]
-        .forEach(([lab, v, sub], i) => {
-          const cx = 168 + i * 68;
-          text(ctx, lab, cx, 22, '#5b6270', 5, 'center');
-          text(ctx, signed(v), cx, 29, v >= 0 ? '#22c55e' : '#ef4444', 9, 'center');
-          text(ctx, sub, cx, 40, '#4b5563', 5, 'center');
-        });
-      px(ctx, 144, 46, 192, 1, '#141b28');
-
-      // Positions first, and separated. They used to be mixed into one list of 24 quoted markets
-      // with a HELD column that was a dot on almost every row -- the five things we actually own
-      // were the hardest part of the board to find.
-      const all = M.markets || [];
-      const held = all.filter((m) => m.inv);
-      const flat = all.filter((m) => !m.inv && m.quoting);
-      const heldPL = held.reduce((a2, m) => a2 + (m.mark - m.cost), 0);
-
-      const PROWS = Math.min(4, Math.max(1, held.length));
-      text(ctx, `OPEN POSITIONS  ${held.length}`, 144, 50, held.length ? '#c7cdd8' : '#4b5563', 5);
-      if (held.length) text(ctx, `${signed(heldPL)} marked`, 331, 50, heldPL >= 0 ? '#22c55e' : '#ef4444', 5, 'right');
-      if (!held.length) text(ctx, 'flat — nothing held', 144, 59, '#3d4350', 5);
-      else {
-        const maxP = Math.max(0, held.length - PROWS);
-        scroll.pos = Math.min(scroll.pos || 0, maxP);
-        zones.push({ x: 144, y: 54, w: 192, h: PROWS * 7 + 2, id: 'pos', max: maxP });
-        held.slice(scroll.pos, scroll.pos + PROWS).forEach((m, i) => {
-          const y = 57 + i * 9;
-          hits.push({ x: 144, y: y - 1, w: 192, h: 9, kind: 'market', key: m.ticker });
-          const hot = (hover && hover.kind === 'market' && hover.key === m.ticker);
-          if (hot) px(ctx, 144, y - 1, 192, 9, '#101826');
-          const long = m.inv > 0, pl = m.mark - m.cost;
-          px(ctx, 144, y + 1, 3, 4, long ? '#22c55e' : '#ef4444');
-          text(ctx, clip(OUTCOME(m) || QUESTION(m), 22), 150, y, hot ? '#e6e8ee' : '#c7cdd8', 5);
-          text(ctx, `${long ? 'LONG' : 'SHORT'} ${Math.abs(m.inv)}`, 262, y, long ? '#4ade80' : '#f87171', 5, 'right');
-          text(ctx, cents(Math.abs(m.cost / m.inv)), 292, y, '#5b6270', 5, 'right');
-          text(ctx, signed(pl), 331, y, pl >= 0 ? '#22c55e' : '#ef4444', 5, 'right');
-          text(ctx, clip(QUESTION(m), 62), 150, y + 4.4, '#4b5563', 4.5);
-        });
-        if (maxP) text(ctx, `${scroll.pos + 1}-${Math.min(held.length, scroll.pos + PROWS)} of ${held.length}`, 331, 57 + PROWS * 9, '#3d4350', 4.5, 'right');
-      }
-
-      // quoting-but-flat: what is on the book waiting to be traded against
-      const qTop = 54 + (held.length ? PROWS * 9 + 7 : 14);
-      px(ctx, 144, qTop - 4, 192, 1, '#141b28');
-      text(ctx, `QUOTING  ${flat.length}`, 144, qTop, '#4b5563', 5);
-      text(ctx, 'BID', 292, qTop, '#3d4350', 4.5, 'right');
-      text(ctx, 'ASK', 331, qTop, '#3d4350', 4.5, 'right');
-      const QROWS = Math.max(1, Math.floor((136 - (qTop + 7)) / 9));
-      const maxB = Math.max(0, flat.length - QROWS);
-      scroll.book = Math.min(scroll.book, maxB);
-      zones.push({ x: 144, y: qTop + 5, w: 192, h: QROWS * 9 + 2, id: 'book', max: maxB });
-      flat.slice(scroll.book, scroll.book + QROWS).forEach((m, i) => {
-        const y = qTop + 7 + i * 9;
-        hits.push({ x: 144, y: y - 1, w: 192, h: 9, kind: 'market', key: m.ticker });
-        const hot = (hover && hover.kind === 'market' && hover.key === m.ticker);
-        if (hot) px(ctx, 144, y - 1, 192, 9, '#101826');
-        px(ctx, 144, y + 1, 3, 3, '#22c55e');
-        text(ctx, clip(OUTCOME(m) || QUESTION(m), 24), 150, y, hot ? '#e6e8ee' : '#9aa3b5', 5);
-        text(ctx, m.bid == null ? '—' : cents(m.bid), 292, y, '#5b6270', 5, 'right');
-        text(ctx, m.ask == null ? '—' : cents(m.ask), 331, y, '#5b6270', 5, 'right');
-        text(ctx, clip(QUESTION(m), 62), 150, y + 4.4, '#3d4350', 4.5);
-      });
-      if (maxB) text(ctx, `${scroll.book + 1}-${Math.min(flat.length, scroll.book + QROWS)} of ${flat.length}`, 331, 136, '#3d4350', 4.5, 'right');
-      if (!all.length) text(ctx, 'scanning for markets', 240, 95, '#3d4350', 6, 'center');
-      text(ctx, 'click a market or an agent', 144, 136, '#243044', 5);
-    }
+    // The screen's words are HTML (placeBoards): the canvas draws only the glass and its light.
+    if (sel && sel.kind === 'market' && !(M.markets || []).some((x) => x.ticker === sel.key)) sel = null;
+    if (sel && sel.kind === 'agent' && !S.agents.some((x) => x.key === sel.key)) sel = null;
+    wallBox = { x: 140, y: 12, w: 200, h: 130 };
     scanlines(ctx, 140, 12, 200, 130, 0.16);
     glow(ctx, 240, 30, 120, '#1e4e8a', 0.18);              // the screen lighting itself
     px(ctx, 238, 148, 6, 6, '#141b28'); px(ctx, 232, 152, 18, 2, '#0d1420');   // wall mount
 
-    // ---- clock + the fill tape (right)
+    // ---- clock + the fill tape (right): boards drawn here, words laid over them (placeBoards)
     panel(ctx, 370, 8, 102, 24, '#080c14', '#243047');
-    const nyc = new Date(S.now).toLocaleTimeString('en-US',
-      { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
-    const [hms, ampm] = nyc.split(' ');
-    text(ctx, hms, 415, 14, working ? '#22c55e' : '#7c869a', 10, 'center');
-    text(ctx, ampm, 466, 17, '#4b5563', 6, 'right');
-
-    // The fill tape. This panel used to restate the selection rules -- four lines of config that
-    // never change, in the most valuable strip of the board. What belongs here is the one thing
-    // that is genuinely live: the trades as they land.
+    clockBox = { x: 370, y: 8, w: 102, h: 24 };
     panel(ctx, 370, 36, 102, 110, '#060f0a', '#1e4a2c');
     scanlines(ctx, 371, 37, 100, 108, 0.12);
-    text(ctx, 'FILLS', 376, 39, '#86efac', 6);
-    text(ctx, `${M.fills || 0} total`, 466, 39, '#3f6b4f', 5, 'right');
-    const tape = M.recent || [];
-    if (!tape.length) {
-      text(ctx, M.fills ? `${M.fills} before` : 'none yet', 421, 84, '#2f5a3f', 6, 'center');
-      text(ctx, M.fills ? 'this restart' : 'waiting to be', 421, 92, '#2f5a3f', 6, 'center');
-      if (!M.fills) text(ctx, 'traded against', 421, 100, '#2f5a3f', 6, 'center');
-    } else {
-      const TROWS = 10;
-      const maxT = Math.max(0, tape.length - TROWS);
-      scroll.tape = Math.min(scroll.tape, maxT);
-      zones.push({ x: 372, y: 46, w: 98, h: 96, id: 'tape', max: maxT });
-      tape.slice(scroll.tape, scroll.tape + TROWS).forEach((f, i) => {
-      const y = 49 + i * 9.4;
-      const buy = f.side === 'buy';
-      px(ctx, 376, y + 1, 3, 3, buy ? '#22c55e' : '#ef4444');
-      text(ctx, `${buy ? 'BUY' : 'SELL'} ${f.qty}`, 382, y, buy ? '#4ade80' : '#f87171', 5);
-      text(ctx, cents(f.px), 466, y, '#86efac', 5, 'right');
-      text(ctx, clip(OUTCOME(byTicker(M, f.ticker) || {}) || f.ticker.replace(/^KX/, ''), 20), 382, y + 4.4, '#3f6b4f', 4.5);
-      });
-    }
+    tapeBox = { x: 370, y: 36, w: 102, h: 110 };
 
     // desks + agents
     // advance the shared clock between SSE frames so the stagger animates smoothly
@@ -706,7 +513,8 @@
   // The bots move when their desk runs; these say WHY, in sentences a person can read from a chair.
   // Everything here is HTML laid over the canvas: bubbles above the bots, the feed on the ledge, and
   // the alert in the floor's title bar. Positions come from the same drawing coordinates as the art.
-  let seats = [], statusBox = null;
+  let seats = [], statusBox = null, wallBox = null, tapeBox = null, clockBox = null;
+  let frameSeq = 0;           // bumps on every SSE frame, so the boards rebuild only when data moves
   let seenKeys = null, feedHead = '';
   const said = {};        // agent -> { text, sub, level, until }   the bubble currently showing
   const lastSaid = {};    // agent -> the last sentence it said, numbers blanked, so repeats stay quiet
@@ -974,6 +782,7 @@
     fx.style.fontSize = `${fs}px`;
     fx.classList.toggle('stale', !!stale());
     placeStatus(X, Y, k);
+    placeBoards(X, Y, k);
 
     const now = Date.now(), al = alerts();
     for (const st of seats) {
@@ -1042,11 +851,130 @@
     if (html !== statusHtml) { el.innerHTML = html; statusHtml = html; }
   }
 
+  // ------------------------------------------------------------ the wall screen, the fills board, the clock
+  // The wall screen answers one question at a glance -- how is the maker desk doing -- and shows the
+  // few positions worth watching. Everything else is one click away: a position or a bot opens its
+  // own view here, and clicking it again (or Back, or Escape) returns. It used to show three
+  // numbers, every open position with a subtitle, and every quoted market, all in 5-unit text.
+  const WALL_ROWS = 5;
+  let wallKey = '', tapeKey = '', clockTxt = '', wallAll = false;
+  const sideTag = (inv) => `<span class="sd ${inv > 0 ? 'long' : 'short'}">${inv > 0 ? 'LONG' : 'SHORT'} ${Math.abs(inv)}</span>`;
+
+  function wallHome(M) {
+    const net = (M.equity ?? M.initial ?? 0) - (M.initial ?? 0);
+    const held = (M.markets || []).filter((m) => m.inv)
+      .map((m) => ({ m, pl: m.mark - m.cost }))
+      .sort((a, b) => Math.abs(b.pl) - Math.abs(a.pl) || Math.abs(b.m.inv) - Math.abs(a.m.inv));
+    const rows = wallAll ? held : held.slice(0, WALL_ROWS);
+    let h = `<div class="wh"><span>Maker desk</span><span>${M.fills || 0} fills</span></div>`;
+    h += `<div class="wbig ${net >= 0 ? 'pos' : 'neg'}">${signed(net)}</div>`;
+    h += `<div class="wsub">if everything closed now · banked ${signed(M.realized || 0)} · holding ${M.inv || 0} contracts</div>`;
+    if (!held.length) h += `<p class="wempty">Nothing held. Quoting ${M.quoting || 0} markets and waiting to be traded against.</p>`;
+    else {
+      h += `<div class="wlist${wallAll ? ' all' : ''}">${rows.map(({ m, pl }) => `<button class="wr" data-m="${esc(m.ticker)}" title="${esc(m.title || '')}">` +
+        `<span class="nm">${esc(OUTCOME(m) || QUESTION(m))}${OUTCOME(m) && QUESTION(m) ? `<i> · ${esc(QUESTION(m))}</i>` : ''}</span>${sideTag(m.inv)}<span class="pl ${pl >= 0 ? 'pos' : 'neg'}">${signed(pl)}</span></button>`).join('')}</div>`;
+      h += held.length > WALL_ROWS
+        ? `<button class="wmore" data-all="1">${wallAll ? 'Show fewer' : `Biggest ${WALL_ROWS} of ${held.length} positions · show all`}</button>`
+        : `<div class="wfoot">${held.length} position${held.length === 1 ? '' : 's'} · click one for details</div>`;
+    }
+    return h;
+  }
+
+  function wallMarket(m, M) {
+    let read, tone = '';
+    if (!m.quoting && m.inv) { read = 'Dropped from the book. Only quoting the side that works this position off.'; tone = 'warn'; }
+    else if (!m.inv) read = 'Nothing held here. Both quotes are resting, waiting to be traded against.';
+    else if (Math.abs(m.inv) > 60) { read = `${m.inv > 0 ? 'Long' : 'Short'} ${Math.abs(m.inv)}, close to the ${M.cap || 100}-contract limit. The flow has been one-sided.`; tone = 'bad'; }
+    else if (m.qAsk > 5000 || m.qBid > 5000) read = 'A long line of orders sits ahead of ours, so fills here come slowly.';
+    else read = 'Working normally: a small position and a short line ahead of us.';
+    const pl = m.inv ? m.mark - m.cost : null;
+    const clears = m.clear == null ? '—' : m.clear < 1 ? `${(m.clear * 24).toFixed(1)} hours` : `${m.clear.toFixed(1)} days`;
+    return `<div class="wh"><button class="wback" data-back="1">‹ Back</button><span>${esc(m.ticker.replace(/^KX/, ''))}</span></div>` +
+      `<div class="wtitle">${esc(OUTCOME(m) || QUESTION(m))}</div><div class="wq">${esc(m.title || QUESTION(m))}</div>` +
+      `<dl class="wfacts">` +
+      `<dt>Position</dt><dd>${m.inv ? `${sideTag(m.inv)} <span class="${pl >= 0 ? 'pos' : 'neg'}">${signed(pl)}</span>` : 'none'}</dd>` +
+      `<dt>Our quotes</dt><dd>${m.bid == null && m.ask == null ? 'not quoting' : `${m.bid == null ? '—' : cc(m.bid)} to buy · ${m.ask == null ? '—' : cc(m.ask)} to sell`}</dd>` +
+      `<dt>Trading</dt><dd>${m.tpd ? `${m.tpd} trades a day · line clears in ${clears}` : 'not measured yet'}</dd>` +
+      `</dl><p class="wread ${tone}">${esc(read)}</p>`;
+  }
+
+  function wallAgent(a) {
+    const mine = (S.log || []).filter((e) => e.agent === a.key);
+    const seen = new Set(), lines = [];
+    for (const e of mine) {                    // plain English, repeats folded, newest first
+      const sx = say(e), k = shape(sx.text);
+      if (seen.has(k)) continue;
+      seen.add(k); lines.push({ e, sx });
+      if (lines.length >= 6) break;
+    }
+    return `<div class="wh"><button class="wback" data-back="1">‹ Back</button><span style="color:${a.color}">${esc(a.key)} · ${esc(cap(String(a.role).toLowerCase()))}</span></div>` +
+      `<div class="wq">${esc(cap(ROLE[a.key] || ''))}</div>` +
+      (lines.length ? `<ol class="wlog">${lines.map(({ e, sx }) => `<li class="lv-${sx.level}"><span class="t">${hhmm(e.t)}</span><span>${esc(sx.text)}</span></li>`).join('')}</ol>`
+        : `<p class="wempty">Nothing logged yet.</p>`);
+  }
+
+  function placeBoards(X, Y, k) {
+    const M = S.maker || {};
+    const fit = (el, b, fs) => Object.assign(el.style, { left: `${X(b.x)}px`, top: `${Y(b.y)}px`, width: `${b.w * k}px`, height: `${b.h * k}px`, fontSize: `${fs}px` });
+
+    if (wallBox) {
+      const el = $('wall');
+      fit(el, wallBox, Math.max(10, Math.min(17, k * 5.6)));
+      const key = `${frameSeq}|${sel ? sel.kind + sel.key : ''}|${wallAll}`;
+      if (key !== wallKey) {
+        const list = el.querySelector('.wlist, .wlog'), top = list && key.split('|')[1] === wallKey.split('|')[1] ? list.scrollTop : 0;
+        wallKey = key;
+        const m = sel && sel.kind === 'market' ? byTicker(M, sel.key) : null;
+        const a = sel && sel.kind === 'agent' ? S.agents.find((x) => x.key === sel.key) : null;
+        el.innerHTML = m ? wallMarket(m, M) : a ? wallAgent(a) : wallHome(M);
+        const list2 = el.querySelector('.wlist, .wlog');
+        if (list2) list2.scrollTop = top;
+      }
+    }
+
+    if (tapeBox) {
+      const el = $('tape');
+      fit(el, { x: tapeBox.x + 1, y: tapeBox.y + 1, w: tapeBox.w - 2, h: tapeBox.h - 2 }, Math.max(9.5, Math.min(15, k * 4.8)));
+      if (frameSeq + '' !== tapeKey) {
+        tapeKey = frameSeq + '';
+        const groups = [];
+        for (const f of M.recent || []) {            // newest first; a run of the same trade is one line
+          const g = groups[groups.length - 1];
+          if (g && g.ticker === f.ticker && g.side === f.side) { g.qty += f.qty; g.val += f.qty * f.px; }
+          else groups.push({ ticker: f.ticker, side: f.side, qty: f.qty, val: f.qty * f.px, at: f.at });
+        }
+        el.innerHTML = `<div class="th"><span>Fills</span><span>${M.fills || 0} total</span></div>` +
+          (groups.length
+            ? `<ol>${groups.map((g) => `<li class="${g.side}"><span class="act">${g.side === 'buy' ? 'Bought' : 'Sold'} ${g.qty}</span><span class="px">${cc(g.val / g.qty)}</span>` +
+              `<span class="nm">${esc(marketName(g.ticker))}</span><span class="ago">${ago(g.at).replace(' ago', '')}</span></li>`).join('')}</ol>`
+            : `<p class="none">${M.fills ? `${M.fills} fills before the last restart` : 'No fills yet'}</p>`);
+      }
+    }
+
+    if (clockBox) {
+      const el = $('clock');
+      fit(el, clockBox, Math.max(12, Math.min(26, k * 10)));
+      const halted = S.halt || M.halted, on = !halted && M.quoting > 0;
+      const t = new Date(S.now).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
+      const html = `<b class="${on ? 'on' : ''}">${t.replace(/ [AP]M$/, '')}</b><small>${t.slice(-2)} ET</small>`;
+      if (html !== clockTxt) { el.innerHTML = html; clockTxt = html; }
+    }
+  }
+
+  $('wall').addEventListener('click', (ev) => {
+    const b = ev.target.closest('button');
+    if (!b) return;
+    if (b.dataset.back) sel = null;
+    else if (b.dataset.all) wallAll = !wallAll;
+    else if (b.dataset.m) sel = sel && sel.kind === 'market' && sel.key === b.dataset.m ? null : { kind: 'market', key: b.dataset.m };
+    wallKey = '';
+  });
+
   function loop(ts) { drawFloor(ts / 1000); placeFx(); requestAnimationFrame(loop); }
   requestAnimationFrame(loop);
 
   // ------------------------------------------------------------ wiring
-  function render() { renderHeader(); ingest(); }
+  function render() { frameSeq++; renderHeader(); ingest(); }
   function connect() {
     const es = new EventSource('/api/stream');
     es.onmessage = (ev) => { try { S = JSON.parse(ev.data); S._rx = S.now; S._rxPerf = performance.now(); lastFrameAt = Date.now(); render(); } catch (e) { console.error(e); } };
