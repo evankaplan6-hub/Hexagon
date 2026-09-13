@@ -46,7 +46,8 @@ Roughly $2–4/month for a shared-cpu-1x with a 1GB volume.
 ### Auto-deploy
 
 Every push to `main` deploys itself (`.github/workflows/test.yml`, job `deploy`): it waits for the
-test matrix, skips pushes that touch nothing the box runs (docs, `ops/` notes), and refuses to ship
+test matrix, stands down if a newer push has landed on `main`, skips pushes that touch nothing the
+box runs (docs, `ops/` notes), and refuses to ship
 unless `fly.toml` still says `MODE = "paper"`. It authenticates with a deploy-scoped token stored as
 the GitHub secret `FLY_API_TOKEN`, created once without either value ever being printed:
 
@@ -56,6 +57,22 @@ fly tokens create deploy -a hexagon-desk -x 8760h | gh secret set FLY_API_TOKEN 
 
 The token is scoped to this one app and expires after a year; rerun the line to renew it. A
 manual `fly deploy` still works and is still how to ship from a branch.
+
+**The box always ends on the newest `main`.** Deploys run one at a time, but not in merge order:
+two PRs merged seconds apart can finish their tests in either order. On 2026-09-13 #11 deployed
+first and #10's deploy (the older commit) landed 30 seconds later, rolling whale watch off the box.
+So each deploy first checks that its commit is still the head of `main`; if not, it stands down and
+the newer push's run deploys instead. If that newer push fails its tests, nothing deploys until
+`main` is green again — the box stays on the last good deploy rather than getting untested code.
+
+**The `fly-deployed` tag marks what the box runs.** After every successful deploy the job moves
+the git tag `fly-deployed` to that commit (this is why the job has `contents: write`). The
+"did anything the box runs change?" check compares against that tag, not against the push before.
+That way a code change whose deploy stood down still ships when the next push is only a README
+edit. To see what's on the box: `git fetch --tags --force && git log -1 fly-deployed`. If the tag
+is missing or behind, the next deploy just ships — the safe direction. A manual `fly deploy` does
+not move the tag, so after shipping a branch by hand, put `main` back with a manual `fly deploy`
+from `main` — a docs-only push won't do it.
 
 ## Any other host
 

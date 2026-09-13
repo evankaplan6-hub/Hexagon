@@ -42,16 +42,24 @@ jobs:
       - run: npm test
 
   # Every push to main that passes the suite goes straight to the Fly desk, so the live dashboard is
-  # never a deploy behind the repo. Three rails before anything ships:
+  # never a deploy behind the repo. The rails before anything ships:
   #   - it waits for BOTH test jobs, so a red build never reaches the box;
-  #   - a push that touches only docs or ops notes is skipped -- a redeploy restarts the desk, and
-  #     a restart for a README edit is a restart for nothing;
+  #   - only the newest main deploys. Deploys queue one at a time, but not in push order: two merges
+  #     seconds apart can finish their tests in either order, and the older commit's deploy would
+  #     then land last and roll the box back. A run whose commit is no longer main's head stands
+  #     down; the newer push's own run deploys;
+  #   - a push that changes nothing the box runs (docs, ops notes) is skipped -- a redeploy restarts
+  #     the desk, and a restart for a README edit is a restart for nothing. "Changes" is measured
+  #     against the `fly-deployed` tag (the commit the box last got), not this push's parent, so a
+  #     code push that stood down or was cancelled while queued still ships with the next push;
   #   - fly.toml must still say MODE = "paper". This pipeline must never be the thing that arms
   #     real money; going live stays a deliberate, manual act.
   deploy:
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # only to move the fly-deployed tag after a successful deploy
     concurrency:
       group: fly-deploy
       cancel-in-progress: false   # never kill a deploy halfway; the next one queues behind it
@@ -59,17 +67,31 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # Runs inside the fly-deploy lock, so no other deploy can land between this check and ours.
+      - name: Stand down unless this is still the newest main
+        id: newest
+        run: |
+          git fetch --quiet origin +refs/heads/main:refs/remotes/origin/main
+          head="$(git rev-parse origin/main)"
+          if [ "$head" = "${{ github.sha }}" ]; then
+            echo "newest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "newest=false" >> "$GITHUB_OUTPUT"
+            echo "main has moved on to $head; that push's run deploys it, so not deploying ${{ github.sha }}"
+          fi
       - name: Skip pushes that change nothing the box runs
         id: changed
+        if: steps.newest.outputs.newest == 'true'
         run: |
-          before="${{ github.event.before }}"
-          if [ -z "$before" ] || ! git cat-file -e "$before" 2>/dev/null; then
-            echo "ship=true" >> "$GITHUB_OUTPUT"; exit 0
+          git fetch --quiet --force origin +refs/tags/fly-deployed:refs/tags/fly-deployed 2>/dev/null || true
+          deployed="$(git rev-parse -q --verify 'refs/tags/fly-deployed^{commit}' || true)"
+          if [ -z "$deployed" ]; then
+            echo "ship=true" >> "$GITHUB_OUTPUT"; echo "no fly-deployed tag yet; deploying"; exit 0
           fi
-          if git diff --name-only "$before" "${{ github.sha }}" | grep -qE '^(src|public|tools)/|^server\.js$|^Dockerfile$|^fly\.toml$|^package(-lock)?\.json$'; then
+          if git diff --name-only "$deployed" "${{ github.sha }}" | grep -qE '^(src|public|tools)/|^server\.js$|^Dockerfile$|^fly\.toml$|^package(-lock)?\.json$'; then
             echo "ship=true" >> "$GITHUB_OUTPUT"
           else
-            echo "ship=false" >> "$GITHUB_OUTPUT"; echo "no runtime files changed; not redeploying"
+            echo "ship=false" >> "$GITHUB_OUTPUT"; echo "no runtime files changed since $deployed; not redeploying"
           fi
       - name: Refuse to deploy anything but a paper desk
         if: steps.changed.outputs.ship == 'true'
@@ -84,3 +106,8 @@ jobs:
         run: flyctl deploy --remote-only -a hexagon-desk
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      # Only reached if the deploy succeeded. If this push fails, the tag stays behind and the next
+      # run just sees more changes and ships -- the safe direction.
+      - name: Record what the box now runs
+        if: steps.changed.outputs.ship == 'true'
+        run: git push --force origin "${{ github.sha }}:refs/tags/fly-deployed"
