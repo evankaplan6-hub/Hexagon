@@ -450,6 +450,49 @@ That is not a contradiction of the $40M finding. That paper measured profit *alr
 across 86 million bets over a year, in windows that closed in seconds. It is evidence the
 opportunity existed and was taken by faster infrastructure — not that it is sitting there waiting.
 
+### The strategy lab: any strategy, on settled markets
+
+Everything above tested one idea at a time on markets still open. `tools/lab.js` runs very different
+strategies through one scoring engine on **settled** Kalshi markets, where a held position is paid
+what it was actually worth. Parameters are picked on the older 60% of markets by close date and
+reported on the newer 40%. Taker fills at the next hour's bid/ask, Kalshi's taker fee both ways,
+10 contracts a trade, and no entry into a book wider than 4c or a market that traded under 50
+contracts in the day before.
+
+```bash
+node tools/lab-fetch.js          # settled markets since 2026-07-15 with hourly bid/ask → data/lab/
+node tools/lab.js --by category  # the tournament
+node tools/lab.js --detail momentum
+```
+
+**The first sample was rigged, and it is the most useful thing the lab found.** It kept markets
+that had traded 5,000+ contracts in their life. Contracts priced at 20c then resolved YES 40% of
+the time and 93c favourites 72%, because an upset is what makes a market busy — and "buy the
+underdog" scored **+10c a contract, t = 7**. Drawing whole events at random from liquid series
+instead gives a calibrated sample (6c→6%, 20c→20%, 40c→42%, 58c→58%, 79c→81%, 94c→94%), and the
+lab now prints that check on every run and warns when a bucket is more than 10 points off.
+
+On that sample (7,597 markets, 843k hourly bars, 2026-07-15 → 09-13), scored on the newer 3,039:
+
+```
+strategy       picked on the older markets      trades  win  ¢/contract  profit    t
+favorite       minPx=95 maxHoursLeft=48            170  94%     -0.96c    -$16  -0.6
+momentum       lookback=24 move=15 hold=∞          384  69%     -0.57c    -$22  -0.3
+longshot       maxPx=5 maxHoursLeft=48             162   4%     -1.45c    -$24  -0.9
+volumeSpike    mult=10 move=6 hold=∞ dir=1         319  60%     -1.05c    -$33  -0.5
+random         (control: coin flip, hold)          236  50%     -1.62c    -$38  -0.6
+tightFavorite  minPx=90 maxSpread=1                418  92%     -1.46c    -$61  -1.1
+reversion      lookback=6 move=10 hold=∞           376  36%     -7.30c   -$274  -3.6
+```
+
+**0 of 161 parameter settings made money in both halves.** Most rows sit near the random control,
+which is what paying the spread and the fee on a calibrated market looks like. The one lead, found
+by looking *after* the table above and so not evidence yet: outside Sports (1,347 markets, 239
+events), buying a 70–90c favourite inside 48 hours of the scheduled end was positive in both halves
+at every threshold (+1.6 to +2.0c dev, +2.0 to +5.3c test), with t under 2 in dev. It is the same
+favourite–longshot bias Bürgi, Deng and Whelan measured on Kalshi, and 239 events cannot confirm it.
+Kalshi's historical endpoints (markets settled before 2026-07-15) are where more of those events are.
+
 ## Operating it
 
 The dashboard is read-only. Two control endpoints exist, both POST, both requiring `FLATTEN_TOKEN`
@@ -492,6 +535,8 @@ data/ticks-*.jsonl     tick tape, one line per priced pair per cycle (RECORD=1)
 tools/maker-replay.js  the maker desk against Kalshi's own trade history, same pure functions as live
 tools/maker-rank.js    three market rankings for the maker, scored walk-forward on that history
 tools/pm-maker-scan.js the same queue and trade-rate yardstick, on Polymarket's CLOB
+tools/lab-fetch.js     settled Kalshi markets with hourly bid/ask history, for the lab
+tools/lab.js           the strategy lab: many strategies, tuned on older markets, scored on newer
 tools/test.js          every suite in one command (npm test)
 tools/decide-test.js   assertions for the taker decision core
 tools/probe-test.js    assertions for the thin-market probe (stubbed venues, frozen clock)
@@ -500,6 +545,7 @@ tools/broker-test.js   assertions for fills, incl. the live Kalshi order path (n
 tools/matcher-test.js  assertions for cross-venue matching
 tools/stream-test.js   assertions for the trade socket and the tape's fallback to the poll
 tools/engine-test.js   assertions for the ledger: operator latch, partial exits, and close serialization
+tools/lab-test.js      assertions for the lab's fees, fills, settlement, and that no strategy sees the result
 tools/golden.js        fixed-fixture output diff, for refactors meant to change nothing
 ```
 
@@ -508,7 +554,7 @@ tape and a synthetic clock (`tools/replay.js`) instead of a network and a wall c
 guard it, and both are worth running after any change to the gates:
 
 ```bash
-npm test                      # all 446 assertions across seven suites
+npm test                      # all 635 assertions across nine suites
 node tools/maker-test.js      # ...or one suite at a time while working on one file
 ```
 
