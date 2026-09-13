@@ -104,19 +104,23 @@ async function run() {
     global.fetch = async (url) => { seen.push(String(url)); return { ok: true, json: async () => ({}) }; };
     const KS = 'https://api.elections.kalshi.com/trade-api/v2';
     try {
-      // a 1ms gap: the ASSERTION is about order, which the queue decides, not about how long it took
-      http.paceHost(KS, 1);
+      // a fake clock whose first wait is released by hand: nothing moves until the test says so
+      let release;
+      const c = fakeClock();
+      const sleep = (ms) => (release ? c.sleep(ms) : new Promise((r) => { release = () => c.sleep(ms).then(r); }));
+      http.paceHost(KS, 80, { now: c.now, sleep });
       const calls = [
         http.getJSON(`${KS}/markets?series_ticker=A`),
         http.getJSON(`${KS}/markets?series_ticker=B`),
         http.getJSON(`${KS}/markets/trades?limit=1000`, { priority: true }),
         http.getJSON('https://gamma-api.polymarket.com/markets'),
       ];
-      // before any timer fires: the first Kalshi call and the Polymarket call are out, the rest wait
-      await new Promise((r) => setImmediate(r));
+      // before the wait is released: the first Kalshi call and the Polymarket call are out, the rest wait
+      for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
       ok('the first Kalshi call went at once', seen.includes(`${KS}/markets?series_ticker=A`), seen);
       ok('the Polymarket call did not queue behind Kalshi', seen.includes('https://gamma-api.polymarket.com/markets'), seen);
       ok('the other two Kalshi calls are still waiting their turn', seen.length === 2, seen);
+      release();
       await Promise.all(calls);
       const ksOrder = seen.filter((u) => u.startsWith(KS)).map((u) => u.slice(KS.length));
       ok('the maker tape went ahead of the queued listing', ksOrder.join(' ') === '/markets?series_ticker=A /markets/trades?limit=1000 /markets?series_ticker=B', ksOrder);
@@ -124,8 +128,8 @@ async function run() {
       http.paceHost(KS, 0);
       seen.length = 0;
       const burst = [1, 2, 3].map((i) => http.getJSON(`${KS}/markets?series_ticker=C${i}`));
-      await new Promise((r) => setImmediate(r));
-      ok('paceHost(base, 0) removes the pacer: all three out before any timer', seen.length === 3, seen);
+      for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+      ok('paceHost(base, 0) removes the pacer: all three out at once', seen.length === 3, seen);
       await Promise.all(burst);
     } finally {
       http.paceHost(KS, 0);

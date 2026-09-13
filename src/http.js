@@ -57,9 +57,10 @@ function makePacer({ gapMs, now = Date.now, sleep = (ms) => new Promise((r) => s
 
 const pacers = new Map();   // host -> pacer
 // Called once from engine.start, never at require time, so no test that builds an engine is paced.
-function paceHost(base, gapMs) {
+// `clock` ({ now, sleep }) is for tests only.
+function paceHost(base, gapMs, clock = {}) {
   const host = new URL(base).host;
-  if (gapMs > 0) pacers.set(host, makePacer({ gapMs })); else pacers.delete(host);
+  if (gapMs > 0) pacers.set(host, makePacer({ gapMs, ...clock })); else pacers.delete(host);
 }
 
 async function getJSON(url, { timeout = 15000, priority = false } = {}) {
