@@ -163,7 +163,17 @@
   // to fit a column throws away the half that distinguishes one market from another: "Will
   // Republicans win the Senate race in Iowa?" and "...in Texas?" both became "Will Republicans
   // win", twice, on the same board. The outcome is the headline; the question is the subtitle.
-  const OUTCOME = (m) => (m.sub || '').trim();
+  //
+  // A few series put a whole question in `sub` ("Will Democrats hold 235 or more seats in the House
+  // AND hold 51 or more seats in the Senate?"). Nothing on the floor truncates text any more, so a
+  // name that long wraps to four lines; squeeze the prose instead: "Democrats 235+ House & 51+ Senate".
+  const OUTCOME = (m) => {
+    const t = (m.sub || '').trim();
+    if (t.length <= 40) return t;
+    return t.replace(/^Will\s+/i, '').replace(/\?$/, '')
+      .replace(/\s+or more\b/gi, '+').replace(/\bseats in the\s+/gi, '').replace(/\b(hold|have|be)\s+/gi, '')
+      .replace(/\s+AND\s+/g, ' & ').replace(/\s+/g, ' ').trim();
+  };
   // The question, compressed to the part that identifies the market. Kalshi writes them in full
   // prose -- "Will Republicans win the Senate race in Iowa?" -- and the outcome above already
   // carries the answer, so the boilerplate is dead weight in a 190px column.
@@ -632,7 +642,7 @@
       const top = loud[0] || al[0];
       fm.className = loud.length ? 'alert' : 'alert kept';
       fm.innerHTML = loud.length
-        ? `⚠ ${esc(top.text)} <small>${esc(top.sub || '')}</small>${loud.length > 1 ? ` <small>+${loud.length - 1} more</small>` : ''} <b class="open">Decide ›</b>`
+        ? `⚠ ${esc(top.text)}${loud.length > 1 ? ` <small>+${loud.length - 1} more</small>` : ''} <b class="open">Decide ›</b>`
         : `✓ Holding to settlement: ${esc(top.text.replace(/^Broken arb: /, ''))} <b class="open">Open ›</b>`;
       fm.onclick = () => openAlert(top);
     }
@@ -829,8 +839,7 @@
   function placeStatus(X, Y, k) {
     if (!statusBox) return;
     const el = $('status'), M = S.maker || {};
-    Object.assign(el.style, { left: `${X(statusBox.x)}px`, top: `${Y(statusBox.y)}px`, width: `${statusBox.w * k}px`, height: `${statusBox.h * k}px`,
-      fontSize: `${Math.max(10, Math.min(17, k * 5.6))}px` });
+    Object.assign(el.style, { left: `${X(statusBox.x)}px`, top: `${Y(statusBox.y)}px`, width: `${statusBox.w * k}px`, height: `${statusBox.h * k}px` });
     // on a small window the board cannot hold every line; keep state, what it is doing, and the last fill
     el.classList.toggle('compact', statusBox.h * k < 150);
     const halted = S.halt || M.halted, working = !halted && M.quoting > 0, gone = stale();
@@ -848,7 +857,16 @@
       `<p class="extra">${working ? `Quoting ${M.quoting} markets` : 'Not quoting'} · ${nHeld ? `holding ${M.inv} contracts in ${nHeld}` : 'nothing held'}</p>` +
       `<p>${esc(fill)}</p>` +
       `<p class="dim">${S.mode === 'live' ? 'LIVE · real money' : 'Paper · no real money'} · up ${dur(S.now - S.startedAt)} · ${feed.mode === 'stream' && feed.connected ? 'live trade feed' : 'polling for trades'}</p>`;
-    if (html !== statusHtml) { el.innerHTML = html; statusHtml = html; }
+    const key = `${html}|${Math.round(statusBox.w * k)}x${Math.round(statusBox.h * k)}`;
+    if (key !== statusHtml) { el.innerHTML = html; statusHtml = key; fitText(el, Math.max(10, Math.min(17, k * 5.6)), 8); }
+  }
+
+  // Shrink a board's text until everything on it fits. Nothing on the floor is cut off with an
+  // ellipsis: a sentence that is half there is worse than a sentence in slightly smaller type.
+  function fitText(el, maxFs, minFs) {
+    let fs = maxFs;
+    el.style.fontSize = `${fs}px`;
+    while (el.scrollHeight > el.clientHeight + 1 && fs > minFs) { fs -= 0.5; el.style.fontSize = `${fs}px`; }
   }
 
   // ------------------------------------------------------------ the wall screen, the fills board, the clock
@@ -915,20 +933,23 @@
 
   function placeBoards(X, Y, k) {
     const M = S.maker || {};
-    const fit = (el, b, fs) => Object.assign(el.style, { left: `${X(b.x)}px`, top: `${Y(b.y)}px`, width: `${b.w * k}px`, height: `${b.h * k}px`, fontSize: `${fs}px` });
+    const fit = (el, b, fs) => Object.assign(el.style, { left: `${X(b.x)}px`, top: `${Y(b.y)}px`, width: `${b.w * k}px`, height: `${b.h * k}px` }, fs ? { fontSize: `${fs}px` } : {});
 
     if (wallBox) {
       const el = $('wall');
-      fit(el, wallBox, Math.max(10, Math.min(17, k * 5.6)));
-      const key = `${frameSeq}|${sel ? sel.kind + sel.key : ''}|${wallAll}`;
+      const wallFs = Math.max(10, Math.min(17, k * 5.6));
+      fit(el, wallBox, null);             // type size is set on rebuild, where fitText may shrink it
+      const key = `${frameSeq}|${sel ? sel.kind + sel.key : ''}|${wallAll}|${Math.round(wallBox.w * k)}`;
       if (key !== wallKey) {
         const list = el.querySelector('.wlist, .wlog'), top = list && key.split('|')[1] === wallKey.split('|')[1] ? list.scrollTop : 0;
         wallKey = key;
         const m = sel && sel.kind === 'market' ? byTicker(M, sel.key) : null;
         const a = sel && sel.kind === 'agent' ? S.agents.find((x) => x.key === sel.key) : null;
+        el.style.fontSize = `${wallFs}px`;
         el.innerHTML = m ? wallMarket(m, M) : a ? wallAgent(a) : wallHome(M);
         const list2 = el.querySelector('.wlist, .wlog');
         if (list2) list2.scrollTop = top;
+        if (m) fitText(el, wallFs, 8);
       }
     }
 
