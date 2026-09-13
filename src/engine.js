@@ -9,6 +9,7 @@ const { makeRecorder } = require('./recorder');
 const { makeProbe } = require('./probe');
 const { makeJournal } = require('./journal');
 const { makeMakerDesk } = require('./makerdesk');
+const { makeWhaleWatch } = require('./whales');
 const agents = require('./agents');
 const { MAX_VENUE_DISAGREE } = require('./matcher');
 const { Brain } = require('./brain');
@@ -41,6 +42,7 @@ class Engine {
     this.probe = makeProbe(cfg);
     this.journal = makeJournal(cfg);
     this.maker = makeMakerDesk(cfg);
+    this.whales = cfg.whaleWatch ? makeWhaleWatch(cfg) : null;   // advisory: never trades
     // The minds. Constructed even without a key: `enabled()` is false and every desk
     // falls straight through to its deterministic path.
     this.brain = new Brain(cfg);
@@ -650,6 +652,9 @@ class Engine {
         }
       }
     }, this.cfg.makerEverySec * 1000);
+    // Whale watch on its own timer too: a slow trade feed must never hold up pricing. step() guards
+    // itself against overlapping and never throws.
+    if (this.whales) setInterval(() => this.whales.step(this), this.cfg.whaleEverySec * 1000);
     setInterval(() => { if (this.dirty) this.save(); }, 10000);
   }
   async step() {
@@ -734,6 +739,7 @@ class Engine {
       pairCount: this.pairs.length,
       cycleMs: this.lastCycleMs,
       maker: this.maker.snapshot(this),
+      whales: this.whales ? this.whales.snapshot() : { enabled: false },
       universe: {
         pm: this.quotes.pm.size, ks: this.quotes.ks.size, dataAge: this.lastQuoteAt ? Math.round((now - this.lastQuoteAt) / 1000) : null,
         apiOk: http.stats.ok, apiErr: http.stats.err, lastError: http.stats.lastError, rejected: this.rejected.length,
