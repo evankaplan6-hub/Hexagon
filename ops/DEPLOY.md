@@ -43,6 +43,20 @@ the `openssl` line on its own first and copy the output.
 
 Roughly $2–4/month for a shared-cpu-1x with a 1GB volume.
 
+### Auto-deploy
+
+Every push to `main` deploys itself (`.github/workflows/test.yml`, job `deploy`): it waits for the
+test matrix, skips pushes that touch nothing the box runs (docs, `ops/` notes), and refuses to ship
+unless `fly.toml` still says `MODE = "paper"`. It authenticates with a deploy-scoped token stored as
+the GitHub secret `FLY_API_TOKEN`, created once without either value ever being printed:
+
+```bash
+fly tokens create deploy -a hexagon-desk -x 8760h | gh secret set FLY_API_TOKEN -R evankaplan6-hub/Hexagon
+```
+
+The token is scoped to this one app and expires after a year; rerun the line to renew it. A
+manual `fly deploy` still works and is still how to ship from a branch.
+
 ## Any other host
 
 The Dockerfile is plain and hostless:

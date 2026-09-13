@@ -9,7 +9,8 @@ Polymarket and Kalshi, trades the disagreements, and streams to a live dashboard
 Node 20+, **zero npm dependencies** — that is deliberate, do not add packages.
 
 Read `README.md` before changing anything; it explains the strategy, the fee math, and why
-the venue gap is not the edge. `ops/DEPLOY.md` covers cloud deployment (Fly app `hexagon-desk`).
+the venue gap is not the edge. `ops/DEPLOY.md` covers cloud deployment (Fly app `hexagon-desk`). Merging to `main` auto-deploys
+to Fly once tests pass (paper only; see ops/DEPLOY.md → Auto-deploy).
 
 ## Running it
 
