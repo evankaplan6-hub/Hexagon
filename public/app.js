@@ -75,7 +75,7 @@
   // more rows than fit, and a canvas has no native scrolling -- so the wheel fell through to the
   // page and moved the whole document instead of the list under the pointer.
   let zones = [];                // rebuilt each frame: { x, y, w, h, id, max }
-  const scroll = { book: 0, tape: 0, agentlog: 0, log: 0, pos: 0 };
+  const scroll = { book: 0, tape: 0, agentlog: 0, pos: 0 };
   const zoneAt = (p) => zones.find((z) => p.x >= z.x && p.x <= z.x + z.w && p.y >= z.y && p.y <= z.y + z.h) || null;
 
   const chartAt = (p) => {
@@ -155,7 +155,6 @@
     px(ctx, x, y + h - 1, w, 1, '#05070b');
     px(ctx, x, y, 1, h, edge); px(ctx, x + w - 1, y, 1, h, '#05070b');
   }
-  function hexagon(ctx, cx, cy, r, c, fill) { ctx.beginPath(); for (let i = 0; i < 6; i++) { const a = Math.PI / 6 + i * Math.PI / 3; ctx[i ? 'lineTo' : 'moveTo'](cx + r * Math.cos(a), cy + r * Math.sin(a)); } ctx.closePath(); if (fill) { ctx.fillStyle = c; ctx.fill(); } else { ctx.strokeStyle = c; ctx.lineWidth = 1; ctx.stroke(); } }
   // ------------------------------------------------------------ focus views
   // What the wall screen shows when you click something. These are the "intelligent" part: not a
   // dump of the fields, but the read on them -- what the position is, and what it means. A market
@@ -303,7 +302,7 @@
   // marker-to-marker deletion of a neighbouring block, and the failure is silent in the source and
   // fatal in the browser: the whole floor goes black sixty times a second.
   //
-  // The art is drawn in a fixed 480x360 space but DISPLAYED at whatever size the viewport allows,
+  // The art is drawn in a fixed 480x262 space but DISPLAYED at whatever size the viewport allows,
   // so the canvas gets a backing store at true device resolution and the context is scaled to
   // match. Coordinates below are unchanged; text draws as vectors at final size rather than being
   // upscaled into a smear.
@@ -316,6 +315,10 @@
   // proportions at any window size and the leftover is letterbox. `floorBox` is the mapping the
   // pointer has to invert, so it is computed once here and read by floorPoint.
   const floorBox = { scale: 1, ox: 0, oy: 0 };
+  // The room ends at the floor's front edge. The ledge that hung below it (P&L and the log) is gone:
+  // the chart stands on the empty floor to the left of the desks, and the log is the HTML feed
+  // under the room, where it can take whatever height the window has left.
+  const ROOM_H = 262;
   function floorCtx() {
     const cv = $('floorc'), r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
     const w = Math.max(1, Math.round(r.width * dpr)), h = Math.max(1, Math.round(r.height * dpr));
@@ -324,17 +327,17 @@
     const ctx = cv.getContext('2d');
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = '#0b0e14'; ctx.fillRect(0, 0, w, h);       // paint the letterbox
-    const scale = Math.min(w / 480, h / 360);
+    const scale = Math.min(w / 480, h / ROOM_H);
     floorBox.scale = scale / dpr;                              // css px per drawing unit
     floorBox.ox = (w - 480 * scale) / 2 / dpr;
-    floorBox.oy = (h - 360 * scale) / 2 / dpr;
-    ctx.setTransform(scale, 0, 0, scale, (w - 480 * scale) / 2, (h - 360 * scale) / 2);
+    floorBox.oy = (h - ROOM_H * scale) / 2 / dpr;
+    ctx.setTransform(scale, 0, 0, scale, (w - 480 * scale) / 2, (h - ROOM_H * scale) / 2);
     return ctx;
   }
 
   function drawFloor(t) {
     const ctx = floorCtx(); ctx.imageSmoothingEnabled = false;
-    ctx.clearRect(0, 0, 480, 360);   // the letterbox is repainted in floorCtx
+    ctx.clearRect(0, 0, 480, ROOM_H);   // the letterbox is repainted in floorCtx
     hits = []; zones = [];                   // rebuilt every frame; the pointer tests against them
     // ---- the room -----------------------------------------------------------------------------
     // wall: darker at the corners, lifting toward the middle where the big screen hangs
@@ -375,43 +378,13 @@
     const mEq = (M.equity ?? M.initial ?? 0) - (M.initial ?? 0);
     const halted = S.halt || M.halted;
     const working = !halted && M.quoting > 0;
-    // The room has a single shared "what is happening now" signal. This is not a fake
-    // activity loop: it comes from the newest durable desk log entry and lets the office
-    // visibly hand attention from scanner → pricing → execution → settlement.
-    const command = (S.log || [])[0] || null;
-    const commandText = command ? clip(`${command.agent} · ${command.kind} · ${command.text}`, 24) : 'waiting for the first desk cycle';
-
-    // emblem
-    hexagon(ctx, 58, 30, 20, '#7c869a'); hexagon(ctx, 58, 30, 13, '#7c869a'); hexagon(ctx, 58, 30, 6, '#7c869a', true);
-    text(ctx, 'THE HEXAGON', 58, 54, '#c7cdd8', 8, 'center');
-
     // ---- status board (left) : the "is it working" answer, in words
-    panel(ctx, 8, 64, 112, 82, '#080c14', '#243047');
-    scanlines(ctx, 9, 65, 110, 80, 0.10);
-    const gone = stale();
-    const stCol = gone ? '#ef4444' : halted ? '#ef4444' : working ? '#22c55e' : '#d4a72c';
-    px(ctx, 14, 71, 4, 4, stCol);
-    text(ctx, gone ? 'NO SIGNAL' : halted ? 'STOPPED' : working ? 'WORKING' : 'IDLE', 22, 70, stCol, 8);
-    text(ctx, gone ? `desk stopped answering` : halted ? 'trading stopped' : commandText,
-      14, 82, gone ? '#f87171' : '#aab3c5', 6);
-    const nHeld = (M.markets || []).filter((m) => m.inv).length;
-    text(ctx, working ? `quoting ${M.quoting} markets` : 'not quoting', 14, 90, working ? '#c7cdd8' : '#5b6270', 5);
-    text(ctx, nHeld ? `holding ${M.inv} contracts in ${nHeld}` : 'flat — nothing held', 14, 96, nHeld ? '#c7cdd8' : '#5b6270', 5);
-    px(ctx, 14, 98, 100, 1, '#141b28');
-    const lf = M.lastFill;
-    // The ledger survives a restart but the last-fill detail does not, so "no fills yet" beside a
-    // screen reading 14 FILLS is a contradiction the reader cannot resolve. Say which.
-    text(ctx, lf ? `last fill ${ago(lf.at)}` : (M.fills ? `${M.fills} fills before restart` : 'no fills yet'),
-      14, 103, lf || M.fills ? '#c7cdd8' : '#5b6270', 6);
-    text(ctx, lf ? `${lf.side === 'buy' ? 'bought' : 'sold'} ${lf.qty} @ ${cents(lf.px)}`
-      : (M.fills ? 'waiting for the next' : 'waiting to be traded against'), 14, 112, '#7c869a', 5);
-    px(ctx, 14, 120, 100, 1, '#141b28');
-    text(ctx, `up ${dur(S.now - S.startedAt)}`, 14, 125, '#7c869a', 5);
-    // where the tape comes from: the socket, or the two-second poll it falls back to
-    const feed = M.feed || {};
-    const feedTxt = feed.mode === 'stream' ? (feed.connected ? 'tape: socket' : 'tape: polling') : 'tape: polling';
-    text(ctx, `scanned ${ago(M.lastScanAt)} · ${feedTxt}`, 14, 133, '#7c869a', 5);
-    text(ctx, 'PAPER · no real money', 14, 141, '#4b5563', 5);
+    // The board is drawn here; its words are HTML laid over it (placeStatus), for the same reason
+    // as the bubbles -- 5-unit canvas text was unreadable and its lines ran into each other.
+    // It runs the full height of the wall now that the emblem is gone (the page header has the logo).
+    panel(ctx, 8, 8, 112, 138, '#080c14', '#243047');
+    scanlines(ctx, 9, 9, 110, 136, 0.10);
+    statusBox = { x: 8, y: 8, w: 112, h: 138 };
 
     // ---- wall screen : the book, or whatever you clicked on
     // bezel, then glass. A single flat rect read as a hole in the wall; a lit top edge and a
@@ -544,7 +517,7 @@
     // desks + agents
     // advance the shared clock between SSE frames so the stagger animates smoothly
     S.now = Math.max(S.now, (S._rx || 0) + (performance.now() - (S._rxPerf || performance.now())));
-    const bubbles = [], labels = [];
+    const labels = [];
     S.agents.forEach((a, i) => {
       if (!DESKS[i]) return;                 // more agents than seats: skip rather than throw
       const [x, y] = DESKS[i];
@@ -614,87 +587,37 @@
       const blink = Math.floor(t * 1.3 + i * 0.7) % 6 === 0 && ((t * 1.3 + i * 0.7) % 1) < 0.18;
       if (blink) { px(ctx, bx - 4, by - 3, 3, 1, '#fff'); px(ctx, bx + 1, by - 3, 3, 1, '#fff'); }
       else { px(ctx, bx - 4, by - 4, 3, 3, '#fff'); px(ctx, bx + 1, by - 4, 3, 3, '#fff'); px(ctx, bx - 3, by - 3, 1, 1, '#111'); px(ctx, bx + 2, by - 3, 1, 1, '#111'); }
-      // QUEUED, for exactly the reason the bubbles below are: drawn inside this loop, a back-row
-      // name landed at y+36 = 194 and the front row's desks were painted over it a few iterations
-      // later. BRAM, KETT and RIGO -- the three agents the activity feed talks about most -- sat
-      // unlabelled on the floor, while TESS, HOLT, ILSA and MAKR in front were fine. The original
-      // line labelled all seven, so the intent was always to name everybody.
-      //
-      // The back row also cannot use the floor in FRONT of it, because the next row of desks
-      // occupies that space -- so its name goes up onto the wall screen behind it instead, at the
-      // same y=152 the back-row bubbles clamp to. A bubble covers the name while that agent is
-      // speaking, which is three seconds and is the more useful of the two.
-      labels.push({ key: a.key, bx, y: y + (i < 3 ? -6 : 36), color: (hot || picked) ? a.color : (act ? '#e6e8ee' : '#5b6270') });
-      // Speech bubbles are QUEUED, not drawn here. Drawing one inside this loop put it under the
-      // next agent's desk, which is why they read "budget $20" and "22 pairs /" -- the box was
-      // being painted over a few iterations later. They go on top, after every desk is down.
-      if (act && a.note) bubbles.push({ note: a.note, bx, y, back: i < 3, color: a.color });
+      // where this agent's name and speech bubble go; placeFx lays them over the room as HTML
+      labels.push({ key: a.key, bx, by, deskY: y, back: i < 3, color: a.color, act, lit: hot || picked, note: a.note });
     });
-    // furniture, before the bubbles -- the server rack stands where the seventh agent sits and was
-    // painting straight over MAKR's line
+    // furniture
     shadow(ctx, 438, 216, 30, 10, 0.5);
     px(ctx, 440, 162, 26, 60, '#0f131b'); px(ctx, 440, 162, 26, 1, '#2a3446'); px(ctx, 440, 162, 1, 60, '#1e2635');
     for (let i = 0; i < 6; i++) { px(ctx, 443, 166 + i * 9, 20, 6, '#06090e'); const on = (Math.floor(t * 4) + i) % 3; px(ctx, 459, 168 + i * 9, 2, 2, on ? '#22c55e' : '#0f3a1f'); if (on) glow(ctx, 460, 169 + i * 9, 5, '#22c55e', 0.5); }
-    shadow(ctx, 12, 206, 22, 8, 0.45);
-    px(ctx, 16, 186, 12, 24, '#241d14'); px(ctx, 16, 186, 3, 24, '#332918');
-    px(ctx, 10, 170, 24, 18, '#153f26'); px(ctx, 14, 164, 16, 10, '#1d5c34'); px(ctx, 14, 164, 16, 1, '#2a7d47');
 
-    // ---- names, after every desk is down so no later row can paint over one
-    for (const l of labels) text(ctx, l.key, l.bx, l.y, l.color, 6, 'center');
-
-    // ---- speech bubbles, last of everything so nothing can cover them
-    // They used to be solid white blocks with black text: the brightest thing in a dark room, for
-    // the least important content on it. Now they read as part of the room -- a dark plate, a hair
-    // line in the agent's own colour, and the label in the same grey as the rest of the furniture.
-    for (const b of bubbles) {
-      // no ellipsis and no run-ons: the note is already a short whole phrase (engine.touch), and
-      // if it still overruns it gets cut at a word, not mid-syllable with a dot-dot-dot.
-      const s2 = clip(b.note, 34);
-      ctx.font = '6px JetBrains Mono, monospace';
-      const w = Math.ceil(ctx.measureText(s2).width) + 8;
-      const h = 10;
-      // back row rises off the desk; the floor starts at y=150, so keep it clear of the wall screen
-      const by2 = b.back ? Math.max(152, b.y - 30) : b.y + 13;
-      // Front-row bubbles open to the right, but the seventh desk sits against the wall -- flip
-      // left when there is no room on the right.
-      const lx = b.back ? Math.min(Math.max(b.bx - w / 2, 3), 477 - w)
-        : (b.bx + 12 + w <= 477 ? b.bx + 12 : Math.max(3, b.bx - 12 - w));
-      const rightward = lx > b.bx;
-      px(ctx, lx, by2, w, h, '#0d1119');                    // plate
-      px(ctx, lx, by2, w, 1, b.color); px(ctx, lx, by2 + h - 1, w, 1, '#1b2130');
-      px(ctx, lx, by2, 1, h, '#1b2130'); px(ctx, lx + w - 1, by2, 1, h, '#1b2130');
-      if (b.back) px(ctx, b.bx - 1, by2 + h, 2, 2, '#0d1119');
-      else px(ctx, rightward ? lx - 2 : lx + w, by2 + 4, 2, 2, '#0d1119');
-      text(ctx, s2, lx + 4, by2 + 2, '#9aa3b5', 6);
-    }
-
-    // a dead feed greys the room out entirely: no chance of reading a frozen board as a live one
-    if (stale()) {
-      ctx.save(); ctx.globalAlpha = 0.55; ctx.fillStyle = '#05070c'; ctx.fillRect(0, 0, 480, 262); ctx.restore();
-      px(ctx, 150, 122, 180, 16, '#1a0d0f'); px(ctx, 150, 122, 180, 1, '#ef4444');
-      text(ctx, 'NO SIGNAL FROM THE DESK', 240, 126, '#f87171', 7, 'center');
-      text(ctx, 'this page is showing the last state it received', 240, 133, '#7f1d1d', 5, 'center');
-    }
+    // Names and speech bubbles are no longer painted into the canvas. At 6 drawing units they came
+    // out around 9px on a laptop and could not be read from a chair. They are HTML now (placeFx),
+    // laid over the room at real font sizes and positioned from these same desk coordinates.
+    seats = labels;
 
     // vignette: pulls the eye to the middle of the board and hides the hard canvas corners
     ctx.save();
     const vig = ctx.createRadialGradient(240, 130, 90, 240, 130, 320);
     vig.addColorStop(0, 'transparent'); vig.addColorStop(1, 'rgba(0,0,0,0.55)');
-    ctx.fillStyle = vig; ctx.fillRect(0, 0, 480, 262);
+    ctx.fillStyle = vig; ctx.fillRect(0, 0, 480, ROOM_H);
     ctx.restore();
 
-    drawLedge(ctx);
-  }
-  // ---- the tape along the bottom of the room: every agent's activity, scrollable in place
-  // ---- the ledge along the bottom: P&L on the left, activity on the right ---------------------
-  function drawLedge(ctx) {
-    const g = ctx.createLinearGradient(0, 262, 0, 360);
-    g.addColorStop(0, '#0a0e16'); g.addColorStop(1, '#05070c');
-    ctx.fillStyle = g; ctx.fillRect(0, 262, 480, 98);
-    px(ctx, 0, 262, 480, 1, '#243047'); px(ctx, 0, 263, 480, 1, '#0e1420');
-    drawPnl(ctx, 8, 268, 178, 84);
-    px(ctx, 192, 270, 1, 80, '#141b28');
-    drawLog(ctx, 200, 268, 274, 84);
+    // P&L board, standing on the floor left of the desks (after the vignette, which would bury it)
+    panel(ctx, 4, 153, 124, 105, '#080c14', '#243047');
+    drawPnl(ctx, 8, 158, 118, 96);
+
+    // a dead feed greys the room out entirely: no chance of reading a frozen board as a live one
+    if (stale()) {
+      ctx.save(); ctx.globalAlpha = 0.55; ctx.fillStyle = '#05070c'; ctx.fillRect(0, 0, 480, ROOM_H); ctx.restore();
+      px(ctx, 150, 122, 180, 16, '#1a0d0f'); px(ctx, 150, 122, 180, 1, '#ef4444');
+      text(ctx, 'NO SIGNAL FROM THE DESK', 240, 126, '#f87171', 7, 'center');
+      text(ctx, 'this page is showing the last state it received', 240, 133, '#7f1d1d', 5, 'center');
+    }
   }
 
   // REALISED is profit from round trips that actually closed. NET is that plus the mark on whatever
@@ -704,7 +627,7 @@
   // earned nothing.
   function drawPnl(ctx, x, y, w, h) {
     const H = (S.maker && S.maker.hist) || [];
-    text(ctx, 'P&L', x + 4, y, '#4b5563', 5);
+    text(ctx, 'P&L', x + 4, y, '#7c869a', 6);
     if (H.length < 2) {
       chartBox = null;
       text(ctx, H.length ? 'collecting — one point a minute' : 'no history yet', x + w / 2, y + h / 2 - 4, '#243044', 5, 'center');
@@ -726,9 +649,9 @@
     const zy = py_(0);
     ctx.save(); ctx.setLineDash([2, 2]); ctx.strokeStyle = '#1f2937'; ctx.lineWidth = 0.5;
     ctx.beginPath(); ctx.moveTo(L, zy); ctx.lineTo(R, zy); ctx.stroke(); ctx.restore();
-    text(ctx, '0', L - 3, zy - 2.5, '#39404e', 4.5, 'right');
-    text(ctx, signed(hi), L - 3, T - 1, '#39404e', 4.5, 'right');
-    text(ctx, signed(lo), L - 3, B - 4, '#39404e', 4.5, 'right');
+    text(ctx, '0', L - 3, zy - 2.5, '#39404e', 5.5, 'right');
+    text(ctx, signed(hi), L - 3, T - 1, '#39404e', 5.5, 'right');
+    text(ctx, signed(lo), L - 3, B - 4, '#39404e', 5.5, 'right');
 
     const line = (key, col, width, fill) => {
       ctx.save(); ctx.beginPath();
@@ -769,51 +692,361 @@
       const lx = Math.min(Math.max(fx - lw / 2, L), R - lw), ly = T + 2;
       px(ctx, lx, ly, lw, 9, '#0d1119'); px(ctx, lx, ly, lw, 1, pin ? '#5ec8e0' : '#434d5b');
       text(ctx, label, lx + 4, ly + 2, pin ? '#93dcec' : '#c3c9d6', 5);
-      text(ctx, pin ? 'pinned · click to clear' : 'click to pin', x + w - 6, y + h - 4, pin ? '#5ec8e0' : '#4b5563', 4.5, 'right');
-    } else text(ctx, 'hover graph · click to pin', x + w - 6, y + h - 4, '#39404e', 4.5, 'right');
+    }
 
     const mins = Math.round((t1 - t0) / 60000);
-    text(ctx, mins < 90 ? `last ${mins}m` : `last ${(mins / 60).toFixed(1)}h`, x + 22, y + h - 4, '#39404e', 4.5);
-    text(ctx, 'NET', x + w - 34, y, now.e >= 0 ? '#22c55e' : '#ef4444', 4.5, 'right');
-    text(ctx, signed(now.e), x + w - 6, y, now.e >= 0 ? '#22c55e' : '#ef4444', 5, 'right');
-    text(ctx, 'realised', x + w - 34, y + h - 10, '#2f6b45', 4.5, 'right');
-    text(ctx, signed((S.maker && S.maker.realized) || 0), x + w - 6, y + h - 10, '#2f6b45', 4.5, 'right');
+    text(ctx, mins < 90 ? `last ${mins}m` : `last ${(mins / 60).toFixed(1)}h`, x + 22, y + h - 4, '#39404e', 5.5);
+    text(ctx, 'NET', x + w - 34, y, now.e >= 0 ? '#22c55e' : '#ef4444', 5.5, 'right');
+    text(ctx, signed(now.e), x + w - 6, y, now.e >= 0 ? '#22c55e' : '#ef4444', 6.5, 'right');
+    // one row under the chart, now that the board is narrow: the span on the left, banked on the right
+    text(ctx, `realised ${signed((S.maker && S.maker.realized) || 0)}`, x + w - 6, y + h - 4, '#3f8a5a', 5.5, 'right');
   }
 
-  function drawLog(ctx, x, y, w, h) {
-    const rows = S.log || [];
-    const LROWS = 9;
-    const maxG = Math.max(0, rows.length - LROWS);
-    scroll.log = Math.min(scroll.log, maxG);
-    zones.push({ x, y, w, h, id: 'log', max: maxG });
-    text(ctx, 'ACTIVITY', x, y, '#4b5563', 5);
-    if (maxG) {
-      text(ctx, `${scroll.log + 1}-${Math.min(rows.length, scroll.log + LROWS)} of ${rows.length}`, x + w, y, '#3d4350', 5, 'right');
-      const th = Math.max(5, (h - 12) * LROWS / rows.length);
-      px(ctx, x + w + 2, y + 8, 1, h - 12, '#141b28');
-      px(ctx, x + w + 2, y + 8 + (h - 12 - th) * (scroll.log / maxG), 1, th, '#4b5563');
+  // ------------------------------------------------------------ notices: what the desk is doing, in words
+  // The bots move when their desk runs; these say WHY, in sentences a person can read from a chair.
+  // Everything here is HTML laid over the canvas: bubbles above the bots, the feed on the ledge, and
+  // the alert in the floor's title bar. Positions come from the same drawing coordinates as the art.
+  let seats = [], statusBox = null;
+  let seenKeys = null, feedHead = '';
+  const said = {};        // agent -> { text, sub, level, until }   the bubble currently showing
+  const lastSaid = {};    // agent -> the last sentence it said, numbers blanked, so repeats stay quiet
+  const logKey = (e) => `${e.t}|${e.agent}|${e.text}`;
+  const shape = (s) => String(s).replace(/[−+-]?\$?\d[\d,.]*%?/g, '#');
+  const cap = (s) => { const t = String(s || '').trim(); return t.charAt(0).toUpperCase() + t.slice(1); };
+  const cc = (p) => `${+(p * 100).toFixed(1)}¢`;
+  const move = (s) => `${s.replace('-', '−').replace(/\.0$/, '')}¢`;
+  const marketName = (tk) => { const m = byTicker(S.maker || {}, tk); return (m && (OUTCOME(m) || QUESTION(m))) || tk.replace(/^KX/, ''); };
+
+  // One log entry -> { text, sub, level }. level: trade (money moved), warn (needs a look),
+  // info (a decision worth knowing), quiet (routine: the desk doing its rounds).
+  function say(e) {
+    const t = String(e.text || ''), parts = t.split(' · '), first = parts[0], rest = parts.slice(1).join(' · ');
+    switch (`${e.agent} ${e.kind}`) {
+      case 'MAKR FILL': {
+        const fills = ((S.maker || {}).recent || []).filter((f) => Math.abs(f.at - e.t) < 5000);
+        if (!fills.length) return { text: cap(first), level: 'trade' };
+        const g = [];
+        for (const f of fills) {
+          const x = g.find((y) => y.ticker === f.ticker && y.side === f.side);
+          if (x) { x.qty += f.qty; x.val += f.qty * f.px; } else g.push({ ticker: f.ticker, side: f.side, qty: f.qty, val: f.qty * f.px });
+        }
+        // the outcome alone ("J.D. Vance") does not say which market; the question goes underneath
+        const m = byTicker(S.maker || {}, g[0].ticker);
+        return { text: cap(g.map((x) => `${x.side === 'buy' ? 'bought' : 'sold'} ${x.qty} ${marketName(x.ticker)} at ${cc(x.val / x.qty)}`).join(', ')),
+          sub: m && OUTCOME(m) ? QUESTION(m) : '', level: 'trade' };
+      }
+      case 'RIGO SETTLE': {
+        const i = t.indexOf(' · sold '), label = i > 0 ? t.slice(0, i) : first;
+        const pl = e.pnl == null ? '' : `, ${e.pnl >= 0 ? 'made' : 'lost'} ${money(e.pnl)}`;
+        return { text: `Closed ${label}${pl}`, sub: parts[parts.length - 1], level: 'trade' };
+      }
+      case 'HOLT SCAN': {
+        const m = t.match(/\+\d+ new: (.+)$/), n = (t.match(/^(\d+) pairs/) || [])[1];
+        return m ? { text: `Found a new market on both venues: ${m[1]}`, level: 'info' }
+          : { text: `Watching ${n || 'the'} markets listed on both venues`, level: 'quiet' };
+      }
+      case 'ILSA RESEARCH': {
+        const m = t.match(/^(.+?): PM ([−+-]?[\d.]+)c, KS ([−+-]?[\d.]+)c over \S+ · gap ([\d.]+)c (\w+)/);
+        if (m) return { text: `${m[1]}: price moved ${move(m[2])} on Polymarket, ${move(m[3])} on Kalshi`, sub: `venues ${+m[4]}¢ apart, ${m[5]}`, level: 'quiet' };
+        break;
+      }
+      case 'BRAM RESEARCH': {
+        const n = (t.match(/over (\d+) pairs/) || [])[1], sig = (S.signals || []).length;
+        if (n) return { text: sig ? `Checked ${n} pairs: ${sig} worth a closer look` : `Checked ${n} pairs: no price gap big enough to trade`, level: sig ? 'info' : 'quiet' };
+        break;
+      }
+      case 'KETT PASS': {
+        const m = t.match(/^(.+?): (.+)$/);
+        return m ? { text: `Passed on ${m[1]}`, sub: m[2], level: 'info' } : { text: cap(t), level: 'info' };
+      }
+      case 'TESS OPS': {
+        if (/^HALT\b/.test(first)) return { text: 'Trading stopped', sub: rest, level: 'warn' };
+        if (/window is clean/.test(t)) { const d = (t.match(/day ([−+-]?[\d.]+%)/) || [])[1]; return { text: `All clear: prices are fresh${d ? `, account ${d} today` : ''}`, level: 'quiet' }; }
+        return { text: cap(first), sub: rest, level: 'warn' };
+      }
+      case 'MAKR OPS': return { text: cap(first), sub: rest, level: /stale|fail|error|halt|stop/i.test(t) ? 'warn' : 'info' };
+      case 'MAKR RESEARCH': {
+        const m = t.match(/book: (\d+) contracts.*marked \$([\d.]+) from \$([\d.]+)/);
+        if (m) { const net = +m[2] - +m[3]; return { text: `Holding ${m[1]} contracts, ${net >= 0 ? 'up' : 'down'} ${money(net)} if closed now`, level: 'quiet' }; }
+        break;
+      }
+      case 'MAKR SCAN': {
+        const m = t.match(/quoting (\d+) of/);
+        if (m) return { text: `Offering to buy and sell in ${m[1]} markets`, level: 'quiet' };
+        break;
+      }
+      case 'RIGO RESEARCH': {
+        const m = t.match(/(\d+) open/), al = +((t.match(/(\d+) integrity alert/) || [])[1] || 0);
+        if (m) return { text: `Checked ${m[1]} open positions${al ? `: ${al} broken arb${al > 1 ? 's' : ''}` : ', all fine'}`, level: 'quiet' };
+        break;
+      }
     }
-    rows.slice(scroll.log, scroll.log + LROWS).forEach((e, i) => {
-      const ry = y + 9 + i * 8.2;
-      if (i % 2) px(ctx, x - 2, ry - 1.5, w + 4, 8.2, '#0a0f18');
-      const col = agentColor(e.agent);
-      px(ctx, x, ry + 1, 2, 4, col);
-      text(ctx, hhmm(e.t), x + 5, ry, '#39404e', 5);
-      text(ctx, e.agent, x + 28, ry, col, 5);
-      const fill = e.kind === 'FILL' || e.kind === 'SETTLE';
-      px(ctx, x + 53, ry - 0.6, e.kind.length * 3 + 5, 6.4, fill ? '#1b2a1e' : '#121826');
-      text(ctx, e.kind, x + 55, ry, fill ? '#4ade80' : '#5b6470', 4.5);
-      if (e.pnl != null) text(ctx, signed(e.pnl), x + 128, ry, e.pnl >= 0 ? '#22c55e' : '#ef4444', 5, 'right');
-      text(ctx, clip(e.text, 46), x + 132, ry, fill ? '#c7cdd8' : '#6b7480', 5);
-    });
-    if (!rows.length) text(ctx, 'waiting for the first cycle', x + w / 2, y + h / 2, '#243044', 6, 'center');
+    if (e.kind === 'HALT') return { text: `Stopped: ${first}`, sub: rest, level: 'warn' };
+    if (e.kind === 'FILL' || e.kind === 'SETTLE') return { text: cap(first), sub: rest, level: 'trade' };
+    return { text: cap(first), sub: rest, level: 'info' };
   }
 
-  function loop(ts) { drawFloor(ts / 1000); requestAnimationFrame(loop); }
+  // What needs a person: a halt, or an arb that is not actually hedged.
+  function alerts() {
+    const out = [];
+    if (S.halt) out.push({ agent: 'TESS', text: `Trading stopped: ${S.halt}` });
+    for (const g of S.arbGroups || []) {
+      if (g.integrity === 'valid') continue;
+      const why = g.integrity === 'orphan_leg' ? 'only one side filled, nothing hedges it' : String(g.integrity).replace(/_/g, ' ');
+      out.push({ agent: 'RIGO', group: g.id, text: `Broken arb: ${g.label}`, sub: `${why} · ${signed(g.liquidationPnl)} if sold now` });
+    }
+    // "Keep until it settles" is a decision, not a fix: the alert stays true, it just stops shouting
+    return out.map((a) => ({ ...a, kept: !!(a.group && kept.has(a.group)) }));
+  }
+
+  // Called on every SSE frame: new log lines become bubbles; the feed is rebuilt when the log moves.
+  function ingest() {
+    const log = S.log || [];
+    const keys = new Set(log.map(logKey));
+    if (seenKeys) {
+      const fresh = log.filter((e) => !seenKeys.has(logKey(e))).reverse();   // oldest first
+      for (const e of fresh) {
+        const s = say(e), cur = said[e.agent], loud = s.level !== 'quiet';
+        if (!loud && shape(s.text) === lastSaid[e.agent]) continue;          // same routine line again
+        if (!loud && cur && cur.level !== 'quiet' && cur.until > Date.now()) continue;   // don't talk over a trade
+        said[e.agent] = { ...s, until: Date.now() + (loud ? 10000 : 6000) };
+        lastSaid[e.agent] = shape(s.text);
+      }
+    }
+    seenKeys = keys;
+
+    const head = log.length ? logKey(log[0]) : '';
+    if (head !== feedHead) { feedHead = head; renderFeed(log); }
+    const al = alerts(), loud = al.filter((a) => !a.kept);
+    const fm = $('floor-meta');
+    if (!al.length) { fm.className = ''; fm.innerHTML = ''; fm.onclick = null; }
+    else {
+      const top = loud[0] || al[0];
+      fm.className = loud.length ? 'alert' : 'alert kept';
+      fm.innerHTML = loud.length
+        ? `⚠ ${esc(top.text)} <small>${esc(top.sub || '')}</small>${loud.length > 1 ? ` <small>+${loud.length - 1} more</small>` : ''} <b class="open">Decide ›</b>`
+        : `✓ Holding to settlement: ${esc(top.text.replace(/^Broken arb: /, ''))} <b class="open">Open ›</b>`;
+      fm.onclick = () => openAlert(top);
+    }
+    if (panelFor) renderPanel();
+  }
+
+  // ------------------------------------------------------------ the alert panel: research, sell, keep
+  // An alert used to be a line of red text with nothing to do about it. This is the decision:
+  // research what happened, sell the position, or hold it to settlement on purpose.
+  const kept = new Set((() => { try { return JSON.parse(localStorage.getItem('hex-kept') || '[]'); } catch { return []; } })());
+  const saveKept = () => { try { localStorage.setItem('hex-kept', JSON.stringify([...kept])); } catch { /* private window */ } };
+  let panelFor = null;          // the alert the panel is showing
+  let confirming = false, sellMsg = null, researchMsg = null, busy = false;
+
+  function openAlert(a) {
+    panelFor = a; confirming = false; sellMsg = null; researchMsg = null;
+    $('alertpanel').hidden = false;
+    renderPanel();
+  }
+  function closeAlert() { panelFor = null; $('alertpanel').hidden = true; }
+  window.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && panelFor) closeAlert(); });
+
+  async function act(group, action) {
+    try {
+      const r = await fetch(`/api/alerts/${encodeURIComponent(group)}/${action}`, { method: 'POST', headers: { 'x-hexagon-action': '1' } });
+      const text = await r.text();
+      if (r.status === 404) return { ok: false, error: 'The desk is running older code. Restart it to use this button.' };
+      let body; try { body = JSON.parse(text); } catch { body = { ok: false, error: text }; }
+      return r.ok ? body : { ok: false, error: body.error || text };
+    } catch (e) { return { ok: false, error: `Could not reach the desk (${e.message})` }; }
+  }
+
+  const venueName = (v) => (v === 'KS' ? 'Kalshi' : 'Polymarket');
+  const usd = (v) => (v == null || !Number.isFinite(+v) ? '—' : signed(+v));
+
+  function renderPanel() {
+    const a = panelFor, el = $('alertpanel');
+    if (!a || !S) return;
+    // the alert may have cleared since the panel opened (sold, settled)
+    const g = a.group ? (S.arbGroups || []).find((x) => x.id === a.group) : null;
+    const legs = a.group ? (S.positions || []).filter((p) => p.group === a.group) : [];
+    const gone = a.group && !legs.length;
+    const job = a.group && S.research && S.research.jobs ? S.research.jobs[a.group] : null;
+
+    let h = `<button class="x" data-do="close" aria-label="Close">✕</button>`;
+    h += `<div class="ah">${gone ? '✓ Resolved' : a.kept ? '✓ Holding to settlement' : '⚠ Needs a decision'}</div>`;
+    h += `<h3>${esc(g ? g.label : a.text)}</h3>`;
+    if (!a.group) { el.innerHTML = h + `<p>${esc(a.sub || a.text)}</p>`; return; }
+    if (gone) { el.innerHTML = h + `<p>Nothing is open in this position any more.</p>${sellMsg ? `<p class="ok">${esc(sellMsg)}</p>` : ''}`; return; }
+
+    const proceeds = legs.reduce((s2, p) => s2 + p.qty * p.sellPx, 0);
+    const cost = legs.reduce((s2, p) => s2 + p.cost, 0);
+    h += `<p class="why">${esc(a.sub ? cap(a.sub.split(' · ')[0]) : '')}.</p>`;
+    h += `<ul class="legs">${legs.map((p) => `<li><b>${p.qty} ${p.side.toUpperCase()}</b> on ${venueName(p.venue)} · paid ${money(p.cost)} · sells for ${cc(p.sellPx)} now (${money(p.qty * p.sellPx)})</li>`).join('')}</ul>`;
+    h += `<p class="sum">Sell now and you get <b>${money(proceeds)}</b>, locking in <b class="${proceeds - cost >= 0 ? 'pos' : 'neg'}">${signed(proceeds - cost)}</b>.</p>`;
+
+    // actions
+    if (confirming) {
+      h += `<div class="confirm"><p>Sell ${legs.map((p) => `${p.qty} ${p.side.toUpperCase()} on ${venueName(p.venue)} at ${cc(p.sellPx)}`).join(' and ')}? You'd receive ${money(proceeds)} and lock in ${signed(proceeds - cost)}.${S.mode === 'live' ? ' <b>This is real money.</b>' : ' Paper account.'}</p>
+        <button class="danger" data-do="sell-yes" ${busy ? 'disabled' : ''}>${busy ? 'Selling…' : 'Yes, sell it'}</button><button data-do="sell-no">Cancel</button></div>`;
+    } else {
+      const running = job && job.status === 'running';
+      h += `<div class="acts">
+        <button class="primary" data-do="research" ${running || !(S.research && S.research.enabled) ? 'disabled' : ''}>${running ? 'Researching…' : job && job.status === 'done' ? 'Research again' : 'Research'}</button>
+        <button class="danger" data-do="sell">Sell now</button>
+        <button data-do="keep">${a.kept ? 'Stop holding (alert me again)' : 'Keep until it settles'}</button></div>`;
+    }
+    if (sellMsg) h += `<p class="${/^Sold/.test(sellMsg) ? 'ok' : 'err'}">${esc(sellMsg)}</p>`;
+
+    // research: a verdict and one sentence
+    h += `<div class="research">`;
+    if (researchMsg) h += `<p class="err">${esc(researchMsg)}</p>`;
+    if (!job) {
+      h += S.research && S.research.enabled
+        ? `<p class="hint">Research gives a quick verdict (sell, hold or hedge) in about 20 seconds.</p>`
+        : `<p class="hint">Research needs ANTHROPIC_API_KEY in .env${S.research ? '' : ' and a desk restart'}.</p>`;
+    } else if (job.status === 'running') {
+      h += `<p class="hint"><span class="spin"></span> Researching… ${Math.round((S.now - job.startedAt) / 1000)}s</p>`;
+    } else if (job.status === 'error') {
+      h += `<p class="err">Research failed: ${esc(job.error)}</p>`;
+    } else if (job.result) {
+      const r = job.result;
+      h += `<div class="verdict v-${esc(r.action || 'none')}"><b>${esc((r.action || 'no clear call').toUpperCase())}</b>${r.confidence ? `<span class="conf">${esc(r.confidence)} confidence</span>` : ''}<p>${esc(r.sentence || '')}</p></div>`;
+      const took = job.finishedAt && job.startedAt ? `${Math.round((job.finishedAt - job.startedAt) / 1000)}s` : '';
+      h += `<p class="cost">${took} · $${(job.usd || 0).toFixed(2)} · ${ago(job.finishedAt)}${job.sources && job.sources.length ? ` · <a href="${esc(job.sources[0].url)}" target="_blank" rel="noopener noreferrer">source</a>` : ''}</p>`;
+    }
+    h += `</div>`;
+    const scroll2 = el.scrollTop;
+    el.innerHTML = h;
+    el.scrollTop = scroll2;
+  }
+
+  $('alertpanel').addEventListener('click', async (ev) => {
+    const b = ev.target.closest('button[data-do]');
+    if (!b || !panelFor) return;
+    const a = panelFor, what = b.dataset.do;
+    if (what === 'close') return closeAlert();
+    if (what === 'keep') {
+      if (kept.has(a.group)) kept.delete(a.group); else kept.add(a.group);
+      saveKept(); a.kept = kept.has(a.group);
+      if (a.kept) closeAlert(); else renderPanel();
+      return;
+    }
+    if (what === 'sell') { confirming = true; sellMsg = null; return renderPanel(); }
+    if (what === 'sell-no') { confirming = false; return renderPanel(); }
+    if (what === 'sell-yes') {
+      busy = true; renderPanel();
+      const r = await act(a.group, 'sell');
+      busy = false; confirming = false;
+      sellMsg = r.ok ? 'Sold. The position is closed.' : r.remaining ? `Only part of it sold; the desk will keep retrying the rest.` : `Not sold: ${r.error || 'unknown error'}`;
+      if (r.ok) { kept.delete(a.group); saveKept(); }
+      return renderPanel();
+    }
+    if (what === 'research') {
+      researchMsg = null; b.disabled = true;
+      const r = await act(a.group, 'research');
+      if (!r.ok) researchMsg = r.error || 'Research did not start';
+      return renderPanel();
+    }
+  });
+
+  function renderFeed(log) {
+    const rows = [], last = {};
+    for (const e of log) {
+      const s = say(e), k = shape(s.text);
+      if (last[e.agent] === k) continue;           // collapse the same routine line said every cycle
+      last[e.agent] = k;
+      rows.push({ e, s });
+      if (rows.length >= 40) break;
+    }
+    const list = $('feedlist'), top = list.scrollTop;
+    list.innerHTML = rows.map(({ e, s }) => {
+      const pl = e.kind === 'SETTLE' && e.pnl != null ? `<span class="fp ${e.pnl >= 0 ? 'pos' : 'neg'}">${signed(e.pnl)}</span>` : '';
+      return `<li class="lv-${s.level}"><span class="ft">${hhmm(e.t)}</span><span class="fa" style="color:${agentColor(e.agent)}">${e.agent}</span>` +
+        `<span class="fs">${esc(s.text)}${s.sub && s.level !== 'quiet' ? `<small>${esc(s.sub)}</small>` : ''}</span>${pl}</li>`;
+    }).join('') || '<li class="lv-quiet"><span class="fs">Waiting for the first desk cycle</span></li>';
+    list.scrollTop = top;
+  }
+
+  // Every animation frame: put the names, bubbles and feed where the room currently is on screen.
+  const nodes = {};
+  function placeFx() {
+    const fx = $('fx');
+    if (!S || !seats.length) return;
+    const k = floorBox.scale, X = (x) => floorBox.ox + x * k, Y = (y) => floorBox.oy + y * k;
+    const fs = Math.max(11, Math.min(15, k * 5.4));
+    fx.style.fontSize = `${fs}px`;
+    fx.classList.toggle('stale', !!stale());
+    placeStatus(X, Y, k);
+
+    const now = Date.now(), al = alerts();
+    for (const st of seats) {
+      let n = nodes[st.key];
+      if (!n) {
+        n = nodes[st.key] = { name: document.createElement('div'), bub: document.createElement('div'), html: '' };
+        n.name.className = 'nametag'; n.name.textContent = st.key;
+        $('bubbles').append(n.name, n.bub);
+      }
+      // name: under the bot in the front row; on the wall below the screen for the back row
+      Object.assign(n.name.style, { left: `${X(st.bx)}px`, top: `${Y(st.back ? st.deskY - 7 : st.deskY + 35)}px`, color: st.lit || st.act ? st.color : '' });
+      n.name.classList.toggle('on', st.act || st.lit);
+
+      // what to say: a fresh event beats a standing alert beats the desk's own running note
+      const ev = said[st.key] && said[st.key].until > now ? said[st.key] : null;
+      const alarm = al.find((a) => a.agent === st.key && !a.kept);
+      // the standing alert stays short here -- it hangs over the wall screen, and the title bar has the detail
+      const b = ev || (alarm && { text: ((n) => `⚠ ${n} problem${n > 1 ? 's' : ''}`)(al.filter((a) => a.agent === st.key && !a.kept).length), level: 'warn' })
+        || (st.act && st.note ? { text: cap(st.note), level: 'quiet' } : null);
+      if (!b) { n.bub.hidden = true; continue; }
+      const html = `${esc(b.text)}${b.sub && b.level !== 'quiet' ? `<small>${esc(b.sub)}</small>` : ''}`;
+      // Back row speaks upward, over the bottom of the wall screen. The front row cannot -- the back
+      // row's bots sit right above its monitors -- so it speaks sideways, across its own desk.
+      const maxw = Math.max(150, Math.min(260, (st.back ? 96 : 70) * k));
+      const flip = !st.back && X(480) - X(st.bx + 10) < maxw;
+      const cls = `bub lv-${b.level} ${st.back ? 'up' : flip ? 'side flip' : 'side'}`;
+      if (html !== n.html || n.cls !== cls) {
+        n.bub.innerHTML = html; n.cls = cls;
+        n.bub.className = cls;
+        if (ev && html !== n.html) { void n.bub.offsetWidth; n.bub.classList.add('pop'); }   // restart the pop animation
+        n.html = html;
+      }
+      n.bub.hidden = false;
+      n.bub.style.setProperty('--c', st.color);
+      n.bub.style.maxWidth = `${maxw}px`;
+      if (st.back) Object.assign(n.bub.style, { left: `${X(st.bx)}px`, right: '', top: `${Y(st.deskY - 19)}px` });
+      else if (flip) Object.assign(n.bub.style, { left: '', right: `${fx.clientWidth - X(st.bx - 10)}px`, top: `${Y(st.deskY + 6)}px` });
+      else Object.assign(n.bub.style, { left: `${X(st.bx + 10)}px`, right: '', top: `${Y(st.deskY + 6)}px` });
+    }
+  }
+
+  // The status board on the left wall: is it working, what is it doing, what did it last trade.
+  let statusHtml = '';
+  function placeStatus(X, Y, k) {
+    if (!statusBox) return;
+    const el = $('status'), M = S.maker || {};
+    Object.assign(el.style, { left: `${X(statusBox.x)}px`, top: `${Y(statusBox.y)}px`, width: `${statusBox.w * k}px`, height: `${statusBox.h * k}px`,
+      fontSize: `${Math.max(10, Math.min(17, k * 5.6))}px` });
+    // on a small window the board cannot hold every line; keep state, what it is doing, and the last fill
+    el.classList.toggle('compact', statusBox.h * k < 150);
+    const halted = S.halt || M.halted, working = !halted && M.quoting > 0, gone = stale();
+    const [state, cls] = gone ? ['No signal', 'bad'] : halted ? ['Stopped', 'bad'] : working ? ['Working', 'good'] : ['Idle', 'warn'];
+    const latest = (S.log || [])[0];
+    const now = gone ? 'The desk stopped answering' : halted ? `Trading stopped: ${halted}` : latest ? say(latest).text : 'Waiting for the first desk cycle';
+    const nHeld = (M.markets || []).filter((m) => m.inv).length;
+    const lf = M.lastFill;
+    // the ledger survives a restart but the last-fill detail does not; say which
+    const fill = lf ? `Last fill ${ago(lf.at)}: ${lf.side === 'buy' ? 'bought' : 'sold'} ${lf.qty} ${marketName(lf.ticker)} at ${cc(lf.px)}`
+      : M.fills ? `${M.fills} fills before the last restart` : 'No fills yet';
+    const feed = M.feed || {};
+    const html = `<div class="st ${cls}"><i></i>${state}</div>` +
+      `<p class="now">${esc(now)}</p>` +
+      `<p class="extra">${working ? `Quoting ${M.quoting} markets` : 'Not quoting'} · ${nHeld ? `holding ${M.inv} contracts in ${nHeld}` : 'nothing held'}</p>` +
+      `<p>${esc(fill)}</p>` +
+      `<p class="dim">${S.mode === 'live' ? 'LIVE · real money' : 'Paper · no real money'} · up ${dur(S.now - S.startedAt)} · ${feed.mode === 'stream' && feed.connected ? 'live trade feed' : 'polling for trades'}</p>`;
+    if (html !== statusHtml) { el.innerHTML = html; statusHtml = html; }
+  }
+
+  function loop(ts) { drawFloor(ts / 1000); placeFx(); requestAnimationFrame(loop); }
   requestAnimationFrame(loop);
 
   // ------------------------------------------------------------ wiring
-  function render() { renderHeader(); }
+  function render() { renderHeader(); ingest(); }
   function connect() {
     const es = new EventSource('/api/stream');
     es.onmessage = (ev) => { try { S = JSON.parse(ev.data); S._rx = S.now; S._rxPerf = performance.now(); lastFrameAt = Date.now(); render(); } catch (e) { console.error(e); } };

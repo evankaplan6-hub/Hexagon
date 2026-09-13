@@ -12,6 +12,7 @@ const { makeMakerDesk } = require('./makerdesk');
 const agents = require('./agents');
 const { MAX_VENUE_DISAGREE } = require('./matcher');
 const { Brain } = require('./brain');
+const { Research } = require('./research');
 
 const AGENTS = [
   { key: 'BRAM', n: '01', role: 'PRICING', color: '#3b82f6' },
@@ -44,6 +45,7 @@ class Engine {
     // falls straight through to its deterministic path.
     this.brain = new Brain(cfg);
     this.brainSignals = [];   // mind-originated signals, merged into the book after BRAM
+    this.research = new Research(cfg, this);   // operator-requested deep dives on an alert
 
     this.lastCycleMs = 0;
     // Operator halt, distinct from TESS's automatic one. TESS recomputes its halt from scratch
@@ -506,6 +508,23 @@ class Engine {
     return { requested: open.length, remaining: left, halted: this.operatorHalt, makerMarketsFlattened: mk.markets, makerContracts: Math.round(mk.contracts) };
   }
 
+  // Sell every open leg of one group at its own venue's bid -- the operator's "sell now" on an
+  // alert. Same close() path RIGO and flatten use, so a failed or partial exit is flagged stuck and
+  // retried exactly as it would be for them. Does NOT halt the desk; that is flattenAll's job.
+  async sellGroup(groupId, reason = 'operator sell') {
+    const legs = this.state.positions.filter((p) => p.group === groupId);
+    if (!legs.length) return { ok: false, error: 'nothing open in that group' };
+    this.journal(this, 'OPERATOR_SELL', { group: groupId, label: legs[0].label, legs: legs.length, reason });
+    this.log('TESS', 'OPS', null, `operator sell requested \u00b7 ${legs[0].label} \u00b7 ${legs.length} leg${legs.length === 1 ? '' : 's'}`);
+    for (const pos of legs) {
+      const px = this.venueMark(pos) ?? pos.mark ?? pos.entry;
+      await this.close(pos, px, `operator: ${reason}`).catch(() => {});
+    }
+    const left = this.state.positions.filter((p) => p.group === groupId).length;
+    this.save();
+    return { ok: left === 0, sold: legs.length - left, remaining: left };
+  }
+
   resume() {
     const was = this.operatorHalt;
     this.operatorHalt = null;
@@ -548,7 +567,11 @@ class Engine {
       }
       try {
         const m = pos.venue === 'KS' ? await ks.fetchMarket(pos.ref) : await pm.fetchMarket(pos.pmId);
-        if (!m || m.closed || m.status === 'closed') continue; // settled: resolution() handles it
+        // Settled: leave it out of the map so resolution() runs. Kalshi reports a decided market as
+        // 'determined' or 'finalized', never 'closed' -- checking only 'closed' re-pinned the tied
+        // Tottenham v Everton leg at a 0c bid on 2026-09-12, and since resolution() only looks at
+        // markets missing from the map, the position could never settle. A result is the real signal.
+        if (!m || m.closed || m.status === 'closed' || m.result === 'yes' || m.result === 'no') continue;
         m.at = Date.now();
         this.pinned.set(pos.id, m);
         map.set(key, m);
@@ -696,7 +719,8 @@ class Engine {
       now, name: 'The Hexagon', mode: this.cfg.mode, demo: this.cfg.demo, startedAt: s.startedAt, halt: this.halt,
       initial: s.initial, cash: s.cash, equity, deployed, unrealized, realized: s.stats.realized, fees: s.stats.fees, pnl,
       wins: s.stats.wins, losses: s.stats.losses, liveBalance: this.liveBalance,
-      positions: s.positions.map((p) => ({ id: p.id, label: p.label, venue: p.venue, side: p.side, qty: p.qty, entry: p.entry, mark: p.mark, cost: p.cost, pnl: r2(p.qty * (p.mark ?? p.entry) - p.cost), strategy: p.strategy, openedAt: p.openedAt })),
+      // `sellPx` is what sellGroup would ask for this leg right now, so the confirm box can say it
+      positions: s.positions.map((p) => ({ id: p.id, group: p.group, label: p.label, venue: p.venue, side: p.side, qty: p.qty, entry: p.entry, mark: p.mark, cost: p.cost, pnl: r2(p.qty * (p.mark ?? p.entry) - p.cost), sellPx: this.venueMark(p) ?? p.mark ?? p.entry, strategy: p.strategy, openedAt: p.openedAt })),
       arbGroups,
       closed: s.closed.slice(-80).map((c) => ({ t: c.exitAt, pnl: c.pnl, label: c.label, reason: c.reason, strategy: c.strategy })),
       log: s.log.slice(0, 150),
@@ -705,6 +729,7 @@ class Engine {
       // It is deliberately separate from `active`, which means the desk's engine step is current.
       agents: AGENTS.map((a) => ({ ...a, ...this.agentStatus[a.key], active: now - this.agentStatus[a.key].lastActive < 4000, thinking: this.brain.thinking(a.key) })),
       brain: this.brain.snapshot(),
+      research: this.research.snapshot(),
       pairs: pairs.slice(0, 40),
       pairCount: this.pairs.length,
       cycleMs: this.lastCycleMs,

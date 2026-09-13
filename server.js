@@ -173,6 +173,35 @@ const server = http.createServer((req, res) => {
     if (req.headers['x-flatten-token'] !== cfg.flattenToken) { res.writeHead(403); return res.end('bad token'); }
     return json(res, engine.resume());
   }
+  // Alert actions from the dashboard: research a position, or sell it.
+  //
+  // These are the first buttons on the page that DO something, so they get three locks:
+  //   - POST with an `x-hexagon-action` header. A custom header forces a CORS preflight this server
+  //     never answers, so another website open in the same browser cannot fire one at localhost.
+  //   - An Origin, when the browser sends one, must be this host.
+  //   - Selling needs FLATTEN_TOKEN unless this is a paper account on loopback. Live money, or a
+  //     box reachable from elsewhere, does not get a one-click sell.
+  const act = p.match(/^\/api\/alerts\/([\w-]+)\/(research|sell)$/);
+  if (act) {
+    if (req.method !== 'POST') { res.writeHead(405); return res.end('POST only'); }
+    if (req.headers['x-hexagon-action'] !== '1') { res.writeHead(403); return res.end('missing action header'); }
+    const origin = req.headers.origin;
+    if (origin && origin !== 'null') {
+      let host = '';
+      try { host = new URL(origin).host; } catch { /* unparseable: refused below */ }
+      if (host !== req.headers.host) { res.writeHead(403); return res.end('cross-origin request refused'); }
+    }
+    const [, groupId, action] = act;
+    if (action === 'research') return json(res, engine.research.start(groupId));
+    const local = cfg.mode === 'paper' && LOOPBACK.includes(cfg.bindHost);
+    if (!local) {
+      if (!cfg.flattenToken) { res.writeHead(503); return res.end('selling from the dashboard needs FLATTEN_TOKEN in .env on a live or remote desk'); }
+      if (req.headers['x-flatten-token'] !== cfg.flattenToken) { res.writeHead(403); return res.end('bad token'); }
+    }
+    return engine.sellGroup(groupId, 'sold from the dashboard alert')
+      .then((r) => json(res, r))
+      .catch((e) => { res.writeHead(500); res.end(String(e.message).slice(0, 200)); });
+  }
   if (p === '/api/state') return json(res, engine.snapshot());
   if (p === '/api/pairs') return json(res, engine.pairs.map((x) => ({ ...x, q: x.q || null })));
   if (p === '/api/trades') return json(res, engine.state.closed);

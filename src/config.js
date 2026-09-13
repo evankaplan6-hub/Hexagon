@@ -251,6 +251,14 @@ module.exports = {
   // is where a pair stops being noise and starts being a thing a trader would look at twice.
   brainGapFloor: num('BRAIN_GAP_FLOOR', 0.01),
   brainTimeoutMs: num('BRAIN_TIMEOUT_MS', 90000),
+  // Operator research (src/research.js): one deep dive when a person clicks "Research" on an
+  // alert. Separate from the desks' paced budget because it only ever runs on a click, and a
+  // person deciding whether to sell should not be told the desks spent the day's allowance.
+  // Opus 5 with web search runs roughly $0.10-0.50 a report.
+  researchEnabled: env('RESEARCH', '1') !== '0',
+  researchModel: env('RESEARCH_MODEL', 'claude-opus-5'),
+  researchDailyUsd: num('RESEARCH_DAILY_USD', 3),
+  researchTimeoutMs: num('RESEARCH_TIMEOUT_MS', 240000),
   // Pairs per view. The whole board is usually 20-40 matched pairs; sending all of them every
   // cycle is mostly cost, since the tail never moves.
   brainPairs: Math.max(1, Math.round(num('BRAIN_PAIRS', 12))),

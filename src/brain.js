@@ -262,13 +262,15 @@ class Brain {
     return body;
   }
 
-  async _post(body, timeoutMs) {
+  // `extraHeaders` is for callers that opt into a beta (src/research.js); the key header is fixed.
+  async _post(body, timeoutMs, extraHeaders = {}) {
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), timeoutMs);
     try {
       const res = await fetch(API_URL, {
         method: 'POST',
         headers: {
+          ...extraHeaders,
           'content-type': 'application/json',
           'x-api-key': this.key,
           'anthropic-version': API_VERSION,

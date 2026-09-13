@@ -388,6 +388,58 @@ const position = (over = {}) => ({
     ok('with nothing to read it keeps the last mark instead of inventing one', F.state.positions[0].mark === 0.62, F.state.positions[0]);
   }
 
+  group('a decided Kalshi market is left for resolution, not re-pinned');
+  {
+    // Kalshi says 'finalized' (or 'determined') for a decided market, never 'closed'. Re-pinning it
+    // kept it in the quote map, and resolution() only runs for markets missing from the map -- so
+    // the tied Tottenham v Everton leg could never settle.
+    const ksv = require('../src/venues/kalshi');
+    const real = ksv.fetchMarket;
+    try {
+      const E = engine();
+      E.state.positions = [position({ id: 'done', ref: 'KXDONE', mark: 0.27 })];
+      ksv.fetchMarket = async () => ({ ticker: 'KXDONE', status: 'finalized', result: 'no', yesBid: 0, yesAsk: 1 });
+      await E.pinPositions();
+      ok('a finalized market with a result is not pinned', !E.quotes.ks.has('KXDONE'));
+      const r = await E.resolution(E.state.positions[0]);
+      ok('so resolution() sees it and settles it', r && r.resolved === true && r.yesWins === false, r);
+
+      const O = engine();
+      O.state.positions = [position({ id: 'live', ref: 'KXOPEN' })];
+      ksv.fetchMarket = async () => ({ ticker: 'KXOPEN', status: 'active', result: '', yesBid: 0.4, yesAsk: 0.42 });
+      await O.pinPositions();
+      ok('an open market is still pinned', O.quotes.ks.has('KXOPEN'));
+    } finally { ksv.fetchMarket = real; }
+  }
+
+  group('operator sell closes every open leg of one group, and only that group');
+  {
+    const E = engine();
+    E.quotes.ks.set('KA', { yesBid: 0.30, yesAsk: 0.32 });
+    E.state.positions = [
+      position({ id: 'a1', group: 'ga', venue: 'KS', ref: 'KA', side: 'yes', qty: 10, cost: 2.7, strategy: 'arb' }),
+      position({ id: 'b1', group: 'gb', venue: 'KS', ref: 'KA', side: 'yes', qty: 5, cost: 1.5, strategy: 'arb' }),
+    ];
+    const r = await E.sellGroup('ga');
+    ok('reports the group sold', r.ok && r.sold === 1 && r.remaining === 0, r);
+    ok('the other group is untouched', E.state.positions.length === 1 && E.state.positions[0].group === 'gb', E.state.positions);
+    const c = E.state.closed.find((x) => x.id === 'a1');
+    ok('it sold at its own venue bid', c && c.exit === 0.30, c);
+    const none = await E.sellGroup('nope');
+    ok('an unknown group is refused, not an error', none.ok === false && /nothing open/.test(none.error), none);
+  }
+
+  group('research answers are read even when wrapped in prose');
+  {
+    const { parseAnswer } = require('../src/research');
+    const a = parseAnswer('Here you go:\n```json\n{"action":"Hold","sentence":"It settles at $0 either way.","confidence":"high"}\n```');
+    ok('the verdict is pulled out of a fence', a.action === 'hold' && a.sentence === 'It settles at $0 either way.' && a.confidence === 'high', a);
+    const c = parseAnswer('{"action":"double down","sentence":"x"}');
+    ok('an action outside sell/hold/hedge is dropped, not shown', c.action === null && c.sentence === 'x', c);
+    const b = parseAnswer('no json here at all');
+    ok('unreadable text becomes a readable fallback, not a throw', b.action === null && /no json/.test(b.sentence), b);
+  }
+
   for (const d of dirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch {} }
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

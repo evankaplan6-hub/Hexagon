@@ -25,7 +25,18 @@
 
   <section class="panel" id="floor">
     <div class="ph"><span><i>◆</i> Trading Floor</span><span id="floor-meta"></span></div>
-    <canvas id="floorc" width="480" height="200"></canvas>
+    <div class="stage">
+      <div class="room">
+        <canvas id="floorc" width="480" height="262"></canvas>
+        <!-- readable text laid over the room: the status board and the bubbles above the bots -->
+        <div id="fx" aria-live="polite">
+          <div id="status"></div>
+          <div id="bubbles"></div>
+        </div>
+      </div>
+      <div id="feed"><div class="fh">What's happening</div><ol id="feedlist"></ol></div>
+      <div id="alertpanel" hidden role="dialog" aria-label="Alert"></div>
+    </div>
   </section>
 
   <footer>Paper account by default. Live mode trades only Kalshi legs and requires API keys plus an explicit confirmation flag. Market data: Polymarket Gamma/CLOB and Kalshi public APIs.</footer>
