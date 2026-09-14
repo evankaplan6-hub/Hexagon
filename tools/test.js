@@ -18,6 +18,7 @@ const SUITES = [
   ['lab', 'the strategy lab: fees, fills, settlement, and no strategy seeing the answer'],
   ['whale', 'whale watch: what counts as a bet, what the floor says, what copying pays'],
   ['http', "the Kalshi pacer: calls spaced apart, the maker's calls first, nothing else waits"],
+  ['disk', 'the box disk: pull copies and verifies before any delete, the brake only trims old tapes'],
 ];
 
 let failed = 0, totalPassed = 0;

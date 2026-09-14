@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.hexagon.pull</string>
+
+  <!-- Through ops/run-pull.sh rather than node directly: launchd's PATH has neither nvm's node
+       nor ~/.fly/bin/fly, and a job that cannot find them exits 127 without anyone noticing. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__HEXDIR__/ops/run-pull.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__HEXDIR__</string>
+
+  <!-- Once a day. Any hour works: the pull only copies Eastern days that are already over, and
+       only trims tapes older than three of them. If the Mac is asleep at 09:30, launchd runs the
+       missed slot when it wakes; if it is switched off, the day is skipped. Skipping a few days is
+       harmless -- the box has about two weeks of room, and its own brake after that. -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>9</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+
+  <!-- Not at login, and not kept alive: this is a daily chore, not a server. -->
+  <key>RunAtLoad</key>
+  <false/>
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <!-- pull.log in the same folder gets one summary line per run; this gets everything. -->
+  <key>StandardOutPath</key>
+  <string>__HEXDIR__/data/fly/archive/launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HEXDIR__/data/fly/archive/launchd.log</string>
+</dict>
+</plist>
