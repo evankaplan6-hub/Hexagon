@@ -1,10 +1,17 @@
 'use strict';
 // Assertions for whale watch (src/whales.js) and the lab that scores it (tools/whale-lab.js):
-// what counts as a bet, what the floor says about it, and what copying it pays.
+// what counts as a bet, what the floor says about it, what copying it pays, and that it is said
+// once: not again when the feed corrects a half-indexed fill, and not again after a restart. Real
+// fills that look exactly alike still all count, and the lab's fetcher still pages back past a
+// half-indexed row.
 //
 //   node tools/whale-test.js
-const { betsFrom, describe } = require('../src/whales');
-const { normalizeFill } = require('../src/venues/polymarket');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { betsFrom, describe, makeWhaleWatch, recordDays, readRecord, panelEntry } = require('../src/whales');
+const pm = require('../src/venues/polymarket');
+const { normalizeFill, outcomeIndex, fillKey } = pm;
 const lab = require('./whale-lab');
 
 let pass = 0, fail = 0;
@@ -22,8 +29,90 @@ const fill = (over) => ({ wallet: '0xw', name: 'whale', tx: 'x', ts: 0, side: 'B
   const f = normalizeFill({ proxyWallet: '0xABC', side: 'BUY', conditionId: 'C', outcomeIndex: 1, outcome: 'No', price: 0.4, size: 100, usdcSize: 40, timestamp: 1789000000, title: 'T', eventSlug: 'ev', transactionHash: '0xt' });
   ok('wallet is lower-cased so leaderboard and feed keys agree', f.wallet === '0xabc', f.wallet);
   ok('usdcSize is the dollars', f.usd === 40 && f.side === 'BUY' && f.outcomeIndex === 1 && f.ts === 1789000000, f);
-  ok('usd falls back to price x size', normalizeFill({ conditionId: 'C', price: 0.4, size: 100, side: 'SELL' }).usd === 40);
-  ok('a fill with no market is dropped', normalizeFill({ price: 0.4, size: 100 }) === null);
+  ok('usd falls back to price x size', normalizeFill({ conditionId: 'C', outcomeIndex: 0, price: 0.4, size: 100, side: 'SELL' }).usd === 40);
+  ok('a fill with no market is dropped', normalizeFill({ outcomeIndex: 0, price: 0.4, size: 100 }) === null);
+}
+
+// ---------------------------------------------------------------- an outcome the feed has not indexed yet
+{
+  // what /activity served for tx 0xb68803c14a… at 21:17:18Z on 2026-09-13, and 75s later
+  const half = { proxyWallet: '0x821d', name: 'Flaznorp', side: 'BUY', conditionId: '0x8e46', outcomeIndex: 999, outcome: 'Under', price: 0.6272, size: 16000, usdcSize: 10035, timestamp: 1789334235, title: 'AA Argentinos Juniors vs. Gimnasia: O/U 2.5', slug: 'arg-aaj-gim-2026-09-13-total-2pt5', eventSlug: '', transactionHash: '0xb68803c14a' };
+  const whole = { ...half, outcomeIndex: 1, eventSlug: 'arg-aaj-gim-2026-09-13-more-markets' };
+  ok('outcome 999 is dropped, not guessed', normalizeFill(half) === null);
+  ok('the corrected copy of the same fill is kept', normalizeFill(whole) && normalizeFill(whole).outcomeIndex === 1, normalizeFill(whole));
+  ok('outcome 0 is a real side, not a missing one', normalizeFill({ ...whole, outcomeIndex: 0 }).outcomeIndex === 0);
+  ok('an index sent as text still reads', normalizeFill({ ...whole, outcomeIndex: '1' }).outcomeIndex === 1);
+  const junk = [999, 2, -1, 0.5, null, undefined, '', ' ', 'abc', true, NaN, [1]];
+  ok('no other value is an outcome: a missing index is not quietly outcome 0', junk.every((x) => outcomeIndex(x) === null && normalizeFill({ ...whole, outcomeIndex: x }) === null), junk.map((x) => outcomeIndex(x)));
+
+  // the lab's cache was written before normalizeFill checked, so betsFrom checks too
+  ok("betsFrom skips a 999 fill it is handed directly (the lab's cache)", betsFrom([fill({ outcomeIndex: 999, usd: 50000 })], { minUsd: 10000 }).length === 0);
+
+  // the incident: a real bet already called, then a new fill arrives half-indexed, then corrected
+  const called = fill({ ts: 0, usd: 15000, outcomeIndex: 1, outcome: 'Under', tx: 'a' });
+  const late = { wallet: '0xw', name: 'whale', tx: 'b', ts: 900, side: 'BUY', conditionId: 'C1', outcome: 'Under', price: 0.52, size: 23000, usd: 12000, title: 'A vs B', slug: 's' };
+  const read = (rows) => betsFrom(rows.map((r) => normalizeFill({ proxyWallet: r.wallet, name: r.name, side: r.side, conditionId: r.conditionId, outcomeIndex: r.outcomeIndex, outcome: r.outcome, price: r.price, size: r.size, usdcSize: r.usd, timestamp: r.ts, title: r.title, slug: r.slug, eventSlug: r.eventSlug, transactionHash: r.tx })).filter(Boolean), { minUsd: 10000, windowSec: 6 * H });
+  const r2 = read([called, { ...late, outcomeIndex: 999, eventSlug: '' }]);
+  ok('a half-indexed fill beside a called bet makes no second bet and no hedge', r2.length === 1 && r2[0].outcomeIndex === 1 && !r2[0].hedged, r2.map((b) => [b.key, b.hedged]));
+  const r3 = read([called, { ...late, outcomeIndex: 1, eventSlug: 'e1' }]);
+  ok('corrected, it adds to the same bet: still one, still not a hedge', r3.length === 1 && r3[0].key === r2[0].key && !r3[0].hedged, r3.map((b) => [b.key, b.hedged]));
+  const both = read([{ ...late, outcomeIndex: 999, eventSlug: '' }, { ...late, outcomeIndex: 1, eventSlug: 'e1' }]);
+  ok('both copies in one read are one bet, under the real outcome', both.length === 1 && both[0].outcomeIndex === 1 && both[0].usd === 12000 && !both[0].hedged, both);
+}
+
+// ---------------------------------------------------------------- fills that look exactly alike
+{
+  // VeryLucky888, tx 0x707acca1e1f7… on 2026-09-14: three /activity rows identical in every field,
+  // and three real fills (/trades lists three, /positions holds 15,000 shares). Scaled to a bet:
+  const alike = [1, 2, 3].map(() => fill({ tx: '0x707acca1e1f7', ts: 1789403434, outcomeIndex: 1, outcome: 'Yes', size: 10000, price: 0.48, usd: 4800 }));
+  const b = betsFrom(alike, { minUsd: 10000 });
+  ok('three identical rows in one read are three fills: $14.4K is a bet', b.length === 1 && b[0].usd === 14400, b);
+  ok('...even though they share one fillKey, which is why it is not an id', new Set(alike.map(fillKey)).size === 1);
+  // a sweep: one tx, one size, two price levels (ferrariChampions2026's feed on 2026-09-14)
+  const sweep = betsFrom([fill({ tx: 't3', usd: 6000, price: 0.34 }), fill({ tx: 't3', usd: 6000, price: 0.35 })], { minUsd: 10000 });
+  ok('one tx at two prices is two fills', sweep.length === 1 && sweep[0].usd === 12000, sweep);
+  ok('fillKey tells the two price levels apart', fillKey(fill({ tx: 't3', price: 0.34 })) !== fillKey(fill({ tx: 't3', price: 0.35 })));
+  const noTx = betsFrom([fill({ tx: undefined, usd: 6000 }), fill({ tx: undefined, usd: 6000 })], { minUsd: 10000 });
+  ok("without a tx identical rows are separate fills too (the lab's compact cache)", noTx.length === 1 && noTx[0].usd === 12000, noTx);
+}
+
+// ---------------------------------------------------------------- which record files a restart reads
+{
+  const ms = (s) => Date.parse(s);
+  ok('twelve hours inside one ET day is one file', recordDays(ms('2026-09-13T15:00:00Z'), ms('2026-09-14T03:00:00Z')).join() === '2026-09-13', recordDays(ms('2026-09-13T15:00:00Z'), ms('2026-09-14T03:00:00Z')));
+  ok('twelve hours across ET midnight is yesterday and today', recordDays(ms('2026-09-13T20:00:00Z'), ms('2026-09-14T08:00:00Z')).join() === '2026-09-13,2026-09-14', recordDays(ms('2026-09-13T20:00:00Z'), ms('2026-09-14T08:00:00Z')));
+  ok('ET, not UTC: 02:00Z on the 14th is still the 13th in New York', recordDays(ms('2026-09-13T22:00:00Z'), ms('2026-09-14T02:00:00Z')).join() === '2026-09-13');
+  const long = recordDays(ms('2027-03-14T04:59:00Z'), ms('2027-03-16T04:59:00Z'));
+  ok('a longer window reads every day, the 23-hour spring-forward day included', long.join() === '2027-03-13,2027-03-14,2027-03-15,2027-03-16', long);
+}
+
+// ---------------------------------------------------------------- reading the record back
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hexagon-whale-'));
+  try {
+    const now = Date.parse('2026-09-14T08:00:00Z'), from = now / 1000 - 12 * 3600;
+    const rec = (over) => JSON.stringify({ t: '2026-09-13T21:18:33.947Z', key: '0xw|C1|1', wallet: '0xw', name: 'whale', conditionId: 'C1', outcomeIndex: 1, outcome: 'Under', title: 'A vs B', eventSlug: 'e1', ts: from + 3600, price: 0.6, usd: 15284, hedged: false, rank: 6, walletPnl: 864821, kalshi: null, inPlay: null, ...over });
+    fs.writeFileSync(path.join(dir, 'whales-2026-09-13.jsonl'), [
+      rec({}),
+      '{"t":"2026-09-13T21:19:00Z","key":"torn',                                // a write cut off mid-line
+      '', 'null', '42', '[]', 'not json at all',
+      rec({ key: undefined }), rec({ ts: 'soon' }),                             // no key, no usable ts
+      rec({ key: '0xw|C9|1', ts: from - 60 }),                                  // made before the window
+      rec({ key: '0xw|C1|999', outcomeIndex: 999, eventSlug: '' }),             // a half-indexed call
+      rec({ t: '2026-09-13T21:20:34.239Z', rank: 7 }),                          // a restart's repeat
+      rec({ t: '2026-09-13T22:05:00Z', key: '0xw|C4|0', conditionId: 'C4', outcomeIndex: 0, outcome: 'Yes', ts: from + 7200 }),   // a new call after all of it
+    ].join('\n') + '\n');
+    fs.writeFileSync(path.join(dir, 'whales-2026-09-14.jsonl'), rec({ t: '2026-09-14T06:13:21Z', key: '0xw|C2|0', conditionId: 'C2', outcomeIndex: 0, outcome: 'Broncos', ts: now / 1000 - 600 }) + '\n');
+    fs.writeFileSync(path.join(dir, 'whales-2026-09-12.jsonl'), rec({ t: '2026-09-12T12:00:00Z', key: '0xw|C8|0', outcomeIndex: 0, ts: from + 60 }) + '\n');   // a day outside the window is not opened
+    const got = readRecord(dir, from, now);
+    ok('torn, foreign, keyless, old and half-indexed lines are skipped', got.map((r) => r.key).join() === '0xw|C1|1,0xw|C4|0,0xw|C2|0', got.map((r) => r.key));
+    ok('...skipped, not the end of the file: the call after them is still read', got.some((r) => r.key === '0xw|C4|0'), got.map((r) => r.key));
+    ok('a key said twice is read back once, as first said', got[0]?.rank === 6, got[0]);
+    ok("yesterday's and today's files are both read, in the order the bets were called", got[2]?.conditionId === 'C2');
+    ok('a directory with no record is simply nothing', readRecord(path.join(dir, 'missing'), from, now).length === 0);
+    const e = panelEntry({ ts: 100, key: 'k' });
+    ok('a sparse record still makes a whole panel row: nulls, never undefined', Object.values(e).every((v) => v !== undefined) && e.url === null && e.usd === null && e.hedged === false, e);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }
 
 // ---------------------------------------------------------------- what counts as a bet
@@ -123,5 +212,174 @@ const fill = (over) => ({ wallet: '0xw', name: 'whale', tx: 'x', ts: 0, side: 'B
   ok('a wallet with too few bets is not rankable', !r.some((x) => x.wallet === 'few'));
 }
 
-console.log(`${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+// ---------------------------------------------------------------- the watch itself, across a restart
+// The Polymarket calls are stubbed in-process: the leaderboard is one wallet, and /activity serves
+// whatever raw rows `feed` holds, through the real normalizeFill. Times are minutes before now, far
+// inside the 20-minute freshness and the 12-hour memory, so the wall clock cannot flip a result.
+async function watchTests() {
+  const real = { fetchLeaderboard: pm.fetchLeaderboard, fetchActivity: pm.fetchActivity };
+  const dirs = [];
+  const tmp = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'hexagon-whale-')); dirs.push(d); return d; };
+  let feed = [];
+  pm.fetchLeaderboard = async ({ offset = 0 } = {}) => (offset ? [] : [{ wallet: '0xw', name: 'whale', rank: 3, pnl: 500000, vol: 2e6 }]);
+  pm.fetchActivity = async (wallet) => feed.filter((r) => r.proxyWallet === wallet).map(pm.normalizeFill).filter(Boolean);
+  const now = Math.floor(Date.now() / 1000);
+  const row = (over) => ({ proxyWallet: '0xw', name: 'whale', side: 'BUY', conditionId: 'C1', outcomeIndex: 1, outcome: 'Under', price: 0.52, size: 30000, usdcSize: 15600, timestamp: now - 600, title: 'Padres vs. Giants: O/U 7.5', slug: 'mlb-sd-sf-total-7pt5', eventSlug: 'mlb-sd-sf', transactionHash: '0xa', ...over });
+  const desk = () => ({ logs: [], log(agent, kind, pnl, text) { this.logs.push({ agent, kind, text }); }, due: () => true, quotes: { pm: new Map() }, pairs: [] });
+  const config = (over) => ({ dataDir: tmp(), record: true, whaleTop: 25, whalePeriod: 'MONTH', whaleMinUsd: 10000, whaleWindowMin: 360, whaleFreshMin: 20, whalePerPoll: 5, whaleBoardMin: 30, ...over });
+  const whaleLines = (E) => E.logs.filter((l) => l.kind === 'WHALE');
+  const recordLines = (dir) => fs.readdirSync(dir).filter((f) => /^whales-.*\.jsonl$/.test(f)).flatMap((f) => fs.readFileSync(path.join(dir, f), 'utf8').split('\n')).filter((l) => { try { return !!JSON.parse(l).key; } catch { return false; } });
+
+  try {
+    // ---- a deploy: the same bet is on the feed before and after
+    {
+      const cfg = config();
+      feed = [row()];
+      const E1 = desk(), before = makeWhaleWatch(cfg);
+      await before.step(E1);
+      ok('first run: the bet is called once and recorded once', whaleLines(E1).length === 1 && recordLines(cfg.dataDir).length === 1, [whaleLines(E1), recordLines(cfg.dataDir)]);
+      const shown = before.snapshot().recent[0];
+
+      // the restart also finds a torn line and some junk in today's record
+      const file = fs.readdirSync(cfg.dataDir).find((f) => f.startsWith('whales-'));
+      fs.appendFileSync(path.join(cfg.dataDir, file), '{"t":"2026-09-14T13:4\n\nnot json\n[]\n');
+      const E2 = desk(), after = makeWhaleWatch(cfg);
+      await after.step(E2);
+      ok('after the restart the same bet is not called again', whaleLines(E2).length === 0, whaleLines(E2));
+      ok('...nor recorded again', recordLines(cfg.dataDir).length === 1, recordLines(cfg.dataDir).length);
+      // (no WHALE line in both: the panel row has to come from the record, not from calling it again)
+      ok('...the malformed lines did not stop the read back', whaleLines(E2).length === 0 && after.snapshot().recent.length === 1, after.snapshot().recent);
+      ok('...and it is back on the panel exactly as it was shown live', whaleLines(E2).length === 0 && JSON.stringify(after.snapshot().recent[0]) === JSON.stringify(shown), [after.snapshot().recent[0], shown]);
+      ok('the leaderboard line still says the watch is on', E2.logs.some((l) => l.kind === 'SCAN'), E2.logs);
+
+      feed = [row(), row({ conditionId: 'C2', outcomeIndex: 0, outcome: 'Broncos', transactionHash: '0xb', timestamp: now - 60, usdcSize: 20000, eventSlug: 'nfl-den-kc' })];
+      await after.step(E2);
+      await after.step(E2);
+      ok('a new bet after the restart is called once', whaleLines(E2).length === 1 && /Broncos/.test(whaleLines(E2)[0].text), whaleLines(E2));
+      const rec = after.snapshot().recent;
+      ok('the panel lists it first, then the restored one', rec.length === 2 && rec[0].outcome === 'Broncos' && rec[1].outcome === 'Under', rec.map((x) => x.outcome));
+      ok('restored and live rows have the same fields', Object.keys(rec[0]).join() === Object.keys(rec[1]).join(), rec.map((x) => Object.keys(x)));
+      ok('the record has the two bets, once each', recordLines(cfg.dataDir).length === 2);
+    }
+
+    // ---- a deploy with a morning of calls in the record, not just the last one
+    {
+      const cfg = config();
+      fs.mkdirSync(cfg.dataDir, { recursive: true });
+      const nowMs = now * 1000;
+      const etDay = (ms) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ms));
+      // a call as the watch writes it: said 5s after the bet crossed the bar, `minAgo` minutes ago
+      const write = (minAgo, over) => {
+        const ts = now - minAgo * 60, t = ts * 1000 + 5000;
+        const line = JSON.stringify({ t: new Date(t).toISOString(), key: `0xw|${over.conditionId}|${over.outcomeIndex}`, wallet: '0xw', name: 'whale', title: 'A vs B', eventSlug: 'ev', ts, price: 0.5, usd: 15000, hedged: false, rank: 3, walletPnl: 500000, kalshi: null, inPlay: null, ...over });
+        fs.appendFileSync(path.join(cfg.dataDir, `whales-${etDay(t)}.jsonl`), line + '\n');
+      };
+      write(90, { conditionId: 'C5', outcomeIndex: 1, outcome: 'Mets' });     // older than freshness, inside the memory
+      fs.appendFileSync(path.join(cfg.dataDir, `whales-${etDay(nowMs - 30 * 60000)}.jsonl`), '{"t":"torn\nnot json\n');
+      write(30, { conditionId: 'C6', outcomeIndex: 0, outcome: 'Jets' });
+      write(5, { conditionId: 'C7', outcomeIndex: 1, outcome: 'Knicks' });
+      const lines = recordLines(cfg.dataDir).length;
+
+      // The feed now shows the 90-minute-old Mets bet crossing the bar two minutes ago -- its early
+      // fills slid out of the six hours -- so only the restored memory can keep it from a second call.
+      feed = [row({ conditionId: 'C5', outcomeIndex: 1, outcome: 'Mets', transactionHash: '0xm', timestamp: now - 120 })];
+      const E = desk(), w = makeWhaleWatch(cfg);
+      await w.step(E);
+      const rec = w.snapshot().recent;
+      ok('every call in the memory is back on the panel, newest first', rec.map((x) => x.outcome).join() === 'Knicks,Jets,Mets', rec.map((x) => x.outcome));
+      ok('...read past the torn lines between them', rec.length === 3);
+      ok('a bet called before the freshness window but inside the memory is not called again', whaleLines(E).length === 0, whaleLines(E));
+      ok('...nor recorded again', recordLines(cfg.dataDir).length === lines, recordLines(cfg.dataDir).length - lines);
+    }
+
+    // ---- the feed's half-indexed fill, read by read
+    {
+      const cfg = config();
+      const E = desk(), w = makeWhaleWatch(cfg);
+      const calls = () => whaleLines(E).length;
+      feed = [row()];                                                                               // $15.6K on Under: a bet
+      await w.step(E);
+      feed = [row(), row({ transactionHash: '0xc', timestamp: now - 120, usdcSize: 12000, outcomeIndex: 999, eventSlug: '' })];   // more on Under, half-indexed
+      await w.step(E);
+      ok('a half-indexed fill beside a called bet says nothing new', calls() === 1, whaleLines(E));
+      feed = [row(), row({ transactionHash: '0xc', timestamp: now - 120, usdcSize: 12000 })];     // the same fill, corrected
+      await w.step(E);
+      ok('corrected, it is the same bet: nothing new either', calls() === 1, whaleLines(E));
+      ok('no call says "both sides"', !whaleLines(E).some((l) => /hedging/.test(l.text)), whaleLines(E));
+
+      feed = [row({ conditionId: 'C3', outcomeIndex: 999, outcome: 'Alejandro Moro Canas', transactionHash: '0xafbb', timestamp: now - 60, usdcSize: 37073, eventSlug: '' })];
+      await w.step(E);
+      ok('a new bet whose only fill is half-indexed waits', calls() === 1, whaleLines(E));
+      feed = [row({ conditionId: 'C3', outcomeIndex: 0, outcome: 'Alejandro Moro Canas', transactionHash: '0xafbb', timestamp: now - 60, usdcSize: 37073, eventSlug: 'atp-canas-blancan' })];
+      await w.step(E);
+      await w.step(E);
+      ok('...and is called once, when the corrected copy arrives', calls() === 2 && /Alejandro Moro Canas/.test(whaleLines(E)[1].text), whaleLines(E));
+      ok('...with its link, which the half-indexed copy lacked', w.snapshot().recent[0]?.url === 'https://polymarket.com/event/atp-canas-blancan', w.snapshot().recent[0]);
+      ok('the record holds two bets and no outcome 999', recordLines(cfg.dataDir).length === 2 && recordLines(cfg.dataDir).every((l) => JSON.parse(l).outcomeIndex !== 999), recordLines(cfg.dataDir));
+    }
+
+    // ---- RECORD=0, and a data directory that is not there
+    {
+      const base = tmp();
+      const cfg = config({ record: false, dataDir: path.join(base, 'never-made') });
+      feed = [row()];
+      const E = desk(), w = makeWhaleWatch(cfg);
+      await w.step(E);
+      ok('RECORD=0 with no record to read: the bet is still called', whaleLines(E).length === 1 && !w.snapshot().lastError, [whaleLines(E), w.snapshot().lastError]);
+      ok('...and nothing is written', !fs.existsSync(cfg.dataDir));
+      const E2 = desk(), broken = makeWhaleWatch(config({ dataDir: undefined }));
+      await broken.step(E2);
+      ok('a record that cannot even be looked for does not stop the watch', whaleLines(E2).length === 1 && !broken.snapshot().lastError, [E2.logs, broken.snapshot().lastError]);
+    }
+  } finally {
+    Object.assign(pm, real);
+    for (const d of dirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch {} }
+  }
+}
+
+// ---------------------------------------------------------------- the lab's fetcher paging back
+// http.getJSON is stubbed to serve one wallet's /activity by its start/end/limit/offset, so the real
+// fetchActivityPage and normalizeFill run. 1,500 rows, three a second, and every second's three
+// are the same fill three times over (the VeryLucky888 shape) -- so the page boundaries, which
+// re-read a second, cut through identical rows. The newest row is half-indexed.
+async function fetchTests() {
+  const http = require('../src/http');
+  const real = http.getJSON;
+  const T = 1789400000, N = 1500;
+  const rows = Array.from({ length: N }, (_, i) => {
+    const s = Math.floor(i / 3);
+    return { proxyWallet: '0xw', side: 'BUY', conditionId: 'C1', outcomeIndex: i === 0 ? 999 : 1, outcome: 'Yes', price: 0.5, size: 100, usdcSize: 50, timestamp: T - s, eventSlug: i === 0 ? '' : 'e', transactionHash: i === 0 ? '0xhalf' : `0xt${s}` };
+  });
+  http.getJSON = async (url) => {
+    const q = new URL(url).searchParams, n = (k, d) => (q.has(k) ? +q.get(k) : d);
+    const hit = rows.filter((r) => r.proxyWallet === q.get('user') && r.timestamp >= n('start', 0) && r.timestamp <= n('end', Infinity));
+    return hit.slice(n('offset', 0), n('offset', 0) + n('limit', 100));
+  };
+  try {
+    const { walletFills } = require('./whale-fetch');
+    const first = await pm.fetchActivityPage('0xw', { limit: 500, start: T - 1e5, end: T });
+    ok('a page says how many rows the feed sent, not just the fills it kept', first.rows === 500 && first.fills.length === 499 && first.oldestTs === T - 166, [first.rows, first.fills.length, first.oldestTs]);
+    ok('fetchActivity is still just the fills', (await pm.fetchActivity('0xw', { limit: 500, start: T - 1e5, end: T })).length === 499);
+
+    const r = await walletFills('0xw', T - 1e5, T);
+    ok('a full page that lost a half-indexed row is not the last page', r.pages === 4 && !r.truncated, [r.pages, r.truncated]);
+    ok('every real fill is kept once: the overlap re-read is dropped, identical real fills are not', r.fills.length === N - 1 && r.fills.reduce((a, f) => a + f.usd, 0) === (N - 1) * 50, r.fills.length);
+    ok('...and the half-indexed row is not among them', r.fills.every((f) => f.outcomeIndex === 1));
+    ok('the fills reach back to the oldest second', r.oldestTs === T - (N / 3 - 1), r.oldestTs);
+    const cut = await walletFills('0xw', T - 1e5, T, { maxPages: 2 });
+    ok('a wallet with more history than the page budget is marked truncated', cut.truncated && cut.pages === 2 && cut.oldestTs > T - (N / 3 - 1), [cut.truncated, cut.pages, cut.oldestTs]);
+
+    // a feed that ignores the cursor serves the newest page again: stop, and do not call it complete
+    http.getJSON = async () => rows.slice(0, 500);
+    const stuck = await walletFills('0xw', T - 1e5, T);
+    ok('a full page that adds nothing new stops the paging and marks the wallet truncated', stuck.pages === 2 && stuck.truncated && stuck.fills.length === 499, [stuck.pages, stuck.truncated, stuck.fills.length]);
+  } finally { http.getJSON = real; }
+}
+
+watchTests()
+  .then(fetchTests)
+  .catch((e) => { fail++; console.log(`  FAIL  threw: ${e.stack}`); })
+  .finally(() => {
+    console.log(`${pass} passed, ${fail} failed`);
+    process.exit(fail ? 1 : 0);
+  });

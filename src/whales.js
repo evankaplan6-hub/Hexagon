@@ -28,10 +28,17 @@ const ET_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', 
 // `hedged` marks a bet whose wallet ALSO crossed the bar on another outcome of the same market.
 // That is a trader managing a book, not taking a side, and copying both halves pays fees on
 // nothing.
+//
+// A fill under an outcome the feed has not indexed yet (999) is skipped here as well as in
+// normalizeFill, because the lab's cache on disk was normalized before that check existed. Rows
+// that are identical in every field all count: one read of /activity has no overlap to repeat a
+// row, and the feed does serve separate real fills that look exactly alike (see pm.fillKey), so
+// collapsing them would hide real buying -- three $4,800 fills in one tx would never reach $10K.
 function betsFrom(fills, { minUsd = 10000, windowSec = 6 * 3600 } = {}) {
   const groups = new Map();
   for (const f of fills) {
     if (!f || !f.conditionId || !Number.isFinite(f.usd) || !Number.isFinite(f.ts)) continue;
+    if (pm.outcomeIndex(f.outcomeIndex) == null) continue;
     const key = `${f.wallet}|${f.conditionId}|${f.outcomeIndex}`;
     (groups.get(key) || groups.set(key, []).get(key)).push(f);
   }
@@ -106,11 +113,75 @@ function describe(bet, w, ctx = {}) {
   return t;
 }
 
+// ---------------------------------------------------------------- the record
+// Every called bet is a line in whales-YYYY-MM-DD.jsonl under dataDir, the ET day it was called.
+const recordPath = (dir, day) => path.join(dir, `whales-${day}.jsonl`);
+
+// The ET days whose files can hold a bet made since `fromMs`. A bet is called after it is made, so
+// its line is in the file of that day or a later one, up to today's. Twelve-hour steps cannot jump
+// a day, not even the 23-hour one in spring.
+function recordDays(fromMs, nowMs) {
+  const days = new Set();
+  for (let ms = fromMs; ms < nowMs; ms += 12 * 3600e3) days.add(ET_DAY.format(new Date(ms)));
+  days.add(ET_DAY.format(new Date(nowMs)));
+  return [...days];
+}
+
+// The bets already called that were made at or after `fromTs` (unix seconds), one per key -- the
+// first time it was said, since past restarts wrote repeats -- in the order they were called. A
+// missing file is a quiet day. A torn or foreign line is skipped, and so is a record under an
+// outcome the feed had not indexed yet: no bet can have that key any more.
+function readRecord(dir, fromTs, nowMs) {
+  const byKey = new Map();
+  for (const day of recordDays(fromTs * 1000, nowMs)) {
+    let text;
+    try { text = fs.readFileSync(recordPath(dir, day), 'utf8'); } catch { continue; }
+    for (const line of text.split('\n')) {
+      let r;
+      try { r = JSON.parse(line); } catch { continue; }
+      if (!r || typeof r.key !== 'string' || !Number.isFinite(r.ts) || r.ts < fromTs || pm.outcomeIndex(r.outcomeIndex) == null) continue;
+      if (!byKey.has(r.key)) byKey.set(r.key, r);
+    }
+  }
+  const said = (r) => { const t = Date.parse(r.t); return Number.isFinite(t) ? t : r.ts * 1000; };
+  return [...byKey.values()].sort((a, b) => said(a) - said(b));
+}
+
+// One row of the snapshot's `recent`, from a bet in its recorded shape (the bet plus rank, kalshi
+// and inPlay). A bet just called and one read back after a restart go through here, so the two
+// cannot drift apart; a field an old or hand-edited line lacks comes out null, never undefined.
+const orNull = (x) => (x === undefined ? null : x);
+function panelEntry(r) {
+  return {
+    at: r.ts * 1000, wallet: r.wallet || '', name: r.name || '', rank: orNull(r.rank), outcome: r.outcome || '', title: r.title || '',
+    usd: Number.isFinite(r.usd) ? r.usd : null, price: Number.isFinite(r.price) ? r.price : null,
+    kalshi: orNull(r.kalshi), inPlay: orNull(r.inPlay), hedged: !!r.hedged,
+    url: r.eventSlug ? `https://polymarket.com/event/${r.eventSlug}` : null,
+  };
+}
+
 function makeWhaleWatch(cfg) {
   const wallets = new Map();        // wallet -> { name, rank, pnl, vol, period }
-  const announced = new Map();      // bet key -> ts, so a restart does not repeat and a bet is said once
+  // bet key -> bet ts: a bet is said once. Kept for twice the window, and in memory only, so the
+  // first step reads it back from the record (restore) or every restart would say the last twenty
+  // minutes of bets again.
+  const announced = new Map();
   const recent = [];                // newest first, for the snapshot
-  let order = [], cursor = 0, boardAt = 0, running = false, lastError = '', polls = 0;
+  let order = [], cursor = 0, boardAt = 0, running = false, lastError = '', polls = 0, restored = false;
+  const keepSec = () => 2 * cfg.whaleWindowMin * 60;
+  const remember = (entry) => { recent.unshift(entry); if (recent.length > 20) recent.length = 20; };
+
+  // Every deploy is a restart, and before this each one called the bets of the last twenty minutes
+  // again: 16 of the box's first 151 record lines were repeats, after v26, v27 and v28. So the watch
+  // starts from what the record says it already called over the span `announced` keeps, and puts
+  // the latest back in `recent` -- without logging them again, since the floor's log is saved with
+  // the ledger and kept them through the restart. With RECORD=0 nothing new is written to read
+  // back, so there a restart still repeats.
+  function restore() {
+    const nowMs = Date.now();
+    const calls = readRecord(cfg.dataDir, Math.floor(nowMs / 1000) - keepSec(), nowMs);
+    for (const r of calls) { announced.set(r.key, r.ts); remember(panelEntry(r)); }
+  }
 
   async function loadBoard(E) {
     const rows = [];
@@ -130,12 +201,12 @@ function makeWhaleWatch(cfg) {
     if (first) E.log('ILSA', 'SCAN', null, `whale watch on · following the top ${order.length} Polymarket sports wallets this ${cfg.whalePeriod.toLowerCase()} · bets of ${usdShort(cfg.whaleMinUsd)}+ get called out`);
   }
 
-  function record(E, bet, w, ctx) {
+  function record(rec) {
     if (!cfg.record) return;
     try {
       fs.mkdirSync(cfg.dataDir, { recursive: true });
-      const line = JSON.stringify({ t: new Date().toISOString(), ...bet, rank: w ? w.rank : null, walletPnl: w ? Math.round(w.pnl) : null, kalshi: ctx.ks ? Math.round(ctx.ks.px * 1000) / 1000 : null, inPlay: ctx.inPlay ?? null });
-      fs.appendFileSync(path.join(cfg.dataDir, `whales-${ET_DAY.format(new Date())}.jsonl`), line + '\n');
+      const nowMs = Date.now();
+      fs.appendFileSync(recordPath(cfg.dataDir, ET_DAY.format(new Date(nowMs))), JSON.stringify({ t: new Date(nowMs).toISOString(), ...rec }) + '\n');
     } catch { /* the record is a convenience for later scoring; never take the desk down for it */ }
   }
 
@@ -152,9 +223,10 @@ function makeWhaleWatch(cfg) {
       if (now - bet.ts > cfg.whaleFreshMin * 60) continue;
       const ctx = context(E, bet);
       const text = describe(bet, w, ctx);
-      recent.unshift({ at: bet.ts * 1000, wallet: bet.wallet, name: bet.name || (w && w.name) || '', rank: w ? w.rank : null, outcome: bet.outcome, title: bet.title, usd: bet.usd, price: bet.price, kalshi: ctx.ks ? ctx.ks.px : null, inPlay: ctx.inPlay ?? null, hedged: bet.hedged, url: bet.eventSlug ? `https://polymarket.com/event/${bet.eventSlug}` : null });
-      if (recent.length > 20) recent.length = 20;
-      record(E, bet, w, ctx);
+      // recorded as the floor named it: the fill's name, else the leaderboard's
+      const rec = { ...bet, name: bet.name || (w && w.name) || '', rank: w ? w.rank : null, walletPnl: w ? Math.round(w.pnl) : null, kalshi: ctx.ks ? Math.round(ctx.ks.px * 1000) / 1000 : null, inPlay: ctx.inPlay ?? null };
+      remember(panelEntry(rec));
+      record(rec);
       E.log('ILSA', 'WHALE', null, text);
     }
   }
@@ -163,12 +235,16 @@ function makeWhaleWatch(cfg) {
     if (running) return;
     running = true;
     try {
+      if (!restored) {
+        restored = true;
+        try { restore(); } catch { /* an unreadable record means a restart may repeat itself, never a desk that stops */ }
+      }
       if (!wallets.size || Date.now() - boardAt > cfg.whaleBoardMin * 60000) await loadBoard(E);
       const batch = [];
       for (let i = 0; i < Math.min(cfg.whalePerPoll, order.length); i++) batch.push(order[(cursor + i) % order.length]);
       cursor = (cursor + batch.length) % Math.max(1, order.length);
       for (const wallet of batch) await poll(E, wallet);
-      const cut = Math.floor(Date.now() / 1000) - 2 * cfg.whaleWindowMin * 60;
+      const cut = Math.floor(Date.now() / 1000) - keepSec();
       for (const [k, ts] of announced) if (ts < cut) announced.delete(k);
       lastError = '';
     } catch (e) {
@@ -184,4 +260,4 @@ function makeWhaleWatch(cfg) {
   return { step, snapshot };
 }
 
-module.exports = { betsFrom, describe, makeWhaleWatch };
+module.exports = { betsFrom, describe, makeWhaleWatch, recordDays, readRecord, panelEntry };
