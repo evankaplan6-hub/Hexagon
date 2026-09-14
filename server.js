@@ -8,6 +8,7 @@ const crypto = require('crypto');
 loadEnv(path.join(__dirname, '.env'));
 const cfg = require('./src/config');
 const { Engine } = require('./src/engine');
+const { actionRefusal, rebindRefusal, routeAsk } = require('./src/ask');
 
 function loadEnv(file) {
   if (!fs.existsSync(file)) return;
@@ -155,6 +156,14 @@ const server = http.createServer((req, res) => {
     res.writeHead(302, { location: '/login' });
     return res.end();
   }
+  // With no password, a page on another site could still reach this desk by re-pointing its own
+  // name at 127.0.0.1 (DNS rebinding): no login to stop it, and Origin matches Host. Every honest
+  // request to a passwordless desk names localhost, so nothing else gets the API (src/ask.js).
+  // A desk with DASH_PASS passes straight through.
+  if (p.startsWith('/api/')) {
+    const foreign = rebindRefusal(req, cfg.dashPass);
+    if (foreign) { res.writeHead(foreign.status); return res.end(foreign.text); }
+  }
   // Manual kill switch. TESS's drawdown halt stops NEW risk while leaving every open position
   // running -- halted is not the same as flat. This is the button for getting out of everything.
   // POST only (a GET would fire from a stray link or a prefetch), shared secret required, and
@@ -181,16 +190,12 @@ const server = http.createServer((req, res) => {
   //   - An Origin, when the browser sends one, must be this host.
   //   - Selling needs FLATTEN_TOKEN unless this is a paper account on loopback. Live money, or a
   //     box reachable from elsewhere, does not get a one-click sell.
+  // The first two locks live in src/ask.js (actionRefusal), shared with the Ask panel's POST so
+  // the two can never drift apart.
   const act = p.match(/^\/api\/alerts\/([\w-]+)\/(research|sell)$/);
   if (act) {
-    if (req.method !== 'POST') { res.writeHead(405); return res.end('POST only'); }
-    if (req.headers['x-hexagon-action'] !== '1') { res.writeHead(403); return res.end('missing action header'); }
-    const origin = req.headers.origin;
-    if (origin && origin !== 'null') {
-      let host = '';
-      try { host = new URL(origin).host; } catch { /* unparseable: refused below */ }
-      if (host !== req.headers.host) { res.writeHead(403); return res.end('cross-origin request refused'); }
-    }
+    const refused = actionRefusal(req);
+    if (refused) { res.writeHead(refused.status); return res.end(refused.text); }
     const [, groupId, action] = act;
     if (action === 'research') return json(res, engine.research.start(groupId));
     const local = cfg.mode === 'paper' && LOOPBACK.includes(cfg.bindHost);
@@ -200,6 +205,16 @@ const server = http.createServer((req, res) => {
     }
     return engine.sellGroup(groupId, 'sold from the dashboard alert')
       .then((r) => json(res, r))
+      .catch((e) => { res.writeHead(500); res.end(String(e.message).slice(0, 200)); });
+  }
+  // The Ask panel. POST /api/ask starts a question (same locks as the alert actions) and returns at
+  // once; GET /api/ask/<id> reads its progress and answer. Read-only tools, never a trade.
+  if (p === '/api/ask' || p.startsWith('/api/ask/')) {
+    return routeAsk(engine.ask, req, p)
+      .then((r) => {
+        if (r.json !== undefined) { res.writeHead(r.status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); return res.end(JSON.stringify(r.json)); }
+        res.writeHead(r.status); res.end(r.text);
+      })
       .catch((e) => { res.writeHead(500); res.end(String(e.message).slice(0, 200)); });
   }
   if (p === '/api/state') return json(res, engine.snapshot());

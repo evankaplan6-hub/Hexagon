@@ -402,3 +402,123 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 .pnl .cr { margin-left: auto; font: .72em var(--mono); color: #7a8497; text-align: right; }
 .pnl.big .cr, .pnl.big .ctip { font-size: .85em; }
 .pnl .cr b { font-weight: 700; }
+
+/* ---- Ask: a question box for the desk ------------------------------------ */
+/* A drawer, not a page: the floor keeps running beside it. On a wide window the page makes room
+   for it (the room re-fits, nothing is hidden behind the drawer); on a narrower one it lies over
+   the right-hand boards; on a phone it is a sheet from the bottom. Same palette as the alert panel. */
+:root { --askw: 420px; }
+.hside { display: flex; align-items: center; gap: 16px; min-width: 0; }
+#askbtn { position: relative; display: inline-flex; align-items: center; gap: 6px; flex: none; cursor: pointer;
+  font: 600 10px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: #c9d3e6;
+  background: #111827; border: 1px solid #2a3140; border-radius: 999px; padding: 6px 12px 6px 10px; }
+#askbtn:hover, #askbtn.on { background: #16305a; border-color: #2c5596; color: #dbe8ff; }
+#askbtn:focus-visible { outline: 2px solid #5b8fd6; outline-offset: 2px; }
+#askbtn i { display: none; position: absolute; top: -2px; right: -2px; width: 8px; height: 8px; border-radius: 50%;
+  background: #22c55e; box-shadow: 0 0 0 2px #06080c; }
+#askbtn.busy i { display: block; background: #5b8fd6; animation: blink 1.2s infinite; }
+#askbtn.unread i { display: block; }
+.sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+.askd { position: fixed; z-index: 20; top: 0; right: 0; bottom: 0; width: min(var(--askw), 100%);
+  display: flex; flex-direction: column; box-sizing: border-box;
+  background: #090c12; border-left: 1px solid #2a3140; box-shadow: -30px 0 80px -30px #000;
+  color: #c9ced8; font: 14px/1.5 var(--sans);
+  transform: translateX(100%); visibility: hidden; transition: transform .22s ease, visibility 0s linear .22s; }
+.askd.open { transform: none; visibility: visible; transition: transform .22s ease; }
+@media (prefers-reduced-motion: reduce) { .askd, .askd.open { transition: none; } }
+/* From 900px the page makes room: the floor keeps about its own 480px drawing width, and the alert
+   pill, the alert panel and every bot stay in view beside the drawer. */
+@media (min-width: 900px) { body.ask-open .wrap { margin-right: var(--askw); } }
+/* Below that it lies over the right of the floor, so it is narrower, and the two things on the floor
+   that need a person are moved clear of it: the alert pill (the title bar's right edge stops short of
+   the drawer) and the alert panel (squeezed into the part of the room still showing). */
+@media (min-width: 641px) and (max-width: 899px) {
+  :root { --askw: 360px; }
+  body.ask-open #floor .ph { padding-right: calc(var(--askw) - 4px); }
+  body.ask-open #alertpanel { left: 8px; transform: none; width: calc(100% - var(--askw) - 4px); }
+}
+/* the meta strip already hides below a 1000px page; a page squeezed beside the drawer is that narrow too */
+@media (max-width: 1439px) { body.ask-open .meta { display: none; } }
+/* The Ask button takes header room the meta strip used to have. When the strip is too long (a halt
+   with a long reason, alerts, DEMO) it is clipped from the left -- Day and Uptime go first, the
+   Position/HALT end stays -- instead of wrapping the title onto two lines and taking height from
+   the floor. */
+header { gap: 16px; }
+header .brand { flex: none; }
+header h1 { white-space: nowrap; }
+.hside .meta { min-width: 0; overflow: hidden; white-space: nowrap; justify-content: flex-end; }
+.hside .meta > span { flex: none; }
+
+.askh { flex: none; display: flex; align-items: flex-start; gap: 8px; padding: 14px 12px 10px 16px;
+  border-bottom: 1px solid #1d2330; border-top: 3px solid #2c5596; }
+.askt { flex: 1 1 auto; min-width: 0; }
+.askt h2 { margin: 0; font: 700 11px/1.4 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: #9cc3f0; }
+#ask-sub { font: 11px/1.4 var(--mono); color: #6b7384; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#ask-sub b { color: #aeb6c4; font-weight: 500; }
+.askd button { font: 600 13px var(--sans); cursor: pointer; border-radius: 7px; background: #161b25; color: #d5dae3; border: 1px solid #2f3747; }
+.askd button:hover:not(:disabled) { background: #1d2431; }
+.askd button:disabled { opacity: .5; cursor: default; }
+.askd button:focus-visible, .askd textarea:focus-visible { outline: 2px solid #5b8fd6; outline-offset: 1px; }
+#ask-new { flex: none; padding: 6px 10px; font-size: 12px; }
+#ask-close { flex: none; width: 32px; height: 30px; padding: 0; background: none; border-color: transparent; color: #8a93a3; font-size: 15px; }
+#ask-close:hover { color: #fff; }
+
+#ask-log { position: relative; flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 14px 16px 6px;
+  scrollbar-width: thin; scrollbar-color: #262b36 transparent; }
+.askempty { color: #8a93a3; font-size: 13px; }
+.askempty p { margin: 2px 0 12px; }
+.askchips { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.askd .askchips button { text-align: left; padding: 8px 12px; font-weight: 500; line-height: 1.35; border-radius: 999px; color: #cfe0fb;
+  background: rgba(59,130,246,.08); border-color: #24406b; }
+.askd .askchips button:hover:not(:disabled) { background: rgba(59,130,246,.16); }
+
+.askturn { margin-bottom: 16px; }
+.askq { margin: 0 0 8px auto; width: fit-content; max-width: 88%; padding: 8px 12px; border-radius: 12px 12px 3px 12px;
+  background: #16305a; border: 1px solid #2c5596; color: #e3edff; white-space: pre-wrap; overflow-wrap: anywhere; }
+.aska { max-width: 96%; padding: 10px 12px; border-radius: 3px 12px 12px 12px; background: #0f131b; border: 1px solid #1d2330;
+  color: #d5dae3; overflow-wrap: anywhere; }
+.aska p { margin: 0 0 8px; } .aska p:last-child { margin-bottom: 0; }
+.aska ul { margin: 0 0 8px; padding-left: 18px; } .aska ul:last-child { margin-bottom: 0; }
+.aska li { margin: 2px 0; }
+.aska b { color: #fff; }
+.aska code { font: 12px var(--mono); padding: 1px 4px; border-radius: 4px; background: #1a202c; color: #c7d7f0; }
+.aska.working { color: #8a93a3; font-size: 13px; }
+.aska.working .old { color: #5b6372; }
+.aska.error { background: rgba(239,68,68,.07); border-color: #5b1d24; color: #fecaca; }
+.aska.lost { background: rgba(212,167,44,.08); border-color: #4a3c14; color: #e8c35a; }
+.asknew { display: flex; align-items: center; gap: 8px; margin: 4px 0 12px; font: 11px var(--mono); color: #6b7384; text-align: center; }
+.asknew::before, .asknew::after { content: ''; flex: 1 1 12px; border-top: 1px solid #1d2330; }
+.askd .spin { display: inline-block; width: 10px; height: 10px; border: 2px solid #2c5596; border-top-color: #9cc3f0; border-radius: 50%;
+  animation: spin 1s linear infinite; vertical-align: -1px; margin-right: 6px; }
+.askmeta { margin-top: 4px; font: 11px var(--mono); color: #4f5767; }
+.askhow { margin-top: 4px; font-size: 12px; color: #6b7384; }
+.askhow summary { cursor: pointer; font: 11px var(--mono); color: #4f5767; width: fit-content; }
+.askhow summary:hover { color: #8a93a3; }
+.askhow ol { margin: 4px 0 0; padding-left: 20px; }
+
+#ask-form { flex: none; padding: 10px 16px 14px; border-top: 1px solid #1d2330; background: #0c0f16; }
+#ask-note { margin: 0 0 8px; padding: 8px 10px; border-radius: 7px; font-size: 13px; color: #e8c35a;
+  background: rgba(212,167,44,.08); border: 1px solid #4a3c14; }
+#ask-q { display: block; width: 100%; box-sizing: border-box; resize: none; min-height: 44px; max-height: 160px; padding: 9px 11px;
+  font: 14px/1.45 var(--sans); color: #e6e8ee; background: #0b0e14; border: 1px solid #2a3140; border-radius: 8px; }
+#ask-q::placeholder { color: #4f5767; }
+#ask-q:disabled { opacity: .5; }
+.askfoot { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+#ask-count { font: 11px var(--mono); color: #6b7384; }
+#ask-count.near { color: #e8c35a; }
+.askhint { flex: 1 1 auto; font: 11px var(--mono); color: #3d4350; text-align: right; }
+.askd #ask-send { padding: 8px 16px; background: #16305a; border-color: #2c5596; color: #dbe8ff; }
+.askd #ask-send:hover:not(:disabled) { background: #1c3b6d; }
+
+/* phone: a sheet from the bottom, most of the screen, with a big close target */
+@media (max-width: 640px) {
+  .askd { top: auto; left: 0; width: 100%; height: 88vh; height: 88dvh; border-left: 0; border-top: 1px solid #2a3140;
+    border-radius: 14px 14px 0 0; box-shadow: 0 -30px 80px -20px #000; transform: translateY(100%); }
+  .askh { border-radius: 14px 14px 0 0; }
+  #ask-close { width: 44px; height: 40px; font-size: 18px; border: 1px solid #2f3747; background: #161b25; color: #d5dae3; }
+  .askhint { display: none; }
+  #ask-count { flex: 1 1 auto; }
+  #ask-q { font-size: 16px; }   /* under 16px, iOS zooms the whole page when the box takes focus */
+  .hside { gap: 10px; }
+}

@@ -128,6 +128,12 @@ BRAM RESEARCH  gate ledger over 19 pairs · 8 gap under minGap · 6 mid outside 
 ## Dashboard
 Balance history with settlement bars, activity log with per-agent color and P&L, venue feed (top Polymarket, top Kalshi, matched pairs with live gap), a pixel trading floor whose six agents animate when their desk is running, agent cards, and an open-positions table. It updates over Server-Sent Events every 2 seconds.
 
+**Ask.** The Ask button opens a chat drawer beside the floor. Type a question ("why hasn't the desk traded today?", "did the Vikings win?") and Claude answers from the desk's own data: positions, trades, the activity log, journals, matched markets, the maker, whale bets, the settings and these docs, plus a couple of web searches when the real world matters. It is read-only: it cannot trade, sell, or change a setting, and says so if asked. It needs `ANTHROPIC_API_KEY`, has its own ceiling (`ASK_DAILY_USD`, $3 per Eastern day, which survives restarts because every charge is journalled as `ASK_SPEND`), and a typical answer costs $0.05–$0.15. On the Fly box `BRAIN=0` is pinned, so adding the key there pays for questions and Research clicks only, not the desks' Claude minds:
+
+```bash
+fly secrets set ANTHROPIC_API_KEY=...   # run it yourself; the box restarts with Ask on
+```
+
 ## Live mode (read this)
 Live mode is **Kalshi only**. In live mode the desk only takes convergence trades whose leg is on Kalshi; locked arbs (which need both venues) are disabled.
 
@@ -575,6 +581,8 @@ src/venues/            Polymarket (Gamma + CLOB) and Kalshi public data
 src/tape.js            the maker's batched market data: the trade tape (socket first, poll as fallback) and top of book
 src/kalshi-ws.js       Kalshi's trade channel over WebSocket, dependency-free and read-only
 src/whales.js          whale watch: top Polymarket sports wallets' big bets, called out on the floor (never trades)
+src/ask.js             the Ask panel: a read-only Claude tool loop over the desk, with its own daily ceiling
+src/ask-tools.js       the Ask panel's ten read-only tools (whitelisted fields, bounded output, secrets scrubbed)
 public/                dashboard (index.html, style.css, app.js)
 data/state.json        persisted account (created on first run)
 data/ticks-*.jsonl     tick tape, one line per priced pair per cycle (RECORD=1)
@@ -598,6 +606,8 @@ tools/lab-test.js      assertions for the lab's fees, fills, settlement, and tha
 tools/whale-test.js    assertions for what counts as a whale bet, said once across a restart, and what copying pays
 tools/http-test.js     assertions for the Kalshi pacer
 tools/disk-test.js     assertions for the tape pull and the box's disk brake: nothing deleted before it is copied and verified
+tools/ask-test.js      assertions for the Ask loop: request shape, tool results, budget ceiling, append-only chats, route locks, no secret in any output
+tools/askui-test.js    assertions for the Ask drawer's answer formatting: everything escaped, only light markdown comes back
 tools/golden.js        fixed-fixture output diff, for refactors meant to change nothing
 ```
 
