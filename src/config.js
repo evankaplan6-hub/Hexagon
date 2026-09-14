@@ -291,7 +291,7 @@ module.exports = {
   // Tool rounds per question. At the cap the model is told to answer with what it has, so a
   // question that keeps looking things up still ends with an answer, never a loop.
   askMaxRounds: Math.max(1, Math.round(num('ASK_MAX_ROUNDS', 8))),
-  askTimeoutMs: num('ASK_TIMEOUT_MS', 120000),     // per API call, not per question
+  askTimeoutMs: num('ASK_TIMEOUT_MS', 240000),     // per API call, not per question; as RESEARCH_TIMEOUT_MS, since a timed-out call is charged its worst case with no answer
   // Pairs per view. The whole board is usually 20-40 matched pairs; sending all of them every
   // cycle is mostly cost, since the tail never moves.
   brainPairs: Math.max(1, Math.round(num('BRAIN_PAIRS', 12))),
