@@ -1,7 +1,9 @@
 'use strict';
 // Assertions for whale watch (src/whales.js) and the lab that scores it (tools/whale-lab.js):
 // what counts as a bet, what the floor says about it, what copying it pays, and that it is said
-// once: not again when the feed corrects a half-indexed fill, and not again after a restart.
+// once: not again when the feed corrects a half-indexed fill, and not again after a restart. Real
+// fills that look exactly alike still all count, and the lab's fetcher still pages back past a
+// half-indexed row.
 //
 //   node tools/whale-test.js
 const fs = require('fs');
@@ -58,18 +60,20 @@ const fill = (over) => ({ wallet: '0xw', name: 'whale', tx: 'x', ts: 0, side: 'B
   ok('both copies in one read are one bet, under the real outcome', both.length === 1 && both[0].outcomeIndex === 1 && both[0].usd === 12000 && !both[0].hedged, both);
 }
 
-// ---------------------------------------------------------------- one fill served twice
+// ---------------------------------------------------------------- fills that look exactly alike
 {
-  const once = fill({ tx: 't1', usd: 6000 });
-  ok('the same fill twice in one read counts once', betsFrom([once, { ...once }], { minUsd: 10000 }).length === 0);
-  const twice = betsFrom([once, { ...once }, fill({ tx: 't2', usd: 6000 })], { minUsd: 10000 });
-  ok('...and the bet is not inflated by it', twice.length === 1 && twice[0].usd === 12000, twice);
+  // VeryLucky888, tx 0x707acca1e1f7… on 2026-09-14: three /activity rows identical in every field,
+  // and three real fills (/trades lists three, /positions holds 15,000 shares). Scaled to a bet:
+  const alike = [1, 2, 3].map(() => fill({ tx: '0x707acca1e1f7', ts: 1789403434, outcomeIndex: 1, outcome: 'Yes', size: 10000, price: 0.48, usd: 4800 }));
+  const b = betsFrom(alike, { minUsd: 10000 });
+  ok('three identical rows in one read are three fills: $14.4K is a bet', b.length === 1 && b[0].usd === 14400, b);
+  ok('...even though they share one fillKey, which is why it is not an id', new Set(alike.map(fillKey)).size === 1);
   // a sweep: one tx, one size, two price levels (ferrariChampions2026's feed on 2026-09-14)
   const sweep = betsFrom([fill({ tx: 't3', usd: 6000, price: 0.34 }), fill({ tx: 't3', usd: 6000, price: 0.35 })], { minUsd: 10000 });
   ok('one tx at two prices is two fills', sweep.length === 1 && sweep[0].usd === 12000, sweep);
-  ok('fillKey tells the sweep apart and the repeat not', fillKey(fill({ tx: 't3', price: 0.34 })) !== fillKey(fill({ tx: 't3', price: 0.35 })) && fillKey(once) === fillKey({ ...once }));
+  ok('fillKey tells the two price levels apart', fillKey(fill({ tx: 't3', price: 0.34 })) !== fillKey(fill({ tx: 't3', price: 0.35 })));
   const noTx = betsFrom([fill({ tx: undefined, usd: 6000 }), fill({ tx: undefined, usd: 6000 })], { minUsd: 10000 });
-  ok("without a tx identical rows are separate fills (the lab's compact cache)", noTx.length === 1 && noTx[0].usd === 12000, noTx);
+  ok("without a tx identical rows are separate fills too (the lab's compact cache)", noTx.length === 1 && noTx[0].usd === 12000, noTx);
 }
 
 // ---------------------------------------------------------------- which record files a restart reads
@@ -96,13 +100,15 @@ const fill = (over) => ({ wallet: '0xw', name: 'whale', tx: 'x', ts: 0, side: 'B
       rec({ key: '0xw|C9|1', ts: from - 60 }),                                  // made before the window
       rec({ key: '0xw|C1|999', outcomeIndex: 999, eventSlug: '' }),             // a half-indexed call
       rec({ t: '2026-09-13T21:20:34.239Z', rank: 7 }),                          // a restart's repeat
+      rec({ t: '2026-09-13T22:05:00Z', key: '0xw|C4|0', conditionId: 'C4', outcomeIndex: 0, outcome: 'Yes', ts: from + 7200 }),   // a new call after all of it
     ].join('\n') + '\n');
     fs.writeFileSync(path.join(dir, 'whales-2026-09-14.jsonl'), rec({ t: '2026-09-14T06:13:21Z', key: '0xw|C2|0', conditionId: 'C2', outcomeIndex: 0, outcome: 'Broncos', ts: now / 1000 - 600 }) + '\n');
     fs.writeFileSync(path.join(dir, 'whales-2026-09-12.jsonl'), rec({ t: '2026-09-12T12:00:00Z', key: '0xw|C8|0', outcomeIndex: 0, ts: from + 60 }) + '\n');   // a day outside the window is not opened
     const got = readRecord(dir, from, now);
-    ok('torn, foreign, keyless, old and half-indexed lines are skipped', got.map((r) => r.key).join() === '0xw|C1|1,0xw|C2|0', got.map((r) => r.key));
+    ok('torn, foreign, keyless, old and half-indexed lines are skipped', got.map((r) => r.key).join() === '0xw|C1|1,0xw|C4|0,0xw|C2|0', got.map((r) => r.key));
+    ok('...skipped, not the end of the file: the call after them is still read', got.some((r) => r.key === '0xw|C4|0'), got.map((r) => r.key));
     ok('a key said twice is read back once, as first said', got[0]?.rank === 6, got[0]);
-    ok("yesterday's and today's files are both read, in the order the bets were called", got[1]?.conditionId === 'C2');
+    ok("yesterday's and today's files are both read, in the order the bets were called", got[2]?.conditionId === 'C2');
     ok('a directory with no record is simply nothing', readRecord(path.join(dir, 'missing'), from, now).length === 0);
     const e = panelEntry({ ts: 100, key: 'k' });
     ok('a sparse record still makes a whole panel row: nulls, never undefined', Object.values(e).every((v) => v !== undefined) && e.url === null && e.usd === null && e.hedged === false, e);
@@ -256,6 +262,36 @@ async function watchTests() {
       ok('the record has the two bets, once each', recordLines(cfg.dataDir).length === 2);
     }
 
+    // ---- a deploy with a morning of calls in the record, not just the last one
+    {
+      const cfg = config();
+      fs.mkdirSync(cfg.dataDir, { recursive: true });
+      const nowMs = now * 1000;
+      const etDay = (ms) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ms));
+      // a call as the watch writes it: said 5s after the bet crossed the bar, `minAgo` minutes ago
+      const write = (minAgo, over) => {
+        const ts = now - minAgo * 60, t = ts * 1000 + 5000;
+        const line = JSON.stringify({ t: new Date(t).toISOString(), key: `0xw|${over.conditionId}|${over.outcomeIndex}`, wallet: '0xw', name: 'whale', title: 'A vs B', eventSlug: 'ev', ts, price: 0.5, usd: 15000, hedged: false, rank: 3, walletPnl: 500000, kalshi: null, inPlay: null, ...over });
+        fs.appendFileSync(path.join(cfg.dataDir, `whales-${etDay(t)}.jsonl`), line + '\n');
+      };
+      write(90, { conditionId: 'C5', outcomeIndex: 1, outcome: 'Mets' });     // older than freshness, inside the memory
+      fs.appendFileSync(path.join(cfg.dataDir, `whales-${etDay(nowMs - 30 * 60000)}.jsonl`), '{"t":"torn\nnot json\n');
+      write(30, { conditionId: 'C6', outcomeIndex: 0, outcome: 'Jets' });
+      write(5, { conditionId: 'C7', outcomeIndex: 1, outcome: 'Knicks' });
+      const lines = recordLines(cfg.dataDir).length;
+
+      // The feed now shows the 90-minute-old Mets bet crossing the bar two minutes ago -- its early
+      // fills slid out of the six hours -- so only the restored memory can keep it from a second call.
+      feed = [row({ conditionId: 'C5', outcomeIndex: 1, outcome: 'Mets', transactionHash: '0xm', timestamp: now - 120 })];
+      const E = desk(), w = makeWhaleWatch(cfg);
+      await w.step(E);
+      const rec = w.snapshot().recent;
+      ok('every call in the memory is back on the panel, newest first', rec.map((x) => x.outcome).join() === 'Knicks,Jets,Mets', rec.map((x) => x.outcome));
+      ok('...read past the torn lines between them', rec.length === 3);
+      ok('a bet called before the freshness window but inside the memory is not called again', whaleLines(E).length === 0, whaleLines(E));
+      ok('...nor recorded again', recordLines(cfg.dataDir).length === lines, recordLines(cfg.dataDir).length - lines);
+    }
+
     // ---- the feed's half-indexed fill, read by read
     {
       const cfg = config();
@@ -301,7 +337,47 @@ async function watchTests() {
   }
 }
 
+// ---------------------------------------------------------------- the lab's fetcher paging back
+// http.getJSON is stubbed to serve one wallet's /activity by its start/end/limit/offset, so the real
+// fetchActivityPage and normalizeFill run. 1,500 rows, three a second, and every second's three
+// are the same fill three times over (the VeryLucky888 shape) -- so the page boundaries, which
+// re-read a second, cut through identical rows. The newest row is half-indexed.
+async function fetchTests() {
+  const http = require('../src/http');
+  const real = http.getJSON;
+  const T = 1789400000, N = 1500;
+  const rows = Array.from({ length: N }, (_, i) => {
+    const s = Math.floor(i / 3);
+    return { proxyWallet: '0xw', side: 'BUY', conditionId: 'C1', outcomeIndex: i === 0 ? 999 : 1, outcome: 'Yes', price: 0.5, size: 100, usdcSize: 50, timestamp: T - s, eventSlug: i === 0 ? '' : 'e', transactionHash: i === 0 ? '0xhalf' : `0xt${s}` };
+  });
+  http.getJSON = async (url) => {
+    const q = new URL(url).searchParams, n = (k, d) => (q.has(k) ? +q.get(k) : d);
+    const hit = rows.filter((r) => r.proxyWallet === q.get('user') && r.timestamp >= n('start', 0) && r.timestamp <= n('end', Infinity));
+    return hit.slice(n('offset', 0), n('offset', 0) + n('limit', 100));
+  };
+  try {
+    const { walletFills } = require('./whale-fetch');
+    const first = await pm.fetchActivityPage('0xw', { limit: 500, start: T - 1e5, end: T });
+    ok('a page says how many rows the feed sent, not just the fills it kept', first.rows === 500 && first.fills.length === 499 && first.oldestTs === T - 166, [first.rows, first.fills.length, first.oldestTs]);
+    ok('fetchActivity is still just the fills', (await pm.fetchActivity('0xw', { limit: 500, start: T - 1e5, end: T })).length === 499);
+
+    const r = await walletFills('0xw', T - 1e5, T);
+    ok('a full page that lost a half-indexed row is not the last page', r.pages === 4 && !r.truncated, [r.pages, r.truncated]);
+    ok('every real fill is kept once: the overlap re-read is dropped, identical real fills are not', r.fills.length === N - 1 && r.fills.reduce((a, f) => a + f.usd, 0) === (N - 1) * 50, r.fills.length);
+    ok('...and the half-indexed row is not among them', r.fills.every((f) => f.outcomeIndex === 1));
+    ok('the fills reach back to the oldest second', r.oldestTs === T - (N / 3 - 1), r.oldestTs);
+    const cut = await walletFills('0xw', T - 1e5, T, { maxPages: 2 });
+    ok('a wallet with more history than the page budget is marked truncated', cut.truncated && cut.pages === 2 && cut.oldestTs > T - (N / 3 - 1), [cut.truncated, cut.pages, cut.oldestTs]);
+
+    // a feed that ignores the cursor serves the newest page again: stop, and do not call it complete
+    http.getJSON = async () => rows.slice(0, 500);
+    const stuck = await walletFills('0xw', T - 1e5, T);
+    ok('a full page that adds nothing new stops the paging and marks the wallet truncated', stuck.pages === 2 && stuck.truncated && stuck.fills.length === 499, [stuck.pages, stuck.truncated, stuck.fills.length]);
+  } finally { http.getJSON = real; }
+}
+
 watchTests()
+  .then(fetchTests)
   .catch((e) => { fail++; console.log(`  FAIL  threw: ${e.stack}`); })
   .finally(() => {
     console.log(`${pass} passed, ${fail} failed`);

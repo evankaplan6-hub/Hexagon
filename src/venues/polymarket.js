@@ -111,13 +111,23 @@ async function fetchLeaderboard({ category = 'SPORTS', period = 'MONTH', orderBy
   })).filter((r) => r.wallet);
 }
 
-// A wallet's fills, newest first. `start`/`end` are unix seconds.
-async function fetchActivity(wallet, { limit = 100, offset = 0, start, end } = {}) {
+// One page of a wallet's fills, newest first (`start`/`end` are unix seconds), with what the feed
+// actually sent: `rows` and the oldest row's `oldestTs`. A pager has to decide on those, not on the
+// fills. normalizeFill drops a row the feed has not indexed yet, and those sit on the newest page of
+// exactly the busiest wallets, so a full page of 500 comes back as 497 fills; reading that as the
+// last page stored Flaznorp's newest fourteen minutes as its whole history, marked complete.
+async function fetchActivityPage(wallet, { limit = 100, offset = 0, start, end } = {}) {
   let url = `${DATA}/activity?user=${wallet}&type=TRADE&limit=${limit}&offset=${offset}`;
   if (start) url += `&start=${start}`;
   if (end) url += `&end=${end}`;
-  const rows = await http.getJSON(url);
-  return (Array.isArray(rows) ? rows : []).map(normalizeFill).filter(Boolean);
+  const got = await http.getJSON(url);
+  const rows = Array.isArray(got) ? got : [];
+  const ts = rows.map((r) => (r ? +r.timestamp : NaN)).filter(Number.isFinite);
+  return { fills: rows.map(normalizeFill).filter(Boolean), rows: rows.length, oldestTs: ts.length ? Math.min(...ts) : null };
+}
+
+async function fetchActivity(wallet, opts) {
+  return (await fetchActivityPage(wallet, opts)).fills;
 }
 
 // Which outcome a fill bought, or null when the feed does not know yet. Every Polymarket market is
@@ -150,11 +160,15 @@ function normalizeFill(t) {
   };
 }
 
-// One fill's identity. The feed serves a transaction as one row per price level, so two rows in
-// one tx can share a size (a sweep through 34c and 35c) or a price (two orders at 55c) and still be
-// two fills; only the whole tuple repeating is the same fill served twice. Price is in the key for
-// that reason: the key tools/whale-fetch.js used before, without it, collapses 8 of the latest 500
-// rows of one busy wallet (ferrariChampions2026, 2026-09-14: $2,069 of fills).
+// Everything a fill row can be told apart by -- NOT a unique id. The feed serves one row per matched
+// order, so one tx can hold rows that differ only in size (a sweep through 34c and 35c) or only in
+// price, and rows identical in every field: VeryLucky888's tx 0x707acca1e1f7… is three rows of 5,000
+// shares at 48c, and /trades and /positions (15,000 shares, $7,200) agree those are three real fills.
+// 12 top-volume wallets had 7 such repeats in their newest 500 fills on 2026-09-14. So a key seen
+// twice in one read is two fills; only a key served again by an overlapping page is a re-read, and
+// tools/whale-fetch.js counts it per page rather than once. Price is in the key because the key
+// whale-fetch used before, without it, merged 8 of the latest 500 rows of one busy wallet
+// (ferrariChampions2026, 2026-09-14: $2,069 of fills).
 const fillKey = (f) => `${f.wallet}|${f.tx}|${f.ts}|${f.conditionId}|${f.outcomeIndex}|${f.side}|${f.size}|${f.price}`;
 
 // Markets by condition id, open or settled. Settled ones carry outcomePrices of "1"/"0".
@@ -173,4 +187,4 @@ async function fetchByConditions(ids) {
   return out;
 }
 
-module.exports = { fetchUniverse, fetchMarket, fetchBook, fetchPrices, fetchLeaderboard, fetchActivity, fetchByConditions, normalizeFill, outcomeIndex, fillKey };
+module.exports = { fetchUniverse, fetchMarket, fetchBook, fetchPrices, fetchLeaderboard, fetchActivity, fetchActivityPage, fetchByConditions, normalizeFill, outcomeIndex, fillKey };

@@ -30,21 +30,15 @@ const ET_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', 
 // nothing.
 //
 // A fill under an outcome the feed has not indexed yet (999) is skipped here as well as in
-// normalizeFill, because the lab's cache on disk was normalized before that check existed. And one
-// fill served twice in a read (same tx, second, outcome, side, size AND price: pm.fillKey) counts
-// once. No live read has shown that yet (0 in 1,500 rows), but a repeat would inflate a bet and it
-// costs nothing to rule out. Without a tx (the lab's compact cache, deduped when it was fetched)
-// there is nothing to tell two identical rows apart by, so both count.
+// normalizeFill, because the lab's cache on disk was normalized before that check existed. Rows
+// that are identical in every field all count: one read of /activity has no overlap to repeat a
+// row, and the feed does serve separate real fills that look exactly alike (see pm.fillKey), so
+// collapsing them would hide real buying -- three $4,800 fills in one tx would never reach $10K.
 function betsFrom(fills, { minUsd = 10000, windowSec = 6 * 3600 } = {}) {
-  const groups = new Map(), seen = new Set();
+  const groups = new Map();
   for (const f of fills) {
     if (!f || !f.conditionId || !Number.isFinite(f.usd) || !Number.isFinite(f.ts)) continue;
     if (pm.outcomeIndex(f.outcomeIndex) == null) continue;
-    if (f.tx) {
-      const id = pm.fillKey(f);
-      if (seen.has(id)) continue;
-      seen.add(id);
-    }
     const key = `${f.wallet}|${f.conditionId}|${f.outcomeIndex}`;
     (groups.get(key) || groups.set(key, []).get(key)).push(f);
   }

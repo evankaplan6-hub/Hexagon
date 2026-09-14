@@ -65,27 +65,38 @@ async function buildPool() {
 }
 
 // Page backwards through one wallet's fills with the `end` cursor until the window start.
-async function walletFills(wallet, startTs, endTs) {
-  const seen = new Set(), out = [];
+//
+// Fills sharing the boundary second are served again on the next page, and a re-read cannot be told
+// from a real fill by its fields: the feed serves separate fills that are identical in every one
+// (pm.fillKey). So a key is kept as many times as the most any single page served it -- a page never
+// repeats a row within itself, only across the overlap -- rather than once.
+//
+// Whether a page was the last is decided on the rows the feed sent (page.rows), never on the fills
+// left after normalizeFill dropped the half-indexed ones: a full page that lost one of them is not
+// the end of the wallet's history.
+async function walletFills(wallet, startTs, endTs, { maxPages = MAX_PAGES } = {}) {
+  const kept = new Map(), out = [];
   let end = endTs, pages = 0, truncated = false;
   for (;;) {
-    const page = await retry(() => pm.fetchActivity(wallet, { limit: 500, start: startTs, end }));
+    const page = await retry(() => pm.fetchActivityPage(wallet, { limit: 500, start: startTs, end }));
     pages++;
+    const counts = new Map();
     let fresh = 0;
-    for (const f of page) {
-      // price is part of a fill's identity: one tx sweeping 34c and 35c for the same size is two fills
+    for (const f of page.fills) {
       const k = pm.fillKey(f);
-      if (seen.has(k)) continue;
-      seen.add(k); out.push(f); fresh++;
+      const n = (counts.get(k) || 0) + 1;
+      counts.set(k, n);
+      if (n <= (kept.get(k) || 0)) continue;
+      kept.set(k, n); out.push(f); fresh++;
     }
-    if (page.length < 500) break;
-    const oldest = Math.min(...page.map((f) => f.ts));
-    if (!fresh || oldest <= startTs) break;
-    if (pages >= MAX_PAGES) { truncated = true; break; }
-    // Fills sharing the boundary second are re-read on the next page and deduped above.
+    if (page.rows < 500) break;
+    const oldest = page.oldestTs;
+    if (oldest == null || oldest <= startTs) break;
+    // a full page that added nothing means the cursor is stuck, with history still behind it
+    if (!fresh || pages >= maxPages) { truncated = true; break; }
     end = oldest === end ? oldest - 1 : oldest;
   }
-  return { fills: out, truncated, oldestTs: out.length ? Math.min(...out.map((f) => f.ts)) : null };
+  return { fills: out, truncated, pages, oldestTs: out.length ? Math.min(...out.map((f) => f.ts)) : null };
 }
 
 async function main() {
@@ -144,4 +155,6 @@ async function main() {
   console.log(`markets: ${Object.keys(markets).length} of ${conds.length} found · ${settled} settled · wrote ${OUT}/`);
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+module.exports = { walletFills };
+
+if (require.main === module) main().catch((e) => { console.error(e); process.exit(1); });
