@@ -28,8 +28,8 @@ const mb = (b) => (b / MB).toFixed(1);
 // files that are exactly ticks-<date>.jsonl count, and only for days BEFORE `today` -- today's
 // tape is the one being written, and a journal or state.json is never a candidate at any price.
 // It stops as soon as the sizes it has picked would cover the shortfall, so a small dip costs one
-// old tape, not all of them. The caller re-measures after each deletion rather than trusting the
-// sizes (the filesystem can free less than a file's length), so this is a plan, not a promise.
+// old tape, not all of them. The caller deletes at most this list and re-measures before each
+// delete, so it can stop short of the list, never run past it.
 //   files: [{ name, size }]   today: 'YYYY-MM-DD' (Eastern)
 function planTapeTrim(files, { today, freeBytes, minFreeBytes }) {
   if (!(freeBytes < minFreeBytes)) return [];
@@ -70,23 +70,45 @@ function makeDiskBrake(cfg, io = fs) {
     try { free = freeNow(); } catch { return; }
     if (!Number.isFinite(free) || free >= minFreeBytes) return;
     try {
+      // Eastern, like the filename the recorder writes: from 20:00 to midnight ET the UTC date is
+      // already tomorrow, and a UTC "today" would make the evening's own tape look old
       const today = ET_DAY.format(new Date(now));
       const files = [];
       for (const name of io.readdirSync(cfg.dataDir)) {
         if (!TICKS_FILE.test(name)) continue;
         try { files.push({ name, size: io.statSync(path.join(cfg.dataDir, name)).size }); } catch { /* gone already */ }
       }
-      // one file at a time, re-measuring in between, so it stops the moment the floor is met
-      for (;;) {
-        const [victim] = planTapeTrim(files, { today, freeBytes: free, minFreeBytes });
-        if (!victim) break;
-        const f = files.splice(files.findIndex((x) => x.name === victim), 1)[0];
+      const remeasure = () => { try { free = freeNow(); return true; } catch { return false; } };
+      // One pass deletes at most what ONE measurement says is needed, going by file sizes. A
+      // deleted file frees less than its length while something still holds it open -- the
+      // Mac's `fly ssh sftp get` streaming that very tape, say -- and chasing that missing space
+      // into ever newer tapes would throw away the ones the pull has not copied yet. Whatever this
+      // pass could not free waits for the next look, an hour out; the floor is days of tape deep.
+      const victims = planTapeTrim(files, { today, freeBytes: free, minFreeBytes });
+      const size = new Map(files.map((f) => [f.name, f.size]));
+      const gone = new Set();
+      for (const victim of victims) {
+        // measured again before every delete: the pull may have removed tapes since the listing
+        remeasure();
+        if (free >= minFreeBytes) break;
         try { io.unlinkSync(path.join(cfg.dataDir, victim)); }
-        catch (e) { if (e && e.code === 'ENOENT') continue; throw e; }   // deleted under us: fine, move on
-        try { free = freeNow(); } catch { free += f.size; }
-        E.log('TESS', 'OPS', null, `disk low · deleted old tick tape ${victim} (${mb(f.size)} MB), ${mb(free)} MB free now · it may not have been copied to the Mac yet; run node tools/fly-pull.js on the Mac to archive tapes before the box has to do this`);
+        catch (e) {
+          // deleted under us, most likely by the pull's own rm: its space is back, and the next
+          // measurement counts it before anything else goes
+          if (e && e.code === 'ENOENT') { gone.add(victim); continue; }
+          throw e;
+        }
+        gone.add(victim);
+        if (!remeasure()) free += size.get(victim);   // statfs would not say this time: go by the size
+        E.log('TESS', 'OPS', null, `disk low · deleted old tick tape ${victim} (${mb(size.get(victim))} MB), ${mb(free)} MB free now · it may not have been copied to the Mac yet; run node tools/fly-pull.js on the Mac to archive tapes before the box has to do this`);
       }
-      if (free < minFreeBytes) E.log('TESS', 'OPS', null, `disk low · ${mb(free)} MB free, under the ${cfg.tapeMinFreeMb} MB floor, and no old tick tape is left to delete · journals and today's tape are never deleted`);
+      remeasure();
+      if (free < minFreeBytes) {
+        const left = planTapeTrim(files.filter((f) => !gone.has(f.name)), { today, freeBytes: 0, minFreeBytes: Infinity }).length;
+        E.log('TESS', 'OPS', null, left
+          ? `disk low · ${mb(free)} MB free, still under the ${cfg.tapeMinFreeMb} MB floor · ${left} old tick tape${left === 1 ? '' : 's'} left; looking again in an hour (a tape still open elsewhere, mid-copy, frees its space only once closed)`
+          : `disk low · ${mb(free)} MB free, under the ${cfg.tapeMinFreeMb} MB floor, and no old tick tape is left to delete · journals and today's tape are never deleted`);
+      }
     } catch (e) {
       // the brake must never take the cycle down with it
       try { E.log('TESS', 'OPS', null, `disk low · could not trim old tick tapes: ${String(e && e.message).slice(0, 120)}`); } catch { /* nothing left to tell */ }
@@ -94,12 +116,14 @@ function makeDiskBrake(cfg, io = fs) {
   };
 }
 
-function makeRecorder(cfg) {
+// `io` and `clock` are the fs module and Date.now in production; tools/disk-test.js passes a fake
+// disk and a fixed time to check the brake is really wired in, ahead of the empty-cycle return.
+function makeRecorder(cfg, { io = fs, clock = Date.now } = {}) {
   if (!cfg.record) return () => {};
   let warnedAt = 0;
-  const brake = makeDiskBrake(cfg);
+  const brake = makeDiskBrake(cfg, io);
   return (E) => {
-    const now = Date.now();
+    const now = clock();
     // before the early return below: a cycle with nothing to write still owns the old tapes on disk
     brake(E, now);
     const lines = [];
@@ -126,10 +150,10 @@ function makeRecorder(cfg) {
     }
     if (!lines.length) return;
     try {
-      fs.mkdirSync(cfg.dataDir, { recursive: true });
+      io.mkdirSync(cfg.dataDir, { recursive: true });
       // append-only, one write per cycle; the filename is re-derived every time, so the file
       // rotates itself at Eastern midnight with no bookkeeping
-      fs.appendFileSync(path.join(cfg.dataDir, `ticks-${ET_DAY.format(new Date(now))}.jsonl`), lines.join('\n') + '\n');
+      io.appendFileSync(path.join(cfg.dataDir, `ticks-${ET_DAY.format(new Date(now))}.jsonl`), lines.join('\n') + '\n');
     } catch (e) {
       // the tape must never halt the desk; rate-limited so a bad disk cannot flood the log
       if (now - warnedAt > 300000) { warnedAt = now; E.log('TESS', 'OPS', null, `tick recorder write failed: ${String(e.message).slice(0, 120)}`); }

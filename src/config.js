@@ -16,7 +16,10 @@ module.exports = {
   // a full disk stops the journal too. The normal route off the box is the Mac's daily
   // tools/fly-pull.js, which deletes only what it has copied and verified; this fires only if that
   // has stopped running, so what it deletes may never have reached the Mac. 0 turns it off.
-  tapeMinFreeMb: Math.max(0, num('TAPE_MIN_FREE_MB', 200)),
+  // On by default only on a Fly machine (Fly sets FLY_MACHINE_ID in every one): on the Mac the
+  // tapes under data/ exist nowhere else and no pull archives them, so there it stays off unless
+  // TAPE_MIN_FREE_MB is set on purpose.
+  tapeMinFreeMb: Math.max(0, num('TAPE_MIN_FREE_MB', process.env.FLY_MACHINE_ID ? 200 : 0)),
   // Thin-market probe (src/probe.js): when the venues disagree by this much, dump BOTH full order
   // books. A gap this wide is either a real opportunity or a price with no size behind it, and
   // only the book can tell the difference. Read-only: probing never signals or trades.

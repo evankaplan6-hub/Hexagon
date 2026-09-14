@@ -24,7 +24,11 @@
 //   - any failure before verification means no deletes at all this run. The trim can wait a day.
 //
 // data/fly/ itself is a frozen snapshot that the maker baselines point at; this writes only to
-// the archive folder under it and refuses a --dest of data/fly.
+// the archive folder under it and refuses a --dest of data/fly, however it is spelled.
+//
+// The archive is the MAIN checkout's data/fly/archive even when this runs from a linked git
+// worktree (.claude/worktrees/*): a worktree's ignored data/ is deleted with the worktree, so a
+// copy there is no reason to delete the box's. --trim into a worktree is refused outright.
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -107,11 +111,20 @@ function planPull(boxFiles, localFiles, { todayET, keep = 3, trim = false } = {}
 // Runs on BOTH sides. On the box it is shipped as source through `node -e` (see boxCall), so it
 // must be self-contained: its own requires, no closures. Read-only: readdir, stat, read, statfs.
 // Sizes come from the bytes actually hashed, so size and sha256 always describe the same bytes.
-// Files dated `todayET` or later are listed but not hashed -- they are still being written, and
+// Files dated today or later are listed but not hashed -- they are still being written, and
 // hashing 60MB the desk is appending to would buy nothing but CPU taken from the maker.
-function listDir({ dir, todayET, only }) {
+//
+// "Today" is the EARLIER of the caller's `todayET` and this side's own Eastern date, and the own
+// date comes back as `today`. On the box that matters: the box is the one writing today's tape,
+// so a Mac clock running a few minutes fast across Eastern midnight must not turn the tape still
+// being written into a closed day. (The same formatter options as src/recorder.js's ET_DAY; it
+// cannot be required from here, the source travels alone. `nowMs` is for the tests' fake box.)
+function listDir({ dir, todayET, only, nowMs }) {
   const fs = require('fs'), path = require('path'), crypto = require('crypto');
   const RE = /^(ticks|journal|whales|probes)-(\d{4}-\d{2}-\d{2})\.jsonl$/;
+  const own = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' })
+    .format(new Date(nowMs == null ? Date.now() : nowMs));
+  const today = todayET && todayET < own ? todayET : own;
   const want = only ? new Set(only) : null;
   const buf = Buffer.alloc(1 << 20);
   const files = [];
@@ -123,7 +136,7 @@ function listDir({ dir, todayET, only }) {
     const full = path.join(dir, name);
     const st = fs.statSync(full);
     if (!st.isFile()) continue;
-    if (m[2] >= todayET) { files.push({ name, size: st.size, sha256: null }); continue; }
+    if (m[2] >= today) { files.push({ name, size: st.size, sha256: null }); continue; }
     const h = crypto.createHash('sha256');
     let size = 0;
     const fd = fs.openSync(full, 'r');
@@ -133,7 +146,7 @@ function listDir({ dir, todayET, only }) {
   }
   let freeBytes = null, totalBytes = null;
   try { const s = fs.statfsSync(dir); freeBytes = s.bavail * s.bsize; totalBytes = s.blocks * s.bsize; } catch { /* not every filesystem says */ }
-  return { machine: process.env.FLY_MACHINE_ID || null, freeBytes, totalBytes, files };
+  return { machine: process.env.FLY_MACHINE_ID || null, today: own, freeBytes, totalBytes, files };
 }
 
 function boxFree({ dir }) {
@@ -167,6 +180,59 @@ function isBytePrefix(short, long) {
     }
     return true;
   } finally { fs.closeSync(fa); fs.closeSync(fb); }
+}
+
+// ---------------------------------------------------------------- where the archive may live
+// The main checkout that `dir` belongs to. In a linked git worktree .git is a FILE naming
+// <main>/.git/worktrees/<name>, and that folder's `commondir` points back at <main>/.git. Read
+// straight off the disk rather than asking `git`, which launchd's bare PATH may not run. A folder
+// with no .git at all (a plain copy) is its own home.
+function mainCheckout(dir) {
+  const dotgit = path.join(dir, '.git');
+  let st;
+  try { st = fs.statSync(dotgit); } catch { return dir; }
+  if (st.isDirectory()) return dir;
+  const m = /^gitdir:\s*(.+?)\s*$/m.exec(fs.readFileSync(dotgit, 'utf8'));
+  if (!m) throw new Error(`${dotgit} is a file that names no gitdir`);
+  const gitdir = path.resolve(dir, m[1]);
+  let main;
+  try { main = path.dirname(path.resolve(gitdir, fs.readFileSync(path.join(gitdir, 'commondir'), 'utf8').trim())); }
+  catch { throw new Error(`${dir} is a linked git checkout and its main checkout could not be found`); }
+  if (!fs.statSync(path.join(main, '.git')).isDirectory()) throw new Error(`${main} does not look like the main checkout of ${dir}`);
+  return main;
+}
+
+// The linked worktree `p` sits inside, or null. Followed through symlinks from the nearest folder
+// that exists, then up to the first .git: a directory means a main checkout (fine), a file means
+// a linked worktree. The .claude/worktrees path is checked by name too, in case its .git is gone.
+function linkedWorktreeOf(p) {
+  let dir = path.resolve(p);
+  while (!fs.existsSync(dir) && path.dirname(dir) !== dir) dir = path.dirname(dir);
+  try { dir = fs.realpathSync.native(dir); } catch { return null; }
+  const named = /^(.*[\\/]\.claude[\\/]worktrees[\\/][^\\/]+)(?:[\\/]|$)/i.exec(dir);
+  if (named) return named[1];
+  for (;;) {
+    let st = null;
+    try { st = fs.lstatSync(path.join(dir, '.git')); } catch { /* no .git at this level */ }
+    if (st) return st.isDirectory() ? null : dir;
+    const up = path.dirname(dir);
+    if (up === dir) return null;
+    dir = up;
+  }
+}
+
+const sameFile = (a, b) => {
+  try { const x = fs.statSync(a), y = fs.statSync(b); return x.dev === y.dev && x.ino === y.ino; } catch { return false; }
+};
+
+// Is `dest` the frozen data/fly snapshot of any of `roots`? By name without regard to case (this
+// Mac's disk ignores case, so data/FLY is data/fly), and by inode, so a symlink or a differently
+// spelled path to the same folder is caught too.
+function isFrozenSnapshot(dest, roots) {
+  const d = path.resolve(dest);
+  if (path.basename(d).toLowerCase() === 'fly' && path.basename(path.dirname(d)).toLowerCase() === 'data') return true;
+  return roots.some((root) => sameFile(d, path.join(root, 'data', 'fly')) ||
+    (path.basename(d).toLowerCase() === 'fly' && sameFile(path.dirname(d), path.join(root, 'data'))));
 }
 
 // ---------------------------------------------------------------- talking to the box
@@ -210,6 +276,9 @@ function parseArgs(argv) {
     const eq = a.indexOf('=');
     if (a.startsWith('--') && eq > 0) { v = a.slice(eq + 1); a = a.slice(0, eq); }
     const val = () => { if (v !== undefined) return v; if (i + 1 >= argv.length) throw new Error(`${a} needs a value`); return argv[++i]; };
+    // an on/off flag is on by being there: `--trim=false` would otherwise mean trim, the one
+    // flag that deletes, so a value on one is a usage error rather than a guess
+    if ((a === '--trim' || a === '--dry-run' || a === '--help') && v !== undefined) throw new Error(`${a} takes no value (got ${a}=${v}); leave it out to turn it off`);
     if (a === '--trim') o.trim = true;
     else if (a === '--dry-run') o.dryRun = true;
     else if (a === '--app') o.app = val();
@@ -226,18 +295,31 @@ function parseArgs(argv) {
 
 // Everything main does, with the clock and the fly binary passed in, returning the exit code
 // instead of exiting -- tools/disk-test.js drives it against a fake fly with a fixed date.
-function run(argv, { now = () => new Date(), fly = findFly(), cwd = process.cwd(), out = console.log, err = console.error } = {}) {
+// `root` is the checkout this file sits in; the tests point it at a made-up one.
+function run(argv, { now = () => new Date(), fly = findFly(), cwd = process.cwd(), out = console.log, err = console.error, root = path.join(__dirname, '..') } = {}) {
   let opts;
   try { opts = parseArgs(argv); } catch (e) { err(`fly-pull: ${e.message}\n${USAGE}`); return 2; }
   if (opts.help) { out(USAGE); return 0; }
 
-  const dest = opts.dest ? path.resolve(cwd, opts.dest) : path.join(__dirname, '..', 'data', 'fly', 'archive');
-  if (path.basename(dest) === 'fly' && path.basename(path.dirname(dest)) === 'data') {
+  let home;
+  try { home = mainCheckout(root); } catch (e) {
+    if (!opts.dest) { err(`fly-pull: ${e.message}, so there is no safe default archive folder; pass --dest`); return 2; }
+    home = root;
+  }
+  const dest = opts.dest ? path.resolve(cwd, opts.dest) : path.join(home, 'data', 'fly', 'archive');
+  if (isFrozenSnapshot(dest, [home, root])) {
     err('fly-pull: refusing --dest data/fly: that folder is a frozen snapshot the maker baselines point at. Use data/fly/archive.');
     return 2;
   }
+  const worktree = linkedWorktreeOf(dest);
+  if (opts.trim && worktree) {
+    err(`fly-pull: refusing --trim into ${dest}: that is inside the git worktree ${worktree}, and a worktree's data/ is deleted along with it. ` +
+      "A box tape is deleted only once its copy is somewhere that lasts: leave out --dest to use the main checkout's data/fly/archive.");
+    return 2;
+  }
   const shown = path.relative(cwd, dest) || '.';
-  const todayET = ET_DAY.format(now());
+  const macToday = ET_DAY.format(now());
+  let todayET = macToday;
   const problems = [];
   const problem = (msg) => { problems.push(msg); out(`  PROBLEM  ${msg}`); };
 
@@ -258,7 +340,7 @@ function run(argv, { now = () => new Date(), fly = findFly(), cwd = process.cwd(
   // 1. what the box has
   let box;
   try {
-    box = boxCall(fly, opts.app, null, listDir, { dir: BOX_DIR, todayET }, 10 * 60000);
+    box = boxCall(fly, opts.app, null, listDir, { dir: BOX_DIR, todayET: macToday }, 10 * 60000);
     if (!box || !Array.isArray(box.files)) throw new Error('the listing had no file list');
   } catch (e) {
     problems.push(e.message);
@@ -266,13 +348,21 @@ function run(argv, { now = () => new Date(), fly = findFly(), cwd = process.cwd(
   }
   const machine = /^[0-9a-f]{8,32}$/.test(String(box.machine)) ? box.machine : null;
   const freeBefore = Number.isFinite(box.freeBytes) ? box.freeBytes : null;
+  // Whose "today"? The box writes today's files, so its own clock counts as much as this Mac's:
+  // go by the EARLIER of the two (the box already hashed by that rule), which leaves alone any
+  // file either clock still calls today's. The later would be the unsafe choice -- a Mac running
+  // fast past Eastern midnight would close the tape the box is still appending to.
+  const boxToday = DAY.test(String(box.today)) ? box.today : null;
+  if (boxToday && boxToday < todayET) todayET = boxToday;
   out(`fly-pull  ${opts.app}${machine ? ` (machine ${machine})` : ''} · today is ${todayET} ET · keep ${plural(opts.keep, 'day')} of tape on the box${opts.trim ? '' : ' · copy only'}${opts.dryRun ? ' · DRY RUN' : ''}`);
   if (freeBefore != null) out(`box ${BOX_DIR}: ${mb(freeBefore)} MB free of ${mb(box.totalBytes)} MB`);
+  if (!boxToday) problem("the listing did not say the box's own date, so nothing will be deleted this run");
+  else if (boxToday !== macToday) out(`  note: the box's clock says ${boxToday} ET and this Mac's says ${macToday}; going by the earlier, ${todayET}`);
 
   // 2. what the Mac already has -- hashing only names the box still has, so a year of archive is
   // not re-read every morning
   const boxNames = box.files.map((f) => f && f.name).filter((n) => typeof n === 'string');
-  const readLocal = () => listDir({ dir: dest, todayET, only: boxNames }).files;
+  const readLocal = () => listDir({ dir: dest, todayET, only: boxNames, nowMs: new Date(now()).getTime() }).files;
   let local, plan;
   try {
     local = readLocal();
@@ -338,7 +428,7 @@ function run(argv, { now = () => new Date(), fly = findFly(), cwd = process.cwd(
   // file), and re-planned against hashes read fresh off the Mac's disk -- not against what the
   // copy loop believes it wrote.
   let deleted = 0, deletedBytes = 0, freeAfter = freeBefore;
-  if (opts.trim && (copyFailed || plan.errors.length)) {
+  if (opts.trim && (copyFailed || plan.errors.length || !boxToday)) {
     out('not deleting anything from the box this run: something before verification failed');
   } else if (opts.trim && plan.delete.length + plan.deleteAfterCopy.length && !machine) {
     // the app has one machine today; if that ever changes, an unpinned rm could land on a machine
@@ -374,6 +464,6 @@ function run(argv, { now = () => new Date(), fly = findFly(), cwd = process.cwd(
     (problems.length ? ` · ${plural(problems.length, 'problem')}, see above` : ''));
 }
 
-module.exports = { planPull, listDir, isBytePrefix, sha256File, parseArgs, addDays, run };
+module.exports = { planPull, listDir, isBytePrefix, sha256File, parseArgs, addDays, mainCheckout, linkedWorktreeOf, isFrozenSnapshot, run };
 
 if (require.main === module) process.exitCode = run(process.argv.slice(2));
