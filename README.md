@@ -585,6 +585,7 @@ tools/lab-fetch.js     settled Kalshi markets with hourly bid/ask history, for t
 tools/lab.js           the strategy lab: many strategies, tuned on older markets, scored on newer
 tools/whale-fetch.js   sports-leaderboard wallets' fills and how their markets settled, for the whale lab
 tools/whale-lab.js     would copying those wallets pay: picked on the first half, scored on the second
+tools/fly-pull.js      copy the Fly box's finished days to data/fly/archive, verify, then trim old box tapes (ops/DEPLOY.md)
 tools/test.js          every suite in one command (npm test)
 tools/decide-test.js   assertions for the taker decision core
 tools/probe-test.js    assertions for the thin-market probe (stubbed venues, frozen clock)
@@ -594,7 +595,9 @@ tools/matcher-test.js  assertions for cross-venue matching
 tools/stream-test.js   assertions for the trade socket and the tape's fallback to the poll
 tools/engine-test.js   assertions for the ledger: operator latch, partial exits, and close serialization
 tools/lab-test.js      assertions for the lab's fees, fills, settlement, and that no strategy sees the result
-tools/whale-test.js    assertions for what counts as a whale bet, what the floor says, and what copying pays
+tools/whale-test.js    assertions for what counts as a whale bet, said once across a restart, and what copying pays
+tools/http-test.js     assertions for the Kalshi pacer
+tools/disk-test.js     assertions for the tape pull and the box's disk brake: nothing deleted before it is copied and verified
 tools/golden.js        fixed-fixture output diff, for refactors meant to change nothing
 ```
 

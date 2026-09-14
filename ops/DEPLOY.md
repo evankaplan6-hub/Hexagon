@@ -94,6 +94,63 @@ fly ssh console -C "node tools/fillcheck.js 24"    # the one number that matters
 fly ssh console -C "node tools/maker-report.js"
 ```
 
+## Keeping the disk from filling
+
+The box's `/data` volume is 1 GB. The tick tape (`ticks-<Eastern date>.jsonl`) grows 35–62 MB a
+day, so the disk fills in about two weeks. A full disk stops the journal and `state.json` too, not
+just the tape. Nothing on the box reads old tapes, so they move to the Mac.
+
+**On the Mac, daily: `tools/fly-pull.js`.** It copies every finished Eastern day (tapes,
+journals, whales, probes) into `data/fly/archive/`. Each file downloads under a temp name and is
+kept only if its sha256 matches the box's. With `--trim` it then deletes box tapes older than the
+newest 3 Eastern days (today counts as one), but only tapes whose Mac copy matched in that same run.
+It never deletes journals, whales, probes, `state.json` or today's tape. If anything fails before
+the check, it deletes nothing that run. It never writes to the frozen `data/fly/` snapshot itself.
+"Today" is the earlier of the Mac's and the box's Eastern date, so a clock running fast past
+midnight can't close the tape the box is still writing.
+
+The archive is always the **main checkout's** `data/fly/archive`, even when the tool is run from a
+git worktree under `.claude/worktrees/`: a worktree's `data/` is deleted along with the worktree,
+so it is no place for the only copy of a tape. `--trim` with a `--dest` inside a worktree is refused.
+
+```bash
+node tools/fly-pull.js --trim --dry-run    # what it would copy and delete; changes nothing
+node tools/fly-pull.js                     # copy only
+node tools/fly-pull.js --trim              # copy, then trim the box
+#   --keep 3   days of tape left on the box     --app hexagon-desk     --dest data/fly/archive
+```
+
+Each run adds one line to `data/fly/archive/pull.log` and exits non-zero on any problem. A Mac copy
+that differs from the box and isn't just an older, shorter copy is never overwritten. It's reported,
+and that box tape stays.
+
+**The daily job** is a LaunchAgent that runs `ops/run-pull.sh` (which runs `fly-pull.js --trim`) at
+09:30 and again at 13:30; the second run is a same-day retry and finds nothing to do after a good
+morning. If the Mac is asleep at a slot, it runs on wake; if the Mac is off, the slot is skipped.
+On wake the network is often not back yet, so the job waits up to ten minutes for Fly to answer.
+The installer refuses from a worktree, and if `fly` is missing or logged out. Before installing, it
+runs the job as a dry run from launchd's bare environment:
+
+```bash
+bash ~/Hexagon/ops/install-pull.sh   # install, from the main checkout (run it yourself)
+launchctl start com.hexagon.pull     # run it now
+bash ~/Hexagon/ops/uninstall-pull.sh # remove; leaves the archive and the box alone
+```
+
+Every run leaves one line in `data/fly/archive/pull.log`, including runs that fail before the pull
+starts (no node, no fly, logged out, offline). No new line for a day, or a `PROBLEM` line, means
+look. Full output of each run goes to `~/Library/Logs/hexagon-pull.log`.
+
+**On the box, the emergency brake** (`src/recorder.js`). This is only for when the daily pull has
+stopped. The recorder checks free space on the first write and then once an hour. Below
+`TAPE_MIN_FREE_MB` (200 on a Fly machine), it deletes the oldest `ticks-*.jsonl` files one at a
+time, never more than that one reading of free space calls for, and stops as soon as free space is
+back above the limit. It never deletes today's (Eastern) tape or anything that isn't a tick tape.
+Each deletion goes in the activity log as `TESS OPS disk low · …`, which says the tape may not
+have reached the Mac and to run `tools/fly-pull.js`. Seeing that line means the daily pull isn't
+running. `TAPE_MIN_FREE_MB=0` turns the brake off. It is off by default anywhere but a Fly machine
+(Fly sets `FLY_MACHINE_ID`): the Mac's own `data/ticks-*.jsonl` exist nowhere else.
+
 ## Two things to be clear about
 
 **Do not put the Kalshi private key on a cloud box to run live.** A key sitting on a rented

@@ -111,26 +111,65 @@ async function fetchLeaderboard({ category = 'SPORTS', period = 'MONTH', orderBy
   })).filter((r) => r.wallet);
 }
 
-// A wallet's fills, newest first. `start`/`end` are unix seconds.
-async function fetchActivity(wallet, { limit = 100, offset = 0, start, end } = {}) {
+// One page of a wallet's fills, newest first (`start`/`end` are unix seconds), with what the feed
+// actually sent: `rows` and the oldest row's `oldestTs`. A pager has to decide on those, not on the
+// fills. normalizeFill drops a row the feed has not indexed yet, and those sit on the newest page of
+// exactly the busiest wallets, so a full page of 500 comes back as 497 fills; reading that as the
+// last page stored Flaznorp's newest fourteen minutes as its whole history, marked complete.
+async function fetchActivityPage(wallet, { limit = 100, offset = 0, start, end } = {}) {
   let url = `${DATA}/activity?user=${wallet}&type=TRADE&limit=${limit}&offset=${offset}`;
   if (start) url += `&start=${start}`;
   if (end) url += `&end=${end}`;
-  const rows = await http.getJSON(url);
-  return (Array.isArray(rows) ? rows : []).map(normalizeFill).filter(Boolean);
+  const got = await http.getJSON(url);
+  const rows = Array.isArray(got) ? got : [];
+  const ts = rows.map((r) => (r ? +r.timestamp : NaN)).filter(Number.isFinite);
+  return { fills: rows.map(normalizeFill).filter(Boolean), rows: rows.length, oldestTs: ts.length ? Math.min(...ts) : null };
 }
 
+async function fetchActivity(wallet, opts) {
+  return (await fetchActivityPage(wallet, opts)).fills;
+}
+
+// Which outcome a fill bought, or null when the feed does not know yet. Every Polymarket market is
+// a two-outcome condition (a many-way event is split into one Yes/No market per runner), so the
+// index is 0 or 1: 671,512 of the lab's 671,513 cached fills say so. The odd one said 999, a second
+// before the fetch ended, and the live feed does the same with a fill it has only just indexed:
+// /activity first serves it with outcomeIndex 999 and an empty eventSlug, and by the next read of
+// that wallet (~75s) the same transactionHash with the real index. `+x` alone would also turn a
+// missing index (null, "") into outcome 0, a real side.
+function outcomeIndex(x) {
+  const i = typeof x === 'number' ? x : typeof x === 'string' && x.trim() !== '' ? Number(x) : NaN;
+  return i === 0 || i === 1 ? i : null;
+}
+
+// A fill whose outcome is not known yet is dropped rather than guessed. Keeping it made a second
+// bet under a key of its own (announced twice, and "bet both sides" when the wallet's real side had
+// crossed the bar as well), and the lab cannot settle an outcome 999. Recovering the index from the outcome's
+// name would need the market's outcome list, which the feed does not carry, and the half-indexed
+// row is missing its eventSlug as well. Dropping it costs one visit: the corrected copy arrives on
+// the next read of that wallet and counts then, whole.
 function normalizeFill(t) {
-  const price = num(t.price), size = num(t.size);
-  if (!t.conditionId || price == null || size == null) return null;
+  const price = num(t.price), size = num(t.size), oi = outcomeIndex(t.outcomeIndex);
+  if (!t.conditionId || price == null || size == null || oi == null) return null;
   return {
     wallet: String(t.proxyWallet || '').toLowerCase(), name: t.name || t.pseudonym || '',
     tx: t.transactionHash || '', ts: +t.timestamp, side: t.side === 'SELL' ? 'SELL' : 'BUY',
-    conditionId: t.conditionId, outcomeIndex: +t.outcomeIndex, outcome: t.outcome || '',
+    conditionId: t.conditionId, outcomeIndex: oi, outcome: t.outcome || '',
     price, size, usd: num(t.usdcSize) ?? price * size,
     title: t.title || '', slug: t.slug || '', eventSlug: t.eventSlug || '',
   };
 }
+
+// Everything a fill row can be told apart by -- NOT a unique id. The feed serves one row per matched
+// order, so one tx can hold rows that differ only in size (a sweep through 34c and 35c) or only in
+// price, and rows identical in every field: VeryLucky888's tx 0x707acca1e1f7… is three rows of 5,000
+// shares at 48c, and /trades and /positions (15,000 shares, $7,200) agree those are three real fills.
+// 12 top-volume wallets had 7 such repeats in their newest 500 fills on 2026-09-14. So a key seen
+// twice in one read is two fills; only a key served again by an overlapping page is a re-read, and
+// tools/whale-fetch.js counts it per page rather than once. Price is in the key because the key
+// whale-fetch used before, without it, merged 8 of the latest 500 rows of one busy wallet
+// (ferrariChampions2026, 2026-09-14: $2,069 of fills).
+const fillKey = (f) => `${f.wallet}|${f.tx}|${f.ts}|${f.conditionId}|${f.outcomeIndex}|${f.side}|${f.size}|${f.price}`;
 
 // Markets by condition id, open or settled. Settled ones carry outcomePrices of "1"/"0".
 async function fetchByConditions(ids) {
@@ -148,4 +187,4 @@ async function fetchByConditions(ids) {
   return out;
 }
 
-module.exports = { fetchUniverse, fetchMarket, fetchBook, fetchPrices, fetchLeaderboard, fetchActivity, fetchByConditions, normalizeFill };
+module.exports = { fetchUniverse, fetchMarket, fetchBook, fetchPrices, fetchLeaderboard, fetchActivity, fetchActivityPage, fetchByConditions, normalizeFill, outcomeIndex, fillKey };

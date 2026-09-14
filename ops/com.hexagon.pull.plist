@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.hexagon.pull</string>
+
+  <!-- Through ops/run-pull.sh rather than node directly: launchd's PATH has neither nvm's node
+       nor ~/.fly/bin/fly, and a job that cannot find them exits 127 without anyone noticing.
+       No WorkingDirectory on purpose: run-pull.sh cds itself, and a checkout that has moved then
+       fails with a readable "No such file" in the log below instead of launchd refusing to start. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__HEXDIR__/ops/run-pull.sh</string>
+  </array>
+
+  <!-- Twice a day. The pull only copies Eastern days that are already over and only trims tapes
+       older than three of them, so a second run on a good day finds nothing to do; on a bad
+       morning (the Mac woke offline, Fly was down) it is the same-day retry. If the Mac is asleep
+       at a slot, launchd runs it when it wakes; if it is switched off, the slot is skipped.
+       Skipping a few days is harmless -- the box has about two weeks of room, and its own brake
+       after that. -->
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict>
+      <key>Hour</key>
+      <integer>9</integer>
+      <key>Minute</key>
+      <integer>30</integer>
+    </dict>
+    <dict>
+      <key>Hour</key>
+      <integer>13</integer>
+      <key>Minute</key>
+      <integer>30</integer>
+    </dict>
+  </array>
+
+  <!-- Not at login, and not kept alive: this is a daily chore, not a server. -->
+  <key>RunAtLoad</key>
+  <false/>
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <!-- ~/Library/Logs always exists. launchd will not create a log's folder, and a log path inside
+       the checkout would stop the job from starting at all -- silently -- the day that folder is
+       moved or deleted. data/fly/archive/pull.log still gets one summary line per run. -->
+  <key>StandardOutPath</key>
+  <string>__HOME__/Library/Logs/hexagon-pull.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/Library/Logs/hexagon-pull.log</string>
+</dict>
+</plist>
