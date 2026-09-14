@@ -1090,23 +1090,46 @@
   // boards on a narrow window) and closes back to exactly the page it opened on.
   const ASK_KEY = 'hex-ask', ASK_MAX = 2000, ASK_TURNS = 40;
   const ASK_CHIPS = ["Why hasn't the desk traded today?", 'How is the maker desk doing?', 'What did the whales bet on today?', 'Is anything wrong right now?'];
-  const ASK_STATUS = ['sending', 'working', 'done', 'error'];
+  // 'lost': polls kept failing while the desk was answering. The job may still finish on the desk,
+  // so the turn keeps its id and is checked again every ASK_LOST_MS instead of being given up on.
+  const ASK_STATUS = ['sending', 'working', 'lost', 'done', 'error'];
+  const ASK_POLL_MS = 6000, ASK_POST_MS = 15000, ASK_LOST_MS = 15000;   // a poll is a tiny read from memory
+  const ASK_HOLD_MS = 5 * 60 * 1000;     // New chat waits this long for a running question (see askControls)
   const ask = { open: false, conversation: null, turns: [], unread: false, gen: 0, toEnd: false, toLast: false };
   const askDollars = (x) => (x > 0 && x < 0.005 ? 'under $0.01' : `$${(+x || 0).toFixed(2)}`);
   const askSteps = (steps) => (Array.isArray(steps) ? steps.filter((s) => s && s.text != null).map((s) => ({ at: +s.at || 0, text: String(s.text) })) : []);
   const askRunning = () => ask.turns.some((t) => t.status === 'sending' || t.status === 'working');
   const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
   const askSentence = (s) => { const t = String(s).trim(); return /[.!?]$/.test(t) ? t : `${t}.`; };
+  // The desk ends a refusal with "· start a new chat" when the chat itself is over (expired, too
+  // long, too many questions). "try a narrower question, or start a new chat" is about one question,
+  // and the chat can still take a narrower one, so that one keeps the chat id.
+  const askChatGone = (msg) => /(^|·\s*)start a new chat/i.test(String(msg || ''));
+  // fetch with a deadline, body included: a socket that went dead (a laptop waking, a Wi-Fi handoff)
+  // never settles on its own, and a request that never settles would hold a question in "working"
+  // for good. Throws on a network error or the deadline, like fetch does.
+  async function askFetch(url, opts, ms) {
+    const ac = new AbortController(), timer = setTimeout(() => ac.abort(), ms);
+    try {
+      const r = await fetch(url, { ...opts, signal: ac.signal });
+      return { status: r.status, ok: r.ok, text: await r.text() };
+    } finally { clearTimeout(timer); }
+  }
 
   // The answer is untrusted text. ALL of it is escaped first; only then are the four marks the
   // server promises added back: blank-line paragraphs, "- " bullets, **bold** and `code`. Because
   // escaping comes first, the only tags that can reach the page are the ones written here -- a
   // <script> inside an answer shows up as the literal characters. No links, on purpose.
+  // (tools/askui-test.js lifts esc, askInline and askFormat out of this file by their text and
+  // checks them in node, so keep them free of the page around them)
   function askInline(s) {
-    // split out `code` first so a ** inside code stays literal
-    return esc(s).split(/(`[^`\n]+`)/).map((part, i) => (i % 2
-      ? `<code>${part.slice(1, -1)}</code>`
-      : part.replace(/\*\*([^*\n]+?)\*\*/g, '<b>$1</b>'))).join('');
+    // `code` is parked behind a \0 marker before bold is matched: a ** inside code stays literal,
+    // and **bold** can still wrap `code`. Bold must hug its words, so "2 ** 3 ** 4" stays as typed.
+    const code = [];
+    return esc(String(s).replace(/\0/g, ''))
+      .replace(/`([^`\n]+)`/g, (m, c) => `\0${code.push(c) - 1}\0`)
+      .replace(/\*\*(?=[^\s*])([^\n]*?[^\s*])\*\*/g, '<b>$1</b>')
+      .replace(/\0(\d+)\0/g, (m, i) => `<code>${code[i]}</code>`);
   }
   function askFormat(text) {
     const blocks = String(text == null ? '' : text).replace(/\r\n?/g, '\n').trim().split(/\n[ \t]*\n+/);
@@ -1123,13 +1146,13 @@
       }
       endPara(); endList();
       return out;
-    }).join('');
+    }).join('').replace(/<\/ul><ul>/g, '');   // "- a", blank line, "- b" is still one list (escaped text holds no "<")
   }
 
   // Keep the chat across a page reload (not across tabs or a closed browser: sessionStorage).
   // Anything read back is re-shaped field by field; the render escapes it all again regardless.
   const askClean = (t) => ({
-    q: String(t.q), id: t.id == null ? null : String(t.id),
+    q: String(t.q), id: t.id == null ? null : String(t.id), conv: typeof t.conv === 'string' ? t.conv : null, fresh: t.fresh === true,
     status: ASK_STATUS.includes(t.status) ? t.status : 'error',
     steps: askSteps(t.steps), answer: t.answer == null ? null : String(t.answer), error: t.error == null ? null : String(t.error),
     usd: t.usd == null || !Number.isFinite(+t.usd) ? null : +t.usd, searches: +t.searches || 0, t0: +t.t0 || Date.now(), took: +t.took || null,
@@ -1155,7 +1178,7 @@
   }
 
   function askTurnHtml(t) {
-    let h = `<div class="askq">${esc(t.q)}</div>`;
+    let h = `${t.fresh ? '<div class="asknew">New chat · the desk forgot the questions above</div>' : ''}<div class="askq">${esc(t.q)}</div>`;
     if (t.status === 'sending' || t.status === 'working') {
       const secs = Math.max(0, Math.round((Date.now() - t.t0) / 1000));
       const recent = t.steps.slice(-3), now = recent.pop();
@@ -1163,6 +1186,7 @@
       return h + `<div class="aska working">${recent.map((s) => `<div class="old">${esc(cap(s.text))}</div>`).join('')}` +
         `<div><span class="spin" aria-hidden="true"></span>${esc(cap(doing))}…</div><div class="askmeta">${secs}s</div></div>`;
     }
+    if (t.status === 'lost') return h + `<div class="aska lost"><p>${esc(t.error || 'Lost contact with the desk.')}</p></div>`;
     h += t.status === 'error'
       ? `<div class="aska error"><p>${esc(t.error || 'Something went wrong.')}</p></div>`
       : `<div class="aska">${t.answer ? askFormat(t.answer) : '<p>No answer came back.</p>'}</div>`;
@@ -1188,7 +1212,13 @@
     const st = askState(), q = $('ask-q'), n = q.value.length, c = $('ask-count');
     q.disabled = !st.on;
     $('ask-send').disabled = !st.on || askRunning() || !q.value.trim();
-    $('ask-new').disabled = !ask.turns.length;
+    // The desk has no way to stop a question once it starts: leaving it would still spend on it and
+    // hold one of the desk's two question slots, with nobody to read the answer. So wait for it --
+    // unless it has run far longer than any real answer takes, when something is stuck and New chat
+    // is the way out.
+    const nw = $('ask-new'), hold = ask.turns.some((t) => (t.status === 'sending' || t.status === 'working') && Date.now() - t.t0 < ASK_HOLD_MS);
+    nw.disabled = !ask.turns.length || hold;
+    nw.title = hold ? 'Wait for this answer first: the desk finishes a question once it starts, and it still costs' : '';
     c.textContent = n >= ASK_MAX - 300 ? `${n} / ${ASK_MAX}` : '';
     c.classList.toggle('near', n >= ASK_MAX - 100);
     return st;
@@ -1199,6 +1229,9 @@
     btn.classList.toggle('on', ask.open);
     btn.classList.toggle('busy', running);
     btn.classList.toggle('unread', ask.unread && !running && !ask.open);
+    // the dot is only colour, so the button's name carries the same news for a screen reader
+    const label = `Ask the desk a question${running ? ' (answering now)' : ask.unread && !ask.open ? ' (an answer is ready)' : ''}`;
+    if (btn.getAttribute('aria-label') !== label) btn.setAttribute('aria-label', label);
     if (!ask.open) return;               // the insides only matter while someone can see them
 
     const A = S && S.ask;
@@ -1266,46 +1299,67 @@
 
   async function askPost(body) {
     try {
-      const r = await fetch('/api/ask', { method: 'POST', headers: { 'x-hexagon-action': '1', 'content-type': 'application/json' }, body: JSON.stringify(body) });
-      const text = await r.text();
+      const r = await askFetch('/api/ask', { method: 'POST', headers: { 'x-hexagon-action': '1', 'content-type': 'application/json' }, body: JSON.stringify(body) }, ASK_POST_MS);
+      const text = r.text;
       if (r.status === 404) return { ok: false, error: 'the desk is running older code. Restart it to use Ask.' };
       if (r.status === 401) return { ok: false, error: 'your dashboard login expired. Reload the page to sign in again.' };
       let j = null; try { j = JSON.parse(text); } catch { /* not JSON: use the text */ }
       if (!r.ok || !j) return { ok: false, error: (j && j.error) || text.slice(0, 200) || `the desk answered ${r.status}` };
       return j.ok && j.id ? j : { ok: false, error: j.error || 'the desk did not start the question' };
-    } catch (e) { return { ok: false, error: `could not reach the desk (${e.message})` }; }
+    } catch (e) {
+      // the POST normally returns at once; one this slow may or may not have started the question
+      if (e && e.name === 'AbortError') return { ok: false, error: `the desk did not reply within ${ASK_POST_MS / 1000}s` };
+      return { ok: false, error: `could not reach the desk (${e.message})` };
+    }
+  }
+
+  // The log is hidden while the drawer is shut, so it cannot announce anything; this status line
+  // outside the drawer tells a screen reader an answer landed. Emptied first so a repeat is heard.
+  function askAnnounce(msg) {
+    const el = $('ask-live');
+    el.textContent = '';
+    setTimeout(() => { el.textContent = msg; }, 60);
   }
 
   function askFinish(turn, status, error) {
     turn.status = status;
     if (error) turn.error = error;
     if (!turn.took) turn.took = Date.now() - turn.t0;
-    if (!ask.open) ask.unread = true;
+    if (!ask.open) { ask.unread = true; askAnnounce(status === 'done' ? 'The desk answered your question. Open Ask to read it.' : "The desk couldn't answer your question. Open Ask to see why."); }
+  }
+  // The desk has let go of the chat this turn was part of: the next question starts a fresh one. Only
+  // if it is still the chat in use -- a slow check on an old question must not drop a newer chat.
+  function askDropChat(turn) {
+    if (!ask.conversation || (turn.conv && turn.conv !== ask.conversation)) return;
+    ask.conversation = null;
+    turn.error = `${turn.error || ''} Your next question starts a fresh chat.`.trim();
   }
 
   async function askSend(text) {
     const question = String(text || '').trim();
     if (!question || question.length > ASK_MAX || !askState().on || askRunning()) return;
     const gen = ask.gen, q = $('ask-q');
-    const turn = askClean({ q: question, status: 'sending', t0: Date.now() });
+    // the first question after the desk dropped a chat gets a divider: the turns above it are still
+    // on screen, but the desk no longer remembers them
+    const since = ask.turns.slice(Math.max(0, ask.turns.map((t) => t.fresh).lastIndexOf(true)));
+    const turn = askClean({ q: question, status: 'sending', t0: Date.now(), fresh: !ask.conversation && since.some((t) => t.id) });
     ask.turns.push(turn);
     if (ask.turns.length > ASK_TURNS) ask.turns.splice(0, ask.turns.length - ASK_TURNS);
     q.value = ''; askGrow(); ask.toEnd = true;
     askSave(); renderAsk();
 
     const body = { question };
-    if (ask.conversation) body.conversation = ask.conversation;
+    if (ask.conversation) body.conversation = turn.conv = ask.conversation;
     const r = await askPost(body);
     if (gen !== ask.gen) return;          // New chat was pressed while the question was on its way
     if (r.ok) {
       turn.id = String(r.id); turn.status = 'working';
-      if (typeof r.conversation === 'string' && r.conversation) ask.conversation = r.conversation;
+      if (typeof r.conversation === 'string' && r.conversation) ask.conversation = turn.conv = r.conversation;
     } else {
       askFinish(turn, 'error', `Couldn't ask: ${askSentence(r.error || 'the desk said no')}`);
       turn.took = null;
       // a follow-up to a chat the desk no longer has can never succeed, so drop the chat id
-      // (the desk ends every such refusal with "start a new chat"; a busy chat says "wait" instead)
-      if (body.conversation && /start a new chat|conversation/i.test(r.error || '')) { ask.conversation = null; turn.error += ' Your next question starts a fresh chat.'; }
+      if (body.conversation && askChatGone(r.error)) askDropChat(turn);
       if (!q.value) { q.value = question; askGrow(); }   // hand the words back rather than make them retype
     }
     askSave(); renderAsk();
@@ -1314,33 +1368,43 @@
 
   async function askPoll(turn, gen) {
     let misses = 0;
-    while (gen === ask.gen && turn.status === 'working') {
-      // a blip gets a few slower retries before the question is given up on
-      await sleep(misses ? Math.min(5000, 1000 * (misses + 1)) : 1000);
+    while (gen === ask.gen && (turn.status === 'working' || turn.status === 'lost')) {
+      // a blip gets a few slower retries; after that the turn is 'lost' and checked every 15s, because
+      // the answer (already paid for) is kept on the desk for an hour and may still be there
+      await sleep(turn.status === 'lost' ? ASK_LOST_MS : misses ? Math.min(5000, 1000 * (misses + 1)) : 1000);
       if (gen !== ask.gen) return;
       let r = null, j = null;
-      try { r = await fetch(`/api/ask/${encodeURIComponent(turn.id)}`, { cache: 'no-store' }); } catch { /* network blip */ }
+      try { r = await askFetch(`/api/ask/${encodeURIComponent(turn.id)}`, { cache: 'no-store' }, ASK_POLL_MS); } catch { /* network blip, or no reply in time */ }
       if (gen !== ask.gen) return;
       if (r && r.status === 404) {
         // jobs live in the server's memory, so a 404 means it restarted (or an hour passed)
         askFinish(turn, 'error', "The desk doesn't have this question any more: it restarted, or the answer expired. Ask again.");
-        ask.conversation = null;
+        askDropChat(turn);
         break;
       }
       if (r && r.status === 401) { askFinish(turn, 'error', 'Your dashboard login expired. Reload the page to sign in again.'); break; }
-      if (r && r.ok) { try { j = await r.json(); } catch { /* half a response: treat as a blip */ } }
-      if (!j) {
-        if (++misses >= 6) { askFinish(turn, 'error', 'Lost contact with the desk while it was answering.'); break; }
+      if (r && r.ok) { try { j = JSON.parse(r.text); } catch { /* half a response: treat as a blip */ } }
+      if (!j || typeof j !== 'object') {
+        if (turn.status === 'working' && ++misses >= 6) {
+          turn.status = 'lost';
+          turn.error = `Lost contact with the desk while it was answering. Checking again every ${ASK_LOST_MS / 1000}s: the answer shows here if the desk still has it.`;
+          askSave(); renderAsk();
+        }
         continue;
       }
       misses = 0;
+      if (turn.status === 'lost') { turn.status = 'working'; turn.error = null; }
       turn.steps = askSteps(j.steps);
       if (j.usd != null && Number.isFinite(+j.usd)) turn.usd = +j.usd;
       turn.searches = +j.searches || 0;
       if (j.status === 'done' || j.status === 'error') {
         if (j.doneAt && j.startedAt) turn.took = j.doneAt - j.startedAt;     // the server's own clock, both ends
         if (j.status === 'done') { turn.answer = j.answer == null ? null : String(j.answer); askFinish(turn, 'done'); }
-        else askFinish(turn, 'error', `Couldn't answer: ${askSentence(j.error || 'something went wrong on the desk')}`);
+        else {
+          askFinish(turn, 'error', `Couldn't answer: ${askSentence(j.error || 'something went wrong on the desk')}`);
+          // a chat can end mid-question too ("this chat has grown too long · start a new chat")
+          if (askChatGone(j.error)) askDropChat(turn);
+        }
       }
       askSave(); renderAsk();
     }
@@ -1360,18 +1424,35 @@
   $('ask-q').addEventListener('input', () => { askGrow(); askControls(); });
   $('ask-log').addEventListener('click', (ev) => {
     const b = ev.target.closest('button[data-chip]');
-    if (b && !b.disabled) askSend(ASK_CHIPS[+b.dataset.chip]);
+    if (!b || b.disabled) return;
+    askSend(ASK_CHIPS[+b.dataset.chip]);
+    // sending replaces the chips with the chat, and the focused chip with them: without this, focus
+    // falls to the page and the next Tab starts from the top
+    $('ask-q').focus({ preventScroll: true });
   });
-  // Escape inside the drawer closes only the drawer: stopping it here keeps it from also clearing
-  // the floor's selection or closing the alert panel. Escape anywhere else also closes it.
-  $('askdrawer').addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && !ev.isComposing) { ev.stopPropagation(); askClose(); } });
-  window.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && ask.open) askClose(); });
+  // Escape inside the drawer belongs to the drawer: it never reaches the floor's selection or the
+  // alert panel. An Escape that ends an IME conversion (isComposing, or keyCode 229 in Safari)
+  // cancels the conversion only.
+  const imeKey = (ev) => ev.isComposing || ev.keyCode === 229;
+  $('askdrawer').addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Escape') return;
+    ev.stopPropagation();
+    if (!imeKey(ev)) askClose();
+  });
+  // Escape elsewhere closes one layer at a time: an open alert panel first (its own listener does
+  // that), the drawer on the next press. Capture phase, so the panel is seen as it was before this
+  // same key closed it.
+  window.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Escape' || !ask.open || imeKey(ev) || $('askdrawer').contains(ev.target)) return;
+    if ($('alertpanel').hidden) askClose();
+  }, true);
   // the elapsed seconds, and the input turning off if the desk stops sending frames (render() only runs on a frame)
   setInterval(() => { if (ask.open) renderAsk(); }, 1000);
-  // a reload in the middle of a question picks the job back up; one that never reached the desk cannot be
+  // a reload in the middle of a question picks the job back up; one that never reached the desk cannot
+  // be. A lost one gets its quick retries again: the reload may be the network coming back.
   for (const t of ask.turns) {
-    if (t.status === 'working' && t.id) askPoll(t, ask.gen);
-    else if (t.status === 'sending' || t.status === 'working') { t.status = 'error'; t.error = 'The page reloaded before the desk replied. Ask again.'; }
+    if ((t.status === 'working' || t.status === 'lost') && t.id) { t.status = 'working'; t.error = null; askPoll(t, ask.gen); }
+    else if (t.status === 'sending' || t.status === 'working' || t.status === 'lost') { t.status = 'error'; t.error = 'The page reloaded before the desk replied. Ask again.'; }
   }
   askSave();
 
