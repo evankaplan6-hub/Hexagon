@@ -1080,8 +1080,302 @@
   function loop(ts) { drawFloor(ts / 1000); placeFx(); requestAnimationFrame(loop); }
   requestAnimationFrame(loop);
 
+  // ------------------------------------------------------------ Ask: questions about the desk, in plain words
+  // A question goes to the server, which has Claude look through the desk's state with read-only
+  // tools and write a short answer. The POST returns at once with a job id and this polls the job
+  // about once a second, showing each step as it happens. Nothing in here can trade or change the
+  // desk: the only thing this code ever sends is a question.
+  //
+  // The floor keeps running the whole time. The drawer sits beside it (or over the right-hand
+  // boards on a narrow window) and closes back to exactly the page it opened on.
+  const ASK_KEY = 'hex-ask', ASK_MAX = 2000, ASK_TURNS = 40;
+  const ASK_CHIPS = ["Why hasn't the desk traded today?", 'How is the maker desk doing?', 'What did the whales bet on today?', 'Is anything wrong right now?'];
+  const ASK_STATUS = ['sending', 'working', 'done', 'error'];
+  const ask = { open: false, conversation: null, turns: [], unread: false, gen: 0, toEnd: false, toLast: false };
+  const askDollars = (x) => (x > 0 && x < 0.005 ? 'under $0.01' : `$${(+x || 0).toFixed(2)}`);
+  const askSteps = (steps) => (Array.isArray(steps) ? steps.filter((s) => s && s.text != null).map((s) => ({ at: +s.at || 0, text: String(s.text) })) : []);
+  const askRunning = () => ask.turns.some((t) => t.status === 'sending' || t.status === 'working');
+  const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
+  const askSentence = (s) => { const t = String(s).trim(); return /[.!?]$/.test(t) ? t : `${t}.`; };
+
+  // The answer is untrusted text. ALL of it is escaped first; only then are the four marks the
+  // server promises added back: blank-line paragraphs, "- " bullets, **bold** and `code`. Because
+  // escaping comes first, the only tags that can reach the page are the ones written here -- a
+  // <script> inside an answer shows up as the literal characters. No links, on purpose.
+  function askInline(s) {
+    // split out `code` first so a ** inside code stays literal
+    return esc(s).split(/(`[^`\n]+`)/).map((part, i) => (i % 2
+      ? `<code>${part.slice(1, -1)}</code>`
+      : part.replace(/\*\*([^*\n]+?)\*\*/g, '<b>$1</b>'))).join('');
+  }
+  function askFormat(text) {
+    const blocks = String(text == null ? '' : text).replace(/\r\n?/g, '\n').trim().split(/\n[ \t]*\n+/);
+    return blocks.map((block) => {
+      if (!block.trim()) return '';
+      let out = '', para = [], items = [];
+      const endPara = () => { if (para.length) out += `<p>${para.map(askInline).join('<br>')}</p>`; para = []; };
+      const endList = () => { if (items.length) out += `<ul>${items.map((x) => `<li>${askInline(x)}</li>`).join('')}</ul>`; items = []; };
+      for (const line of block.split('\n')) {
+        const m = line.match(/^\s*- (.*)$/);
+        if (m) { endPara(); items.push(m[1]); }
+        else if (items.length && /^\s+\S/.test(line)) items[items.length - 1] += ` ${line.trim()}`;   // a bullet wrapped onto an indented line
+        else { endList(); para.push(line); }
+      }
+      endPara(); endList();
+      return out;
+    }).join('');
+  }
+
+  // Keep the chat across a page reload (not across tabs or a closed browser: sessionStorage).
+  // Anything read back is re-shaped field by field; the render escapes it all again regardless.
+  const askClean = (t) => ({
+    q: String(t.q), id: t.id == null ? null : String(t.id),
+    status: ASK_STATUS.includes(t.status) ? t.status : 'error',
+    steps: askSteps(t.steps), answer: t.answer == null ? null : String(t.answer), error: t.error == null ? null : String(t.error),
+    usd: t.usd == null || !Number.isFinite(+t.usd) ? null : +t.usd, searches: +t.searches || 0, t0: +t.t0 || Date.now(), took: +t.took || null,
+  });
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(ASK_KEY) || 'null');
+    if (saved && Array.isArray(saved.turns)) {
+      ask.conversation = typeof saved.conversation === 'string' ? saved.conversation : null;
+      ask.turns = saved.turns.filter((t) => t && typeof t.q === 'string').slice(-ASK_TURNS).map(askClean);
+    }
+  } catch { /* private window or blocked storage: start with an empty chat */ }
+  const askSave = () => { try { sessionStorage.setItem(ASK_KEY, JSON.stringify({ conversation: ask.conversation, turns: ask.turns.slice(-ASK_TURNS) })); } catch { /* ignore */ } };
+
+  // Can a question be sent right now, and if not, why not -- in words, because the answer is
+  // usually "a key is missing" or "the desk needs restarting", which a person can act on.
+  function askState() {
+    if (!S) return { on: false, why: 'Waiting for the desk to connect.' };
+    const A = S.ask;
+    if (!A || typeof A !== 'object') return { on: false, why: 'Ask needs the server update: restart the desk on the newest code to turn it on.' };
+    if (!A.enabled) return { on: false, why: `Ask is off: ${String(A.reason || 'the desk did not say why').replace(/\.?\s*$/, '.')}` };
+    if (stale()) return { on: false, why: 'The desk stopped answering. Ask works again when it comes back.' };
+    return { on: true, why: '' };
+  }
+
+  function askTurnHtml(t) {
+    let h = `<div class="askq">${esc(t.q)}</div>`;
+    if (t.status === 'sending' || t.status === 'working') {
+      const secs = Math.max(0, Math.round((Date.now() - t.t0) / 1000));
+      const recent = t.steps.slice(-3), now = recent.pop();
+      const doing = now ? now.text : t.status === 'sending' ? 'sending your question' : 'thinking';
+      return h + `<div class="aska working">${recent.map((s) => `<div class="old">${esc(cap(s.text))}</div>`).join('')}` +
+        `<div><span class="spin" aria-hidden="true"></span>${esc(cap(doing))}…</div><div class="askmeta">${secs}s</div></div>`;
+    }
+    h += t.status === 'error'
+      ? `<div class="aska error"><p>${esc(t.error || 'Something went wrong.')}</p></div>`
+      : `<div class="aska">${t.answer ? askFormat(t.answer) : '<p>No answer came back.</p>'}</div>`;
+    if (t.steps.length) {
+      h += `<details class="askhow"><summary>What it looked at · ${t.steps.length} step${t.steps.length === 1 ? '' : 's'}</summary>` +
+        `<ol>${t.steps.map((s) => `<li>${esc(cap(s.text))}</li>`).join('')}</ol></details>`;
+    }
+    const meta = [];
+    if (t.usd != null && (t.usd > 0 || t.status === 'done')) meta.push(askDollars(t.usd));
+    if (t.took) meta.push(`${Math.max(1, Math.round(t.took / 1000))}s`);
+    if (t.searches) meta.push(`${t.searches} web search${t.searches === 1 ? '' : 'es'}`);
+    return h + (meta.length ? `<div class="askmeta">${meta.join(' · ')}</div>` : '');
+  }
+
+  const askEmptyHtml = (on) => `<div class="askempty"><p>Ask anything about the desk in plain words. Claude looks through the desk's live state to answer. It can look, but it cannot trade or change anything.</p>` +
+    `<div class="askchips">${ASK_CHIPS.map((c, i) => `<button type="button" data-chip="${i}"${on ? '' : ' disabled'}>${esc(c)}</button>`).join('')}</div></div>`;
+
+  // Rebuild a node only when its markup actually changed: the progress line ticks every second,
+  // and re-writing a finished answer would throw away a text selection or an opened step list.
+  const askSet = (el, h) => { if (el._h === h) return false; el.innerHTML = h; el._h = h; return true; };
+
+  function askControls() {
+    const st = askState(), q = $('ask-q'), n = q.value.length, c = $('ask-count');
+    q.disabled = !st.on;
+    $('ask-send').disabled = !st.on || askRunning() || !q.value.trim();
+    $('ask-new').disabled = !ask.turns.length;
+    c.textContent = n >= ASK_MAX - 300 ? `${n} / ${ASK_MAX}` : '';
+    c.classList.toggle('near', n >= ASK_MAX - 100);
+    return st;
+  }
+
+  function renderAsk() {
+    const btn = $('askbtn'), running = askRunning();
+    btn.classList.toggle('on', ask.open);
+    btn.classList.toggle('busy', running);
+    btn.classList.toggle('unread', ask.unread && !running && !ask.open);
+    if (!ask.open) return;               // the insides only matter while someone can see them
+
+    const A = S && S.ask;
+    // money first: on a phone the line runs out of room, and the model name is the part to lose
+    askSet($('ask-sub'), !A ? '' : !A.enabled ? 'off'
+      : [A.budgetLeft != null && Number.isFinite(+A.budgetLeft) ? `<b>${askDollars(Math.max(0, +A.budgetLeft))}</b> left today` : '', A.model ? esc(A.model) : ''].filter(Boolean).join(' · '));
+    const st = askControls(), note = $('ask-note');
+    note.hidden = st.on;
+    if (note.textContent !== st.why) note.textContent = st.why;
+
+    const log = $('ask-log');
+    if (!ask.turns.length) {
+      if (log.dataset.mode !== 'empty') { log.dataset.mode = 'empty'; log._h = null; }
+      if (askSet(log, askEmptyHtml(st.on))) log.scrollTop = 0;   // a new chat starts at the top, not where the old one was scrolled
+      log.removeAttribute('aria-busy');
+      return;
+    }
+    if (log.dataset.mode !== 'chat') { log.innerHTML = ''; log._h = null; log.dataset.mode = 'chat'; }
+    const nearEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+    while (log.children.length > ask.turns.length) log.lastElementChild.remove();
+    let changed = false, landed = null;
+    ask.turns.forEach((t, i) => {
+      let el = log.children[i];
+      if (!el) { el = document.createElement('div'); el.className = 'askturn'; log.append(el); }
+      if (askSet(el, askTurnHtml(t))) {
+        changed = true;
+        // an answer that just arrived: show its start, not its end
+        if (el._st && el._st !== t.status && (t.status === 'done' || t.status === 'error')) landed = el;
+        el._st = t.status;
+      }
+    });
+    // a screen reader hears the answer once it lands, not the seconds ticking on the way
+    log.setAttribute('aria-busy', String(running));
+    // an answer that arrived while the drawer was shut is read from its start too
+    const start = landed && (nearEnd || ask.toEnd) ? landed : ask.toLast ? log.lastElementChild : null;
+    if (start) log.scrollTop = start.offsetTop - 8;
+    else if (ask.toEnd || (changed && nearEnd)) log.scrollTop = log.scrollHeight;
+    ask.toEnd = false; ask.toLast = false;
+  }
+
+  function askOpen() {
+    ask.open = true; ask.toLast = ask.unread; ask.unread = false; ask.toEnd = true;
+    $('askdrawer').classList.add('open');
+    document.body.classList.add('ask-open');
+    $('askbtn').setAttribute('aria-expanded', 'true');
+    renderAsk();
+    // preventScroll: the drawer starts off-screen, and focusing it would scroll the page to chase it
+    ($('ask-q').disabled ? $('ask-close') : $('ask-q')).focus({ preventScroll: true });
+  }
+  function askClose() {
+    const inside = $('askdrawer').contains(document.activeElement);
+    ask.open = false;
+    $('askdrawer').classList.remove('open');
+    document.body.classList.remove('ask-open');
+    $('askbtn').setAttribute('aria-expanded', 'false');
+    renderAsk();
+    if (inside) $('askbtn').focus({ preventScroll: true });
+  }
+  function askReset() {
+    ask.gen++;                            // any poll still running for the old chat stops at its next step
+    ask.conversation = null; ask.turns = []; ask.unread = false;
+    askSave(); renderAsk();
+    if (!$('ask-q').disabled) $('ask-q').focus({ preventScroll: true });
+  }
+
+  async function askPost(body) {
+    try {
+      const r = await fetch('/api/ask', { method: 'POST', headers: { 'x-hexagon-action': '1', 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      const text = await r.text();
+      if (r.status === 404) return { ok: false, error: 'the desk is running older code. Restart it to use Ask.' };
+      if (r.status === 401) return { ok: false, error: 'your dashboard login expired. Reload the page to sign in again.' };
+      let j = null; try { j = JSON.parse(text); } catch { /* not JSON: use the text */ }
+      if (!r.ok || !j) return { ok: false, error: (j && j.error) || text.slice(0, 200) || `the desk answered ${r.status}` };
+      return j.ok && j.id ? j : { ok: false, error: j.error || 'the desk did not start the question' };
+    } catch (e) { return { ok: false, error: `could not reach the desk (${e.message})` }; }
+  }
+
+  function askFinish(turn, status, error) {
+    turn.status = status;
+    if (error) turn.error = error;
+    if (!turn.took) turn.took = Date.now() - turn.t0;
+    if (!ask.open) ask.unread = true;
+  }
+
+  async function askSend(text) {
+    const question = String(text || '').trim();
+    if (!question || question.length > ASK_MAX || !askState().on || askRunning()) return;
+    const gen = ask.gen, q = $('ask-q');
+    const turn = askClean({ q: question, status: 'sending', t0: Date.now() });
+    ask.turns.push(turn);
+    if (ask.turns.length > ASK_TURNS) ask.turns.splice(0, ask.turns.length - ASK_TURNS);
+    q.value = ''; askGrow(); ask.toEnd = true;
+    askSave(); renderAsk();
+
+    const body = { question };
+    if (ask.conversation) body.conversation = ask.conversation;
+    const r = await askPost(body);
+    if (gen !== ask.gen) return;          // New chat was pressed while the question was on its way
+    if (r.ok) {
+      turn.id = String(r.id); turn.status = 'working';
+      if (typeof r.conversation === 'string' && r.conversation) ask.conversation = r.conversation;
+    } else {
+      askFinish(turn, 'error', `Couldn't ask: ${askSentence(r.error || 'the desk said no')}`);
+      turn.took = null;
+      // a follow-up to a chat the desk no longer has can never succeed, so drop the chat id
+      if (body.conversation && /conversation/i.test(r.error || '')) { ask.conversation = null; turn.error += ' Your next question starts a fresh chat.'; }
+      if (!q.value) { q.value = question; askGrow(); }   // hand the words back rather than make them retype
+    }
+    askSave(); renderAsk();
+    if (turn.status === 'working') askPoll(turn, gen);
+  }
+
+  async function askPoll(turn, gen) {
+    let misses = 0;
+    while (gen === ask.gen && turn.status === 'working') {
+      // a blip gets a few slower retries before the question is given up on
+      await sleep(misses ? Math.min(5000, 1000 * (misses + 1)) : 1000);
+      if (gen !== ask.gen) return;
+      let r = null, j = null;
+      try { r = await fetch(`/api/ask/${encodeURIComponent(turn.id)}`, { cache: 'no-store' }); } catch { /* network blip */ }
+      if (gen !== ask.gen) return;
+      if (r && r.status === 404) {
+        // jobs live in the server's memory, so a 404 means it restarted (or an hour passed)
+        askFinish(turn, 'error', "The desk doesn't have this question any more: it restarted, or the answer expired. Ask again.");
+        ask.conversation = null;
+        break;
+      }
+      if (r && r.status === 401) { askFinish(turn, 'error', 'Your dashboard login expired. Reload the page to sign in again.'); break; }
+      if (r && r.ok) { try { j = await r.json(); } catch { /* half a response: treat as a blip */ } }
+      if (!j) {
+        if (++misses >= 6) { askFinish(turn, 'error', 'Lost contact with the desk while it was answering.'); break; }
+        continue;
+      }
+      misses = 0;
+      turn.steps = askSteps(j.steps);
+      if (j.usd != null && Number.isFinite(+j.usd)) turn.usd = +j.usd;
+      turn.searches = +j.searches || 0;
+      if (j.status === 'done' || j.status === 'error') {
+        if (j.doneAt && j.startedAt) turn.took = j.doneAt - j.startedAt;     // the server's own clock, both ends
+        if (j.status === 'done') { turn.answer = j.answer == null ? null : String(j.answer); askFinish(turn, 'done'); }
+        else askFinish(turn, 'error', `Couldn't answer: ${askSentence(j.error || 'something went wrong on the desk')}`);
+      }
+      askSave(); renderAsk();
+    }
+    if (gen === ask.gen) { askSave(); renderAsk(); }
+  }
+
+  function askGrow() { const q = $('ask-q'); q.style.height = 'auto'; q.style.height = `${Math.min(160, q.scrollHeight + 2)}px`; }
+
+  $('askbtn').addEventListener('click', () => (ask.open ? askClose() : askOpen()));
+  $('ask-close').addEventListener('click', askClose);
+  $('ask-new').addEventListener('click', askReset);
+  $('ask-form').addEventListener('submit', (ev) => { ev.preventDefault(); askSend($('ask-q').value); });
+  $('ask-q').addEventListener('keydown', (ev) => {
+    // Enter sends, Shift+Enter is a new line; never send in the middle of composing an accented character
+    if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing && ev.keyCode !== 229) { ev.preventDefault(); askSend(ev.target.value); }
+  });
+  $('ask-q').addEventListener('input', () => { askGrow(); askControls(); });
+  $('ask-log').addEventListener('click', (ev) => {
+    const b = ev.target.closest('button[data-chip]');
+    if (b && !b.disabled) askSend(ASK_CHIPS[+b.dataset.chip]);
+  });
+  // Escape inside the drawer closes only the drawer: stopping it here keeps it from also clearing
+  // the floor's selection or closing the alert panel. Escape anywhere else also closes it.
+  $('askdrawer').addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && !ev.isComposing) { ev.stopPropagation(); askClose(); } });
+  window.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && ask.open) askClose(); });
+  // the elapsed seconds, and the input turning off if the desk stops sending frames (render() only runs on a frame)
+  setInterval(() => { if (ask.open) renderAsk(); }, 1000);
+  // a reload in the middle of a question picks the job back up; one that never reached the desk cannot be
+  for (const t of ask.turns) {
+    if (t.status === 'working' && t.id) askPoll(t, ask.gen);
+    else if (t.status === 'sending' || t.status === 'working') { t.status = 'error'; t.error = 'The page reloaded before the desk replied. Ask again.'; }
+  }
+  askSave();
+
   // ------------------------------------------------------------ wiring
-  function render() { frameSeq++; renderHeader(); ingest(); }
+  function render() { frameSeq++; renderHeader(); ingest(); renderAsk(); }
   function connect() {
     const es = new EventSource('/api/stream');
     es.onmessage = (ev) => { try { S = JSON.parse(ev.data); S._rx = S.now; S._rxPerf = performance.now(); lastFrameAt = Date.now(); render(); } catch (e) { console.error(e); } };
@@ -1089,5 +1383,6 @@
   }
   wireFloor();
   connect();
+  renderAsk();
   
 })();
