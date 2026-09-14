@@ -1304,7 +1304,8 @@
       askFinish(turn, 'error', `Couldn't ask: ${askSentence(r.error || 'the desk said no')}`);
       turn.took = null;
       // a follow-up to a chat the desk no longer has can never succeed, so drop the chat id
-      if (body.conversation && /conversation/i.test(r.error || '')) { ask.conversation = null; turn.error += ' Your next question starts a fresh chat.'; }
+      // (the desk ends every such refusal with "start a new chat"; a busy chat says "wait" instead)
+      if (body.conversation && /start a new chat|conversation/i.test(r.error || '')) { ask.conversation = null; turn.error += ' Your next question starts a fresh chat.'; }
       if (!q.value) { q.value = question; askGrow(); }   // hand the words back rather than make them retype
     }
     askSave(); renderAsk();
