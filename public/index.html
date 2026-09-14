@@ -20,7 +20,14 @@
       </svg>
       <h1>The Hexagon</h1>
     </div>
-    <div class="meta" id="meta"></div>
+    <div class="hside">
+      <div class="meta" id="meta"></div>
+      <!-- outside #meta on purpose: the meta strip hides on narrow screens, the Ask button must not -->
+      <button type="button" id="askbtn" aria-controls="askdrawer" aria-expanded="false" aria-label="Ask the desk a question">
+        <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M2.5 3h11a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1H7l-3.2 2.6v-2.6H2.5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
+        Ask<i aria-hidden="true"></i>
+      </button>
+    </div>
   </header>
 
   <section class="panel" id="floor">
@@ -45,6 +52,22 @@
 
   <footer>Paper account by default. Live mode trades only Kalshi legs and requires API keys plus an explicit confirmation flag. Market data: Polymarket Gamma/CLOB and Kalshi public APIs.</footer>
 </div>
+
+<!-- Ask: questions about the desk, answered by Claude reading the desk's state. Read-only: nothing
+     in this drawer can trade, sell or change the desk. Filled in by the Ask section of app.js. -->
+<aside id="askdrawer" class="askd" role="dialog" aria-labelledby="ask-title">
+  <div class="askh">
+    <div class="askt"><h2 id="ask-title">Ask the desk</h2><div id="ask-sub"></div></div>
+    <button type="button" id="ask-new">New chat</button>
+    <button type="button" id="ask-close" aria-label="Close the Ask panel">✕</button>
+  </div>
+  <div id="ask-log" role="log" aria-live="polite"></div>
+  <form id="ask-form" autocomplete="off">
+    <p id="ask-note" hidden></p>
+    <textarea id="ask-q" rows="2" maxlength="2000" aria-label="Your question" placeholder="Ask about the desk…"></textarea>
+    <div class="askfoot"><span id="ask-count"></span><span class="askhint">Enter sends · Shift+Enter new line</span><button type="submit" id="ask-send">Send</button></div>
+  </form>
+</aside>
 <script src="app.js"></script>
 </body>
 </html>
