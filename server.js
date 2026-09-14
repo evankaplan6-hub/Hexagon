@@ -8,7 +8,7 @@ const crypto = require('crypto');
 loadEnv(path.join(__dirname, '.env'));
 const cfg = require('./src/config');
 const { Engine } = require('./src/engine');
-const { actionRefusal, routeAsk } = require('./src/ask');
+const { actionRefusal, rebindRefusal, routeAsk } = require('./src/ask');
 
 function loadEnv(file) {
   if (!fs.existsSync(file)) return;
@@ -155,6 +155,14 @@ const server = http.createServer((req, res) => {
     }
     res.writeHead(302, { location: '/login' });
     return res.end();
+  }
+  // With no password, a page on another site could still reach this desk by re-pointing its own
+  // name at 127.0.0.1 (DNS rebinding): no login to stop it, and Origin matches Host. Every honest
+  // request to a passwordless desk names localhost, so nothing else gets the API (src/ask.js).
+  // A desk with DASH_PASS passes straight through.
+  if (p.startsWith('/api/')) {
+    const foreign = rebindRefusal(req, cfg.dashPass);
+    if (foreign) { res.writeHead(foreign.status); return res.end(foreign.text); }
   }
   // Manual kill switch. TESS's drawdown halt stops NEW risk while leaving every open position
   // running -- halted is not the same as flat. This is the button for getting out of everything.

@@ -285,9 +285,10 @@ module.exports = {
   // and on Opus 5 medium is strong at a fraction of high's thinking.
   askEffort: env('ASK_EFFORT', 'medium'),
   // Its own cap per Eastern day, separate from the desks' and Research's, because it only runs
-  // when a person asks. Checked before a question starts and before every round inside one.
+  // when a person asks. A ceiling: the most each call could cost is held before it goes out, a call
+  // the day cannot cover is not made, and a restart adds the day's spend back up from the journal.
   askDailyUsd: num('ASK_DAILY_USD', 3),
-  // Tool rounds per question. At the cap the model is asked once more with tools off, so a
+  // Tool rounds per question. At the cap the model is told to answer with what it has, so a
   // question that keeps looking things up still ends with an answer, never a loop.
   askMaxRounds: Math.max(1, Math.round(num('ASK_MAX_ROUNDS', 8))),
   askTimeoutMs: num('ASK_TIMEOUT_MS', 120000),     // per API call, not per question

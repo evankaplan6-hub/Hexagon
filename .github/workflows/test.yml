@@ -48,8 +48,10 @@ jobs:
   #     seconds apart can finish their tests in either order, and the older commit's deploy would
   #     then land last and roll the box back. A run whose commit is no longer main's head stands
   #     down; the newer push's own run deploys;
-  #   - a push that changes nothing the box runs (docs, ops notes) is skipped -- a redeploy restarts
-  #     the desk, and a restart for a README edit is a restart for nothing. "Changes" is measured
+  #   - a push that changes nothing the box runs (most ops notes) is skipped -- a redeploy restarts
+  #     the desk, and a restart for nothing is not worth it. README.md and ops/DEPLOY.md DO count:
+  #     the image carries them for the Ask panel's docs tool, which would otherwise quote the old
+  #     copy until the next code push. "Changes" is measured
   #     against the `fly-deployed` tag (the commit the box last got), not this push's parent, so a
   #     code push that stood down or was cancelled while queued still ships with the next push;
   #   - fly.toml must still say MODE = "paper". This pipeline must never be the thing that arms
@@ -88,7 +90,7 @@ jobs:
           if [ -z "$deployed" ]; then
             echo "ship=true" >> "$GITHUB_OUTPUT"; echo "no fly-deployed tag yet; deploying"; exit 0
           fi
-          if git diff --name-only "$deployed" "${{ github.sha }}" | grep -qE '^(src|public|tools)/|^server\.js$|^Dockerfile$|^fly\.toml$|^package(-lock)?\.json$'; then
+          if git diff --name-only "$deployed" "${{ github.sha }}" | grep -qE '^(src|public|tools)/|^server\.js$|^Dockerfile$|^fly\.toml$|^package(-lock)?\.json$|^README\.md$|^ops/DEPLOY\.md$'; then
             echo "ship=true" >> "$GITHUB_OUTPUT"
           else
             echo "ship=false" >> "$GITHUB_OUTPUT"; echo "no runtime files changed since $deployed; not redeploying"

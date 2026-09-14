@@ -15,7 +15,7 @@ const crypto = require('crypto');
 const EventEmitter = require('events');
 const { Engine } = require('../src/engine');
 const base = require('../src/config');
-const { routeAsk, actionRefusal, echoable, withTailMark, answerText, TOOLS, SYSTEM } = require('../src/ask');
+const { routeAsk, actionRefusal, rebindRefusal, echoable, withTailMark, answerText, TOOLS, SYSTEM } = require('../src/ask');
 const tools = require('../src/ask-tools');
 
 let pass = 0, fail = 0;
@@ -67,9 +67,10 @@ function setup(over = {}) {
   const ask = E.ask;
   let clock = T0;
   ask.now = () => clock;
-  ask.sleep = async () => {};
+  const slept = [];
+  ask.sleep = async (ms) => { slept.push(ms); };
   ask._rollDay();
-  return { E, ask, calls, script, tick: (ms) => { clock += ms; } };
+  return { E, ask, calls, script, slept, tick: (ms) => { clock += ms; } };
 }
 async function askAndWait(ask, q, conv) {
   const r = ask.start(q, conv);
@@ -179,6 +180,7 @@ const deferred = () => { let release; const p = new Promise((res) => { release =
     ok('resent once to continue', calls.length === 2, calls.length);
     const second = calls[1].body.messages;
     ok('the paused turn is resent as the trailing assistant message, no "continue" added', second.length === 2 && second[1].role === 'assistant' && second[1].content[0].type === 'server_tool_use', second);
+    ok('the continuation still marks the question for caching, where the paused request wrote it', second[0].content[0].cache_control && second[0].content[0].cache_control.type === 'ephemeral' && !JSON.stringify(second[1]).includes('cache_control'), second);
     const conv = ask.convs.get(r.conversation);
     ok('the history holds ONE assistant message with both halves', conv.messages.length === 2 && conv.messages[1].content.map((b) => b.type).join() === 'server_tool_use,web_search_tool_result,text', conv.messages.map((m) => m.role));
     ok('the answer', job.answer === 'Everton won 2-1 (from the web).', job.answer);
@@ -205,25 +207,47 @@ const deferred = () => { let release; const p = new Promise((res) => { release =
     ok('and sends only its own question', calls[1].body.messages.length === 1, calls[1].body.messages.length);
   }
 
-  group('the round cap ends with an answer, never a loop');
+  group('the round cap ends with an answer, never a loop, and never re-writes the cache');
   {
     const { ask, calls, script } = setup({ askMaxRounds: 2 });
-    const again = (body) => (body.tool_choice && body.tool_choice.type === 'none' ? R.text('Best answer with what I found.') : R.tools([[`toolu_${calls.length}`, 'desk_overview', {}]]));
+    const told = (body) => body.messages.at(-1).content.some((b) => b.type === 'text' && /last lookup/.test(b.text));
+    const again = (body) => (told(body) ? R.text('Best answer with what I found.') : R.tools([[`toolu_${calls.length}`, 'desk_overview', {}]]));
     script.push(again, again, again, again);
     const { r, job } = await askAndWait(ask, 'keep looking');
-    ok('two tool rounds, then one call with tools off', calls.length === 3, calls.length);
-    ok('the first two calls leave tool choice alone', !calls[0].body.tool_choice && !calls[1].body.tool_choice);
-    ok('the last call switches tools off', calls[2].body.tool_choice && calls[2].body.tool_choice.type === 'none', calls[2].body.tool_choice);
+    ok('two tool rounds, then one call told to answer', calls.length === 3, calls.length);
+    ok('no call changes tool choice: that would re-write the whole chat\'s cache', calls.every((c) => !('tool_choice' in c.body)), calls.map((c) => c.body.tool_choice));
+    ok('the last call still offers the same tools', JSON.stringify(calls[2].body.tools) === JSON.stringify(calls[0].body.tools));
     const tail = calls[2].body.messages.at(-1).content;
     ok('and says why, after the results', tail.at(-1).type === 'text' && /last lookup/.test(tail.at(-1).text) && tail[0].type === 'tool_result', tail.map((b) => b.type));
     ok('the answer lands', job.status === 'done' && job.answer === 'Best answer with what I found.', job);
     ok('the whole turn is kept', ask.convs.get(r.conversation).messages.length === 6, ask.convs.get(r.conversation).messages.length);
 
     const b = setup({ askMaxRounds: 1 });
-    b.script.push(R.tools([['toolu_x', 'settings', {}]]), R.tools([['toolu_y', 'settings', {}]]), R.tools([['toolu_z', 'settings', {}]]));
-    const { job: j2 } = await askAndWait(b.ask, 'ignore the cap');
-    ok('a model that calls a tool anyway gets a plain stop', j2.status === 'error' && /more lookups than one question allows/.test(j2.error), j2);
-    ok('with no further calls', b.calls.length === 2, b.calls.length);
+    b.script.push(R.tools([['toolu_x', 'settings', {}]]), R.tools([['toolu_y', 'settings', {}], ['toolu_z', 'markets', {}]]), R.text('Answer from what I had.'));
+    const { r: rb, job: jb } = await askAndWait(b.ask, 'ignore the cap');
+    ok('a model that asks for a lookup anyway still ends with an answer', jb.status === 'done' && jb.answer === 'Answer from what I had.', jb);
+    ok('after exactly one call with tools switched off', b.calls.length === 3 && !b.calls[1].body.tool_choice && b.calls[2].body.tool_choice && b.calls[2].body.tool_choice.type === 'none', b.calls.map((c) => c.body.tool_choice));
+    const denied = b.calls[2].body.messages.at(-1).content;
+    ok('every lookup it asked for gets an error result, and none runs', denied.length === 3 && denied[0].is_error && denied[0].tool_use_id === 'toolu_y' && denied[1].is_error && denied[1].tool_use_id === 'toolu_z' && denied[2].type === 'text' && b.ask.jobs.get(rb.id).toolCalls === 1, denied);
+    ok('the forced call repeats the one before it exactly (markers aside)', JSON.stringify(stripMarks(b.calls[2].body.messages.slice(0, b.calls[1].body.messages.length))) === JSON.stringify(stripMarks(b.calls[1].body.messages)));
+
+    const c = setup({ askMaxRounds: 1 });
+    c.script.push(R.tools([['toolu_x', 'settings', {}]]), R.tools([['toolu_y', 'settings', {}]]), R.tools([['toolu_z', 'settings', {}]]), R.text('never sent'));
+    const { job: jc } = await askAndWait(c.ask, 'ignore the cap twice');
+    ok('a tool call even with tools off gets a plain stop', jc.status === 'error' && /more lookups than one question allows/.test(jc.error), jc);
+    ok('with no further calls', c.calls.length === 3, c.calls.length);
+  }
+
+  group('one round runs at most twelve lookups; the rest come back as errors');
+  {
+    const { ask, calls, script } = setup();
+    script.push(R.tools(Array.from({ length: 14 }, (_, i) => [`toolu_${i}`, 'settings', { contains: 'maker' }])), R.text('ok'));
+    const { r, job } = await askAndWait(ask, 'fan out');
+    const res = calls[1].body.messages.at(-1).content;
+    ok('all fourteen get a result, in order', res.length === 14 && res.every((x, i) => x.tool_use_id === `toolu_${i}`), res.map((x) => x.tool_use_id));
+    ok('twelve ran', ask.jobs.get(r.id).toolCalls === 12 && res.slice(0, 12).every((x) => !x.is_error), ask.jobs.get(r.id).toolCalls);
+    ok('the last two are errors that say why', res.slice(12).every((x) => x.is_error && /at most 12 lookups/.test(x.content)), res.slice(12));
+    ok('and the question still finishes', job.status === 'done', job);
   }
 
   group('max_tokens: a usable partial answer is kept and labelled');
@@ -254,6 +278,142 @@ const deferred = () => { let release; const p = new Promise((res) => { release =
     ok('the half-finished turn is not kept', b.ask.convs.get(r2.conversation).messages.length === 0);
     ok('and it still counted the spend', job.usd === 1.5013 && b.ask.daySpend === 1.5013, [job.usd, b.ask.daySpend]);
     void script;
+  }
+
+  group('the budget is a ceiling: the most a call can cost is held before it goes out');
+  {
+    const { ask, script } = setup();
+    ok('the most a new question\'s first call can cost is about $0.45 on Opus 5 (16,000 output tokens, the prompt written to cache, 3 searches)', ask.minCallUsd > 0.42 && ask.minCallUsd < 0.5, ask.minCallUsd);
+    ask.daySpend = 3 - ask.minCallUsd * 0.9;
+    const s1 = ask.snapshot();
+    ok('less left than one question can cost: off, and it says so', s1.enabled === false && /less than one question can cost/.test(s1.reason) && s1.budgetLeft > 0.3, s1);
+    ok('and a question is refused before any call', !ask.start('anything?').ok);
+
+    const b = setup();
+    b.ask.daySpend = 3 - b.ask.minCallUsd * 1.5;
+    const d = deferred();
+    b.script.push(() => d.p);
+    const first = b.ask.start('first');
+    ok('with room for one question, one starts', first.ok, first);
+    await new Promise((res) => setImmediate(res));
+    ok('its worst case is held while its call is out', b.ask.held > 0.42 && b.calls.length === 1, [b.ask.held, b.calls.length]);
+    const second = b.ask.start('second, in another chat');
+    ok('a second question cannot spend the same last dollar', !second.ok && /held for the questions being answered/.test(second.error), second);
+    d.release(R.text('one'));
+    await b.ask.wait(first.id);
+    ok('the hold is released when the call returns, and only real usage stays', b.ask.held === 0 && b.ask.jobs.get(first.id).usd === 0.0018, [b.ask.held, b.ask.jobs.get(first.id).usd]);
+
+    const c = setup();
+    c.script.push(R.text('first answer'));
+    const { r: rc } = await askAndWait(c.ask, 'start a chat');
+    const conv = c.ask.convs.get(rc.conversation);
+    conv.messages.push({ role: 'user', content: [{ type: 'text', text: 'y'.repeat(250000) }] }, { role: 'assistant', content: [{ type: 'text', text: 'ok' }] });
+    c.ask.daySpend = 3 - 0.8;
+    const follow = c.ask.start('and now?', rc.conversation);
+    ok('a follow-up in a long chat starts (the day has room for a short question)', follow.ok, follow);
+    await c.ask.wait(follow.id);
+    const jf = c.ask.job(follow.id);
+    ok('but its call, which could cost more than is left, is never made', jf.status === 'error' && /cannot cover a question in a chat this long · start a new chat/.test(jf.error) && c.calls.length === 1, [jf.error, c.calls.length]);
+    ok('and nothing was charged for it', jf.usd === 0, jf.usd);
+  }
+
+  group('a question that pulls in too much stops before sending it');
+  {
+    const { ask, calls, script, E } = setup({ askDailyUsd: 50 });
+    for (let i = 0; i < 500; i++) E.state.log.push({ t: T0 - i * 1000, agent: 'BRAM', kind: 'RESEARCH', pnl: null, text: `gate ledger ${'8 gap under minGap · '.repeat(14)}${i}` });
+    script.push(R.text('hi'));
+    const { r } = await askAndWait(ask, 'start');
+    const conv = ask.convs.get(r.conversation);
+    conv.messages.push({ role: 'user', content: [{ type: 'text', text: 'y'.repeat(295000) }] }, { role: 'assistant', content: [{ type: 'text', text: 'ok' }] });
+    script.push(R.tools(Array.from({ length: 12 }, (_, i) => [`toolu_${i}`, 'activity_log', { limit: 100 }])), R.text('never sent'));
+    const { job } = await askAndWait(ask, 'read the whole log twelve times', r.conversation);
+    ok('the round that would push the request past the limit is not sent', job.status === 'error' && /more than one request can carry/.test(job.error) && calls.length === 2, [job.error, calls.length]);
+  }
+
+  group('a call whose reply never arrived is still charged: the API may have finished it');
+  {
+    const timeout = () => { throw Object.assign(new Error('timed out after 120000ms'), { status: 408 }); };
+    const a = setup();
+    a.script.push(timeout);
+    const { job } = await askAndWait(a.ask, 'slow one');
+    const most = a.ask._worstCase(a.ask._body([{ role: 'user', content: [{ type: 'text', text: `Asked at 2026-09-14 10:00:00 ET.\n\nslow one` }] }], false));
+    ok('a timeout is an error that says so, and what it counted', job.status === 'error' && /took longer than 120s/.test(job.error) && /\$0\.4\d is counted against today's budget/.test(job.error), job.error);
+    ok('charged the most that call could cost', job.usd === most && a.ask.daySpend === most && most > 0.42, [job.usd, a.ask.daySpend, most]);
+    ok('journalled as an estimated charge', a.E.journalled.some((j) => j.kind === 'ASK_SPEND' && j.data.estimated === true && j.data.usd === most), a.E.journalled);
+    ok('and not retried: a slow model is slow again, at the same price', a.calls.length === 1, a.calls.length);
+
+    const b = setup();
+    b.script.push(() => { throw Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }) }); }, R.text('second try'));
+    const { job: jb } = await askAndWait(b.ask, 'dropped');
+    ok('a dropped connection is retried once', jb.status === 'done' && jb.answer === 'second try' && b.calls.length === 2, jb);
+    ok('the first attempt is charged as well as the second', jb.usd > 0.42 && b.E.journalled.filter((j) => j.kind === 'ASK_SPEND').length === 2, [jb.usd, b.E.journalled]);
+    ok('and the step says what happened', jb.steps.some((s) => /connection dropped/.test(s.text)), jb.steps);
+
+    const c = setup();
+    const refused = () => { throw Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) }); };
+    const neverOpened = () => { throw Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('Connect Timeout Error'), { code: 'UND_ERR_CONNECT_TIMEOUT' }) }); };
+    c.script.push(refused, neverOpened);
+    const { job: jc } = await askAndWait(c.ask, 'no network');
+    ok('a connection that was never made costs nothing', jc.status === 'error' && jc.usd === 0 && c.ask.daySpend === 0 && !c.E.journalled.some((j) => j.kind === 'ASK_SPEND'), [jc, c.ask.daySpend]);
+
+    const d = setup();
+    d.script.push(() => { throw httpErr(529, 'overloaded'); }, () => { throw httpErr(529, 'overloaded'); });
+    const { job: jd } = await askAndWait(d.ask, 'busy');
+    ok('an error Anthropic answered with costs nothing', jd.status === 'error' && jd.usd === 0 && /having trouble/.test(jd.error), jd);
+  }
+
+  group('a rate limit waits as long as Anthropic asks, or says how long');
+  {
+    const a = setup();
+    a.script.push(() => { throw Object.assign(httpErr(429, 'rate_limit_error'), { retryAfter: 45 }); }, R.text('after the wait'));
+    const { job } = await askAndWait(a.ask, 'q');
+    ok('retry-after 45s is waited in full, then retried', job.status === 'done' && a.slept.length === 1 && a.slept[0] === 45000 && a.calls.length === 2, [a.slept, a.calls.length]);
+    ok('and the step says how long', job.steps.some((s) => s.text === 'the API was busy, trying again in 45s'), job.steps);
+
+    const b = setup();
+    b.script.push(() => { throw Object.assign(httpErr(429, 'rate_limit_error'), { retryAfter: 120 }); });
+    const { job: jb } = await askAndWait(b.ask, 'q');
+    ok('a wait longer than a minute is not sat through', b.slept.length === 0 && b.calls.length === 1, [b.slept, b.calls.length]);
+    ok('the error says when to try again', jb.status === 'error' && /try again in 2 minutes/.test(jb.error), jb.error);
+  }
+
+  group('a refusal fallback: every attempt is metered, not just the one that answered');
+  {
+    const { ask, script } = setup();
+    const u = usage({ iterations: [{ type: 'message', model: 'claude-opus-5', input_tokens: 40000, output_tokens: 3000 }, { type: 'fallback_message', model: 'claude-opus-4-8', input_tokens: 100, output_tokens: 50 }] });
+    script.push({ ...R.text('answered by the fallback'), model: 'claude-opus-4-8', usage: u });
+    const { job } = await askAndWait(ask, 'q');
+    const want = 40100 * 5e-6 + 3050 * 25e-6;
+    ok('the declined attempt is charged too', Math.abs(job.usd - want) < 1e-4 && Math.abs(ask.daySpend - want) < 1e-4, [job.usd, want]);
+    const b = setup();
+    b.script.push(R.text('ok', { input_tokens: 1000, output_tokens: 1000, iterations: [{ type: 'message' }] }));
+    const { job: jb } = await askAndWait(b.ask, 'q');
+    ok('an iterations list without token counts never lowers the charge', Math.abs(jb.usd - (1000 * 5e-6 + 1000 * 25e-6)) < 1e-4, jb.usd);
+  }
+
+  group('a restart does not hand out a fresh day: spend is added back up from the journal');
+  {
+    const dir = tmp();
+    const line = (t, kind, data) => JSON.stringify({ t, cycle: 1, mode: 'paper', kind, ...data });
+    const YESTERDAY = ET_DAY.format(new Date(T0 - 86400e3)), TOMORROW = ET_DAY.format(new Date(T0 + 86400e3));
+    fs.writeFileSync(path.join(dir, `journal-${TODAY}.jsonl`), [
+      line('2026-09-14T13:00:00Z', 'ASK_SPEND', { usd: 0.25, searches: 0, model: 'claude-opus-5' }),
+      line('2026-09-14T13:01:00Z', 'ASK_SPEND', { usd: 0.4412, searches: 0, model: 'claude-opus-5', estimated: true }),
+      line('2026-09-14T13:02:00Z', 'ASK', { status: 'done', usd: 0.69, searches: 0 }),     // the summary: not counted twice
+      line('2026-09-14T13:03:00Z', 'OPEN', { usd: 99 }),
+      '{"kind":"ASK_SPEND","usd":', 'not json',
+    ].join('\n'));
+    fs.writeFileSync(path.join(dir, `journal-${YESTERDAY}.jsonl`), line('2026-09-13T13:00:00Z', 'ASK_SPEND', { usd: 2 }));
+    fs.writeFileSync(path.join(dir, `journal-${TOMORROW}.jsonl`), line('2026-09-15T13:00:00Z', 'ASK_SPEND', { usd: 0.1 }));
+    const { ask, script, E, tick } = setup({ dataDir: dir });
+    ok('today\'s ASK_SPEND lines are the day\'s spend so far', ask.daySpend === 0.6912, ask.daySpend);
+    ok('and the panel says what is left', ask.snapshot().reason === 'live · $2.31 left today', ask.snapshot());
+    script.push(R.text('ok'));
+    await askAndWait(ask, 'q');
+    const spent = E.journalled.filter((j) => j.kind === 'ASK_SPEND');
+    ok('each metered call writes its own ASK_SPEND line', spent.length === 1 && spent[0].data.usd === 0.0018 && !('estimated' in spent[0].data), spent);
+    tick(86400e3);
+    ok('a new Eastern day starts from that day\'s journal', ask.snapshot().spentUsd === 0.1, ask.snapshot());
   }
 
   group('conversations are append-only: earlier turns are byte-identical after a follow-up');
@@ -389,6 +549,24 @@ const deferred = () => { let release; const p = new Promise((res) => { release =
     ok('a refused key is explained, not retried', j3.status === 'error' && /refused the key/.test(j3.error) && c.calls.length === 1, j3);
   }
 
+  group('errors are scrubbed for secrets, like tool output');
+  {
+    const { ask, E, script, calls } = setup({ flattenToken: 'PLANTED-flatten-token-1a2b3c4d' });
+    const key = 'sk-ant-PLANTED-9f8e7d6c\nsecond-half-of-a-two-line-paste';
+    E.brain.key = key;
+    script.push(() => { throw new TypeError(`Headers.append: "${key}" is an invalid header value.`); });
+    const { job } = await askAndWait(ask, 'q');
+    ok('a malformed key is named, not quoted', job.status === 'error' && /ANTHROPIC_API_KEY looks malformed/.test(job.error) && !job.error.includes('PLANTED'), job.error);
+    ok('and costs nothing: the request never left', job.usd === 0, job.usd);
+    script.push(() => { throw new Error(`something odd happened near ${key} and PLANTED-flatten-token-1a2b3c4d`); });
+    const { job: j2 } = await askAndWait(ask, 'q2');
+    ok('any other error text is scrubbed of secret values', j2.status === 'error' && !j2.error.includes('PLANTED') && j2.error.includes('[redacted]'), j2.error);
+    script.push(R.tools([['toolu_s', 'PLANTED-flatten-token-1a2b3c4d', {}]]), R.text('ok'));
+    const { job: j3 } = await askAndWait(ask, 'q3');
+    const res = calls.at(-1).body.messages.at(-1).content[0];
+    ok('a tool error is scrubbed before it goes to the model', j3.status === 'done' && res.tool_use_id === 'toolu_s' && res.is_error && !res.content.includes('PLANTED') && res.content.includes('[redacted]'), res);
+  }
+
   group('pure helpers');
   {
     const blocks = [
@@ -405,7 +583,8 @@ const deferred = () => { let release; const p = new Promise((res) => { release =
     const msgs = [{ role: 'user', content: [{ type: 'text', text: 'a' }] }];
     const marked = withTailMark(msgs);
     ok('withTailMark marks a copy', marked[0].content[0].cache_control && !msgs[0].content[0].cache_control);
-    ok('withTailMark leaves a trailing assistant turn alone', withTailMark([...msgs, { role: 'assistant', content: [{ type: 'text', text: 'b' }] }])[1].content[0].cache_control === undefined);
+    const cont = withTailMark([...msgs, { role: 'assistant', content: [{ type: 'text', text: 'b' }] }]);
+    ok('withTailMark on a paused turn marks the user message before it, not the assistant one', cont[0].content[0].cache_control && cont[1].content[0].cache_control === undefined && !msgs[0].content[0].cache_control, cont);
     ok('answerText skips the narration before a search', answerText([{ type: 'text', text: 'Let me check.' }, { type: 'server_tool_use', id: 'a' }, { type: 'web_search_tool_result', tool_use_id: 'a' }, { type: 'text', text: 'Final ' }, { type: 'text', text: 'answer' }]) === 'Final answer');
   }
 
@@ -457,6 +636,16 @@ const deferred = () => { let release; const p = new Promise((res) => { release =
     const post = await routeAsk(ask, req({ headers: H }), `/api/ask/${out.json.id}`);
     ok('POST to a job is refused', post.status === 405, post);
     ok('actionRefusal passes a proper action', actionRefusal({ method: 'POST', headers: { host: 'a:1', origin: 'http://a:1', 'x-hexagon-action': '1' } }) === null);
+    // DNS rebinding: the attacker's page names itself in both Origin and Host, so the lock above passes
+    const rebound = { method: 'POST', headers: { host: 'rebind.attacker.example:8787', origin: 'http://rebind.attacker.example:8787', 'x-hexagon-action': '1' } };
+    ok('a rebound page passes the Origin check (why the Host check exists)', actionRefusal(rebound) === null);
+    ok('but a passwordless desk refuses a foreign Host', rebindRefusal(rebound, '') && rebindRefusal(rebound, '').status === 403 && rebindRefusal(rebound, undefined).status === 403, rebindRefusal(rebound, ''));
+    // the operator's own dashboard must never be locked out: every way a browser or tools/api.js names a loopback desk
+    const own = ['localhost:8787', '127.0.0.1:8787', '[::1]:8787', 'LOCALHOST:8787', 'localhost:9000', 'localhost', '127.0.0.1', '[::1]'];
+    ok('localhost, 127.0.0.1 and [::1], with or without a port (an SSH tunnel on another port too), are let through', own.every((host) => rebindRefusal({ method: 'GET', headers: { host } }, '') === null), own.filter((host) => rebindRefusal({ headers: { host } }, '')));
+    const foreign = ['127.0.0.1.nip.io:8787', 'localhost.attacker.example', 'attacker.localhost', '', 'localhost@evil.example', 'evil.example/@localhost', 'localhost:8787:1', '192.168.1.20:8787', undefined];
+    ok('a lookalike, a LAN address, a missing Host or a userinfo trick is refused', foreign.every((host) => rebindRefusal({ headers: { host } }, '') !== null), foreign.filter((host) => !rebindRefusal({ headers: { host } }, '')));
+    ok('a desk with DASH_PASS (the Fly box) is not Host-checked: its login stops a rebound page', rebindRefusal({ headers: { host: 'hexagon-desk.fly.dev' } }, 'a-password') === null && rebindRefusal(rebound, 'a-password') === null);
 
     // server.js cannot be required without starting a desk, so pin its wiring from the source
     const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
@@ -464,6 +653,9 @@ const deferred = () => { let release; const p = new Promise((res) => { release =
     ok('server.js routes /api/ask behind the dashboard login', authAt > 0 && askAt > authAt, [authAt, askAt]);
     ok('the alert actions use the same lock function', (src.match(/actionRefusal\(req\)/g) || []).length === 1 && /require\('\.\/src\/ask'\)/.test(src));
     ok('the old inline lock is gone, so the two cannot drift', !/x-hexagon-action'\] !== '1'/.test(src));
+    const rebindAt = src.indexOf('rebindRefusal(req, cfg.dashPass)'), alertsAt = src.indexOf("p.match(/^\\/api\\/alerts");
+    ok('server.js checks Host on every /api/ route, before any of them, passing the password', /if \(p\.startsWith\('\/api\/'\)\) \{\s*const foreign = rebindRefusal\(req, cfg\.dashPass\);/.test(src) && rebindAt > authAt && rebindAt < alertsAt && rebindAt < askAt && rebindAt < src.indexOf("p === '/api/flatten'") && rebindAt < src.indexOf("p === '/api/stream'"), [authAt, rebindAt, alertsAt, askAt]);
+    ok('and the page itself (not under /api/) is never Host-checked', !/rebindRefusal\(req, cfg\.dashPass\)/.test(src.slice(0, src.indexOf("if (p.startsWith('/api/')) {"))));
   }
 
   // -------------------------------------------------------------------------------------------
@@ -565,6 +757,26 @@ const deferred = () => { let release; const p = new Promise((res) => { release =
     ok('whale_bets: a recorded day', wb.found && wb.bets[0].who === 'whale' && wb.bets[0].size === '$12000.00', wb);
     const d = JSON.parse(outputs.docs[2]);
     ok('docs: finds the flatten and resume section', d.sections.some((s) => /Operating it/.test(s.heading)), d.sections.map((s) => s.heading));
+    {
+      const droot = tmp();
+      fs.mkdirSync(path.join(droot, 'ops'));
+      fs.writeFileSync(path.join(droot, 'README.md'), '# Operating it\nPress the old button.\n');
+      const first = tools.RUN.docs(E, { query: 'operating button' }, T0, droot);
+      fs.writeFileSync(path.join(droot, 'README.md'), '# Operating it\nPress the new button.\n');
+      fs.utimesSync(path.join(droot, 'README.md'), new Date(T0 + 60e3), new Date(T0 + 60e3));
+      const second = tools.RUN.docs(E, { query: 'operating button' }, T0, droot);
+      ok('docs: an edited README is read again without a restart', /old button/.test(first.sections[0].text) && /new button/.test(second.sections[0].text), [first.sections, second.sections]);
+    }
+    {
+      // The box's docs are the copies in its image: every file the Dockerfile copies must redeploy
+      // the box when it changes, or the docs tool quotes an old README until some code push.
+      const root = path.join(__dirname, '..');
+      const ship = new RegExp(fs.readFileSync(path.join(root, '.github/workflows/test.yml'), 'utf8').match(/git diff --name-only[^\n]*grep -qE '([^']+)'/)[1]);
+      const copied = fs.readFileSync(path.join(root, 'Dockerfile'), 'utf8').split('\n').map((l) => l.match(/^COPY\s+(\S+)\s/)).filter(Boolean)
+        .map((m) => m[1].replace('*', '').replace(/^(src|tools|public)$/, '$1/x.js'));
+      ok('deploy: a change to any file the image copies ships (README.md and ops/DEPLOY.md included)', copied.includes('README.md') && copied.includes('ops/DEPLOY.md') && copied.every((f) => ship.test(f)), copied.filter((f) => !ship.test(f)));
+      ok('deploy: a change to other notes still does not restart the box', !ship.test('ops/NOTES.md') && !ship.test('CLAUDE.md'));
+    }
     const ov = JSON.parse(outputs.desk_overview[0]);
     ok('desk_overview: paper, cash, halts, desks', /^paper/.test(ov.account) && ov.takerBook.cash === '$10000.00' && ov.desks.length === 7 && 'riskHalt' in ov.halts, ov.takerBook);
     let threw = null;

@@ -15,7 +15,9 @@
 // parallel -- and return ALL the results in ONE user message, a failed tool as `is_error` rather
 // than a missing result. `pause_turn` (a long server-side web search) is resent to continue.
 // `stop_reason` is read before `content`, because a refusal can come back with no content at all.
-// The rounds are capped; at the cap the model is asked once more with tools switched off.
+// The rounds are capped. At the cap the last results go back with a note to answer now, tools
+// still offered: changing `tool_choice` would re-write the whole chat's cache at 1.25x. Only a
+// model that asks for a lookup anyway gets one more call with tools switched off.
 //
 // CONVERSATIONS ARE APPEND-ONLY. Each response's `content` goes into the history exactly as it
 // came back, thinking blocks included, and nothing already sent is ever edited or reordered: the
@@ -25,16 +27,31 @@
 // uncommitted tail is going back to a prefix the API has already seen, not editing it.
 //
 // COST. Metered on every call at priceFor(model), cache reads and writes and web searches
-// included, against its own Eastern-day cap (ASK_DAILY_USD), checked before a question starts and
-// again before every round -- a question that runs the budget out stops and says so.
+// included -- per attempt when a refusal fallback ran -- against its own Eastern-day cap
+// (ASK_DAILY_USD). The cap is a ceiling, not a target:
+//   - Before a call goes out, the most it could cost is held against the day (every prompt token
+//     written to the cache, every output token used). A call the day cannot cover is not made, and
+//     two questions in flight cannot both spend the same last dollar.
+//   - A call whose reply never arrived (our timeout, a dropped socket) is charged that most: the
+//     API may have finished it, and bills it whether or not anyone was still listening.
+//   - Every charge is journalled as ASK_SPEND, and a restart adds today's back up, so a deploy
+//     does not hand out a fresh day's budget.
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const { priceFor } = require('./brain');
 const tools = require('./ask-tools');
 
 const WEB_SEARCH_USD = 0.01;           // $10 per 1,000 searches, as src/research.js
+const WEB_SEARCH_MAX_USES = 3;         // per request
 const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
 const MAX_TOKENS = 16000;
 const MAX_CONTINUATIONS = 4;           // pause_turn resumes per round
+const MAX_TOOLS_PER_ROUND = 12;        // parallel lookups run in one round; the rest come back as errors
+const MAX_RETRY_WAIT_S = 60;           // a busy API asking for a longer wait than this is not waited on
+// Characters per token when estimating the most a call can cost. Real prompts run nearer four;
+// three over-counts on purpose, because the estimate guards a spending cap.
+const CHARS_PER_TOKEN = 3;
 const MAX_QUESTION = 2000;
 const MAX_CONVERSATIONS = 20;
 const MAX_QUESTIONS = 12;              // per conversation
@@ -46,6 +63,8 @@ const MAX_STEPS = 40;
 // A long chat is re-sent in full on every request. Past this many characters of history a
 // follow-up is refused rather than quietly costing a dollar a question.
 const MAX_HISTORY_CHARS = 300000;
+// The same guard inside a question: the history plus everything this question's lookups pulled in.
+const MAX_PROMPT_CHARS = 400000;
 const BODY_BYTES = 8192;               // POST /api/ask body cap
 const ET_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' });
 const r2 = (x) => Math.round(x * 100) / 100;
@@ -82,7 +101,7 @@ Rules that always hold:
 
 const SYSTEM_BLOCKS = [{ type: 'text', text: SYSTEM, cache_control: { type: 'ephemeral' } }];
 // Built once, in a fixed order: tools render at the very front of the prompt.
-const TOOLS = [...tools.DEFS, { type: 'web_search_20260209', name: 'web_search', max_uses: 3 }]
+const TOOLS = [...tools.DEFS, { type: 'web_search_20260209', name: 'web_search', max_uses: WEB_SEARCH_MAX_USES }]
   .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 
 // A failure a person can read. `plain` errors carry their message to the dashboard as written.
@@ -106,15 +125,45 @@ function echoable(content) {
 // The cache breakpoint for the growing conversation: on the last block of the last user message,
 // set on a COPY at send time so the stored history is never touched. Moving a marker is not an
 // edit as far as the API is concerned; storing it would make the history differ from what the
-// append-only test compares.
+// append-only test compares. A pause_turn continuation ends in the paused assistant message; the
+// mark still goes on the user message before it, which is exactly where the paused request wrote
+// the cache -- so the continuation reads the chat instead of paying full price for it again.
 function withTailMark(messages) {
-  const n = messages.length;
-  if (!n) return messages;
-  const m = messages[n - 1];
-  if (m.role !== 'user' || !Array.isArray(m.content) || !m.content.length) return messages;
+  let i = messages.length - 1;
+  while (i >= 0 && !(messages[i] && messages[i].role === 'user')) i--;
+  if (i < 0) return messages;
+  const m = messages[i];
+  if (!Array.isArray(m.content) || !m.content.length) return messages;
   const content = m.content.slice();
   content[content.length - 1] = { ...content[content.length - 1], cache_control: { type: 'ephemeral' } };
-  return [...messages.slice(0, n - 1), { ...m, content }];
+  const out = messages.slice();
+  out[i] = { ...m, content };
+  return out;
+}
+
+// Could the API have run a call whose reply we never got? Our own timeout (408, from brain._post)
+// or a connection that dropped after the request went out: yes. An HTTP error Anthropic sent back,
+// a connection refused or never opened, a name that did not resolve, or a header Node would not
+// send: no, nothing ran. Anything else unclear counts as yes -- under-reporting is the one way the
+// cap must not err.
+const NEVER_SENT = /^(ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|UND_ERR_CONNECT_TIMEOUT)$/;
+function maybeBilled(e) {
+  const s = e && e.status;
+  if (s === 408) return true;
+  if (s) return false;
+  if (e && e.cause && NEVER_SENT.test(String(e.cause.code || ''))) return false;
+  if (e instanceof TypeError && /header/i.test(String(e.message))) return false;
+  return true;
+}
+
+// Dollars and searches for one usage record (the top-level one, or one attempt of a fallback).
+function usageCost(u, model) {
+  const p = priceFor(model);
+  const searches = (u && u.server_tool_use && u.server_tool_use.web_search_requests) || 0;
+  const usd = ((u && u.input_tokens) || 0) * p.input + ((u && u.output_tokens) || 0) * p.output
+    + ((u && u.cache_read_input_tokens) || 0) * p.cacheRead + ((u && u.cache_creation_input_tokens) || 0) * p.cacheWrite
+    + searches * WEB_SEARCH_USD;
+  return { usd, searches };
 }
 
 // The answer is the text the model wrote after its last tool call in the final message; any
@@ -136,14 +185,31 @@ class Ask {
     this.jobs = new Map();                  // id -> job; process-local, like research's
     this.convs = new Map();                 // id -> { id, messages, questions, running, lastAt }
     this.promises = new Map();              // id -> the running question's promise (tests await it)
-    this.day = ET_DAY.format(new Date(this.now()));
-    this.daySpend = 0;
+    this.held = 0;                          // dollars held for calls in flight (see COST above)
     this.fallbacks = true;                  // dropped for good if this deployment rejects the parameter
+    // The most the first call of a new question can cost: below this much left, none can start.
+    this.minCallUsd = this._worstCase(this._body([{ role: 'user', content: [{ type: 'text', text: 'x'.repeat(MAX_QUESTION + 60) }] }], false));
+    this.day = null;
+    this._rollDay();
   }
 
+  // A new Eastern day starts from what the journal says was already spent in it: normally nothing,
+  // but after a restart, everything asked so far today. A plain read is fine here, unlike in the
+  // journal tool: it runs once at startup, and at midnight, when the new day's file is just begun.
   _rollDay() {
     const k = ET_DAY.format(new Date(this.now()));
-    if (k !== this.day) { this.day = k; this.daySpend = 0; }
+    if (k !== this.day) { this.day = k; this.daySpend = this._spentInJournal(k); }
+  }
+
+  _spentInJournal(day) {
+    let raw;
+    try { raw = fs.readFileSync(path.join(this.cfg.dataDir, `journal-${day}.jsonl`), 'utf8'); } catch { return 0; }
+    let usd = 0;
+    for (const line of raw.split('\n')) {
+      if (!line.includes('"ASK_SPEND"')) continue;
+      try { const r = JSON.parse(line); if (r && r.kind === 'ASK_SPEND' && Number.isFinite(r.usd) && r.usd > 0) usd += r.usd; } catch { /* torn line */ }
+    }
+    return r4(usd);
   }
 
   // Why it is on or off, in words the panel shows.
@@ -152,8 +218,17 @@ class Ask {
     const cap = this.cfg.askDailyUsd;
     if (!this.cfg.askEnabled) return { enabled: false, reason: 'switched off (ASK=0 in .env)' };
     if (!this.E.brain || !this.E.brain.key) return { enabled: false, reason: 'add ANTHROPIC_API_KEY to turn this on' };
-    if (this.daySpend >= cap) return { enabled: false, reason: `today's $${cap.toFixed(2)} for questions is spent · it resets at midnight Eastern` };
-    return { enabled: true, reason: `live · $${Math.max(0, r2(cap - this.daySpend)).toFixed(2)} left today` };
+    const left = cap - this.daySpend;
+    if (left <= 0) return { enabled: false, reason: `today's $${cap.toFixed(2)} for questions is spent · it resets at midnight Eastern` };
+    if (left - this.held < this.minCallUsd) {
+      return {
+        enabled: false,
+        reason: this.held > 0
+          ? `the rest of today's $${cap.toFixed(2)} is held for the questions being answered · try again when they finish`
+          : `today's $${cap.toFixed(2)} for questions is spent: the $${r2(left).toFixed(2)} left is less than one question can cost · it resets at midnight Eastern`,
+      };
+    }
+    return { enabled: true, reason: `live · $${Math.max(0, r2(left)).toFixed(2)} left today` };
   }
 
   inflight() { let n = 0; for (const j of this.jobs.values()) if (j.status === 'working') n++; return n; }
@@ -221,7 +296,7 @@ class Ask {
     const job = {
       id: crypto.randomUUID(), conversation: conv.id, question: q, status: 'working',
       steps: [], answer: null, error: null, usd: 0, searches: 0, startedAt: now, doneAt: null,
-      rounds: 0, toolCalls: 0,
+      rounds: 0, toolCalls: 0, calls: 0, estimatedUsd: 0,
     };
     conv.questions++;
     conv.running = job.id;
@@ -232,7 +307,13 @@ class Ask {
     const p = Promise.resolve()
       .then(() => this._run(job, conv))
       .then((answer) => { job.answer = answer; job.status = 'done'; })
-      .catch((e) => { job.status = 'error'; job.error = this._explain(e); })
+      .catch((e) => {
+        job.status = 'error';
+        let msg = this._explain(e);
+        if (job.estimatedUsd > 0) msg += ` · $${job.estimatedUsd.toFixed(2)} is counted against today's budget in case the API finished the reply that never arrived`;
+        // scrubbed like tool output: an error can quote what it choked on, and that can be a key
+        job.error = tools.redact(msg, tools.secretValues(this.E));
+      })
       .finally(() => {
         job.doneAt = this.now();
         conv.running = null;
@@ -240,6 +321,7 @@ class Ask {
         this.promises.delete(job.id);
         try {
           if (typeof this.E.journal === 'function') {
+            // the summary of the question; the day's spend is added up from its ASK_SPEND lines
             this.E.journal(this.E, 'ASK', { status: job.status, usd: job.usd, searches: job.searches, rounds: job.rounds, tools: job.toolCalls, model: this.cfg.askModel });
           }
         } catch { /* the journal never takes the panel down */ }
@@ -268,18 +350,17 @@ class Ask {
     job.steps.push({ at: this.now(), text: String(text).slice(0, 120) });
   }
 
-  _overBudget() { this._rollDay(); return this.daySpend >= this.cfg.askDailyUsd; }
-
   async _run(job, conv) {
-    const cap = this.cfg.askDailyUsd;
     const turn = [{ role: 'user', content: [{ type: 'text', text: `Asked at ${tools.et(this.now())}.\n\n${job.question}` }] }];
-    let final = false;            // true for the one extra call after the rounds cap: tools off
+    // 'open': tools on. 'last': the rounds are used up and the model was told to answer; tools stay
+    // offered so the chat's cache holds. 'forced': it asked for a lookup anyway, so tools are off.
+    let phase = 'open';
     let continuations = 0;
     for (;;) {
-      if (this._overBudget()) throw plain(`today's $${cap.toFixed(2)} for questions ran out while answering this · it resets at midnight Eastern`);
-      this._step(job, final ? 'writing the answer' : job.rounds ? 'thinking about what it found' : 'thinking');
-      const res = await this._call([...conv.messages, ...turn], final, job);
-      this._meter(job, res);
+      const messages = [...conv.messages, ...turn];
+      if (JSON.stringify(messages).length > MAX_PROMPT_CHARS) throw plain('this question pulled in more than one request can carry · try a narrower question, or start a new chat');
+      this._step(job, phase !== 'open' ? 'writing the answer' : job.rounds ? 'thinking about what it found' : 'thinking');
+      const res = await this._call(messages, phase === 'forced', job, conv.messages.length > 0);
 
       // stop_reason before content: a refusal may carry no content, or a partial one to discard
       if (res.stop_reason === 'refusal') throw plain("I couldn't answer that one: the model declined it. Try asking another way.");
@@ -302,12 +383,22 @@ class Ask {
 
       if (res.stop_reason === 'tool_use') {
         const uses = msg.content.filter((b) => b && b.type === 'tool_use');
-        if (final || !uses.length) throw plain(`I needed more lookups than one question allows (${this.cfg.askMaxRounds} rounds) · try a narrower question`);
-        const results = await Promise.all(uses.map((u) => this._tool(job, u)));
+        if (phase === 'forced' || !uses.length) throw plain(`I needed more lookups than one question allows (${this.cfg.askMaxRounds} rounds) · try a narrower question`);
+        if (phase === 'last') {
+          // Every call still gets a result (a missing one is a 400); none of them runs.
+          phase = 'forced';
+          turn.push({ role: 'user', content: [
+            ...uses.map((u) => ({ type: 'tool_result', tool_use_id: u.id, content: 'error: no lookups are left for this question', is_error: true })),
+            { type: 'text', text: 'No lookups are left. Answer now with what you have, and say what you could not check.' },
+          ] });
+          continue;
+        }
+        const results = await Promise.all(uses.map((u, i) => (i < MAX_TOOLS_PER_ROUND ? this._tool(job, u)
+          : { type: 'tool_result', tool_use_id: u.id, content: `error: at most ${MAX_TOOLS_PER_ROUND} lookups run at once; ask for this one again if you still need it`, is_error: true })));
         job.rounds++;
         const reply = { role: 'user', content: results };
         if (job.rounds >= this.cfg.askMaxRounds) {
-          final = true;
+          phase = 'last';
           reply.content = [...results, { type: 'text', text: 'That was the last lookup allowed for this question. Answer now with what you have, and say what you could not check.' }];
         }
         turn.push(reply);
@@ -337,11 +428,12 @@ class Ask {
       const out = await tools.runTool(this.E, use.name, use.input, this.now());
       return { type: 'tool_result', tool_use_id: use.id, content: out };
     } catch (e) {
-      return { type: 'tool_result', tool_use_id: use.id, content: `error: ${String((e && e.message) || e).slice(0, 300)}`, is_error: true };
+      const msg = tools.redact(String((e && e.message) || e).slice(0, 300), tools.secretValues(this.E));
+      return { type: 'tool_result', tool_use_id: use.id, content: `error: ${msg}`, is_error: true };
     }
   }
 
-  _body(messages, final) {
+  _body(messages, toolsOff) {
     const body = {
       model: this.cfg.askModel,
       max_tokens: MAX_TOKENS,
@@ -351,22 +443,50 @@ class Ask {
       tools: TOOLS,
       messages: withTailMark(messages),
     };
-    if (final) body.tool_choice = { type: 'none' };
+    if (toolsOff) body.tool_choice = { type: 'none' };
     return body;
   }
 
-  // One API call, with the refusal fallback exactly as research.js does it, and one retry when
-  // Anthropic is rate-limiting or overloaded -- a person is waiting, and a second try usually lands.
-  async _call(messages, final, job) {
-    const body = this._body(messages, final);
-    try { return await this._post(body); }
-    catch (e) {
-      const s = e && e.status;
-      const transient = s === 429 || s === 500 || s === 502 || s === 503 || s === 504 || s === 529 || (e && !s && /fetch failed|ECONNRESET|socket/i.test(String(e.message)));
-      if (!transient) throw e;
-      this._step(job, 'the API was busy, trying again');
-      await this.sleep(Math.min(10000, Math.max(1000, ((e.retryAfter || 0) * 1000) || 2000)));
-      return this._post(body);
+  // The most one request can cost: every prompt token written to the cache, all of max_tokens used,
+  // every search spent. The fallback model, if one runs, prices no higher (priceFor).
+  _worstCase(body) {
+    const p = priceFor(body.model);
+    return r4(Math.ceil(JSON.stringify(body).length / CHARS_PER_TOKEN) * p.cacheWrite + body.max_tokens * p.output + WEB_SEARCH_MAX_USES * WEB_SEARCH_USD);
+  }
+
+  // One API call: its worst case held against the day while it runs, the refusal fallback exactly as
+  // research.js does it, and one retry when Anthropic is rate-limiting or overloaded, or the
+  // connection dropped -- a person is waiting, and a second try usually lands.
+  async _call(messages, toolsOff, job, followUp) {
+    const body = this._body(messages, toolsOff);
+    const most = this._worstCase(body);
+    const cap = this.cfg.askDailyUsd;
+    for (let attempt = 0; ; attempt++) {
+      this._rollDay();
+      const free = cap - this.daySpend - this.held;
+      if (most > free) {
+        if (job.calls) throw plain(`today's $${cap.toFixed(2)} for questions ran out while answering this · it resets at midnight Eastern`);
+        if (this.held > 0) throw plain(`the rest of today's $${cap.toFixed(2)} is held for the other question being answered · try again when it finishes`);
+        if (followUp) throw plain(`the $${Math.max(0, r2(cap - this.daySpend)).toFixed(2)} left today cannot cover a question in a chat this long · start a new chat, or wait for midnight Eastern`);
+        throw plain(`today's $${cap.toFixed(2)} for questions is spent · it resets at midnight Eastern`);
+      }
+      job.calls++;
+      this.held = r4(this.held + most);
+      let res = null, err = null;
+      try { res = await this._post(body); } catch (e) { err = e; }
+      this.held = Math.max(0, r4(this.held - most));
+      if (!err) { this._meter(job, res); return res; }
+
+      if (maybeBilled(err)) this._charge(job, most, 0, true);
+      const s = err.status;
+      const transient = s === 429 || s === 500 || s === 502 || s === 503 || s === 504 || s === 529 || (!s && /fetch failed|ECONNRESET|socket/i.test(String(err.message)));
+      if (!transient || attempt >= 1) throw err;
+      // retry-after is honoured in full; a wait longer than a person should sit through fails now
+      // and says how long, rather than spending the one retry too early to work
+      const wait = err.retryAfter > 0 ? err.retryAfter : 2;
+      if (wait > MAX_RETRY_WAIT_S) throw err;
+      this._step(job, s ? `the API was busy, trying again in ${Math.ceil(wait)}s` : 'the connection dropped, trying again');
+      await this.sleep(Math.ceil(wait) * 1000);
     }
   }
 
@@ -384,30 +504,50 @@ class Ask {
     }
   }
 
+  // With a refusal fallback, top-level usage covers only the attempt that produced the message;
+  // usage.iterations is the record of every attempt, a declined one included. The larger of the two
+  // is charged: when unsure whether an attempt was billed, it counts.
   _meter(job, res) {
     const u = res && res.usage;
     if (!u) return;
-    const p = priceFor(res.model || this.cfg.askModel);
-    const searches = (u.server_tool_use && u.server_tool_use.web_search_requests) || 0;
-    const usd = (u.input_tokens || 0) * p.input + (u.output_tokens || 0) * p.output
-      + (u.cache_read_input_tokens || 0) * p.cacheRead + (u.cache_creation_input_tokens || 0) * p.cacheWrite
-      + searches * WEB_SEARCH_USD;
-    job.usd = r4(job.usd + usd);
-    job.searches += searches;
-    this._rollDay();
-    this.daySpend = r4(this.daySpend + usd);
+    let { usd, searches } = usageCost(u, res.model || this.cfg.askModel);
+    if (Array.isArray(u.iterations) && u.iterations.length) {
+      let iu = 0, is = 0;
+      for (const it of u.iterations) {
+        const c = usageCost(it, (it && it.model) || res.model || this.cfg.askModel);
+        iu += c.usd; is += c.searches;
+      }
+      usd = Math.max(usd, iu); searches = Math.max(searches, is);
+    }
+    this._charge(job, usd, searches, false);
   }
 
-  // Errors in the operator's words. Anthropic's error bodies carry no key; they are cut short anyway.
+  _charge(job, usd, searches, estimated) {
+    job.usd = r4(job.usd + usd);
+    job.searches += searches;
+    if (estimated) job.estimatedUsd = r4((job.estimatedUsd || 0) + usd);
+    this._rollDay();
+    this.daySpend = r4(this.daySpend + usd);
+    try {
+      if (typeof this.E.journal === 'function') {
+        this.E.journal(this.E, 'ASK_SPEND', { usd: r4(usd), searches, model: this.cfg.askModel, ...(estimated ? { estimated: true } : {}) });
+      }
+    } catch { /* the journal never takes the panel down */ }
+  }
+
+  // Errors in the operator's words. Anthropic's error bodies carry no key; they are cut short anyway,
+  // and the caller scrubs the result for secret values regardless.
   _explain(e) {
     if (e && e.plain) return e.message;
     const s = e && e.status;
     const m = String((e && e.message) || e);
     if (s === 401 || s === 403) return `the Anthropic API refused the key (HTTP ${s}) · check ANTHROPIC_API_KEY`;
-    if (s === 429) return "Anthropic's rate limit was hit · try again in a minute";
+    if (s === 429) return `Anthropic's rate limit was hit · try again in ${e.retryAfter > 90 ? `${Math.ceil(e.retryAfter / 60)} minutes` : e.retryAfter > 0 ? `${Math.ceil(e.retryAfter)} seconds` : 'a minute'}`;
     if (s === 408 || /timed out/i.test(m)) return `the model took longer than ${Math.round(this.cfg.askTimeoutMs / 1000)}s to reply · try again`;
     if (s >= 500) return "Anthropic's API is having trouble right now · try again shortly";
     if (s === 400) return `the request was rejected: ${m.slice(0, 200)}`;
+    // Node refuses to send a header with a line break in it, and its message quotes the value
+    if (e instanceof TypeError && /header/i.test(m)) return 'ANTHROPIC_API_KEY looks malformed (a line break or stray character inside it) · check it in .env';
     return `the question failed: ${m.slice(0, 200)}`;
   }
 }
@@ -429,6 +569,19 @@ function actionRefusal(req) {
     if (host !== req.headers.host) return { status: 403, text: 'cross-origin request refused' };
   }
   return null;
+}
+
+// DNS rebinding. A web page can point its own name at 127.0.0.1; the browser then treats the desk as
+// that page's own site, so the page's name is in both Origin and Host and the check above passes.
+// A desk with no DASH_PASS is loopback-only (server.js refuses to start otherwise), so everything
+// that honestly reaches one names a loopback host -- on any port, so an SSH tunnel still works. A
+// desk with a password (the Fly box) is not checked: its login already stops a rebound page, which
+// never has the cookie. server.js applies this to every /api/ request.
+const LOOPBACK_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d{1,5})?$/i;
+function rebindRefusal(req, dashPass) {
+  if (dashPass) return null;
+  const host = String((req.headers && req.headers.host) || '');
+  return LOOPBACK_HOST.test(host) ? null : { status: 403, text: 'this desk has no password, so it only answers to localhost' };
 }
 
 // A small JSON body. Over the cap it is drained and refused in words rather than cut off mid-send,
@@ -475,4 +628,4 @@ async function routeAsk(ask, req, pathname) {
   return { status: 404, text: 'not found' };
 }
 
-module.exports = { Ask, actionRefusal, readJson, routeAsk, echoable, withTailMark, answerText, SYSTEM, TOOLS, MAX_QUESTIONS, MAX_CONVERSATIONS, MAX_INFLIGHT };
+module.exports = { Ask, actionRefusal, rebindRefusal, readJson, routeAsk, echoable, withTailMark, answerText, SYSTEM, TOOLS, MAX_QUESTIONS, MAX_CONVERSATIONS, MAX_INFLIGHT };

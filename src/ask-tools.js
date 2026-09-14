@@ -251,7 +251,7 @@ function activityLog(E, input, now) {
 const JOURNAL_FIELDS = ['id', 'group', 'label', 'venue', 'side', 'qty', 'entry', 'exit', 'fee', 'cost', 'proceeds', 'pnl', 'legPnl',
   'partialPnl', 'reason', 'strategy', 'heldMs', 'cash', 'sold', 'remaining', 'attempt', 'ref', 'orderId', 'clientOrderId', 'pairId',
   'expectedPayout', 'entryCost', 'lockedPnl', 'integrity', 'positions', 'legs', 'was', 'ticker', 'px', 'tradePx', 'runOver', 'inv',
-  'rate', 'until', 'equity', 'usd', 'searches', 'action', 'sentence', 'confidence', 'status', 'rounds', 'tools', 'model', 'validationVersion'];
+  'rate', 'until', 'equity', 'usd', 'estimated', 'searches', 'action', 'sentence', 'confidence', 'status', 'rounds', 'tools', 'model', 'validationVersion'];
 function journalDates(dir) {
   try { return fs.readdirSync(dir).map((f) => (f.match(/^journal-(\d{4}-\d{2}-\d{2})\.jsonl$/) || [])[1]).filter(Boolean).sort(); }
   catch { return []; }
@@ -515,15 +515,23 @@ function settings(E, input) {
 }
 
 // ---------------------------------------------------------------- docs
-// README.md and ops/DEPLOY.md, split at their headings and searched by keyword. Parsed once: the
-// files do not change under a running desk.
+// README.md and ops/DEPLOY.md, split at their headings and searched by keyword. Parsed again only
+// when a file's size or modification time changes (one stat per file per call): a local desk sees
+// an edited or pulled README without a restart. The box's copies are baked into its image, and a
+// merge that touches either file redeploys it (.github/workflows/test.yml).
+const DOC_FILES = ['README.md', 'ops/DEPLOY.md'];
 let docCache = null;
-function docSections() {
-  if (docCache) return docCache;
+function docSections(root = ROOT) {
+  const files = [];
+  for (const rel of DOC_FILES) {
+    try { const st = fs.statSync(path.join(root, rel)); files.push({ rel, stamp: `${st.size}@${st.mtimeMs}` }); } catch { /* not on this machine */ }
+  }
+  const key = `${root}|${files.map((f) => `${f.rel}:${f.stamp}`).join('|')}`;
+  if (docCache && docCache.key === key) return docCache;
   const out = [];
-  for (const rel of ['README.md', 'ops/DEPLOY.md']) {
+  for (const { rel } of files) {
     let body;
-    try { body = fs.readFileSync(path.join(ROOT, rel), 'utf8'); } catch { continue; }
+    try { body = fs.readFileSync(path.join(root, rel), 'utf8'); } catch { continue; }
     let cur = null, inFence = false;
     for (const line of body.split('\n')) {
       if (/^```/.test(line)) inFence = !inFence;
@@ -533,15 +541,15 @@ function docSections() {
       cur.lines.push(line);
     }
   }
-  docCache = out.map((s) => ({ file: s.file, heading: s.heading, text: s.lines.join('\n').trim() })).filter((s) => s.text);
+  docCache = { key, sections: out.map((s) => ({ file: s.file, heading: s.heading, text: s.lines.join('\n').trim() })).filter((s) => s.text) };
   return docCache;
 }
-function docs(_E, input) {
+function docs(_E, input, _now, root = ROOT) {
   if (typeof input.query !== 'string' || !input.query.trim()) throw new Error('query is required: a few keywords');
   const limit = int(input.limit, 2, 1, 4, 'limit');
   const words = [...new Set(input.query.toLowerCase().split(/[^a-z0-9_]+/).filter((w) => w.length >= 3))].slice(0, 12);
   if (!words.length) throw new Error('query needs at least one word of three or more letters');
-  const secs = docSections();
+  const secs = docSections(root).sections;
   if (!secs.length) return { found: false, note: 'README.md and ops/DEPLOY.md are not on this machine' };
   const scored = secs.map((s) => {
     const head = s.heading.toLowerCase(), body = s.text.toLowerCase();
