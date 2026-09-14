@@ -10,6 +10,10 @@ COPY src ./src
 COPY tools ./tools
 COPY public ./public
 COPY server.js ./
+# The Ask panel's docs tool searches these (src/ask-tools.js). Without them it says so and answers
+# from the live tools alone.
+COPY README.md ./
+COPY ops/DEPLOY.md ./ops/
 
 # The journals, tick tape and ledger live here. Mount a volume on it or a restart loses the
 # evidence the desk exists to collect.

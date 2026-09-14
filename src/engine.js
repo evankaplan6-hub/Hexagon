@@ -14,6 +14,7 @@ const agents = require('./agents');
 const { MAX_VENUE_DISAGREE } = require('./matcher');
 const { Brain } = require('./brain');
 const { Research } = require('./research');
+const { Ask } = require('./ask');
 
 const AGENTS = [
   { key: 'BRAM', n: '01', role: 'PRICING', color: '#3b82f6' },
@@ -48,6 +49,7 @@ class Engine {
     this.brain = new Brain(cfg);
     this.brainSignals = [];   // mind-originated signals, merged into the book after BRAM
     this.research = new Research(cfg, this);   // operator-requested deep dives on an alert
+    this.ask = new Ask(cfg, this);             // the Ask panel: operator questions over read-only tools
 
     this.lastCycleMs = 0;
     // Operator halt, distinct from TESS's automatic one. TESS recomputes its halt from scratch
@@ -742,6 +744,7 @@ class Engine {
       agents: AGENTS.map((a) => ({ ...a, ...this.agentStatus[a.key], active: now - this.agentStatus[a.key].lastActive < 4000, thinking: this.brain.thinking(a.key) })),
       brain: this.brain.snapshot(),
       research: this.research.snapshot(),
+      ask: this.ask.snapshot(),
       pairs: pairs.slice(0, 40),
       pairCount: this.pairs.length,
       cycleMs: this.lastCycleMs,

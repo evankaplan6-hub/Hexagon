@@ -20,6 +20,11 @@ primary_region = "iad"          # Ashburn, Virginia — close to the exchange, a
   # is the hard cap.
   MAKER_MAX_RUNOVER = "1"
   MAKER_SOFT_CAP = "1"
+  # The desks' Claude minds stay off here. The box has no ANTHROPIC_API_KEY today, so they are
+  # already off; pinning it keeps them off if the key is added for the Ask panel, so the key only
+  # pays for questions someone asks (ASK_DAILY_USD caps it). Research is click-only with its own
+  # cap (RESEARCH_DAILY_USD).
+  BRAIN = "0"
 
 # The ledger, the journals and the tick tape. Without this a redeploy silently resets the evidence.
 [[mounts]]
