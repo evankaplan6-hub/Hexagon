@@ -73,7 +73,8 @@ async function walletFills(wallet, startTs, endTs) {
     pages++;
     let fresh = 0;
     for (const f of page) {
-      const k = `${f.tx}|${f.conditionId}|${f.outcomeIndex}|${f.side}|${f.size}|${f.ts}`;
+      // price is part of a fill's identity: one tx sweeping 34c and 35c for the same size is two fills
+      const k = pm.fillKey(f);
       if (seen.has(k)) continue;
       seen.add(k); out.push(f); fresh++;
     }
