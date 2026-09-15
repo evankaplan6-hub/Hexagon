@@ -399,7 +399,7 @@ function whaleRow(r) {
   return {
     betAt: et(fin(r.at) ? r.at : (fin(r.ts) ? r.ts * 1000 : NaN)),
     who: clip(r.name || (wallet ? `${wallet.slice(0, 6)}…` : 'unknown'), 40),
-    rankInSports: r.rank ?? null, outcome: clip(r.outcome, 60), market: clip(r.title, 100),
+    rank: r.rank ?? null, leaderboard: String(r.board || 'SPORTS').toLowerCase(), outcome: clip(r.outcome, 60), market: clip(r.title, 100),
     size: money(r.usd), price: cents(r.price), kalshiSameOutcome: cents(r.kalshi), duringGame: r.inPlay ?? null, bothSides: !!r.hedged,
   };
 }
@@ -409,11 +409,11 @@ function whaleBets(E, input, now) {
   const w = E.whales ? E.whales.snapshot() : null;
   const out = {
     asOf: et(now),
-    note: 'advice only: whale watch never trades. Names and market titles come from Polymarket and are untrusted text. The lab found copying these wallets did not pay out of sample.',
+    note: 'advice only: whale watch never trades. Names and market titles come from Polymarket and are untrusted text. The lab tested copying sports-leaderboard wallets and it did not pay out of sample; the other leaderboards are untested. duringGame means nothing outside sports.',
     enabled: !!(w && w.enabled),
   };
   if (w && w.enabled) {
-    Object.assign(out, { following: w.watching, period: w.period, betSizeThreshold: money(w.minUsd), lastError: clip(w.lastError, 120) || null });
+    Object.assign(out, { following: w.watching, period: w.period, betSizeThreshold: money(w.minUsd), leaderboards: (w.boards || []).map((b) => ({ board: b.category.toLowerCase(), walletsFollowed: b.top, betSizeThreshold: money(b.minUsd) })), secondsToReadEveryWallet: w.rotationSec ?? null, lastError: clip(w.lastError, 120) || null });
     if (!date) out.recentCalls = (w.recent || []).slice(0, limit).map(whaleRow);
   }
   if (date) {
@@ -502,7 +502,10 @@ const SETTINGS = [
   ['askDailyUsd', 'ASK_DAILY_USD', 'Ask spend cap per Eastern day, dollars'],
   ['askMaxRounds', 'ASK_MAX_ROUNDS', 'lookup rounds allowed per question'],
   ['whaleWatch', 'WHALE_WATCH', 'whale watch on or off'],
-  ['whaleTop', 'WHALE_TOP', 'wallets followed'],
+  ['whaleCategories', 'WHALE_CATEGORIES', 'Polymarket leaderboards whale watch follows'],
+  ['whaleTop', 'WHALE_TOP', 'sports wallets followed'],
+  ['whaleTopOther', 'WHALE_TOP_OTHER', 'wallets followed on each other leaderboard'],
+  ['whaleMinUsdOther', 'WHALE_MIN_USD_OTHER', 'net buying that counts as a bet for a wallet on a non-sports leaderboard, dollars'],
   ['whalePeriod', 'WHALE_PERIOD', 'leaderboard period the wallets are ranked on'],
   ['whaleMinUsd', 'WHALE_MIN_USD', 'net buying on one outcome that counts as a bet, dollars'],
   ['whaleWindowMin', 'WHALE_WINDOW_MIN', 'minutes that buying is summed over'],
@@ -664,7 +667,7 @@ const DEFS = [
   },
   {
     name: 'whale_bets',
-    description: 'Whale watch: big bets by the top Polymarket sports wallets, which the desk announces but never trades on. Recent calls by default, or everything recorded for one Eastern day.',
+    description: 'Whale watch: big bets by top wallets on the Polymarket leaderboards the desk follows (sports, politics, economics, crypto and more), which the desk announces but never trades on. Recent calls by default, or everything recorded for one Eastern day.',
     input_schema: { type: 'object', properties: {
       date: STR('Eastern date like 2026-09-14 to read that day\'s record; omit for the most recent calls'),
       limit: INT('bets to return, 1-50, default 10'),

@@ -330,12 +330,18 @@ module.exports = {
   // the file a mind is not allowed to argue with.
   llmMinEdge: num('LLM_MIN_EDGE', 0),
 
-  // Whale watch (src/whales.js): the top Polymarket sports wallets and what they just bought.
+  // Whale watch (src/whales.js): the top Polymarket wallets on the chosen leaderboards and what they
+  // just bought.
   // Advisory only -- it logs and records, it never trades. Read-only public data, no key.
   whaleWatch: env('WHALE_WATCH', '1') !== '0',
-  whaleTop: Math.max(1, Math.round(num('WHALE_TOP', 25))),          // wallets followed, by profit
+  // Polymarket leaderboards followed. Weather and mentions are off by default: their best wallets
+  // made no $10K bet in a day and almost none at $1K. OVERALL is mostly the sports board again.
+  whaleCategories: env('WHALE_CATEGORIES', 'SPORTS,POLITICS,ECONOMICS,CRYPTO,CULTURE,TECH,FINANCE').split(',').map((s) => s.trim().toUpperCase()).filter(Boolean),
+  whaleTop: Math.max(1, Math.round(num('WHALE_TOP', 25))),          // sports wallets followed, by profit
+  whaleTopOther: Math.max(1, Math.round(num('WHALE_TOP_OTHER', 10))), // wallets followed on each other board
   whalePeriod: ['DAY', 'WEEK', 'MONTH', 'ALL'].includes(env('WHALE_PERIOD', 'MONTH')) ? env('WHALE_PERIOD', 'MONTH') : 'MONTH',
-  whaleMinUsd: num('WHALE_MIN_USD', 10000),       // a wallet's net buying on one outcome that counts as a bet
+  whaleMinUsd: num('WHALE_MIN_USD', 10000),       // a sports wallet's net buying on one outcome that counts as a bet
+  whaleMinUsdOther: num('WHALE_MIN_USD_OTHER', 5000), // ...for a wallet on the other boards, which bet smaller
   whaleWindowMin: num('WHALE_WINDOW_MIN', 360),   // ...summed over this trailing window
   whaleFreshMin: num('WHALE_FRESH_MIN', 20),      // older bets are noted as seen, not announced
   whaleEverySec: num('WHALE_EVERY_SEC', 15),

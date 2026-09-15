@@ -1,8 +1,9 @@
 'use strict';
-// Whale watch: what the best sports bettors on Polymarket just bought.
+// Whale watch: what Polymarket's best bettors just bought -- sports, politics, economics, crypto and
+// the other leaderboards.
 //
 // Every Polymarket fill is public, and the data API serves it per wallet with no key, alongside a
-// sports leaderboard. Paid "insider trackers" (sharpai.us's is the one this replaced) are this
+// leaderboard per category. Paid "insider trackers" (sharpai.us's is the one this replaced) are this
 // feed repackaged: a leaderboard wallet, the market, the side, the size.
 //
 // ADVISORY ONLY. Nothing here opens a position or feeds a signal. Whether copying these wallets
@@ -100,13 +101,15 @@ const GENERIC = /^(yes|no|over|under)$/i;
 // One sentence for the log, in the shape public/app.js turns into a bubble:
 //   "<who> bought $54K on <outcome> at 55c · <market> · #6 in sports this month, +$827K · Kalshi 57c now"
 //   "<who> bought $12K on No (Will Getafe CF win on 2026-09-13?) at 84c · #9 in sports this month, +$310K"
+// `w.category` is the leaderboard the wallet ranks best on; a wallet from before the watch followed
+// more than one board has none, and was on the sports board.
 function describe(bet, w, ctx = {}) {
   const who = bet.name || (w && w.name) || `${bet.wallet.slice(0, 6)}…`;
   const outcome = bet.outcome || `outcome ${bet.outcomeIndex}`;
   const generic = GENERIC.test(outcome) && bet.title;
   let t = `${who} bought ${usdShort(bet.usd)} on ${generic ? `${outcome} (${bet.title})` : outcome} at ${cents(bet.price)}`;
   if (!generic && bet.title) t += ` · ${bet.title}`;
-  if (w && w.rank) t += ` · #${w.rank} in sports this ${w.period.toLowerCase()}, ${w.pnl >= 0 ? '+' : '−'}${usdShort(w.pnl)}`;
+  if (w && w.rank) t += ` · #${w.rank} in ${String(w.category || 'sports').toLowerCase()} this ${w.period.toLowerCase()}, ${w.pnl >= 0 ? '+' : '−'}${usdShort(w.pnl)}`;
   if (ctx.ks) t += ` · Kalshi ${cents(ctx.ks.px)} now`;   // now, not when the bet was made
   if (ctx.inPlay) t += ' · during the game';
   if (bet.hedged) t += ' · bet both sides, likely hedging';
@@ -153,15 +156,38 @@ function readRecord(dir, fromTs, nowMs) {
 const orNull = (x) => (x === undefined ? null : x);
 function panelEntry(r) {
   return {
-    at: r.ts * 1000, wallet: r.wallet || '', name: r.name || '', rank: orNull(r.rank), outcome: r.outcome || '', title: r.title || '',
+    at: r.ts * 1000, wallet: r.wallet || '', name: r.name || '', rank: orNull(r.rank), board: r.board || 'SPORTS', outcome: r.outcome || '', title: r.title || '',
     usd: Number.isFinite(r.usd) ? r.usd : null, price: Number.isFinite(r.price) ? r.price : null,
     kalshi: orNull(r.kalshi), inPlay: orNull(r.inPlay), hedged: !!r.hedged,
     url: r.eventSlug ? `https://polymarket.com/event/${r.eventSlug}` : null,
   };
 }
 
+// The leaderboards Polymarket's data API accepts, checked 2026-09-14: GEOPOLITICS, ELECTIONS, SCIENCE
+// and WORLD come back HTTP 400 "invalid category parameter", and each refused call counts toward
+// TESS's API-error halt, so a typo in WHALE_CATEGORIES is dropped here rather than sent every 30 min.
+const BOARDS = ['SPORTS', 'POLITICS', 'ECONOMICS', 'CRYPTO', 'CULTURE', 'TECH', 'FINANCE', 'WEATHER', 'MENTIONS', 'OVERALL'];
+
+// Which boards to follow, how deep, and how big a bet has to be on each. Sports keeps the watch's
+// original settings. The others are shallower and their bar lower, because their best wallets bet
+// smaller: over one day the top 8 wallets on each board made 6 bets of $10K+ on economics, 3 on
+// tech, 2 each on politics and finance, 1 on crypto -- and none on weather or mentions, which are
+// left out by default. A config without WHALE_CATEGORIES (an older .env, a test) follows sports only.
+function boardsFrom(cfg) {
+  const want = (cfg.whaleCategories && cfg.whaleCategories.length ? cfg.whaleCategories : ['SPORTS']).map((c) => String(c).toUpperCase());
+  const out = [], unknown = [];
+  for (const c of want) {
+    if (!BOARDS.includes(c)) { unknown.push(c); continue; }
+    if (out.some((b) => b.category === c)) continue;
+    const sports = c === 'SPORTS';
+    out.push({ category: c, top: sports ? cfg.whaleTop : (cfg.whaleTopOther ?? cfg.whaleTop), minUsd: sports ? cfg.whaleMinUsd : (cfg.whaleMinUsdOther ?? cfg.whaleMinUsd) });
+  }
+  return { boards: out, unknown };
+}
+
 function makeWhaleWatch(cfg) {
-  const wallets = new Map();        // wallet -> { name, rank, pnl, vol, period }
+  const wallets = new Map();        // wallet -> { name, rank, pnl, vol, period, category, minUsd, ranks: [{category, rank, pnl}] }
+  const { boards, unknown } = boardsFrom(cfg);
   // bet key -> bet ts: a bet is said once. Kept for twice the window, and in memory only, so the
   // first step reads it back from the record (restore) or every restart would say the last twenty
   // minutes of bets again.
@@ -183,22 +209,51 @@ function makeWhaleWatch(cfg) {
     for (const r of calls) { announced.set(r.key, r.ts); remember(panelEntry(r)); }
   }
 
+  // Every followed board, merged by wallet. The same wallets top several boards (one was #1 in
+  // finance, #2 in politics and #5 in tech on 2026-09-14), so a wallet keeps all its ranks, is shown
+  // by its best one, and has a bet called at the lowest bar of the boards it is on. One board that
+  // fails or comes back empty costs that board, not the whole reload.
   async function loadBoard(E) {
-    const rows = [];
-    for (let off = 0; off < cfg.whaleTop; off += 50) {
-      const page = await pm.fetchLeaderboard({ category: 'SPORTS', period: cfg.whalePeriod, orderBy: 'PNL', limit: Math.min(50, cfg.whaleTop - off), offset: off });
-      rows.push(...page);
-      if (page.length < 50) break;
+    const next = new Map();
+    const failed = [];
+    const counts = [];
+    for (const b of boards) {
+      try {
+        const rows = [];
+        for (let off = 0; off < b.top; off += 50) {
+          const page = await pm.fetchLeaderboard({ category: b.category, period: cfg.whalePeriod, orderBy: 'PNL', limit: Math.min(50, b.top - off), offset: off });
+          rows.push(...page);
+          if (page.length < 50) break;
+        }
+        const keep = rows.filter((r) => r.pnl > 0).slice(0, b.top);
+        counts.push(`${keep.length} ${b.category.toLowerCase()}`);
+        for (const r of keep) {
+          const cur = next.get(r.wallet) || { ...r, ranks: [], minUsd: Infinity };
+          cur.ranks.push({ category: b.category, rank: r.rank, pnl: r.pnl });
+          cur.minUsd = Math.min(cur.minUsd, b.minUsd);
+          if (!cur.name && r.name) cur.name = r.name;
+          next.set(r.wallet, cur);
+        }
+      } catch (e) {
+        failed.push(`${b.category.toLowerCase()} (${String(e.message).slice(0, 60)})`);
+      }
     }
-    const keep = rows.filter((r) => r.pnl > 0).slice(0, cfg.whaleTop);
-    if (!keep.length) throw new Error('sports leaderboard came back empty');
+    if (!next.size) throw new Error(failed.length ? `every leaderboard failed: ${failed.join(', ')}` : 'every leaderboard came back empty');
+    for (const w of next.values()) {
+      const best = w.ranks.slice().sort((a, b) => (a.rank - b.rank) || (b.pnl - a.pnl))[0];
+      Object.assign(w, { rank: best.rank, pnl: best.pnl, category: best.category, period: cfg.whalePeriod });
+    }
     const first = !wallets.size;
     wallets.clear();
-    for (const r of keep) wallets.set(r.wallet, { ...r, period: cfg.whalePeriod });
+    for (const [k, v] of next) wallets.set(k, v);
     order = [...wallets.keys()];
     cursor %= order.length;
     boardAt = Date.now();
-    if (first) E.log('ILSA', 'SCAN', null, `whale watch on · following the top ${order.length} Polymarket sports wallets this ${cfg.whalePeriod.toLowerCase()} · bets of ${usdShort(cfg.whaleMinUsd)}+ get called out`);
+    if (first) {
+      const bars = [...new Set(boards.map((b) => b.minUsd))].sort((a, b) => b - a).map(usdShort).join(' or ');
+      E.log('ILSA', 'SCAN', null, `whale watch on · following ${order.length} top Polymarket wallets this ${cfg.whalePeriod.toLowerCase()} across ${counts.join(', ')} · bets of ${bars}+ get called out${unknown.length ? ` · ignored unknown boards ${unknown.join(', ')}` : ''}`);
+    }
+    if (failed.length && E.due('whale-board-fail', 1800)) E.log('ILSA', 'OPS', null, `whale watch could not load ${failed.join(', ')} · following the other boards`);
   }
 
   function record(rec) {
@@ -215,7 +270,8 @@ function makeWhaleWatch(cfg) {
     const fills = await pm.fetchActivity(wallet, { limit: 500, start: now - cfg.whaleWindowMin * 60 });
     polls++;
     const w = wallets.get(wallet);
-    for (const bet of betsFrom(fills, { minUsd: cfg.whaleMinUsd, windowSec: cfg.whaleWindowMin * 60 })) {
+    const bar = w && Number.isFinite(w.minUsd) ? w.minUsd : cfg.whaleMinUsd;
+    for (const bet of betsFrom(fills, { minUsd: bar, windowSec: cfg.whaleWindowMin * 60 })) {
       if (announced.has(bet.key)) continue;
       announced.set(bet.key, bet.ts);
       // Old news is recorded as seen but not announced: on a restart the last six hours of bets
@@ -224,7 +280,7 @@ function makeWhaleWatch(cfg) {
       const ctx = context(E, bet);
       const text = describe(bet, w, ctx);
       // recorded as the floor named it: the fill's name, else the leaderboard's
-      const rec = { ...bet, name: bet.name || (w && w.name) || '', rank: w ? w.rank : null, walletPnl: w ? Math.round(w.pnl) : null, kalshi: ctx.ks ? Math.round(ctx.ks.px * 1000) / 1000 : null, inPlay: ctx.inPlay ?? null };
+      const rec = { ...bet, name: bet.name || (w && w.name) || '', rank: w ? w.rank : null, board: w ? w.category : null, ranks: w ? w.ranks : null, walletPnl: w ? Math.round(w.pnl) : null, kalshi: ctx.ks ? Math.round(ctx.ks.px * 1000) / 1000 : null, inPlay: ctx.inPlay ?? null };
       remember(panelEntry(rec));
       record(rec);
       E.log('ILSA', 'WHALE', null, text);
@@ -254,10 +310,12 @@ function makeWhaleWatch(cfg) {
   }
 
   function snapshot() {
-    return { enabled: true, watching: wallets.size, period: cfg.whalePeriod, minUsd: cfg.whaleMinUsd, polls, boardAt, lastError, recent: recent.slice(0, 10) };
+    // a full rotation: every followed wallet read once, WHALE_PER_POLL at a time every WHALE_EVERY_SEC
+    const rotationSec = Math.round(Math.ceil(order.length / Math.max(1, cfg.whalePerPoll)) * (cfg.whaleEverySec || 15));
+    return { enabled: true, watching: wallets.size, period: cfg.whalePeriod, minUsd: cfg.whaleMinUsd, boards: boards.map((b) => ({ ...b })), rotationSec, polls, boardAt, lastError, recent: recent.slice(0, 10) };
   }
 
   return { step, snapshot };
 }
 
-module.exports = { betsFrom, describe, makeWhaleWatch, recordDays, readRecord, panelEntry };
+module.exports = { betsFrom, describe, makeWhaleWatch, recordDays, readRecord, panelEntry, boardsFrom, BOARDS };

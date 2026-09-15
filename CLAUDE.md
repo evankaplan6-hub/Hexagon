@@ -15,7 +15,7 @@ to Fly once tests pass (paper only; see ops/DEPLOY.md → Auto-deploy).
 ## Running it
 
 ```bash
-npm test                                      # 1570 assertions, no network, no clock
+npm test                                      # 1583 assertions, no network, no clock
 node server.js                                # paper account, live market data → localhost:8787
 DEMO=1 DATA_DIR=./data-demo node server.js    # synthetic fills/settles, separate account
 npm run reset                                 # wipe the paper account
@@ -48,7 +48,7 @@ src/broker.js     paper broker + live Kalshi adapter
 src/venues/       Polymarket (Gamma + CLOB) and Kalshi public data
 src/recorder.js   tick tape writer      public/          dashboard
 src/tape.js       maker market data     src/kalshi-ws.js Kalshi trade socket (read-only; needs the key, else the tape polls)
-src/whales.js     whale watch: top Polymarket sports wallets' big bets on the floor (advisory, never trades; WHALE_WATCH=0 off)
+src/whales.js     whale watch: top wallets' big bets on Polymarket's sports/politics/economics/crypto/culture/tech/finance boards (advisory, never trades; WHALE_WATCH=0 off)
 src/ask.js        the dashboard Ask panel: read-only Claude tool loop (src/ask-tools.js), ASK_DAILY_USD ceiling; needs ANTHROPIC_API_KEY
 tools/            edge-scan, replay, maker-replay, maker-rank, pm-maker-scan, maker-report, fillcheck,
                   history-scan, golden, api, lab-fetch + lab (strategy tournament on settled markets),
