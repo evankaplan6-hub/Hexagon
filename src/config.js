@@ -154,6 +154,30 @@ module.exports = {
   // would cool every market on its first adverse print. 5, 10 and 15 replay within 2% of each
   // other on run-over contracts and within $4 on realized.
   makerToxMinFills: Math.max(1, Math.round(num('MAKER_TOX_MIN_FILLS', 10))),
+  // Which share trips the gate: run-over FILLS (0, as replayed above) or run-over CONTRACTS (1).
+  //
+  // The live journal said the bad markets stay bad: across 12 markets with 50+ contracts on both
+  // sides of 2026-09-12 12:00Z, a market's run-over share before and after correlated at 0.62, and
+  // the worst third before ran 63% after against 40% for the rest. So the gate was re-scored on a
+  // fresh tape (2026-09-10 → 09-15, 46 markets), days 10-12 and 13-14 separately, soft cap off as
+  // on the box. realized + mark, change against the gate switched off:
+  //
+  //                           queue 0            queue 500
+  //                         10-12   13-14      10-12   13-14
+  //   fills,     60 min     +$13    -$2        +$2     +$0
+  //   fills,    240 min     +$26    +$5        +$7     -$0
+  //   fills,    720 min     +$28    +$3        +$7     -$0
+  //   contracts, 60 min     +$11    +$9        +$1     -$0
+  //   contracts,240 min     +$19   +$21        +$6     +$2
+  //   contracts,720 min     +$9    +$14        +$16    +$2
+  //
+  // Counting contracts with a rest of 240 or 720 minutes are the only rows better in all four cells;
+  // 240 is better in total (+$48 against +$41) and halves run-over cost on days 13-14 at queue 0 (-$79
+  // to -$40), the setting that reproduces the live run-over count. Counting fills looks best on days
+  // 10-12 and gives almost all of it back on 13-14. At queue 2000 the gate trips 1-4 times a period
+  // and moves run-over cost by under $2. Both halves were looked at to pick the row, so it is a
+  // choice, not an out-of-sample result. fly.toml turns it on for the box.
+  makerToxByContracts: env('MAKER_TOX_BY_CONTRACTS', '0') === '1',
   // The maker keeps its own drawdown rail. TESS's watches the TAKER book's equity and would never
   // notice this desk bleeding, because the two ledgers are deliberately separate.
   makerMaxDrawdownPct: num('MAKER_MAX_DRAWDOWN_PCT', 0.10),

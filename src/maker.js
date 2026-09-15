@@ -152,14 +152,30 @@ function applyFill(pos, f) {
 // market over its last TOX_WINDOW fills, and cools a market that passes cfg.makerMaxRunOver for
 // cfg.makerToxCooldownMin minutes. Both pure: the window is a value, the gate returns the next
 // state, and makerdesk assigns it -- the same split as applyFill.
+//
+// Each entry is the fill's size, positive when it was run over and negative when it was not, so one
+// window answers both questions: the share of FILLS run over, and the share of CONTRACTS. They are
+// not the same question. A sweep is one fill of several hundred contracts, and a fill-counted share
+// barely sees it -- which is why the fill-counted gate replayed with nothing off run-over contracts.
+// cfg.makerToxByContracts picks which share trips the gate. Windows saved before sizes were kept hold
+// bare 1s and 0s: a 1 reads as one run-over contract and a 0 as one clean contract, so for them the
+// contract share is the fill share, as it was when they were written.
 const TOX_WINDOW = 30;
 function toxWindow(tox, fill) {
-  return [...(tox || []), fill.runOver ? 1 : 0].slice(-TOX_WINDOW);
+  const q = Math.max(1, Math.abs(Number(fill.qty)) || 1);
+  return [...(tox || []), fill.runOver ? q : -q].slice(-TOX_WINDOW);
+}
+function toxRate(tox, byContracts) {
+  if (!tox.length) return 0;
+  if (!byContracts) return tox.filter((x) => x > 0).length / tox.length;
+  const size = (x) => (x === 0 ? 1 : Math.abs(x));      // an old window's clean 0 is one clean contract
+  const all = tox.reduce((a, x) => a + size(x), 0);
+  return tox.reduce((a, x) => a + (x > 0 ? x : 0), 0) / all;
 }
 function toxicGate(m, cfg, now) {
   const tox = m.tox || [];
   const n = tox.length;
-  const rate = n ? tox.reduce((a, x) => a + x, 0) / n : 0;
+  const rate = toxRate(tox, !!cfg.makerToxByContracts);
   if (m.cooledUntil && now < m.cooledUntil) return { cooled: true, tripped: false, rate, cooledUntil: m.cooledUntil, tox };
   // The window resets on a trip. Otherwise the same thirty fills re-trip the gate the moment the
   // cooldown ends, and a market could never earn its way back with clean fills.
