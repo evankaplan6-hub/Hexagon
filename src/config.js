@@ -10,6 +10,8 @@ module.exports = {
   initialBalance: num('INITIAL_BALANCE', 10000),
   dataDir: env('DATA_DIR', path.join(__dirname, '..', 'data')),
   record: env('RECORD', '1') !== '0', // append a tick line per priced pair per cycle under dataDir
+  // Any-market pairs are recorded on change plus this heartbeat (src/recorder.js says why).
+  recordHeartbeatMin: num('RECORD_HEARTBEAT_MIN', 15),
   // The tape's emergency brake (src/recorder.js). When free space under dataDir falls below this,
   // the recorder deletes the OLDEST ticks-*.jsonl files -- never today's, never a journal -- until
   // it is back above. On the Fly box's 1GB volume the tape fills the disk in about two weeks, and
@@ -185,6 +187,19 @@ module.exports = {
   // Locked arbs held at once, counted as arbs (one per pair of legs), not legs. Each is sized to
   // maxPositionPct of equity like any trade, so twelve is at most ~24% of the book, and it is hedged.
   maxArbGroups: num('MAX_ARB_GROUPS', 12),
+  // ...of which at most this many may settle more than LONG_DAYS out. Outside games most arbs are
+  // long: politics pairs settle in 2027-2028, and a book of them would be full for a year.
+  maxLongArbGroups: num('MAX_LONG_ARB_GROUPS', 3),
+  longDays: num('LONG_DAYS', 30),
+  // The annualised return a locked arb must beat for the time its money is tied up (decide.arbReturn).
+  // Above cash, deliberately: a 1c arb settling in 85 days is 4.3% a year, and the same 1c settling
+  // tonight is the kind of trade this desk exists for. J.D. Vance 2028 crossed 2.46c after fees and
+  // settles in 785 days -- 1.2% a year.
+  arbMinApr: num('ARB_MIN_APR', 0.05),
+  // Cycles a signal on an any-market pair must persist before KETT acts (15s each, so a minute).
+  // LA mayor crossed 4c at 01:25Z on 2026-09-15 and was 0.8c three hours later; a one-cycle gap is
+  // far more often a listing that has not caught up with its book.
+  entryPersistCycles: Math.max(1, Math.round(num('ENTRY_PERSIST_CYCLES', 4))),
   maxDailyDrawdownPct: num('MAX_DAILY_DRAWDOWN_PCT', 0.03),
   maxDataAgeSec: num('MAX_DATA_AGE_SEC', 90),
   // API errors in a 5m window before TESS halts new risk. Was hardcoded as `errs >= 25` inside
@@ -337,6 +352,27 @@ module.exports = {
   ksFeeRate: num('KS_FEE_RATE', 0.07),
 
   // universe
+  // The any-market scanner (src/anymarket.js): every category on both venues, not just the games and
+  // Fed brackets below. Discovery crawls both venues every DISCOVER_EVERY_MIN off the 15s cycle
+  // (~65 Kalshi calls, ~20 Polymarket), and every cycle reprices only the matched markets. A pair
+  // trades only once its resolution rules are verified to match (src/rules.js); the rest are
+  // priced and recorded as watch-only.
+  anyMarkets: env('ANY_MARKETS', '1') !== '0',
+  discoverEveryMin: Math.max(5, num('DISCOVER_EVERY_MIN', 20)),
+  // Matched pairs kept and repriced. Each 100 costs one Kalshi call and half a Polymarket call a cycle.
+  anyMaxPairs: Math.max(1, Math.round(num('ANY_MAX_PAIRS', 300))),
+  // Polymarket events under this 24h volume are not crawled. $500 keeps ~1,200 events (every one
+  // traded at least $1k on 2026-09-14 but a handful) and stops well inside Gamma's offset cap of 2,000.
+  pmDiscoverMinVol: num('PM_DISCOVER_MIN_VOL', 500),
+  // The rules gate's Claude check (src/rules.js): a matched pair with no verified rule family is
+  // watch-only, and when one shows an edge its two rules texts can be put to Claude ONCE (the answer
+  // is cached in DATA_DIR/rules-verdicts.jsonl, keyed by both texts). Nothing is asked without
+  // ANTHROPIC_API_KEY; a Claude "same" never overrides a conflict the deterministic check found.
+  rulesCheck: env('RULES_CHECK', '1') !== '0',
+  rulesModel: env('RULES_MODEL', 'claude-opus-5'),
+  rulesEffort: env('RULES_EFFORT', 'medium'),
+  rulesDailyUsd: num('RULES_DAILY_USD', 1),
+  rulesTimeoutMs: num('RULES_TIMEOUT_MS', 120000),
   pmUniverse: num('PM_UNIVERSE', 300),
   ksSeries: env('KS_SERIES', 'KXFEDDECISION,KXATPMATCH,KXWTAMATCH,KXMLBGAME,KXNFLGAME,KXNBAGAME,KXNCAAFGAME,KXMLSGAME,KXEPLGAME,KXUCLGAME,KXLALIGAGAME').split(',').map((s) => s.trim()).filter(Boolean),
 

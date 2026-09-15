@@ -299,6 +299,75 @@ group('arbs and convergence bets have separate books, and an arb counts once');
   ok('...but not the arb book', d.bookFull(bets, arb, c) === null);
 }
 
+group('a locked arb has to be worth the wait');
+{
+  const NOW = 1788900000000, DAY = 86400000;
+  ok('a 1c arb settling tomorrow annualises far above any hurdle', d.arbReturn(0.01, NOW + DAY, NOW) > 3);
+  // J.D. Vance for the 2028 nomination: 2.46c after fees, 785 days
+  ok('the 2028 Vance arb annualises near 1.2%', Math.abs(d.arbReturn(0.0246, NOW + 785 * DAY, NOW) - 0.0116) < 0.001, d.arbReturn(0.0246, NOW + 785 * DAY, NOW));
+  ok('a game settling within the day counts as one day, not an infinite return', d.arbReturn(0.01, NOW + 3600000, NOW) === d.arbReturn(0.01, NOW + DAY, NOW));
+  const arbPair = (settlesAt) => { const p = mk(0.40, 0.41, 0.50, 0.51); p.q.pmFeeRate = 0; p.settlesAt = settlesAt; return p; };
+  const soon = d.pairSignals(arbPair(NOW + 10 * DAY), cfg, NOW);
+  ok('an arb settling in 10 days is taken', soon.signals.length === 1 && soon.signals[0].type === 'arb', soon.signals);
+  const late = d.pairSignals(arbPair(NOW + 20000 * DAY), cfg, NOW);
+  ok('the same edge settling decades out is not an arb signal', !late.signals.some((x) => x.type === 'arb'), late.signals);
+  ok('...and says why', late.arbVeto === 'arb return under hurdle', late);
+  const sc = d.scan([{ ...arbPair(NOW + 20000 * DAY), q: { ...arbPair(0).q, t: NOW } }], { ...cfg, maxSpread: 0 }, NOW);
+  ok('the ledger reports the hurdle, not the convergence gate, when an arb existed', sc.rejects.get('arb return under hurdle') === 1, [...sc.rejects]);
+  ok('without a settlement time the hurdle is not applied', d.pairSignals({ ...arbPair(NaN) }, cfg, NOW).signals[0].type === 'arb');
+}
+
+group('long-dated arbs have a budget of their own');
+{
+  const NOW = 1788900000000, DAY = 86400000;
+  const c = { ...cfg, maxArbGroups: 12, maxLongArbGroups: 3, longDays: 30 };
+  const legs = (n, days) => Array.from({ length: n }, (_, i) => [
+    { strategy: 'arb', group: `L${days}-${i}`, settlesAt: NOW + days * DAY }, { strategy: 'arb', group: `L${days}-${i}`, settlesAt: NOW + days * DAY }]).flat();
+  const sig = (days) => ({ type: 'arb', legs: [{}, {}], pair: { settlesAt: NOW + days * DAY } });
+  ok('three long arbs held: a fourth long one is refused', /long-dated arb budget full at 3/.test(d.bookFull(legs(3, 200), sig(400), c, NOW)), d.bookFull(legs(3, 200), sig(400), c, NOW));
+  ok('...but a short one is still taken', d.bookFull(legs(3, 200), sig(5), c, NOW) === null);
+  ok('short arbs do not use the long budget', d.bookFull(legs(8, 5), sig(400), c, NOW) === null);
+  ok('without a clock only the overall limit applies', d.bookFull(legs(3, 200), sig(400), c) === null);
+}
+
+group('rules-unverified pairs are priced but never traded');
+{
+  const NOW = 1e12;
+  const p = { ...mk(0.40, 0.41, 0.50, 0.51), id: 'w', kind: 'event', watchOnly: 'unclear' };
+  p.q = { ...p.q, pmFeeRate: 0, t: NOW };
+  const s = d.scan([p], cfg, NOW);
+  ok('no signal from a watch-only pair, even a fat arb', s.signals.length === 0, s.signals);
+  ok('it is still priced for the tape', s.fair.has('w') && s.best.get('w') != null);
+  ok('and its veto names the rules verdict', s.veto.get('w') === 'rules unverified' || s.veto.get('w') === 'rules unclear', s.veto.get('w'));
+}
+
+group('an any-market signal must persist before it is acted on');
+{
+  const c = { ...cfg, entryPersistCycles: 3 };
+  const ev = { type: 'arb', pair: { id: 'e1', kind: 'event' } }, fed = { type: 'arb', pair: { id: 'f1', kind: 'fed' } };
+  let counts = new Map();
+  const r1 = d.persistFilter([ev, fed], counts, c); counts = r1.counts;
+  ok('a Fed pair acts at once, as before', r1.kept.includes(fed));
+  ok('an any-market pair does not act on its first cycle', !r1.kept.includes(ev));
+  const r2 = d.persistFilter([ev], counts, c); counts = r2.counts;
+  const r3 = d.persistFilter([ev], counts, c); counts = r3.counts;
+  ok('it acts on the third consecutive cycle', !r2.kept.includes(ev) && r3.kept.includes(ev));
+  const gap = d.persistFilter([], counts, c);
+  const again = d.persistFilter([ev], gap.counts, c);
+  ok('a cycle without the signal starts the count again', !again.kept.includes(ev) && again.counts.get('e1') === 1);
+}
+
+group('a locked arb is re-priced from the books fetched for it');
+{
+  const p = mk(0.40, 0.41, 0.50, 0.51); p.q.pmFeeRate = 0.04;
+  const sig = { type: 'arb', pair: p, legs: [{ venue: 'PM', side: 'yes', px: 0.41 }, { venue: 'KS', side: 'no', px: 0.50 }] };
+  const live = d.arbEdgeLive(sig, [{ asks: [{ price: 0.41, size: 100 }] }, { asks: [{ price: 0.50, size: 100 }] }], cfg);
+  const want = 1 - (0.41 + pmv.feePerShare(0.41, 0.04) + 0.50 + ks.feePerContract(0.50, cfg.ksFeeRate, 'KXTEST'));
+  ok('the live edge nets both fees at the live asks', Math.abs(live - want) < 1e-9, { live, want });
+  ok('a leg whose book moved away kills the edge', d.arbEdgeLive(sig, [{ asks: [{ price: 0.52, size: 100 }] }, { asks: [{ price: 0.50, size: 100 }] }], cfg) < 0);
+  ok('an empty side is null, not a price', d.arbEdgeLive(sig, [{ asks: [] }, { asks: [{ price: 0.50, size: 1 }] }], cfg) === null);
+}
+
 group('property: the arb is the better signal wherever both are available');
 {
   let both = 0, convWon = 0, worst = 0;

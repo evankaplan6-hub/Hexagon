@@ -10,6 +10,7 @@ const { makeProbe } = require('./probe');
 const { makeJournal } = require('./journal');
 const { makeMakerDesk } = require('./makerdesk');
 const { makeWhaleWatch } = require('./whales');
+const { makeAnyMarket } = require('./anymarket');
 const agents = require('./agents');
 const { MAX_VENUE_DISAGREE } = require('./matcher');
 const { Brain } = require('./brain');
@@ -64,6 +65,7 @@ class Engine {
     this.journal = makeJournal(cfg);
     this.maker = makeMakerDesk(cfg);
     this.whales = cfg.whaleWatch ? makeWhaleWatch(cfg) : null;   // advisory: never trades
+    this.any = cfg.anyMarkets ? makeAnyMarket(cfg) : null;       // every category, not just games and the Fed
     // The minds. Constructed even without a key: `enabled()` is false and every desk
     // falls straight through to its deterministic path.
     this.brain = new Brain(cfg);
@@ -729,6 +731,8 @@ class Engine {
     // Whale watch on its own timer too: a slow trade feed must never hold up pricing. step() guards
     // itself against overlapping and never throws.
     if (this.whales) setInterval(() => this.whales.step(this), this.cfg.whaleEverySec * 1000);
+    // The any-market crawl runs on its own timer too; only the repricing of matched pairs is in the cycle.
+    if (this.any) this.any.start(this);
     setInterval(() => { if (this.dirty) this.save(); }, 10000);
   }
   async step() {
@@ -738,6 +742,12 @@ class Engine {
     try {
       this.cycle++;
       await this.refreshQuotes();
+      if (this.any) {
+        // the matched any-market pairs, repriced in a few batched calls and put back into the maps
+        // the fast listing just replaced; a failed reprice leaves them stale, never the cycle broken
+        await this.any.refresh(this).catch((e) => { if (this.due('any-refresh-err', 300)) this.log('TESS', 'OPS', null, `any-market reprice error: ${String(e.message).slice(0, 100)}`); });
+        this.any.inject(this);
+      }
       await this.pinPositions(); // before HOLT: it rebuilds pairs from whatever is in the map
       agents.HOLT(this);
       await this.refreshPairPrices();
@@ -753,6 +763,7 @@ class Engine {
       // Strictly after BRAM, which assigns this.signals wholesale, and strictly before
       // KETT, which spends against it. See agents.mergeBrainSignals.
       agents.mergeBrainSignals(this);
+      if (this.any) this.any.afterPricing(this);   // ask the rules judge about watch-only pairs showing an edge
       this.recordTick(this); // durable tape of what BRAM just saw; never throws
       await this.probe(this);  // full order books whenever a gap looks too good; never throws
       await agents.KETT(this);
@@ -786,7 +797,8 @@ class Engine {
     let hist = s.balanceHistory;
     if (hist.length > 600) { const k = Math.ceil(hist.length / 600); hist = hist.filter((_, i) => i % k === 0 || i === hist.length - 1); }
     const pairs = this.pairs.filter((p) => p.q).map((p) => ({
-      id: p.id, label: p.label, kind: p.kind, series: p.series, inPlay: !!p.inPlay, startsAt: p.startsAt || null,
+      id: p.id, label: p.label, kind: p.kind, series: p.series, category: p.category || null, inPlay: !!p.inPlay, startsAt: p.startsAt || null,
+      closesAt: p.closesAt || null, watchOnly: p.watchOnly || null,
       pmMid: r3(p.q.pmMid), ksMid: r3(p.q.ksMid), gap: r3(p.q.ksMid - p.q.pmMid),
       age: p.q.t ? Math.round((now - p.q.t) / 1000) : null,
       pmVol: Math.round(p.q.pmVol), ksVol: Math.round(p.q.ksVol), pmUrl: p.pm.url, ksUrl: p.ks.url,
@@ -815,6 +827,7 @@ class Engine {
       cycleMs: this.lastCycleMs,
       maker: this.maker.snapshot(this),
       whales: this.whales ? this.whales.snapshot() : { enabled: false },
+      anyMarket: this.any ? this.any.snapshot() : { enabled: false },
       universe: {
         pm: this.quotes.pm.size, ks: this.quotes.ks.size, dataAge: this.lastQuoteAt ? Math.round((now - this.lastQuoteAt) / 1000) : null,
         apiOk: http.stats.ok, apiErr: http.stats.err, lastError: http.stats.lastError, rejected: this.rejected.length,

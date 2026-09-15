@@ -122,6 +122,14 @@ function makeRecorder(cfg, { io = fs, clock = Date.now } = {}) {
   if (!cfg.record) return () => {};
   let warnedAt = 0;
   const brake = makeDiskBrake(cfg, io);
+  // Pairs from the any-market scanner (kind 'event') are written when something on the line changes
+  // -- a price level, the veto, in-play -- and otherwise once every RECORD_HEARTBEAT_MIN. There can be
+  // hundreds of them, most long-dated and quiet: a line per pair per cycle is ~2 MB a day each, and
+  // the Fly box keeps three days of tape on a 1 GB volume. Games and Fed pairs keep a line every
+  // cycle, so tools/replay.js reads old and new tapes the same way for them. `hb: true` marks a
+  // heartbeat line, so a flat market and a gap in the tape stay distinguishable.
+  const lastLine = new Map();   // pairId -> { key, at }
+  const heartbeatMs = Math.max(1, Number(cfg.recordHeartbeatMin) || 15) * 60000;
   return (E) => {
     const now = clock();
     // before the early return below: a cycle with nothing to write still owns the old tapes on disk
@@ -148,8 +156,25 @@ function makeRecorder(cfg, { io = fs, clock = Date.now } = {}) {
       // Which rail stopped this pair, when one did. `edge` says how close it came; this says what
       // it came up short against, so a tape line explains itself without re-running the gates.
       if (p.veto) row.veto = p.veto;
+      if (p.kind === 'event') {
+        // a quote that stopped refreshing is a change too, or a carried-forward line in replay
+        // would look fresh when the desk itself had stopped trusting it
+        const stale = Number.isFinite(q.t) && now - q.t > (Number(cfg.maxDataAgeSec) || 90) * 1000;
+        const key = `${row.pmBid}|${row.pmAsk}|${row.ksBid}|${row.ksAsk}|${row.veto || ''}|${row.inPlay}|${stale}`;
+        const prev = lastLine.get(p.id);
+        if (prev && prev.key === key && now - prev.at < heartbeatMs) continue;
+        if (prev && prev.key === key) row.hb = true;
+        lastLine.set(p.id, { key, at: now });
+        if (p.category) row.category = p.category;
+        if (stale) row.stale = true;
+        // what the desk's time and rules gates read, so replay applies the same ones
+        if (Number.isFinite(p.closesAt)) row.closesAt = new Date(p.closesAt).toISOString();
+        if (Number.isFinite(p.settlesAt)) row.settlesAt = new Date(p.settlesAt).toISOString();
+        if (p.watchOnly) row.watch = p.watchOnly;
+      }
       lines.push(JSON.stringify(row));
     }
+    if (lastLine.size > 5000) for (const id of [...lastLine.keys()]) if (!E.pairs.some((p) => p.id === id)) lastLine.delete(id);
     if (!lines.length) return;
     try {
       io.mkdirSync(cfg.dataDir, { recursive: true });

@@ -46,6 +46,8 @@ function loadCycles(files) {
       const [pmId, tokenIndex] = pmPart.split(':');
       byT.get(t).push({
         id: r.pair, label: r.label, kind: r.kind, series: r.series, inPlay: !!r.inPlay,
+        category: r.category, watchOnly: r.watch || undefined, stale: !!r.stale,
+        closesAt: r.closesAt ? Date.parse(r.closesAt) : undefined, settlesAt: r.settlesAt ? Date.parse(r.settlesAt) : undefined,
         pm: { id: pmId, tokenIndex: +tokenIndex, tokenId: `tok:${r.pair}` },
         ks: { ticker },
         q: {
@@ -62,7 +64,24 @@ function loadCycles(files) {
       });
     }
   }
-  return [...byT.entries()].sort((a, b) => a[0] - b[0]);
+  const cycles = [...byT.entries()].sort((a, b) => a[0] - b[0]);
+  // Any-market pairs (kind 'event') are written only when something changes, plus a heartbeat
+  // (src/recorder.js). Between lines the desk was still pricing them at the last written values, so
+  // carry each forward into every cycle until its next line, with the quote time moved up to the
+  // cycle -- unless the line itself said the quote was stale. A pair silent for longer than two
+  // heartbeats was no longer being priced and is dropped rather than carried.
+  const last = new Map();
+  const HEARTBEAT_GRACE = 2 * Math.max(1, Number(base.recordHeartbeatMin) || 15) * 60000 + 60000;
+  for (const [t, pairs] of cycles) {
+    const here = new Set(pairs.map((p) => p.id));
+    for (const [id, { p, at }] of last) {
+      if (here.has(id)) continue;
+      if (t - at > HEARTBEAT_GRACE) { last.delete(id); continue; }
+      pairs.push({ ...p, carried: true, q: { ...p.q, t: p.stale ? p.q.t : t } });
+    }
+    for (const p of pairs) if (p.kind === 'event' && !p.carried) last.set(p.id, { p, at: t });
+  }
+  return cycles;
 }
 
 const markPrice = (pos, q) => (pos.venue === 'PM'

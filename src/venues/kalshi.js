@@ -59,6 +59,21 @@ async function fetchAll(seriesList) {
   return out;
 }
 
+// Many markets by ticker in one call per chunk. `GET /markets?tickers=A,B,...` answered 200 tickers
+// in 111ms on 2026-09-14 and refused 500 (HTTP 414, the URL is too long), so chunks of 100. This is
+// how the any-market pairs are repriced every cycle without listing whole series. Returns the
+// normalized markets that came back, every status included -- the caller decides what a closed or
+// decided market means for it.
+async function fetchMarketsByTickers(tickers, { chunk = 100 } = {}) {
+  const out = [];
+  for (let i = 0; i < tickers.length; i += chunk) {
+    const part = tickers.slice(i, i + chunk);
+    const d = await http.getJSON(`${BASE}/markets?tickers=${part.map(encodeURIComponent).join(',')}&limit=${part.length}`);
+    for (const m of d.markets || []) out.push(normalize(m));
+  }
+  return out;
+}
+
 async function fetchMarket(ticker) {
   const d = await http.getJSON(`${BASE}/markets/${ticker}`);
   return d.market ? normalize(d.market) : null;
@@ -149,4 +164,4 @@ function feePerContract(price, rate = 0.07, ref) {
   return rate * (ref === undefined ? 1 : multFor(ref)) * price * (1 - price);
 }
 
-module.exports = { fetchSeries, fetchAll, fetchMarket, fetchBook, fee, feePerContract, loadFeeMultipliers, loadSeriesIndex, seriesInfo, seriesFor, multFor, normalize, BASE };
+module.exports = { fetchSeries, fetchAll, fetchMarket, fetchMarketsByTickers, fetchBook, fee, feePerContract, loadFeeMultipliers, loadSeriesIndex, seriesInfo, seriesFor, multFor, normalize, BASE };

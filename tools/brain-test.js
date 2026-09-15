@@ -75,6 +75,8 @@ group('every data-integrity rail drops the proposal rather than shrinking it');
     ['no quote at all', mkE([mkPair({ q: null })]), propose(), 'no quote'],
     ['crossed book', mkE([mkPair({ q: { ...mkPair().q, pmAsk: 0.38 } })]), propose(), 'crossed book'],
     ['in-play game', mkE([mkPair({ inPlay: true })]), propose(), 'in-play'],
+    // an any-market pair whose resolution rules are unverified: two contracts that may settle differently
+    ['rules unverified', mkE([mkPair({ watchOnly: 'unclear' })]), propose(), 'rules unverified'],
     ['stale quote', mkE([mkPair({ q: { ...mkPair().q, t: Date.now() - (cfg.maxDataAgeSec + 60) * 1000 } })]), propose(), 'stale quote'],
     ['bad venue', mkE([mkPair()]), propose({ venue: 'NYSE' }), 'bad venue'],
     ['bad side', mkE([mkPair()]), propose({ side: 'maybe' }), 'bad side'],
