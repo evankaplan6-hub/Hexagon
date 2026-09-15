@@ -116,9 +116,18 @@ function pairSignals(p, cfg, now) {
   // locked arbs: YES here + NO there must cost < $1 after fees
   const edgeA = 1 - (q.pmAsk + (1 - q.ksBid) + pm.feePerShare(q.pmAsk, rate) + ksFeeNo);
   const edgeB = 1 - (q.ksAsk + (1 - q.pmBid) + pm.feePerShare(1 - q.pmBid, rate) + ksFeeYes);
-  const arbs = [];
+  let arbs = [];
   if (edgeA >= cfg.minArbEdge) arbs.push({ type: 'arb', pair: p, edge: edgeA, legs: [{ venue: 'PM', side: 'yes', px: q.pmAsk }, { venue: 'KS', side: 'no', px: r2(1 - q.ksBid) }] });
   if (edgeB >= cfg.minArbEdge) arbs.push({ type: 'arb', pair: p, edge: edgeB, legs: [{ venue: 'KS', side: 'yes', px: q.ksAsk }, { venue: 'PM', side: 'no', px: r2(1 - q.pmBid) }] });
+  // A locked arb pays its edge at SETTLEMENT, so the edge has to be worth the wait. Outside games the
+  // wait is long: J.D. Vance for the 2028 nomination crossed 2.46c after fees on 2026-09-15 and settles
+  // 785 days later, about 1.2% a year -- below cash. `arbReturn` annualises the edge on the money the
+  // two legs tie up; an arb under ARB_MIN_APR is not taken, and says so.
+  if (arbs.length && Number.isFinite(now) && Number.isFinite(p.settlesAt)) {
+    const kept = arbs.filter((a) => arbReturn(a.edge, p.settlesAt, now) >= cfg.arbMinApr);
+    if (!kept.length) out.arbVeto = 'arb return under hurdle';
+    arbs = kept;
+  }
 
   const gap = q.ksMid - q.pmMid; // + => Kalshi rich, Polymarket cheap
   const fair = fairValue(q);
@@ -172,6 +181,14 @@ function pairSignals(p, cfg, now) {
   return out;
 }
 
+// Annualised return of a locked arb: `edge` per $1 of payout, on the (1 - edge) the legs cost, over
+// the days until the pair is expected to settle (floored at one day, so a game settling tonight is
+// not an infinite return that sorts ahead of everything).
+function arbReturn(edge, settlesAt, now) {
+  const days = Math.max(1, (settlesAt - now) / 86400000);
+  return (edge / Math.max(0.01, 1 - edge)) * (365 / days);
+}
+
 // Every pair, gated and ranked. `now` is passed in rather than read, so a replay can lie about it.
 // `rejects` counts why pairs produced nothing, so "the desk took no trades" is always accompanied
 // by which rail it died on rather than requiring a debugger to find out.
@@ -196,7 +213,10 @@ function scan(pairs, cfg, now) {
     fair.set(p.id, r.fair); best.set(p.id, r.best);
     // A pair that could not be priced at all never becomes `widest`: a crossed or non-finite book
     // reports whatever garbage gap its mids imply, and `widest` is what the desk narrates.
-    if (r.fair != null) {
+    // Watch-only pairs are not candidates for `widest`, which is what BRAM narrates as the desk's
+    // biggest opportunity: a pair whose rules are unverified is exactly where a look-alike with a
+    // wide, meaningless gap sits (Serbia's next PM, 24c apart on 2026-09-15, rules unchecked).
+    if (r.fair != null && !p.watchOnly) {
       const gap = q.ksMid - q.pmMid;
       if (!widest || Math.abs(gap) > Math.abs(widest.gap)) widest = { p, gap, q };
     }
@@ -205,7 +225,17 @@ function scan(pairs, cfg, now) {
     // rejection put a pair the desk actually traded into the ledger, and stamped a veto onto its
     // tape line. The ledger exists to answer "why did nothing trade"; a pair that traded is not
     // part of that answer.
-    if (r.veto && !r.signals.length) { veto.set(p.id, r.veto); reject(r.veto); }
+    // A pair the rules gate has not verified is priced like any other -- the tape needs its
+    // near-misses -- but it never emits a signal. Its resolution rules may differ from its
+    // counterpart's, and a pair whose two contracts settle differently is not an arb at all.
+    if (p.watchOnly) {
+      const why = `rules ${p.watchOnly}`;
+      veto.set(p.id, why); reject(why); continue;
+    }
+    // An arb that existed and was stopped by its lock-up is the more useful thing to report than
+    // whatever gate stopped the convergence candidate on the same pair.
+    const why = r.arbVeto && !r.signals.length ? r.arbVeto : r.veto;
+    if (why && !r.signals.length) { veto.set(p.id, why); reject(why); }
     for (const s of r.signals) signals.push(s);
   }
   signals.sort(rankSignals);
@@ -302,10 +332,22 @@ function biasFor(history, cfg) {
 // Is there room in the book for this signal? Unhedged convergence positions and locked arbs are
 // counted separately, and an arb counts once rather than once per leg: one limit over legs let six
 // hedged Fed arbs fill a book whose limit was written for directional bets. Returns why not, or null.
-function bookFull(positions, signal, cfg) {
+//
+// Long-dated arbs have a smaller budget of their own: money locked for months cannot be used for
+// anything else, and a book of year-long arbs would be full for a year. `now` is optional; without
+// it the long-dated budget is not checked.
+function bookFull(positions, signal, cfg, now) {
   if (signal.type === 'arb') {
-    const groups = new Set(positions.filter((p) => p.strategy === 'arb').map((p) => p.group)).size;
-    return groups + 1 > cfg.maxArbGroups ? `arb book full at ${groups} arbs` : null;
+    const arbLegs = positions.filter((p) => p.strategy === 'arb');
+    const groups = new Set(arbLegs.map((p) => p.group)).size;
+    if (groups + 1 > cfg.maxArbGroups) return `arb book full at ${groups} arbs`;
+    const longMs = cfg.longDays * 86400000;
+    const settles = signal.pair && signal.pair.settlesAt;
+    if (Number.isFinite(now) && Number.isFinite(settles) && settles - now > longMs) {
+      const longGroups = new Set(arbLegs.filter((p) => Number.isFinite(p.settlesAt) && p.settlesAt - now > longMs).map((p) => p.group)).size;
+      if (longGroups + 1 > cfg.maxLongArbGroups) return `long-dated arb budget full at ${longGroups} arbs settling after ${cfg.longDays} days`;
+    }
+    return null;
   }
   const open = positions.filter((p) => p.strategy !== 'arb').length;
   return open + signal.legs.length > cfg.maxOpenPositions ? `book full at ${open} positions` : null;
@@ -338,4 +380,37 @@ function sizePlan(signal, { budget, sizeMult = 1, books, cfg }) {
   return { qty: Math.max(0, qty), unitCost, capped: wanted > budget, reason: limited ? `${limited} depth inside limit` : null };
 }
 
-module.exports = { fairValue, quoteFault, convEdge, pairSignals, scan, liveWindow, exitIntent, arbUnwind, riskState, biasFor, bookFull, sizePlan, rankSignals, pmRate };
+// Persistence: a signal on a pair from the any-market scanner must be seen on `entryPersistCycles`
+// consecutive cycles before it is acted on. A listing that lags its book produces a one-cycle
+// "gap"; a real disagreement is still there a minute later. `counts` is the previous cycle's map
+// (pairId -> consecutive cycles); returns the signals to act on and the map for next cycle. Games
+// and Fed pairs keep their old behaviour, so replays of existing tapes do not change.
+function persistFilter(signals, counts, cfg) {
+  const next = new Map();
+  const kept = [];
+  for (const s of signals) {
+    const id = s.pair.id;
+    const n = (counts.get(id) || 0) + 1;
+    next.set(id, n);
+    if (s.pair.kind !== 'event' || n >= cfg.entryPersistCycles) kept.push(s);
+  }
+  return { kept, counts: next };
+}
+
+// Re-price a locked arb from the books actually fetched for its legs, before any money moves. The
+// signal was priced from listing quotes, which lag. `books[i].asks` is the ask ladder for leg i's
+// side, best first. Returns the live edge per contract, or null when a leg has no ask.
+function arbEdgeLive(signal, books, cfg) {
+  const ref = signal.pair && signal.pair.ks && signal.pair.ks.ticker;
+  const rate = pmRate(signal.pair && signal.pair.q, cfg);
+  let cost = 0;
+  for (let i = 0; i < signal.legs.length; i++) {
+    const top = books[i] && books[i].asks && books[i].asks[0];
+    if (!top || !(top.price > 0 && top.price < 1)) return null;
+    const l = signal.legs[i];
+    cost += top.price + (l.venue === 'KS' ? ks.feePerContract(top.price, cfg.ksFeeRate, ref) : pm.feePerShare(top.price, rate));
+  }
+  return 1 - cost;
+}
+
+module.exports = { fairValue, quoteFault, convEdge, pairSignals, scan, liveWindow, exitIntent, arbUnwind, arbReturn, arbEdgeLive, riskState, biasFor, bookFull, persistFilter, sizePlan, rankSignals, pmRate };

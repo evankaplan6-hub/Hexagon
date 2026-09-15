@@ -175,6 +175,10 @@ function ilsaRows(E) {
     const q = p.q;
     if (!q || decide.quoteFault(q)) continue;    // nothing to say about a book we cannot price
     if (p.inPlay) continue;                       // untradeable regardless of the read
+    // A pair whose resolution rules are unverified is not shown to the mind at all: its gap is the
+    // widest on the board precisely when the two contracts settle differently, which is the one
+    // argument a mind must never be handed.
+    if (p.watchOnly) continue;
     if (q.t && Date.now() - q.t > E.cfg.maxDataAgeSec * 1000) continue;
     rows.push({ p, q, gap: q.ksMid - q.pmMid });
   }
@@ -283,6 +287,7 @@ function ilsaApply(E, answer) {
     const fault = decide.quoteFault(q);
     if (fault) { drop(fault); continue; }
     if (p.inPlay) { drop('in-play'); continue; }
+    if (p.watchOnly) { drop('rules unverified'); continue; }
     if (q.t && now - q.t > E.cfg.maxDataAgeSec * 1000) { drop('stale quote'); continue; }
     if (held.has(p.id)) { drop('already holding'); continue; }
     if (now - (E.cooldown.get(p.id) || 0) < E.cfg.reentryCooldownMs) { drop('in cooldown'); continue; }

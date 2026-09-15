@@ -25,6 +25,9 @@ primary_region = "iad"          # Ashburn, Virginia — close to the exchange, a
   # pays for questions someone asks (ASK_DAILY_USD caps it). Research is click-only with its own
   # cap (RESEARCH_DAILY_USD).
   BRAIN = "0"
+  # The any-market scanner runs here too, at half the default pair cap until a day of tape and memory
+  # on this 512 MB machine says it can take more. It is paper, and only rules-verified pairs trade.
+  ANY_MAX_PAIRS = "150"
 
 # The ledger, the journals and the tick tape. Without this a redeploy silently resets the evidence.
 [[mounts]]

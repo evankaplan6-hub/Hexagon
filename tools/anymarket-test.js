@@ -1,0 +1,179 @@
+'use strict';
+// Assertions for src/anymarket.js -- the any-market scanner's two speeds (discover off the cycle,
+// reprice in it), and the rule that decides what may trade: only a pair whose resolution rules
+// are verified the same. Discovery, matching, the rules gate and both venues are stubbed, so this
+// tests the orchestration itself, with no network and no clock.
+//
+//   node tools/anymarket-test.js
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { makeAnyMarket } = require('../src/anymarket');
+const base = require('../src/config');
+
+let pass = 0, fail = 0;
+const ok = (name, cond, got) => {
+  if (cond) { pass++; return; }
+  fail++;
+  console.log(`  FAIL  ${name}${got === undefined ? '' : `\n        got: ${JSON.stringify(got)}`}`);
+};
+const group = (n) => console.log(`\n${n}`);
+
+const T0 = 1788900000000;
+const dirs = [];
+const cfgFor = (over = {}) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hexagon-any-'));
+  dirs.push(dataDir);
+  return { ...base, dataDir, anyMaxPairs: 3, ...over };
+};
+const ksm = (ticker, o = {}) => ({ venue: 'KS', ticker, eventTicker: ticker.split('-').slice(0, 2).join('-'), seriesTicker: ticker.split('-')[0], category: 'Elections', title: `t ${ticker}`, yesBid: 0.40, yesAsk: 0.42, vol24: 1000, status: 'active', closeTime: '2026-11-03T15:00:00Z', expectedExpiration: '2027-01-04T15:00:00Z', rulesHash: `k${ticker}`, url: '', ...o });
+const pmm = (id, o = {}) => ({ venue: 'PM', id, question: `q ${id}`, tokenIds: [`${id}-y`, `${id}-n`], outcomes: ['Yes', 'No'], bestBid: 0.40, bestAsk: 0.41, vol24: 5000, feeRate: 0.04, rulesHash: `p${id}`, url: '', ...o });
+const cand = (pmId, ticker, verdict, o = {}) => ({ id: `${pmId}:0|${ticker}`, pm: pmm(pmId, o.pm), ks: ksm(ticker, o.ks), tokenIndex: 0, how: 'names', score: 1, label: `${pmId} - ${ticker}`, category: 'Elections', series: ticker.split('-')[0], rulesKey: `${pmId}:${ticker}`, _verdict: verdict });
+
+function harness(list, over = {}) {
+  const logs = [];
+  const E = {
+    cfg: cfgFor(over.cfg), quotes: { pm: new Map(), ks: new Map() }, pairs: [],
+    log: (agent, kind, pnl, text) => logs.push({ agent, kind, text }), due: () => true,
+  };
+  let crawl = over.crawl || { k: { markets: [1], complete: true }, p: { markets: [1], complete: true } };
+  let prices = over.prices || new Map();
+  let ksLive = over.ksLive || [];
+  const requested = [];
+  const saved = { data: null };
+  let clockAt = T0;
+  const deps = {
+    now: () => clockAt,
+    discovery: {
+      makeDiscoveryFetch: () => async () => ({}),
+      crawlKalshi: async () => { if (crawl.throw) throw new Error('boom'); return crawl.k; },
+      crawlPolymarket: async () => crawl.p,
+    },
+    store: {
+      save: (file, data) => { saved.data = JSON.parse(JSON.stringify(data)); saved.file = file; },
+      load: () => over.registry || null,
+    },
+    matchAny: () => ({ candidates: list, rejected: [{ why: 'tick' }], stats: {} }),
+    rules: { staticVerdict: (c) => ({ verdict: c._verdict, source: 'allowlist', reason: `stub ${c._verdict}` }) },
+    judge: { request: (c) => requested.push(c.id), snapshot: () => ({ asked: requested.length }) },
+    ks: { seriesInfo: new Map(), fetchMarketsByTickers: async () => { if (over.ksThrow) throw new Error('HTTP 429'); return ksLive; } },
+    pm: { fetchPrices: async () => prices },
+  };
+  const A = makeAnyMarket(E.cfg, deps);
+  return { A, E, logs, requested, saved, set: { clock: (t) => { clockAt = t; }, crawl: (c) => { crawl = c; }, prices: (p) => { prices = p; }, ksLive: (k) => { ksLive = k; } } };
+}
+
+(async () => {
+  group('discovery keeps verified pairs first, drops different rules, and respects the cap');
+  {
+    const list = [
+      cand('a', 'SENATEIA-26-R', 'unclear', { pm: { vol24: 90000 } }),
+      cand('b', 'CONTROLS-2026-D', 'same', { pm: { vol24: 100 } }),
+      cand('c', 'KXLEADERSOUT-27JAN01-BNETISR', 'different'),
+      cand('d', 'KXMAYORLA-26-NRAM', 'same', { pm: { vol24: 50000 } }),
+      cand('e', 'KXTIME-26-ZOH', 'unclear', { pm: { vol24: 10 } }),
+    ];
+    const { A, E, logs, saved } = harness(list);
+    await A.discover(E);
+    const ids = A._candidates().map((c) => c.id);
+    ok('a pair with different rules is never kept', !ids.some((x) => /BNETISR/.test(x)), ids);
+    ok('verified pairs rank ahead of watch-only ones, busier first', ids[0] === 'd:0|KXMAYORLA-26-NRAM' && ids[1] === 'b:0|CONTROLS-2026-D' && ids[2] === 'a:0|SENATEIA-26-R', ids);
+    ok('the cap holds', ids.length === 3, ids.length);
+    const line = logs.find((l) => /any-market scan/.test(l.text));
+    ok('the scan is narrated with what can trade and what is watched', line && /2 rules-verified to trade, 1 watch-only, 1 dropped as different rules/.test(line.text) && /over the 3-pair cap/.test(line.text), line && line.text);
+    ok('only matched markets are saved for a restart', saved.data && saved.data.candidates.length === 3 && /pairs-any\.json$/.test(saved.file), saved.data && saved.data.candidates.length);
+    const snap = A.snapshot();
+    ok('the snapshot counts both', snap.rulesVerified === 2 && snap.watchOnly === 1 && snap.droppedDifferentRules === 1 && snap.byCategory.Elections === 3, snap);
+  }
+
+  group('a failed or empty crawl keeps the last good set');
+  {
+    const { A, E, logs, set } = harness([cand('b', 'CONTROLS-2026-D', 'same')]);
+    await A.discover(E);
+    set.crawl({ throw: true });
+    await A.discover(E);
+    ok('after a throw the pairs are still there', A._candidates().length === 1);
+    ok('...and it says so', logs.some((l) => /discovery failed: boom · keeping the last good set of 1 pairs/.test(l.text)), logs.map((l) => l.text));
+    set.crawl({ k: { markets: [], complete: true }, p: { markets: [1], complete: true } });
+    await A.discover(E);
+    ok('an empty crawl does not wipe them either', A._candidates().length === 1 && logs.some((l) => /came back empty/.test(l.text)));
+  }
+
+  group('pairs: the shape HOLT uses, watch-only unless verified, fast matcher wins');
+  {
+    const { A, E } = harness([cand('b', 'CONTROLS-2026-D', 'same'), cand('a', 'SENATEIA-26-R', 'unclear')]);
+    await A.discover(E);
+    const ps = A.pairs(E);
+    const v = ps.find((p) => p.ks.ticker === 'CONTROLS-2026-D'), w = ps.find((p) => p.ks.ticker === 'SENATEIA-26-R');
+    ok('a verified pair is tradeable', v && v.watchOnly === null && v.kind === 'event' && v.rules.verdict === 'same', v);
+    ok('an unclear pair is watch-only', w && w.watchOnly === 'unclear', w);
+    ok('pairs carry close, settlement, category and the PM YES token', v.closesAt === Date.parse('2026-11-03T15:00:00Z') && v.settlesAt === Date.parse('2027-01-04T15:00:00Z') && v.category === 'Elections' && v.pm.tokenId === 'b-y', v);
+    ok('the id keeps the shape replay parses', v.id === 'b:0|CONTROLS-2026-D');
+    const taken = { ks: new Set(['CONTROLS-2026-D']), pm: new Set() };
+    ok('a market the fast matcher already paired is left to it', !A.pairs(E, taken).some((p) => p.ks.ticker === 'CONTROLS-2026-D'));
+  }
+
+  group('refresh reprices matched markets, and a stale or closed market is never traded on');
+  {
+    const { A, E, set, logs } = harness([cand('b', 'CONTROLS-2026-D', 'same'), cand('a', 'SENATEIA-26-R', 'same')]);
+    set.clock(T0 - 600000);   // discovered ten minutes ago
+    await A.discover(E);
+    set.clock(T0);
+    set.ksLive([
+      { ticker: 'CONTROLS-2026-D', yesBid: 0.51, yesAsk: 0.52, vol24: 7, status: 'active', closeTime: '2027-02-01T15:00:00Z' },
+      { ticker: 'SENATEIA-26-R', yesBid: 0, yesAsk: 1, status: 'active' },
+    ]);
+    set.prices(new Map([['b-y', { bid: 0.53, ask: 0.54 }]]));
+    await A.refresh(E);
+    A.inject(E);
+    const k = E.quotes.ks.get('CONTROLS-2026-D'), p = E.quotes.pm.get('b');
+    ok('the Kalshi price and time are fresh', k && k.yesBid === 0.51 && k.at === T0, k);
+    ok('rules texts from discovery survive a reprice', k.rulesHash === 'kCONTROLS-2026-D' && k.category === 'Elections');
+    ok('the Polymarket price comes from the CLOB', p && p.bestBid === 0.53 && p.bestAsk === 0.54 && p.at === T0, p);
+    const empty = E.quotes.ks.get('SENATEIA-26-R');
+    ok('an empty Kalshi book keeps its OLD time, so the pair goes stale instead of pricing 0/1', empty && empty.at !== T0 && empty.yesBid === 0, empty);
+    set.ksLive([{ ticker: 'CONTROLS-2026-D', status: 'finalized', result: 'yes' }]);
+    await A.refresh(E);
+    const E2q = { pm: new Map(), ks: new Map() };
+    A.inject({ quotes: E2q });
+    ok('a decided market leaves the maps, so a held position goes to resolution', !E2q.ks.has('CONTROLS-2026-D'));
+    const fast = { pm: new Map(), ks: new Map([['SENATEIA-26-R', { ticker: 'SENATEIA-26-R', fast: true }]]) };
+    A.inject({ quotes: fast });
+    ok('the fast listing wins where both have a market', fast.ks.get('SENATEIA-26-R').fast === true);
+    const bad = harness([cand('b', 'CONTROLS-2026-D', 'same')], { ksThrow: true });
+    await bad.A.discover(bad.E);
+    await bad.A.refresh(bad.E);
+    ok('a failed Kalshi reprice is logged, not thrown', bad.logs.some((l) => /Kalshi reprice failed: HTTP 429/.test(l.text)), bad.logs.map((l) => l.text));
+  }
+
+  group('the rules judge is asked only about watch-only pairs that show an edge');
+  {
+    const { A, E, requested } = harness([cand('a', 'SENATEIA-26-R', 'unclear'), cand('z', 'KXTIME-26-ZOH', 'unclear')]);
+    await A.discover(E);
+    const mk = (id, q, o = {}) => ({ id, kind: 'event', watchOnly: 'unclear', inPlay: false, label: id, ks: { ticker: 'KXTEST' }, pm: { id: 'x' }, q: { t: T0, pmVol: 5e5, ksVol: 1e5, pmFeeRate: 0, ...q, pmMid: (q.pmBid + q.pmAsk) / 2, ksMid: (q.ksBid + q.ksAsk) / 2 }, ...o });
+    E.pairs = [
+      mk('a:0|SENATEIA-26-R', { pmBid: 0.40, pmAsk: 0.41, ksBid: 0.50, ksAsk: 0.51 }),          // a fat arb
+      mk('z:0|KXTIME-26-ZOH', { pmBid: 0.50, pmAsk: 0.51, ksBid: 0.50, ksAsk: 0.51 }),          // nothing
+    ];
+    A.afterPricing(E);
+    ok('a watch-only pair with an arb on it is sent to the judge', requested.includes('a:0|SENATEIA-26-R'), requested);
+    ok('a flat one is not', !requested.includes('z:0|KXTIME-26-ZOH'), requested);
+    E.pairs[0].inPlay = true;
+    requested.length = 0;
+    A.afterPricing(E);
+    ok('nor is one inside its live window', requested.length === 0, requested);
+  }
+
+  group('a restart restores the last matched pairs, stale until repriced');
+  {
+    const reg = { at: T0 - 3600000, complete: true, candidates: [cand('b', 'CONTROLS-2026-D', 'same')] };
+    const { A, E } = harness([], { registry: reg });
+    ok('restored from disk', A.loadSaved() === 1 && A._candidates()[0].id === 'b:0|CONTROLS-2026-D');
+    A.inject(E);
+    ok('with the crawl time, not now, so nothing trades until refresh', E.quotes.ks.get('CONTROLS-2026-D').at === T0 - 3600000);
+  }
+
+  for (const d of dirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch {} }
+  console.log(`\n${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+})();

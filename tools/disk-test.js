@@ -668,6 +668,39 @@ group('the recorder: the brake is wired in, ahead of the empty-cycle return');
   ok('RECORD=0: no recorder, no brake', off.statfs === 0 && off.unlinked.length === 0);
 }
 
+group('the recorder: any-market pairs are written on change and on a heartbeat');
+{
+  const rcfg = { record: true, dataDir: '/fake/data', tapeMinFreeMb: 0, recordHeartbeatMin: 15, maxDataAgeSec: 90 };
+  const d = fakeDisk({}, 10000);
+  let t = NOW;
+  const rec = makeRecorder(rcfg, { io: d.io, clock: () => t });
+  const q = (o = {}) => ({ pmBid: 0.5, pmAsk: 0.52, pmVol: 10, ksBid: 0.49, ksAsk: 0.53, ksVol: 5, t, ...o });
+  const E = { ...fakeE(), cycle: 1, pairs: [
+    { id: 'ev', label: 'Iowa Senate - Republicans', kind: 'event', category: 'Elections', closesAt: NOW + 86400000, settlesAt: NOW + 2 * 86400000, watchOnly: 'unclear', q: q() },
+    { id: 'gm', label: 'A v B', kind: 'game', q: q() },
+  ] };
+  const lines = () => d.appended.flatMap((a) => a.text.trim().split('\n')).map((l) => JSON.parse(l));
+  rec(E);
+  const first = lines();
+  ok('the first cycle writes both', first.length === 2, first.length);
+  const ev = first.find((r) => r.pair === 'ev');
+  ok('an event line carries its category, close, settlement and rules status', ev && ev.category === 'Elections' && ev.closesAt && ev.settlesAt && ev.watch === 'unclear', ev);
+  t += 15000; E.pairs.forEach((p) => { p.q = { ...p.q, t }; });
+  rec(E);
+  ok('an unchanged event pair is not written again; the game still is', lines().filter((r) => r.pair === 'ev').length === 1 && lines().filter((r) => r.pair === 'gm').length === 2);
+  t += 15000; E.pairs[0].q = { ...E.pairs[0].q, ksBid: 0.50, t };
+  rec(E);
+  ok('a moved price is written', lines().filter((r) => r.pair === 'ev').length === 2);
+  t += 16 * 60000; E.pairs[0].q = { ...E.pairs[0].q, t };
+  rec(E);
+  const hb = lines().filter((r) => r.pair === 'ev').pop();
+  ok('a quiet pair gets a heartbeat line after RECORD_HEARTBEAT_MIN, marked as one', hb && hb.hb === true && lines().filter((r) => r.pair === 'ev').length === 3, hb);
+  t += 15000; E.pairs[0].q = { ...E.pairs[0].q, t: t - 120000 };
+  rec(E);
+  const st = lines().filter((r) => r.pair === 'ev').pop();
+  ok('a quote going stale is a change, and says so', st && st.stale === true && !st.hb, st);
+}
+
 group('config: the brake is on by default only on a Fly machine');
 {
   const { execFileSync } = require('child_process');

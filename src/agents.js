@@ -45,6 +45,12 @@ function standDown(E) {
 function HOLT(E) {
   const prev = new Map(E.pairs.map((p) => [p.id, p]));
   const { pairs, rejected } = matchPairs([...E.quotes.pm.values()], [...E.quotes.ks.values()]);
+  // Every other category, from the any-market scanner (src/anymarket.js). The fast matcher's pairs
+  // win where both found the same market: it re-matches from live listings every cycle.
+  if (E.any) {
+    const taken = { ks: new Set(pairs.map((p) => p.ks.ticker)), pm: new Set(pairs.map((p) => p.pm.id)) };
+    for (const p of E.any.pairs(E, taken)) pairs.push(p);
+  }
   for (const p of pairs) if (prev.has(p.id)) p.q = prev.get(p.id).q; // keep last quote until repriced
   // A pair is untradeable once its event is live or its Kalshi market is about to close
   // (decide.liveWindow: games from 2 minutes before start, every pair from CLOSE_GUARD_MIN before
@@ -58,11 +64,19 @@ function HOLT(E) {
   E.pairs = pairs;
   E.rejected = rejected;
   const added = pairs.filter((p) => !prev.has(p.id));
-  const dropped = [...prev.keys()].filter((id) => !pairs.some((p) => p.id === id));
+  const nowIds = new Set(pairs.map((p) => p.id));
+  const dropped = [...prev.keys()].filter((id) => !nowIds.has(id));
   const seriesN = new Set(pairs.map((p) => p.series)).size;
-  E.touch('HOLT', `${pairs.length} pairs / ${seriesN} series`);
-  if (added.length || dropped.length || E.due('holt-log', 600)) {
-    let txt = `${pairs.length} pairs live across ${seriesN} series · ${E.quotes.pm.size} PM + ${E.quotes.ks.size} KS markets scanned`;
+  // What kind of markets these are, in words: sports and the Fed from the fast matcher, the scanner's
+  // own category for everything else.
+  const catOf = (p) => (p.kind === 'game' ? 'sports' : p.kind === 'fed' ? 'fed' : String(p.category || 'other').toLowerCase());
+  const cats = {};
+  for (const p of pairs) cats[catOf(p)] = (cats[catOf(p)] || 0) + 1;
+  const catText = Object.entries(cats).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${n} ${k}`).join(', ');
+  const watchN = pairs.filter((p) => p.watchOnly).length;
+  E.touch('HOLT', `${pairs.length} pairs / ${Object.keys(cats).length} categories`);
+  if (added.length > 20 || dropped.length > 20 ? E.due('holt-churn', 120) : (added.length || dropped.length || E.due('holt-log', 600))) {
+    let txt = `${pairs.length} pairs live (${catText})${watchN ? `, ${watchN} watch-only until their rules are verified` : ''} · ${E.quotes.pm.size} PM + ${E.quotes.ks.size} KS markets scanned`;
     if (added.length) txt += ` · +${added.length} new: ${added.slice(0, 2).map((p) => p.label).join(', ')}${added.length > 2 ? '…' : ''}`;
     if (dropped.length) txt += ` · −${dropped.length} closed`;
     if (rejected.length) {
@@ -227,7 +241,10 @@ function BRAM(E) {
     if (best.has(p.id)) p.best = best.get(p.id);
     p.veto = veto.get(p.id) || null;
   }
-  E.signals = sig;
+  // Signals on any-market pairs must persist before they reach KETT (decide.persistFilter).
+  const held = decide.persistFilter(sig, E.persist || new Map(), E.cfg);
+  E.persist = held.counts;
+  E.signals = held.kept;
   E.touch('BRAM', widest ? `widest ${c(Math.abs(widest.gap))} ${widest.p.label}` : inPlayN ? `${inPlayN} pairs live or closing, none tradeable` : 'no pairs');
   if (staleN && E.due('bram-stale', 300)) E.log('BRAM', 'RESEARCH', null, `${staleN} pair${staleN > 1 ? 's' : ''} skipped on stale quotes (older than ${E.cfg.maxDataAgeSec}s) \u00b7 desk-wide data age is fine, these instruments individually are not`);
   // "Nothing traded" is this desk's normal output, so the useful thing to narrate is which rail
@@ -281,7 +298,7 @@ async function KETT(E) {
     if (E.state.positions.some((p) => p.pairId === s.pair.id)) continue;
     if (Date.now() - (E.cooldown.get(s.pair.id) || 0) < E.cfg.reentryCooldownMs) continue; // no churn after an exit
     if (live && s.legs.some((l) => l.venue !== 'KS')) continue; // live mode trades Kalshi legs only
-    const full = decide.bookFull(E.state.positions, s, E.cfg);
+    const full = decide.bookFull(E.state.positions, s, E.cfg, Date.now());
     // an arb book that is full does not stop a convergence trade further down the list, or the reverse
     if (full) { if (E.due(`kett-full-${s.type}`, 300)) E.log('KETT', 'PASS', null, `${full}, passing on ${s.pair.label}`); continue; }
     considered++;
@@ -314,6 +331,17 @@ async function KETT(E) {
     try { books = await Promise.all(s.legs.map((l) => E.book(l.venue, s.pair, l.side))); }
     catch (e) { E.log('KETT', 'PASS', null, `${s.pair.label}: book fetch failed (${e.message.slice(0, 60)})`); continue; }
     if (standDown(E)) return;
+    // A locked arb is re-priced from the books just fetched, as a convergence trade already was. The
+    // signal came from listing quotes, and a "locked" edge that only exists in a lagging listing
+    // is two unhedged fills at prices that no longer give it.
+    if (s.type === 'arb') {
+      const live = decide.arbEdgeLive(s, books, E.cfg);
+      if (live == null || live < E.cfg.minArbEdge) {
+        if (E.due(`kett-stale-${s.pair.id}`, 300)) E.log('KETT', 'PASS', null, `${s.pair.label}: listing showed a ${c(s.edge)} arb but live books show ${live == null ? 'an empty side' : c(live)}`);
+        continue;
+      }
+      s.edge = live;
+    }
     if (s.type === 'converge') {
       const leg = s.legs[0];
       let far;

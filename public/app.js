@@ -466,9 +466,15 @@
         return { text: `Closed ${label}${pl}`, sub: parts[parts.length - 1], level: 'trade' };
       }
       case 'HOLT SCAN': {
-        const m = t.match(/\+\d+ new: (.+)$/), n = (t.match(/^(\d+) pairs/) || [])[1];
+        // the any-market crawl: every category on both venues, and how many can actually trade
+        const scan = t.match(/^any-market scan · .*? · (\d+) matched \(([^)]*)\) · (\d+) rules-verified to trade, (\d+) watch-only/);
+        if (scan) return { text: `Scanned every market on both venues: ${scan[1]} matched (${scan[2]})`, sub: `${scan[3]} with rules checked and tradeable, ${scan[4]} watched until their rules are checked`, level: 'info' };
+        if (/^any-market scanner restored/.test(t)) return { text: cap(first), level: 'quiet' };
+        // labels can carry ' · ' themselves, so a new-pair list ends where the next count begins
+        const m = t.match(/\+\d+ new: (.+?)(?: · −\d+ closed| · \d+ rejected|$)/), n = (t.match(/^(\d+) pairs/) || [])[1];
+        const mix = (t.match(/^\d+ pairs live \(([^)]*)\)/) || [])[1];
         return m ? { text: `Found a new market on both venues: ${m[1]}`, level: 'info' }
-          : { text: `Watching ${n || 'the'} markets listed on both venues`, level: 'quiet' };
+          : { text: `Watching ${n || 'the'} markets listed on both venues${mix ? `: ${mix}` : ''}`, level: 'quiet' };
       }
       case 'ILSA RESEARCH': {
         const m = t.match(/^(.+?): PM ([−+-]?[\d.]+)c, KS ([−+-]?[\d.]+)c over \S+ · gap ([\d.]+)c (\w+)/);
@@ -770,6 +776,8 @@
       `<p class="now">${esc(now)}</p>` +
       `<p class="extra">${working ? `Quoting ${M.quoting} markets` : 'Not quoting'} · ${nHeld ? `holding ${M.inv} contracts in ${nHeld}` : 'nothing held'}</p>` +
       `<p>${esc(fill)}</p>` +
+      // the taker's reach: markets matched on both venues, across every category
+      (S.anyMarket && S.anyMarket.enabled ? `<p class="extra">Both venues: ${S.pairCount || 0} matched · ${S.anyMarket.rulesVerified || 0} scanned pairs cleared to trade, ${S.anyMarket.watchOnly || 0} watched</p>` : '') +
       `<p class="dim">${S.mode === 'live' ? 'LIVE · real money' : 'Paper · no real money'} · up ${dur(S.now - S.startedAt)} · ${feed.mode === 'stream' && feed.connected ? 'live trade feed' : 'polling for trades'}</p>`;
     const key = `${html}|${Math.round(statusBox.w * k)}x${Math.round(statusBox.h * k)}`;
     if (key !== statusHtml) { el.innerHTML = html; statusHtml = key; fitText(el, Math.max(10, Math.min(17, k * 5.6)), 8); }

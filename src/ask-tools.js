@@ -320,12 +320,14 @@ function markets(E, input, now) {
     if (why) whyNot[why] = (whyNot[why] || 0) + 1;
   }
   const rows = E.pairs
-    .filter((p) => !contains || [p.label, p.pm && p.pm.question, p.ks && p.ks.title, p.ks && p.ks.ticker, p.series].some((x) => String(x || '').toLowerCase().includes(contains)))
+    .filter((p) => !contains || [p.label, p.pm && p.pm.question, p.ks && p.ks.title, p.ks && p.ks.ticker, p.series, p.category].some((x) => String(x || '').toLowerCase().includes(contains)))
     .sort((a, b) => (!!a.inPlay - !!b.inPlay) || (Math.abs(b.q ? b.q.ksMid - b.q.pmMid : 0) - Math.abs(a.q ? a.q.ksMid - a.q.pmMid : 0)));
   return {
     asOf: et(now),
     note: 'matched pairs: the same outcome on Polymarket and Kalshi. Prices are YES prices per contract. netEdge is the profit per contract after spread and fees if traded now; negative is the normal reading.',
     matchedPairs: E.pairs.length, inPlay: E.pairs.filter((p) => p.inPlay).length, rejectedMatches: E.rejected.length,
+    watchOnlyUntilRulesChecked: E.pairs.filter((p) => p.watchOnly).length,
+    anyMarketScanner: E.any ? E.any.snapshot() : { enabled: false },
     tradeSignalsThisCycle: (E.signals || []).slice(0, 5).map((s) => ({ market: clip(s.pair.label, 80), type: s.type === 'arb' ? 'locked arb' : 'convergence', netEdge: cents(s.edge) })),
     whyPairsAreNotTrading: whyNot,
     rules: {
@@ -341,7 +343,9 @@ function markets(E, input, now) {
       const q = p.q;
       const bias = E.bias.get(p.id);
       return {
-        market: clip(p.label, 80), kind: p.kind, series: p.series, inPlay: !!p.inPlay, startsAt: et(p.startsAt), kalshiClosesAt: et(p.closesAt),
+        market: clip(p.label, 80), kind: p.kind, category: p.kind === 'game' ? 'Sports' : p.kind === 'fed' ? 'Economics' : p.category || null, series: p.series, inPlay: !!p.inPlay, startsAt: et(p.startsAt), kalshiClosesAt: et(p.closesAt), expectedSettlement: et(p.settlesAt),
+        rules: p.rules ? { verdict: p.rules.verdict, checkedBy: p.rules.source, why: clip(p.rules.reason, 160) } : null,
+        tradeable: !p.watchOnly,
         polymarket: q ? { bid: cents(q.pmBid), ask: cents(q.pmAsk), volume24h: money(Math.round(q.pmVol || 0)) } : null,
         kalshi: q ? { bid: cents(q.ksBid), ask: cents(q.ksAsk), volume24h: money(Math.round(q.ksVol || 0)) } : null,
         gapKalshiMinusPolymarket: q ? signedCents(q.ksMid - q.pmMid) : null,
@@ -455,7 +459,16 @@ const SETTINGS = [
   ['priceEvery', 'PRICE_EVERY_SEC', 'seconds between taker cycles'],
   ['reentryCooldownMs', 'REENTRY_COOLDOWN_MIN', 'wait after an exit before re-entering a pair (milliseconds here)'],
   ['pmUniverse', 'PM_UNIVERSE', 'Polymarket markets scanned, by volume'],
-  ['ksSeries', 'KS_SERIES', 'Kalshi series scanned'],
+  ['ksSeries', 'KS_SERIES', 'Kalshi series scanned by the fast matcher (games and the Fed)'],
+  ['anyMarkets', 'ANY_MARKETS', 'any-market scanner on or off (every category on both venues)'],
+  ['anyMaxPairs', 'ANY_MAX_PAIRS', 'most any-market pairs kept and repriced each cycle'],
+  ['discoverEveryMin', 'DISCOVER_EVERY_MIN', 'minutes between full any-market crawls'],
+  ['arbMinApr', 'ARB_MIN_APR', 'yearly return a locked arb must beat for the time its money is tied up'],
+  ['maxLongArbGroups', 'MAX_LONG_ARB_GROUPS', 'most locked arbs settling more than LONG_DAYS out'],
+  ['longDays', 'LONG_DAYS', 'days after which an arb counts as long-dated'],
+  ['entryPersistCycles', 'ENTRY_PERSIST_CYCLES', 'cycles an any-market signal must last before trading'],
+  ['rulesCheck', 'RULES_CHECK', 'whether unclear pairs showing an edge may be put to Claude for a rules verdict'],
+  ['rulesDailyUsd', 'RULES_DAILY_USD', 'daily spending ceiling for the rules check'],
   ['probeGap', 'PROBE_GAP', 'gap that triggers a full order-book probe'],
   ['record', 'RECORD', 'whether the tick tape is recorded'],
   ['tapeMinFreeMb', 'TAPE_MIN_FREE_MB', 'free disk (MB) below which old tick tapes are trimmed; 0 is off'],

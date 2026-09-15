@@ -18,7 +18,7 @@ Every 15 seconds the engine pulls the top 300 Polymarket markets by volume and e
 
 | # | Agent | Desk | Job |
 |---|-------|------|-----|
-| 05 | **HOLT** | Scanner | Matches the same outcome on both venues (Fed brackets by month/code; games and matches by team/player name plus US/Eastern date). Rejects any match where a figure in the text — a year, a date, a percentage, a bps count, a dollar amount, a bare number like a doubleheader's game number — differs between the venues, and any match where the venues disagree by 30c+; either means the match is wrong. |
+| 05 | **HOLT** | Scanner | Matches the same outcome on both venues: Fed brackets and games from a fast matcher, every other category from the any-market scanner (see *Any market*). Fast matcher: Fed brackets by month/code; games and matches by team/player name plus US/Eastern date. Rejects any match where a figure in the text — a year, a date, a percentage, a bps count, a dollar amount, a bare number like a doubleheader's game number — differs between the venues, and any match where the venues disagree by 30c+; either means the match is wrong. |
 | 06 | **ILSA** | Sentiment | Tracks each pair's price drift and whether the venue gap is narrowing or widening. Execution skips trades ILSA reads as diverging and sizes up ones it reads as converging. Also runs whale watch: calls out big bets by the top Polymarket sports wallets (advisory only). |
 | 04 | **TESS** | Ops | Health and risk: halts new risk on stale quotes, API error storms, or a daily drawdown past the limit. Sets the per-trade budget. |
 | 03 | **RIGO** | Settlement | Marks positions, exits convergence trades (gap closed, stop, max hold, event going in-play, or its Kalshi market about to close), settles resolved markets at their settlement price ($1, $0, or 50c when Polymarket resolves a question 50-50), realizes P&L, scores wins/losses. |
@@ -234,6 +234,66 @@ Measured across the tradeable book, listing and order book agree to **0.00c medi
 That is why there is no Kalshi equivalent of `refreshPairPrices()` — it would spend an API call per
 pair per cycle to correct an error of zero. The lag is real, but only where the desk already
 refuses to trade.
+
+## Any market, not just games and the Fed
+
+HOLT's fast matcher pairs eleven Kalshi series (Fed decisions and ten game series) against the top
+300 Polymarket markets every cycle. Everything else on both venues — elections, economics, central
+banks, Treasury yields, awards, charts, deadlines, world events — comes from the **any-market
+scanner** (`src/anymarket.js`), in two speeds:
+
+- **discover**, every `DISCOVER_EVERY_MIN` (20), off the cycle: crawl every open non-sports event on
+  both venues (`src/discovery.js`, ~65 Kalshi and ~20 Polymarket calls, about 10 seconds), match
+  outcomes (`src/match-any.js`), and give each pair a rules verdict (`src/rules.js`).
+- **refresh**, every cycle: reprice only the matched markets — one Kalshi call per 100 tickers, one
+  Polymarket CLOB call per 200 tokens. A market that fails to reprice keeps its old time, and its
+  pair goes stale rather than trading on an old price.
+
+On 2026-09-15 the first live scan crawled 23,261 Kalshi and 9,018 Polymarket markets in 7 seconds
+and matched about 400 outcomes, mostly elections, entertainment, politics and economics
+(`ANY_MAX_PAIRS` keeps the busiest 300, verified pairs first).
+
+**The matcher** pairs an outcome only when it is the same person, party, deadline or threshold:
+"Ashley Hinson (R)" is "Ashley Hinson"; "by September 30" is "Before Oct 1, 2026"; "≥4.0%" is
+Kalshi's "Above 3.9%" on a one-decimal statistic; "R Senate, D House" is "D-House, R-Senate". It
+rejects, by name, a threshold one tick off ("dip below 4.67%" is not "4.67% or below"), a complement,
+a nomination against a win, 4th place against first, Best Actress against Best Supporting Actress,
+one lab's best model against any model's, SPD at 31% against AfD at 31%, and a Polymarket "Other"
+bucket. `tools/match-any-test.js` pins each of those on the venues' real text.
+
+**Only pairs whose rules are verified the same trade.** A locked arb is only locked if every outcome
+settles both legs identically, and look-alikes often do not while trading within a few cents: of 76
+politics pairs whose full rules were read side by side, 23 resolved differently. Polymarket's
+"Netanyahu out" counts death and Kalshi's does not; Polymarket pays on an announced resignation,
+Kalshi on an actual departure; Polymarket's NYC temperature is LaGuardia, Kalshi's is Central Park;
+every crypto price pair uses a different oracle. So each pair gets a verdict:
+
+| verdict | from | what happens |
+|---|---|---|
+| `different` | a denylisted family, or a rule dimension both texts speak on and disagree (death, announcement vs departure, acting holders, de facto vs official, weather station, price or poll source, ties) | dropped |
+| `same` | an allowlisted family read by hand (chamber control, party races, nominations, TIME, Billboard, CPI and jobs releases, Treasury yields, Fed and central-bank decisions, ...) with no conflict | tradeable |
+| `unclear` | everything else | priced and recorded, never traded (`rules unclear` in the gate ledger) |
+
+An `unclear` pair that shows an edge can be put to Claude once per pair of rules texts
+(`RULES_CHECK`, `RULES_DAILY_USD` $1), cached in `DATA_DIR/rules-verdicts.jsonl`. A Claude `same`
+never overrides a conflict the deterministic check found, and nothing is asked without
+`ANTHROPIC_API_KEY`.
+
+**Long-dated arbs are a different trade.** Outside games most arbs settle months or years out:
+J.D. Vance for the 2028 nomination crossed 2.46c after fees on 2026-09-15 and settles in 785 days,
+about 1.2% a year. Three rails follow from that:
+
+- a locked arb must return `ARB_MIN_APR` (5%) a year on the money it ties up until expected settlement;
+- at most `MAX_LONG_ARB_GROUPS` (3) arbs may settle more than `LONG_DAYS` (30) out;
+- an any-market signal must persist `ENTRY_PERSIST_CYCLES` (4, one minute) before KETT acts, and
+  every locked arb is re-priced on the order books fetched for it before its first leg.
+
+On the first local paper run the desk took the Nevada governor's race (Lombardo, R): YES on
+Polymarket at 47.2c and NO on Kalshi at 47.0c, 3.3c a contract after both venues' fees, settling in
+January 2027. Two more long-dated arbs filled the budget and it passed on the next.
+
+Any-market pairs are written to the tick tape when a price or veto changes and on a
+`RECORD_HEARTBEAT_MIN` (15) heartbeat; `tools/replay.js` carries them forward between lines.
 
 ## The MAKER desk (07)
 
@@ -579,7 +639,11 @@ src/config.js          all tunables
 src/engine.js          state, cash, positions, cycle loop, snapshot
 src/agents.js          the six desks (I/O and sequencing)
 src/decide.js          the decision core: pure gate/rank/size/exit logic, no I/O and no clock
-src/matcher.js         cross-venue matching
+src/matcher.js         cross-venue matching: Fed brackets and games, every cycle
+src/anymarket.js       the any-market scanner: discover off the cycle, reprice matched pairs in it
+src/discovery.js       crawls every open non-sports event on both venues
+src/match-any.js       the same outcome in any category: names, deadlines, thresholds on their tick
+src/rules.js           the rules gate: same / different / unclear, and the cached Claude check
 src/broker.js          paper broker + live Kalshi adapter
 src/venues/            Polymarket (Gamma + CLOB) and Kalshi public data
 src/tape.js            the maker's batched market data: the trade tape (socket first, poll as fallback) and top of book
@@ -604,6 +668,10 @@ tools/probe-test.js    assertions for the thin-market probe (stubbed venues, fro
 tools/maker-test.js    assertions for the maker core: quoting, queue, fills, realised P&L
 tools/broker-test.js   assertions for fills, incl. the live Kalshi order path (no network)
 tools/fees-test.js     assertions for what each venue charges: Polymarket per market, Kalshi per series
+tools/match-any-test.js  assertions for any-market matching on real venue text, every near-miss included
+tools/rules-test.js    assertions for the rules gate: same rules, look-alikes, and the cached Claude check
+tools/discovery-test.js  assertions for the any-market crawl: paging, backoff, partial results, the registry
+tools/anymarket-test.js  assertions for the scanner: discover off the cycle, reprice in it, only verified pairs trade
 tools/matcher-test.js  assertions for cross-venue matching
 tools/stream-test.js   assertions for the trade socket and the tape's fallback to the poll
 tools/engine-test.js   assertions for the ledger: operator latch, partial exits, and close serialization
@@ -621,7 +689,7 @@ tape and a synthetic clock (`tools/replay.js`) instead of a network and a wall c
 guard it, and both are worth running after any change to the gates:
 
 ```bash
-npm test                      # all 1298 assertions across fifteen suites
+npm test                      # all 1570 assertions across nineteen suites
 node tools/maker-test.js      # ...or one suite at a time while working on one file
 ```
 

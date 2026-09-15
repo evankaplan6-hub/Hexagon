@@ -267,7 +267,8 @@ const position = (over = {}) => ({
     const pair = { id: 'inflight-pair', label: 'inflight pair', pm: { id: 'pm-inflight', tokenId: 'pm-yes', tokenIndex: 0 }, ks: { ticker: 'KXINFLIGHT' }, q: { ksBid: 0.49, ksAsk: 0.50 } };
     E.quotes.pm.set('pm-inflight', { tokenIds: ['pm-yes', 'pm-no'] });
     E.signals = [{ pair, type: 'arb', edge: 0.10, gap: 0.10, legs: [{ venue: 'KS', side: 'yes', px: 0.50 }, { venue: 'PM', side: 'no', px: 0.50 }] }];
-    E.book = async () => ({ asks: [{ price: 0.50, size: 100 }], yesBid: 0.49, yesAsk: 0.50 });
+    // both legs at 40c: a real arb on the live books, which KETT now re-checks before the first leg
+    E.book = async () => ({ asks: [{ price: 0.40, size: 100 }], yesBid: 0.39, yesAsk: 0.40 });
     let releaseBuy, buys = 0, sells = 0;
     const buyStarted = new Promise((resolve) => {
       E.broker = {
