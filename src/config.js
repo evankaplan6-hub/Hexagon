@@ -367,6 +367,14 @@ module.exports = {
   discoverEveryMin: Math.max(5, num('DISCOVER_EVERY_MIN', 20)),
   // Matched pairs kept and repriced. Each 100 costs one Kalshi call and half a Polymarket call a cycle.
   anyMaxPairs: Math.max(1, Math.round(num('ANY_MAX_PAIRS', 300))),
+  // Everything on the desk shares one Kalshi rate limit, and the maker already spends most of it. On
+  // the Fly box the day these shipped, the crawl's 65 pages back to back and a reprice of 150 pairs
+  // every 15 seconds pushed refused calls from 3-8 to 25-38 per 5 minutes, and TESS halted new
+  // trades on them again and again. So the crawl spaces its Kalshi pages DISCOVER_GAP_MS apart (a
+  // crawl takes ~2 minutes instead of 25 seconds, which costs nothing), and matched pairs -- almost
+  // all months from settling -- are repriced every ANY_REFRESH_SEC, inside MAX_DATA_AGE_SEC.
+  discoverGapMs: Math.max(0, num('DISCOVER_GAP_MS', 1500)),
+  anyRefreshSec: Math.max(15, num('ANY_REFRESH_SEC', 60)),
   // Polymarket events under this 24h volume are not crawled. $500 keeps ~1,200 events (every one
   // traded at least $1k on 2026-09-14 but a handful) and stops well inside Gamma's offset cap of 2,000.
   pmDiscoverMinVol: num('PM_DISCOVER_MIN_VOL', 500),

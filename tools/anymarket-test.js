@@ -59,6 +59,7 @@ function harness(list, over = {}) {
     ks: { seriesInfo: new Map(), fetchMarketsByTickers: async () => { if (over.ksThrow) throw new Error('HTTP 429'); return ksLive; } },
     pm: { fetchPrices: async () => prices },
   };
+  deps.sleep = async (ms) => { clockAt += ms; };   // pacing moves the fake clock instead of waiting
   const A = makeAnyMarket(E.cfg, deps);
   return { A, E, logs, requested, saved, set: { clock: (t) => { clockAt = t; }, crawl: (c) => { crawl = c; }, prices: (p) => { prices = p; }, ksLive: (k) => { ksLive = k; } } };
 }
@@ -133,6 +134,7 @@ function harness(list, over = {}) {
     const empty = E.quotes.ks.get('SENATEIA-26-R');
     ok('an empty Kalshi book keeps its OLD time, so the pair goes stale instead of pricing 0/1', empty && empty.at !== T0 && empty.yesBid === 0, empty);
     set.ksLive([{ ticker: 'CONTROLS-2026-D', status: 'finalized', result: 'yes' }]);
+    set.clock(T0 + 61000);   // the next reprice, a minute on
     await A.refresh(E);
     const E2q = { pm: new Map(), ks: new Map() };
     A.inject({ quotes: E2q });
@@ -144,6 +146,43 @@ function harness(list, over = {}) {
     await bad.A.discover(bad.E);
     await bad.A.refresh(bad.E);
     ok('a failed Kalshi reprice is logged, not thrown', bad.logs.some((l) => /Kalshi reprice failed: HTTP 429/.test(l.text)), bad.logs.map((l) => l.text));
+  }
+
+  group('Kalshi is not hammered: the crawl is paced and pairs are repriced once a minute');
+  {
+    const { A, E, set } = harness([cand('b', 'CONTROLS-2026-D', 'same')], { cfg: { anyRefreshSec: 60 } });
+    await A.discover(E);
+    set.ksLive([{ ticker: 'CONTROLS-2026-D', yesBid: 0.51, yesAsk: 0.52, status: 'active' }]);
+    await A.refresh(E);
+    set.clock(T0 + 15000);
+    set.ksLive([{ ticker: 'CONTROLS-2026-D', yesBid: 0.60, yesAsk: 0.61, status: 'active' }]);
+    await A.refresh(E); A.inject(E);
+    ok('a cycle 15 seconds after a reprice does not reprice again', E.quotes.ks.get('CONTROLS-2026-D').yesBid === 0.51, E.quotes.ks.get('CONTROLS-2026-D'));
+    set.clock(T0 + 61000);
+    E.quotes.ks.clear();
+    await A.refresh(E); A.inject(E);
+    ok('a minute later it does', E.quotes.ks.get('CONTROLS-2026-D').yesBid === 0.60, E.quotes.ks.get('CONTROLS-2026-D'));
+  }
+  {
+    // a crawl stub that reads three Kalshi pages and two Polymarket pages through the fetchers it is given
+    const stamps = [];
+    let clock = T0;
+    const A2 = makeAnyMarket({ ...base, dataDir: cfgFor().dataDir, anyMaxPairs: 3, discoverGapMs: 1500 }, {
+      now: () => clock, sleep: async (ms) => { clock += ms; },
+      discovery: {
+        makeDiscoveryFetch: ({ pace }) => async () => { if (pace) await pace(); stamps.push({ paced: !!pace, at: clock }); return {}; },
+        crawlKalshi: async ({ getJSON }) => { await getJSON('k1'); await getJSON('k2'); await getJSON('k3'); return { markets: [1], complete: true }; },
+        crawlPolymarket: async ({ getJSON }) => { await getJSON('p1'); await getJSON('p2'); return { markets: [1], complete: true }; },
+      },
+      store: { save() {}, load: () => null },
+      matchAny: () => ({ candidates: [], rejected: [], stats: {} }),
+      rules: { staticVerdict: () => ({ verdict: 'same' }) }, judge: null,
+      ks: { seriesInfo: new Map(), fetchMarketsByTickers: async () => [] }, pm: { fetchPrices: async () => new Map() },
+    });
+    await A2.discover({ log: () => {}, due: () => true, quotes: { pm: new Map(), ks: new Map() } });
+    const k = stamps.filter((x) => x.paced).map((x) => x.at);
+    ok('Kalshi crawl pages are at least DISCOVER_GAP_MS apart', k.length === 3 && k[1] - k[0] >= 1500 && k[2] - k[1] >= 1500, stamps);
+    ok('Polymarket pages are not held back by Kalshi\'s pacing', stamps.filter((x) => !x.paced).length === 2, stamps);
   }
 
   group('the rules judge is asked only about watch-only pairs that show an edge');
