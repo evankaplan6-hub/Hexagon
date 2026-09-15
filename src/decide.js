@@ -299,6 +299,18 @@ function biasFor(history, cfg) {
   return { score, reliable: Math.abs(gapThen) >= cfg.minGap, pmDrift: b.pmMid - a.pmMid, ksDrift: b.ksMid - a.ksMid, gapNow, mins };
 }
 
+// Is there room in the book for this signal? Unhedged convergence positions and locked arbs are
+// counted separately, and an arb counts once rather than once per leg: one limit over legs let six
+// hedged Fed arbs fill a book whose limit was written for directional bets. Returns why not, or null.
+function bookFull(positions, signal, cfg) {
+  if (signal.type === 'arb') {
+    const groups = new Set(positions.filter((p) => p.strategy === 'arb').map((p) => p.group)).size;
+    return groups + 1 > cfg.maxArbGroups ? `arb book full at ${groups} arbs` : null;
+  }
+  const open = positions.filter((p) => p.strategy !== 'arb').length;
+  return open + signal.legs.length > cfg.maxOpenPositions ? `book full at ${open} positions` : null;
+}
+
 // How many contracts, given a budget and the depth actually resting inside the limit.
 //
 // `budget` is a CAP, not a target. ILSA's conviction multiplier used to be applied on top of it
@@ -326,4 +338,4 @@ function sizePlan(signal, { budget, sizeMult = 1, books, cfg }) {
   return { qty: Math.max(0, qty), unitCost, capped: wanted > budget, reason: limited ? `${limited} depth inside limit` : null };
 }
 
-module.exports = { fairValue, quoteFault, convEdge, pairSignals, scan, liveWindow, exitIntent, arbUnwind, riskState, biasFor, sizePlan, rankSignals, pmRate };
+module.exports = { fairValue, quoteFault, convEdge, pairSignals, scan, liveWindow, exitIntent, arbUnwind, riskState, biasFor, bookFull, sizePlan, rankSignals, pmRate };

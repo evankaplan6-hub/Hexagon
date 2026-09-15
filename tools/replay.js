@@ -107,7 +107,7 @@ function run(cycles, cfg, { verbose = false } = {}) {
       if (considered >= 2) break;
       if (positions.some((p) => p.pairId === s.pair.id)) continue;
       if (now - (cooldown.get(s.pair.id) || 0) < 10 * 60 * 1000) continue;
-      if (positions.length + s.legs.length > cfg.maxOpenPositions) break;
+      if (decide.bookFull(positions, s, cfg)) continue;
       considered++;
       const equity = r2(cash + positions.reduce((a, p) => a + p.qty * (p.mark ?? p.entry), 0));
       const budget = r2(Math.max(0, Math.min(cfg.maxPositionPct * equity, cash * 0.95)));
