@@ -316,7 +316,7 @@ function markets(E, input, now) {
   const cfg = E.cfg;
   const whyNot = {};
   for (const p of E.pairs) {
-    const why = !p.q ? 'no quote yet' : p.inPlay ? 'in-play (game starting or started)' : p.veto || null;
+    const why = !p.q ? 'no quote yet' : p.inPlay ? 'in-play (event live, or its Kalshi market closes soon)' : p.veto || null;
     if (why) whyNot[why] = (whyNot[why] || 0) + 1;
   }
   const rows = E.pairs
@@ -334,13 +334,14 @@ function markets(E, input, now) {
       minArbEdge: `${cents(cfg.minArbEdge)} (locked arb profit per contract needed)`,
       maxSpread: cents(cfg.maxSpread), priceBand: `${cents(cfg.minMid)} to ${cents(cfg.maxMid)}`,
       thickVenueVolumeRatio: cfg.convMinVolRatio, gamesUntradeable: 'from 2 minutes before start',
+      anyPairUntradeable: `from ${cfg.closeGuardMin} minutes before its Kalshi market closes`,
     },
     matchingPairs: rows.length, shown: Math.min(limit, rows.length),
     pairs: rows.slice(0, limit).map((p) => {
       const q = p.q;
       const bias = E.bias.get(p.id);
       return {
-        market: clip(p.label, 80), kind: p.kind, series: p.series, inPlay: !!p.inPlay, startsAt: et(p.startsAt),
+        market: clip(p.label, 80), kind: p.kind, series: p.series, inPlay: !!p.inPlay, startsAt: et(p.startsAt), kalshiClosesAt: et(p.closesAt),
         polymarket: q ? { bid: cents(q.pmBid), ask: cents(q.pmAsk), volume24h: money(Math.round(q.pmVol || 0)) } : null,
         kalshi: q ? { bid: cents(q.ksBid), ask: cents(q.ksAsk), volume24h: money(Math.round(q.ksVol || 0)) } : null,
         gapKalshiMinusPolymarket: q ? signedCents(q.ksMid - q.pmMid) : null,
@@ -447,7 +448,8 @@ const SETTINGS = [
   ['maxMid', null, 'highest price a convergence bet is taken at'],
   ['maxSpread', null, 'widest bid-ask spread a trade will cross'],
   ['slipLimit', 'SLIP_LIMIT', 'how far past the signal price a fill may walk'],
-  ['pmTakerFee', 'PM_TAKER_FEE', 'Polymarket taker fee rate'],
+  ['pmFeeFallback', 'PM_FEE_FALLBACK', 'Polymarket taker fee rate used only when a market does not publish its own (fee = rate x shares x P x (1-P))'],
+  ['closeGuardMin', 'CLOSE_GUARD_MIN', 'minutes before a Kalshi market closes that its pair stops trading and convergence bets are closed'],
   ['ksFeeRate', 'KS_FEE_RATE', 'Kalshi taker fee rate (fee = rate x contracts x P x (1-P))'],
   ['priceEvery', 'PRICE_EVERY_SEC', 'seconds between taker cycles'],
   ['reentryCooldownMs', 'REENTRY_COOLDOWN_MIN', 'wait after an exit before re-entering a pair (milliseconds here)'],

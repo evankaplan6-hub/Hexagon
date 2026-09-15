@@ -19,15 +19,34 @@ function normalize(m) {
     vol24: num(m.volume_24h_fp) || 0,
     oi: num(m.open_interest_fp) || 0,
     closeTime: m.close_time || null,
+    // When the answer is expected, which is not the close: a scheduled print closes minutes before
+    // it (the Fed at 17:59Z, expected 18:05Z), and a can-close-early market's close_time is a
+    // backstop months out (SENATEIA-26 closes 2027-11-03, expected 2027-01-04).
+    expectedExpiration: m.expected_expiration_time || null,
+    latestExpiration: m.latest_expiration_time || null,
+    canCloseEarly: !!m.can_close_early,
     status: m.status,
     result: m.result || '',
+    settlementValue: num(m.settlement_value_dollars),
+    marketType: m.market_type || null,
     url: `https://kalshi.com/markets/${String(m.ticker || '').split('-')[0].toLowerCase()}`,
   };
 }
 
+// Follows the cursor. One page used to be the whole answer, and ten open series are bigger than a
+// page (KXNCAAFSPREAD had 1,828 open markets on 2026-09-14): the rest of such a series was simply
+// never seen, and a held position in it looked like a market that had left the listing.
+const SERIES_PAGES = 10;
 async function fetchSeries(series) {
-  const d = await http.getJSON(`${BASE}/markets?series_ticker=${series}&status=open&limit=1000`);
-  return (d.markets || []).map(normalize).filter((m) => m.yesBid != null && m.yesAsk != null && m.yesAsk >= m.yesBid);
+  const out = [];
+  let cursor = '';
+  for (let page = 0; page < SERIES_PAGES; page++) {
+    const d = await http.getJSON(`${BASE}/markets?series_ticker=${series}&status=open&limit=1000${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
+    for (const m of d.markets || []) out.push(m);
+    cursor = d.cursor || '';
+    if (!cursor || !(d.markets || []).length) break;
+  }
+  return out.map(normalize).filter((m) => m.yesBid != null && m.yesAsk != null && m.yesAsk >= m.yesBid);
 }
 
 // All configured series in parallel; tolerates partial failure.
@@ -68,19 +87,52 @@ async function fetchBook(ticker) {
 // desk decline MLB trades that were cheaper than it believed. Fetched once per series and cached;
 // an unknown series falls back to 1, the conservative direction.
 const feeMult = new Map();
+// A failed lookup is NOT cached. It used to store 1 on any error, so one refused call at startup
+// billed that series at full rate until the next restart; now the call is billed at full rate (the
+// safe direction) and the next load tries again.
 async function loadFeeMultipliers(seriesList) {
   for (const s of seriesList) {
     if (feeMult.has(s)) continue;
     try {
       const d = await http.getJSON(`${BASE}/series/${s}`);
       const m = d.series && d.series.fee_multiplier;
-      feeMult.set(s, Number.isFinite(+m) ? +m : 1);
-    } catch { feeMult.set(s, 1); }
+      if (m != null && Number.isFinite(+m)) feeMult.set(s, +m);
+    } catch { /* not cached: see above */ }
   }
   return feeMult;
 }
+
+// Every series at once. `GET /series` with no parameters returns all of them in one response --
+// 14,060 on 2026-09-14, about 17 MB, under two seconds -- each with its fee_type, fee_multiplier and
+// category, so the per-series loop above is only the fallback. It ignores limit and cursor.
+const seriesInfo = new Map();   // series ticker -> { feeMultiplier, feeType, category, title }
+async function loadSeriesIndex({ timeout = 60000 } = {}) {
+  const d = await http.getJSON(`${BASE}/series`, { timeout });
+  const list = Array.isArray(d && d.series) ? d.series : [];
+  if (!list.length) throw new Error('Kalshi /series came back empty');
+  for (const x of list) {
+    if (!x || !x.ticker) continue;
+    const m = x.fee_multiplier != null && Number.isFinite(+x.fee_multiplier) ? +x.fee_multiplier : null;
+    if (m != null) feeMult.set(x.ticker, m);
+    seriesInfo.set(x.ticker, { feeMultiplier: m, feeType: x.fee_type || null, category: x.category || null, title: x.title || null });
+  }
+  return list.length;
+}
+
+// The series a ticker belongs to. Not simply the text before the first hyphen: 151 series tickers
+// contain one (KXNFLWINS-ANY, SENATEPARTY-FL), so a market in KXNFLWINS-ANY was looked up as
+// KXNFLWINS and billed at that series' multiplier. Longest known prefix wins; an unknown ticker falls
+// back to its first segment.
+function seriesFor(ref) {
+  const parts = String(ref).split('-');
+  for (let n = parts.length; n >= 1; n--) {
+    const cand = parts.slice(0, n).join('-');
+    if (feeMult.has(cand) || seriesInfo.has(cand)) return cand;
+  }
+  return parts[0];
+}
 // `ref` is a ticker or a bare series; anything unseen bills at full rate.
-const multFor = (ref) => feeMult.get(String(ref).split('-')[0]) ?? 1;
+const multFor = (ref) => feeMult.get(seriesFor(ref)) ?? 1;
 
 // Kalshi taker fee schedule: ceil(rate * multiplier * contracts * P * (1 - P)), in dollars.
 function fee(qty, price, rate = 0.07, ref) {
@@ -97,4 +149,4 @@ function feePerContract(price, rate = 0.07, ref) {
   return rate * (ref === undefined ? 1 : multFor(ref)) * price * (1 - price);
 }
 
-module.exports = { fetchSeries, fetchAll, fetchMarket, fetchBook, fee, feePerContract, loadFeeMultipliers, multFor, BASE };
+module.exports = { fetchSeries, fetchAll, fetchMarket, fetchBook, fee, feePerContract, loadFeeMultipliers, loadSeriesIndex, seriesInfo, seriesFor, multFor, normalize, BASE };

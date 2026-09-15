@@ -19,6 +19,7 @@
 const fs = require('fs');
 const decide = require('../src/decide');
 const ks = require('../src/venues/kalshi');
+const pm = require('../src/venues/polymarket');
 const base = require('../src/config');
 
 const args = process.argv.slice(2);
@@ -52,6 +53,9 @@ function loadCycles(files) {
           pmMid: (r.pmBid + r.pmAsk) / 2, ksMid: (r.ksBid + r.ksAsk) / 2,
           pmSpread: r.pmAsk - r.pmBid, ksSpread: r.ksAsk - r.ksBid,
           pmVol: r.pmVol || 0, ksVol: r.ksVol || 0,
+          // the Polymarket taker rate the desk priced this line at; tapes older than 2026-09-15 do
+          // not carry it and are priced at the fallback, as the live desk prices an unknown market
+          pmFeeRate: Number.isFinite(r.pmFee) ? r.pmFee : undefined,
           // the quote's own observation time, so the staleness gate behaves as it did live
           t: r.qt ? Date.parse(r.qt) : t,
         },
@@ -64,7 +68,9 @@ function loadCycles(files) {
 const markPrice = (pos, q) => (pos.venue === 'PM'
   ? (pos.side === 'yes' ? q.pmBid : Math.round((1 - q.pmAsk) * 1000) / 1000)
   : (pos.side === 'yes' ? q.ksBid : Math.round((1 - q.ksAsk) * 1000) / 1000));
-const feeFor = (venue, qty, px, cfg) => (venue === 'KS' ? ks.fee(qty, px, cfg.ksFeeRate) : r2(cfg.pmTakerFee * qty * px));
+// Same fee shapes as the live broker: Kalshi per series (the ticker is the ref), Polymarket at the
+// rate the tape recorded for that market.
+const feeFor = (venue, qty, px, cfg, ref, rate) => (venue === 'KS' ? ks.fee(qty, px, cfg.ksFeeRate, ref) : r2(pm.fee(qty, px, Number.isFinite(rate) ? rate : cfg.pmFeeFallback)));
 
 function run(cycles, cfg, { verbose = false } = {}) {
   let cash = cfg.initialBalance;
@@ -81,7 +87,7 @@ function run(cycles, cfg, { verbose = false } = {}) {
       if (pair && pair.q) pos.mark = markPrice(pos, pair.q);
       const intent = decide.exitIntent(pos, pair, cfg, now);
       if (!intent) continue;
-      const fee = feeFor(pos.venue, pos.qty, intent.px, cfg);
+      const fee = feeFor(pos.venue, pos.qty, intent.px, cfg, pos.ref, pos.feeRate);
       const proceeds = r2(pos.qty * intent.px - fee);
       cash = r2(cash + proceeds);
       positions.splice(positions.indexOf(pos), 1);
@@ -106,13 +112,14 @@ function run(cycles, cfg, { verbose = false } = {}) {
       const equity = r2(cash + positions.reduce((a, p) => a + p.qty * (p.mark ?? p.entry), 0));
       const budget = r2(Math.max(0, Math.min(cfg.maxPositionPct * equity, cash * 0.95)));
       if (budget < 5) break;
-      const unit = s.legs.reduce((a, l) => a + l.px + (l.venue === 'KS' ? ks.fee(1, l.px, cfg.ksFeeRate) : cfg.pmTakerFee * l.px), 0);
+      const rate = decide.pmRate(s.pair.q, cfg);
+      const unit = s.legs.reduce((a, l) => a + l.px + (l.venue === 'KS' ? ks.fee(1, l.px, cfg.ksFeeRate, s.pair.ks.ticker) : pm.feePerShare(l.px, rate)), 0);
       const qty = Math.floor(budget / unit);
       if (qty < 5) continue;
       const group = `r${now}${considered}`;
       let cost = 0;
       const legs = s.legs.map((l) => {
-        const fee = feeFor(l.venue, qty, l.px, cfg);
+        const fee = feeFor(l.venue, qty, l.px, cfg, s.pair.ks.ticker, rate);
         cost = r2(cost + qty * l.px + fee);
         return { venue: l.venue, side: l.side, px: l.px, fee };
       });
@@ -121,7 +128,7 @@ function run(cycles, cfg, { verbose = false } = {}) {
       for (const l of legs) {
         positions.push({
           id: `${group}-${l.venue}${l.side[0]}`, group, pairId: s.pair.id, label: s.pair.label,
-          venue: l.venue, side: l.side, qty, entry: l.px, fee: l.fee,
+          venue: l.venue, side: l.side, qty, entry: l.px, fee: l.fee, ref: l.venue === 'KS' ? s.pair.ks.ticker : null, feeRate: l.venue === 'PM' ? rate : undefined,
           cost: r2(qty * l.px + l.fee), mark: l.px, openedAt: now, strategy: s.type,
         });
       }

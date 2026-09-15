@@ -21,11 +21,11 @@ Every 15 seconds the engine pulls the top 300 Polymarket markets by volume and e
 | 05 | **HOLT** | Scanner | Matches the same outcome on both venues (Fed brackets by month/code; games and matches by team/player name plus US/Eastern date). Rejects any match where a figure in the text — a year, a date, a percentage, a bps count, a dollar amount, a bare number like a doubleheader's game number — differs between the venues, and any match where the venues disagree by 30c+; either means the match is wrong. |
 | 06 | **ILSA** | Sentiment | Tracks each pair's price drift and whether the venue gap is narrowing or widening. Execution skips trades ILSA reads as diverging and sizes up ones it reads as converging. Also runs whale watch: calls out big bets by the top Polymarket sports wallets (advisory only). |
 | 04 | **TESS** | Ops | Health and risk: halts new risk on stale quotes, API error storms, or a daily drawdown past the limit. Sets the per-trade budget. |
-| 03 | **RIGO** | Settlement | Marks positions, exits convergence trades (gap closed, stop, max hold, or event going in-play), settles resolved markets at $1/$0, realizes P&L, scores wins/losses. |
+| 03 | **RIGO** | Settlement | Marks positions, exits convergence trades (gap closed, stop, max hold, event going in-play, or its Kalshi market about to close), settles resolved markets at their settlement price ($1, $0, or 50c when Polymarket resolves a question 50-50), realizes P&L, scores wins/losses. |
 | 01 | **BRAM** | Pricing | Two signal types, at most one per pair per cycle, arb first. **Locked arb**: YES on one venue + NO on the other costs under $1 after fees, so it pays $1 at resolution regardless of outcome. **Convergence**: venues disagree by ≥ `MIN_GAP` (3c) on a pre-game or macro market. Fair value is the volume-weighted mid (the thin book is usually the wrong one), and the trade is whichever side of the off-fair venue is cheap relative to fair, YES or NO. The signal fires only if the **round trip** clears `MIN_EDGE` — see below. Exits when the venues agree again. |
 | 02 | **KETT** | Execution | Pulls the real order books on both venues, re-verifies the gap from live books (listings lag), sizes to depth and budget, fills, and unwinds the first leg if the second leg fails. |
 
-Fees are modeled: Kalshi's `ceil(0.07 × contracts × P × (1−P))` and a configurable Polymarket taker fee (0 by default). Fills walk the ask ladder, so size is limited by real depth.
+Fees are modeled on both venues, and both have the same shape. Kalshi: `ceil(0.07 × multiplier × contracts × P × (1−P))`, with the multiplier read for every series from one `GET /series` call at startup (0.5 on MLB, 0 on a few politics and crypto series, 1 almost everywhere else). Polymarket: `shares × rate × P × (1−P)` at each market's own `feeSchedule` rate — 0.07 crypto, 0.05 sports, economics, culture and weather, 0.04 politics, finance, mentions and tech, 0.03 sports futures, 0 on geopolitics. Until 2026-09-15 the desk modelled Polymarket as free; 250 of the top 300 markets by volume, including the Fed pair it traded, are not. A market that publishes no rate is priced at `PM_FEE_FALLBACK` (0.07), so not knowing never makes a trade look cheaper. Fills walk the ask ladder, so size is limited by real depth.
 
 ### The gap is not the edge
 
@@ -43,13 +43,15 @@ a pair *interesting*) and `MIN_EDGE` (the profit that makes it *worth trading*) 
 Testing the edge against `MIN_GAP`, as this code originally did, demanded a 6–10c gap to clear a
 nominal "3c" bar and meant the convergence book never opened a position.
 
-Practical consequence: on Kalshi legs at mid prices this strategy needs a genuinely wide gap (~8c) to
-pay. It gets much cheaper near the tails, and cheapest of all on Polymarket legs, where
-`PM_TAKER_FEE` is 0. **Live mode is Kalshi-only**, so live has the least favourable fee profile of
-the three — read that section before funding anything.
+Practical consequence: at mid prices this strategy needs a genuinely wide gap (~8c) to pay on either
+venue. It gets much cheaper near the tails, and cheapest on the few fee-free markets (Polymarket
+geopolitics, Kalshi's zero-multiplier series). **Live mode is Kalshi-only** — read that section
+before funding anything.
 
 ### Guardrails baked in
 - Game pairs become untradeable 2 minutes before start. In-play prices move faster than any listing refresh, and the biggest "gaps" you'll see are exactly those.
+- Every pair becomes untradeable `CLOSE_GUARD_MIN` (60) minutes before its Kalshi market closes, and a convergence position on it is flattened then, even if the pair has already gone. Scheduled prints close their Kalshi market just before the number lands — the Fed at 17:59Z for an 18:00Z statement, CPI at 12:25Z for 12:30Z — while Polymarket trades straight through. Before this only games had a rule, so a Fed position could lose its Kalshi quote a minute before the statement and ride it on the Polymarket leg. A convergence trade is also never opened on a market that closes inside max hold plus the guard. Close time is an extra rule for games, never a replacement: Kalshi game markets close days after the game.
+- A locked arb whose first venue has settled is `half_settled`, not broken. Kalshi settles the Fed minutes after the statement; Polymarket waits hours for UMA. The open leg is valued at the complement of what the settled leg paid.
 - Convergence trades are never opened on markets priced under 3c or over 97c (tick noise), or where the cheap venue's spread is over 5c.
 - Max 2% of equity per position, 12 open positions, 3% daily drawdown halt, 90-second stale-data halt. All in `.env`.
 - The daily drawdown window rolls at midnight **US/Eastern**, matching the dates the matcher pairs games on (a UTC roll would reset the limit at 8pm ET, mid-slate).
@@ -58,7 +60,9 @@ the three — read that section before funding anything.
   that two venues will re-agree — so ranking them together by `edge` let a marginal directional bet
   jump the queue ahead of a risk-free one. On the same pair the arb is also nearly always the bigger
   number: gridded over 158k synthetic books it was available alongside a valid convergence candidate
-  95,877 times and was the larger edge in all but 319, where convergence won by at most 0.43c.
+  95,877 times and was the larger edge in all but 319, where convergence won by at most 0.43c. With
+  Polymarket's taker fee priced in (at the 0.07 fallback) the same grid gives 72,341 cells, 9
+  exceptions, and at most 0.12c.
 - **The 2% position cap is a hard ceiling, and conviction scales inside it.** ILSA's read is a
   *fraction of* the cap, never a multiplier on top: a locked arb is hedged and takes the full 2%, a
   neutral convergence signal takes `BASE_SIZE_MULT` of it (0.8 → 1.6% of equity), and a converging
@@ -78,7 +82,7 @@ the three — read that section before funding anything.
   leg pays a taker fee on the way out. The old `bidSum > 1.005` test ignored that fee and unwound
   three pairs on the cloud box for $1–3 each that would have settled for $2–6. `decide.arbUnwind`
   now requires `(bidSum − 1) × qty − fee` to clear `ARB_UNWIND_MARGIN` (0.5c) a contract.
-- The directional leg of a convergence trade already lands on Polymarket whenever the venues are
+- On a fee-free Polymarket market, the directional leg of a convergence trade already lands on Polymarket whenever the venues are
   similarly off fair: `convEdge` nets each venue's fees, and Polymarket's is zero, so it wins by
   exactly the Kalshi round trip. Pinned by a test rather than a rule.
 - A crossed or non-finite book is rejected, not priced. `convEdge` subtracts `spread/2`, so a
@@ -599,6 +603,7 @@ tools/decide-test.js   assertions for the taker decision core
 tools/probe-test.js    assertions for the thin-market probe (stubbed venues, frozen clock)
 tools/maker-test.js    assertions for the maker core: quoting, queue, fills, realised P&L
 tools/broker-test.js   assertions for fills, incl. the live Kalshi order path (no network)
+tools/fees-test.js     assertions for what each venue charges: Polymarket per market, Kalshi per series
 tools/matcher-test.js  assertions for cross-venue matching
 tools/stream-test.js   assertions for the trade socket and the tape's fallback to the poll
 tools/engine-test.js   assertions for the ledger: operator latch, partial exits, and close serialization
@@ -616,7 +621,7 @@ tape and a synthetic clock (`tools/replay.js`) instead of a network and a wall c
 guard it, and both are worth running after any change to the gates:
 
 ```bash
-npm test                      # all 701 assertions across eleven suites
+npm test                      # all 1292 assertions across fifteen suites
 node tools/maker-test.js      # ...or one suite at a time while working on one file
 ```
 

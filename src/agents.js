@@ -46,12 +46,15 @@ function HOLT(E) {
   const prev = new Map(E.pairs.map((p) => [p.id, p]));
   const { pairs, rejected } = matchPairs([...E.quotes.pm.values()], [...E.quotes.ks.values()]);
   for (const p of pairs) if (prev.has(p.id)) p.q = prev.get(p.id).q; // keep last quote until repriced
-  // Games are untradeable from 2 minutes before start. This has to be stamped here, not in
-  // BRAM: HOLT rebuilds `pairs` from scratch every cycle and only carries `q` across, so a
-  // flag set later in the cycle is gone by the next one — and RIGO, which reads it to
-  // flatten directional risk, runs BEFORE BRAM. Set there, it was always undefined.
+  // A pair is untradeable once its event is live or its Kalshi market is about to close
+  // (decide.liveWindow: games from 2 minutes before start, every pair from CLOSE_GUARD_MIN before
+  // close). This has to be stamped here, not in BRAM: HOLT rebuilds `pairs` from scratch every
+  // cycle and only carries `q` across, so a flag set later in the cycle is gone by the next one —
+  // and RIGO, which reads it to flatten directional risk, runs BEFORE BRAM. Set there, it was
+  // always undefined. It used to be games-only, so a Fed pair stayed tradeable up to the minute
+  // Kalshi closed it ahead of the statement.
   const now = Date.now();
-  for (const p of pairs) p.inPlay = p.kind === 'game' && (!p.startsAt || now >= p.startsAt - 120000);
+  for (const p of pairs) p.inPlay = decide.liveWindow(p, now, E.cfg);
   E.pairs = pairs;
   E.rejected = rejected;
   const added = pairs.filter((p) => !prev.has(p.id));
@@ -165,8 +168,10 @@ async function RIGO(E) {
     // resolution first (market vanished from the open listing)
     const res = await E.resolution(pos).catch(() => null);
     if (res && res.resolved) {
-      const px = (pos.side === 'yes') === res.yesWins ? 1 : 0;
-      await E.close(pos, px, `resolved ${res.yesWins ? 'YES' : 'NO'}`, true);
+      // yesPx is the pair's YES settlement price: 1, 0, or 0.5 when a question resolves 50-50
+      const px = Math.round((pos.side === 'yes' ? res.yesPx : 1 - res.yesPx) * 1000) / 1000;
+      const how = res.yesPx === 1 ? 'YES' : res.yesPx === 0 ? 'NO' : res.yesPx === 0.5 ? '50-50' : `at ${res.yesPx}`;
+      await E.close(pos, px, `resolved ${how}`, true);
       continue;
     }
     const pair = E.pairs.find((p) => p.id === pos.pairId);
@@ -223,7 +228,7 @@ function BRAM(E) {
     p.veto = veto.get(p.id) || null;
   }
   E.signals = sig;
-  E.touch('BRAM', widest ? `widest ${c(Math.abs(widest.gap))} ${widest.p.label}` : inPlayN ? `${inPlayN} pairs in-play, none tradeable` : 'no pairs');
+  E.touch('BRAM', widest ? `widest ${c(Math.abs(widest.gap))} ${widest.p.label}` : inPlayN ? `${inPlayN} pairs live or closing, none tradeable` : 'no pairs');
   if (staleN && E.due('bram-stale', 300)) E.log('BRAM', 'RESEARCH', null, `${staleN} pair${staleN > 1 ? 's' : ''} skipped on stale quotes (older than ${E.cfg.maxDataAgeSec}s) \u00b7 desk-wide data age is fine, these instruments individually are not`);
   // "Nothing traded" is this desk's normal output, so the useful thing to narrate is which rail
   // stopped each pair. Without this the only way to answer that was a debugger.
@@ -231,7 +236,7 @@ function BRAM(E) {
     const ledger = [...rejects.entries()].sort((a, b) => b[1] - a[1]).map(([why, n]) => `${n} ${why}`).join(' \u00b7 ');
     E.log('BRAM', 'RESEARCH', null, `gate ledger over ${E.pairs.length} pairs \u00b7 ${ledger}`);
   }
-  if (!widest && inPlayN && E.due('bram-inplay', 600)) E.log('BRAM', 'RESEARCH', null, `${inPlayN} matched pairs are all in-play right now · not pricing live games`);
+  if (!widest && inPlayN && E.due('bram-inplay', 600)) E.log('BRAM', 'RESEARCH', null, `${inPlayN} matched pairs are all live or about to close right now · not pricing them`);
   if (widest) {
     const key = `${widest.p.id}:${Math.round(widest.gap * 100)}`;
     if (key !== E.lastGapKey && (Math.abs(widest.gap) >= 0.01 || E.due('bram-log', 240))) {
@@ -322,7 +327,7 @@ async function KETT(E) {
       const nearMid = (near.yesBid + near.yesAsk) / 2, farMid = (far.yesBid + far.yesAsk) / 2;
       const isPM = leg.venue === 'PM';
       const liveQ = {
-        pmVol: q.pmVol, ksVol: q.ksVol,
+        pmVol: q.pmVol, ksVol: q.ksVol, pmFeeRate: q.pmFeeRate,
         pmMid: isPM ? nearMid : farMid, ksMid: isPM ? farMid : nearMid,
         pmBid: isPM ? near.yesBid : far.yesBid, pmAsk: isPM ? near.yesAsk : far.yesAsk,
         ksBid: isPM ? far.yesBid : near.yesBid, ksAsk: isPM ? far.yesAsk : near.yesAsk,
@@ -372,7 +377,7 @@ async function KETT(E) {
       if (entryHalt(E)) { failed = 'operator halt'; break; }
       // deterministic idempotency key: a retried request for THIS leg of THIS group dedupes at
       // the exchange instead of opening a second position
-      try { f = await E.broker.buy({ venue: l.venue, ref: refs[i], side: l.side, qty, limit: l.px + E.cfg.slipLimit, book: books[i].asks, key: `${group}-${l.venue}${l.side[0]}-in` }); }
+      try { f = await E.broker.buy({ venue: l.venue, ref: refs[i], side: l.side, qty, limit: l.px + E.cfg.slipLimit, book: books[i].asks, feeRate: s.pair.q && s.pair.q.pmFeeRate, key: `${group}-${l.venue}${l.side[0]}-in` }); }
       catch (e) {
         if (ambiguousOrder(e)) { uncertain = e; break; }
         f = { filled: 0, reason: e.message.slice(0, 80) };

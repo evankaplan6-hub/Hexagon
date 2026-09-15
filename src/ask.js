@@ -81,7 +81,7 @@ What the desk is:
 - A seventh desk, MAKR (the maker), rests buy and sell quotes on Kalshi markets that charge makers no fee, and earns the spread when someone trades against them. It keeps its own cash and P&L, separate from the six desks' book (the taker book).
 - A locked arb buys YES on one venue and NO on the other for less than $1 in total, so it pays $1 at settlement whichever side wins. A convergence bet buys the side that looks cheap and waits for the two venues to agree again.
 - The account is paper (pretend money) unless desk_overview says live. Paper results do not predict real ones.
-- Trading rarely, or not at all, is normal and correct. The venues usually agree within 0 to 1 cent, while a round trip costs about 4 cents in spread and Kalshi fees, so almost every pair is stopped by a rule. "Why isn't it trading?" is answered by the rules in the markets tool, such as "gap under minGap" or "edge under minEdge".
+- Trading rarely, or not at all, is normal and correct. The venues usually agree within 0 to 1 cent, while a round trip costs a few cents in spread plus both venues' taker fees (Kalshi's varies by series and is 0 on a few; Polymarket's is 3 to 7 percent of p(1-p) by category and 0 on geopolitics), so almost every pair is stopped by a rule. "Why isn't it trading?" is answered by the rules in the markets tool, such as "gap under minGap" or "edge under minEdge".
 - The journal (one file per Eastern day) is the permanent record. The activity log and the closed-trade list in memory keep only the newest entries.
 
 How to answer:

@@ -114,8 +114,32 @@ group('matchPairs: Fed brackets pair by month and code');
   const spanning = matchPairs([pm({ question: 'Will the Fed increase interest rates by 25+ bps after the September 2026 meeting?' })], hikeKs);
   ok('a spanning "25+ bps" pairs to NOTHING', spanning.pairs.length === 0, spanning.pairs);
 
+  // "50+ bps" is the wording Polymarket lists, and its rules round any move UP to the nearest 25, so
+  // it is every move over 25 -- exactly Kalshi's ">25bps". An EXACT "50 bps" is only part of that
+  // bracket: a 75bp move is Yes on Kalshi and No on Polymarket.
+  const fiftyPlus = matchPairs([pm({ question: 'Will the Fed increase interest rates by 50+ bps after the September 2026 meeting?' })], hikeKs);
+  ok('"50+ bps" pairs to the >25 bracket', fiftyPlus.pairs.length === 1 && /H26$/.test(fiftyPlus.pairs[0].ks.ticker), fiftyPlus.pairs);
+  const cutKs = [ks({ ticker: 'KXFEDDECISION-26SEP-C26', eventTicker: 'KXFEDDECISION-26SEP', title: 'cut >25', subTitle: 'Cut >25bps' })];
+  const cutPlus = matchPairs([pm({ question: 'Will the Fed decrease interest rates by 50+ bps after the September 2026 meeting?' })], cutKs);
+  ok('...and so does the cut side', cutPlus.pairs.length === 1 && /C26$/.test(cutPlus.pairs[0].ks.ticker), cutPlus.pairs);
   const fifty = matchPairs([pm({ question: 'Will the Fed increase interest rates by 50 bps after the September 2026 meeting?' })], hikeKs);
-  ok('an unambiguous "50 bps" still pairs to >25', fifty.pairs.length === 1 && /H26$/.test(fifty.pairs[0].ks.ticker), fifty.pairs);
+  ok('an exact "50 bps" pairs to NOTHING', fifty.pairs.length === 0, fifty.pairs);
+  const seventyFive = matchPairs([pm({ question: 'Will the Fed increase interest rates by 75+ bps after the September 2026 meeting?' })], hikeKs);
+  ok('neither does "75+ bps"', seventyFive.pairs.length === 0, seventyFive.pairs);
+}
+
+group('matchPairs: an empty Kalshi book is not a price');
+{
+  const q = 'Will there be no change in Fed interest rates after the September 2026 meeting?';
+  const k = (o) => [ks({ ticker: 'KXFEDDECISION-26SEP-H0', eventTicker: 'KXFEDDECISION-26SEP', title: 'no change', subTitle: 'Fed maintains rate', ...o })];
+  ok('bid 0 / ask 1 (a mid of exactly 50c) pairs to nothing', matchPairs([pm({ question: q })], k({ yesBid: 0, yesAsk: 1 })).pairs.length === 0);
+  ok('a one-sided book (no bid) pairs to nothing', matchPairs([pm({ question: q })], k({ yesBid: 0, yesAsk: 0.52 })).pairs.length === 0);
+  ok('a two-sided book still pairs', matchPairs([pm({ question: q })], k({})).pairs.length === 1);
+  const timed = matchPairs([pm({ question: q })], k({ closeTime: '2026-09-16T17:59:00Z', expectedExpiration: '2026-09-16T18:05:00Z' })).pairs[0];
+  ok('a pair carries its Kalshi close and expected settlement', timed && timed.closesAt === Date.parse('2026-09-16T17:59:00Z') && timed.settlesAt === Date.parse('2026-09-16T18:05:00Z'), timed);
+  const noExp = matchPairs([pm({ question: q })], k({ closeTime: '2026-09-16T17:59:00Z' })).pairs[0];
+  ok('settlesAt falls back to the close', noExp && noExp.settlesAt === noExp.closesAt, noExp);
+  ok('no close time is null, not NaN', matchPairs([pm({ question: q })], k({})).pairs[0].closesAt === null);
 }
 
 group('matchPairs: moneylines pair on the same ET date and the same sport');
@@ -249,8 +273,8 @@ group('matchPairs: the figure guard');
     ks({ ticker: 'KXFEDDECISION-26SEP-H25', eventTicker: 'KXFEDDECISION-26SEP', title: 'Fed decision, September 2026', subTitle: 'Hike 25bps' }),
     ks({ ticker: 'KXFEDDECISION-26SEP-H26', eventTicker: 'KXFEDDECISION-26SEP', title: 'Fed decision, September 2026', subTitle: 'Hike >25bps' }),
   ];
-  const fifty = matchPairs([pm({ question: 'Will the Fed increase interest rates by 50 bps after the September 2026 meeting?' })], hikeKs);
-  ok('a Fed pair is exempt: "50 bps" still pairs to the >25 bracket', fifty.pairs.length === 1 && /H26$/.test(fifty.pairs[0].ks.ticker), fifty);
+  const fifty = matchPairs([pm({ question: 'Will the Fed increase interest rates by 50+ bps after the September 2026 meeting?' })], hikeKs);
+  ok('a Fed pair is exempt: "50+ bps" still pairs to the >25 bracket', fifty.pairs.length === 1 && /H26$/.test(fifty.pairs[0].ks.ticker), fifty);
 }
 
 group('matchPairs: shape of what it returns');

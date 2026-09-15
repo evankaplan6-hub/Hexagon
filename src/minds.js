@@ -33,6 +33,7 @@
 //
 // Everything else is the mind's call.
 const decide = require('./decide');
+const ks = require('./venues/kalshi');
 const { num01 } = require('./brain');
 
 const c = (x) => `${(x * 100).toFixed(1)}c`;
@@ -55,8 +56,10 @@ Two strategies exist:
              Directional and unhedged. This is where judgement lives, and where you work.
 
 Hard facts about the economics, which you must not argue with:
-  - Kalshi charges a taker fee of roughly ceil(0.07 * contracts * P * (1-P)); at mid prices that
-    is about 1.75c per contract EACH WAY. Polymarket is usually 0.
+  - Both venues charge takers, per contract, rate * P * (1-P), EACH WAY. Kalshi's rate is 0.07
+    times a per-series multiplier (usually 1, which is about 1.75c at mid prices; 0.5 on MLB, 0 on
+    a few politics and crypto series). Polymarket's rate depends on the market: 0.03-0.07 by
+    category, 0 on geopolitics. Each pair in your view carries both, so use the pair's numbers.
   - Any "edge" figure you are shown is already net of the spread you cross going in, the spread
     you cross coming out, and both fees. An edge of 0 is exact break-even, not a small profit.
   - Real gaps on liquid markets are 0-1c. A 6c gap is much more often a stale listing, a
@@ -202,8 +205,9 @@ function ilsaView(E) {
       label: p.label,
       kind: p.kind || 'event',
       startsAt: p.startsAt ? new Date(p.startsAt).toISOString() : null,
-      pm: { bid: r3(q.pmBid), ask: r3(q.pmAsk), vol24: Math.round(q.pmVol || 0) },
-      ks: { bid: r3(q.ksBid), ask: r3(q.ksAsk), vol24: Math.round(q.ksVol || 0) },
+      pm: { bid: r3(q.pmBid), ask: r3(q.pmAsk), vol24: Math.round(q.pmVol || 0), takerFeeRate: q.pmFeeRate != null ? r3(q.pmFeeRate) : null },
+      ks: { bid: r3(q.ksBid), ask: r3(q.ksAsk), vol24: Math.round(q.ksVol || 0), takerFeeRate: r3(E.cfg.ksFeeRate * ks.multFor(p.ks.ticker)) },
+      closesAt: Number.isFinite(p.closesAt) ? new Date(p.closesAt).toISOString() : null,
       gap: r3(gap),
       fair: p.fair != null ? r3(p.fair) : null,
       // What the deterministic scan concluded, so the mind argues with a stated position rather
