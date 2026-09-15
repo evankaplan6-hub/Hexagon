@@ -1,6 +1,6 @@
 'use strict';
 // Tiny fetch wrapper with timeout + error accounting (used by TESS for health checks).
-const stats = { ok: 0, err: 0, lastError: '', recent: [] };
+const stats = { ok: 0, err: 0, lastError: '', recent: [], throttled: 0 };
 
 function noteError(e) {
   stats.err++;
@@ -63,24 +63,54 @@ function paceHost(base, gapMs, clock = {}) {
   if (gapMs > 0) pacers.set(host, makePacer({ gapMs, ...clock })); else pacers.delete(host);
 }
 
-async function getJSON(url, { timeout = 15000, priority = false } = {}) {
-  // wait for our turn BEFORE the timeout starts, or a queued call would spend its timeout in line
+// A turn in a host's queue without making the call through getJSON: the any-market crawl uses its
+// own fetch (its errors must not feed TESS's halt) but must still take turns with everything else,
+// or its pages land between the maker's calls and get everyone refused.
+async function takeTurn(url, priority = false) {
   const pacer = pacers.size ? pacers.get(new URL(url).host) : null;
   if (pacer) await pacer.take(priority);
-  const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), timeout);
-  try {
-    const r = await fetch(url, { signal: ctl.signal, headers: { accept: 'application/json', 'user-agent': 'the-hexagon/1.0' } });
-    if (!r.ok) throw new Error(`HTTP ${r.status} ${url.slice(0, 90)}`);
-    const j = await r.json();
-    stats.ok++;
-    return j;
-  } catch (e) {
-    noteError(e);
-    throw e;
-  } finally {
-    clearTimeout(timer);
+}
+
+// A refused call (HTTP 429) is a throttle, not an outage, and it is usually over in well under a
+// second. It used to count toward TESS's error halt the instant it happened, and the maker retries a
+// 429 up to three times -- so one crowded moment could count as three errors, and on the evening of
+// 2026-09-15 the box ran 15-38 of them per five minutes and halted new trades again and again. A 429
+// now waits what Kalshi asks (Retry-After, held to 0.5-2s), takes a fresh turn in the queue, and is
+// tried once more; only if that is refused too does it count. Timeouts and every other failure count
+// at once, as before: those are what the halt is for.
+const RETRY_MIN_MS = 500, RETRY_MAX_MS = 2000;
+async function getJSON(url, { timeout = 15000, priority = false, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+  for (let attempt = 0; ; attempt++) {
+    // wait for our turn BEFORE the timeout starts, or a queued call would spend its timeout in line
+    await takeTurn(url, priority);
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), timeout);
+    let retryAfter = null;
+    try {
+      const r = await fetch(url, { signal: ctl.signal, headers: { accept: 'application/json', 'user-agent': 'the-hexagon/1.0' } });
+      if (!r.ok) {
+        const err = new Error(`HTTP ${r.status} ${url.slice(0, 90)}`);
+        err.status = r.status;
+        if (r.status === 429 && attempt === 0) {
+          const ra = Number(r.headers && typeof r.headers.get === 'function' ? r.headers.get('retry-after') : NaN);
+          retryAfter = Math.min(RETRY_MAX_MS, Math.max(RETRY_MIN_MS, Number.isFinite(ra) ? ra * 1000 : 0));
+          stats.throttled++;
+        } else {
+          throw err;
+        }
+      } else {
+        const j = await r.json();
+        stats.ok++;
+        return j;
+      }
+    } catch (e) {
+      noteError(e);
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
+    await sleep(retryAfter);
   }
 }
 
-module.exports = { getJSON, stats, noteError, recentErrors, makePacer, paceHost };
+module.exports = { getJSON, stats, noteError, recentErrors, makePacer, paceHost, takeTurn };

@@ -138,7 +138,43 @@ async function run() {
   }
 }
 
+async function retryTests() {
+  group('a refused call (429) is tried once more before it counts as an error');
+  const real = global.fetch;
+  const KS = 'https://api.elections.kalshi.com/trade-api/v2';
+  const answer = (status, body = {}, headers = {}) => ({ ok: status < 400, status, headers: { get: (k) => headers[k.toLowerCase()] ?? null }, json: async () => body });
+  const noSleep = { slept: [], fn: (ms) => { noSleep.slept.push(ms); return Promise.resolve(); } };
+  try {
+    let replies = [answer(429, {}, { 'retry-after': '1' }), answer(200, { ok: 1 })];
+    let n = 0;
+    global.fetch = async () => replies[Math.min(n++, replies.length - 1)];
+    const before = http.recentErrors(), throttled = http.stats.throttled;
+    const j = await http.getJSON(`${KS}/markets`, { sleep: noSleep.fn });
+    ok('a 429 then a success returns the success', j && j.ok === 1 && n === 2, { j, n });
+    ok('...waiting what Retry-After asked', noSleep.slept[0] === 1000, noSleep.slept);
+    ok('...and counts no error toward the halt', http.recentErrors() === before, http.recentErrors());
+    ok('...though it is counted as a throttle', http.stats.throttled === throttled + 1);
+
+    replies = [answer(429), answer(429)]; n = 0; noSleep.slept.length = 0;
+    let threw = null;
+    try { await http.getJSON(`${KS}/markets`, { sleep: noSleep.fn }); } catch (e) { threw = e; }
+    ok('two 429s in a row throw, once', threw && /HTTP 429/.test(threw.message) && n === 2, { n, threw: threw && threw.message });
+    ok('...and count exactly one error', http.recentErrors() === before + 1, http.recentErrors());
+    ok('...with a wait held to at least half a second when Retry-After says nothing', noSleep.slept[0] === 500, noSleep.slept);
+
+    replies = [answer(429, {}, { 'retry-after': '30' }), answer(200, {})]; n = 0; noSleep.slept.length = 0;
+    await http.getJSON(`${KS}/markets`, { sleep: noSleep.fn });
+    ok('a long Retry-After is capped at 2 seconds', noSleep.slept[0] === 2000, noSleep.slept);
+
+    replies = [answer(500)]; n = 0;
+    const b5 = http.recentErrors();
+    try { await http.getJSON(`${KS}/markets`, { sleep: noSleep.fn }); } catch { /* expected */ }
+    ok('a 500 is not retried and counts at once', n === 1 && http.recentErrors() === b5 + 1, { n });
+  } finally { global.fetch = real; }
+}
+
 run()
+  .then(retryTests)
   .catch((e) => { fail++; console.log(`  FAIL  threw: ${e.stack}`); })
   .finally(() => {
     console.log(`\n${pass} passed, ${fail} failed`);

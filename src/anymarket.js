@@ -22,6 +22,7 @@
 const fs = require('fs');
 const path = require('path');
 const decide = require('./decide');
+const http = require('./http');
 
 // Only the matched candidates go to disk (a few hundred records), atomically, so a restart has
 // pairs at once. The full crawl is tens of MB and is simply fetched again.
@@ -110,6 +111,8 @@ function makeAnyMarket(cfg, deps = {}) {
       const paceKs = async () => {
         const wait = lastKs + (cfg.discoverGapMs || 0) - clock();
         if (wait > 0) await sleep(wait);
+        // and a turn in the shared Kalshi queue, so a crawl page never lands on top of a maker call
+        await (deps.takeTurn || http.takeTurn)(ks.BASE || 'https://api.elections.kalshi.com/trade-api/v2');
         lastKs = clock();
       };
       const getJSONks = discovery.makeDiscoveryFetch({ timeoutMs: 60000, pace: paceKs });
