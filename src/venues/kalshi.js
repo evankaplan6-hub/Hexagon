@@ -64,7 +64,7 @@ async function fetchAll(seriesList) {
 // how the any-market pairs are repriced every cycle without listing whole series. Returns the
 // normalized markets that came back, every status included -- the caller decides what a closed or
 // decided market means for it.
-async function fetchMarketsByTickers(tickers, { chunk = 100 } = {}) {
+async function fetchMarketsByTickers(tickers, { chunk = 200 } = {}) {
   const out = [];
   for (let i = 0; i < tickers.length; i += chunk) {
     const part = tickers.slice(i, i + chunk);

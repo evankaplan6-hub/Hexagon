@@ -56,6 +56,7 @@ function makeAnyMarket(cfg, deps = {}) {
   let last = null;                     // { at, ms, complete, stats }
   let running = false;
   let timer = null;
+  let lastRefresh = 0;
   const judge = deps.judge !== undefined ? deps.judge
     : (typeof rules.makeRulesJudge === 'function' ? rules.makeRulesJudge(cfg, deps.judgeDeps || {}) : null);
 
@@ -76,6 +77,7 @@ function makeAnyMarket(cfg, deps = {}) {
     }
     scored.sort((a, b) => ((b.v.verdict === 'same') - (a.v.verdict === 'same')) || (b.vol - a.vol));
     candidates = scored.slice(0, cfg.anyMaxPairs).map((x) => x.c);
+    lastRefresh = 0;   // new pairs are priced on the next cycle, not up to ANY_REFRESH_SEC later
     for (const c of candidates) {
       if (!ksCache.has(c.ks.ticker)) ksCache.set(c.ks.ticker, { ...c.ks, at });
       if (!pmCache.has(c.pm.id)) pmCache.set(c.pm.id, { ...c.pm, at });
@@ -102,14 +104,22 @@ function makeAnyMarket(cfg, deps = {}) {
     running = true;
     const t0 = clock();
     try {
+      const sleep = deps.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
+      // Kalshi's pages are spaced out (see DISCOVER_GAP_MS); Polymarket is another host with its own limit.
+      let lastKs = 0;
+      const paceKs = async () => {
+        const wait = lastKs + (cfg.discoverGapMs || 0) - clock();
+        if (wait > 0) await sleep(wait);
+        lastKs = clock();
+      };
+      const getJSONks = discovery.makeDiscoveryFetch({ timeoutMs: 60000, pace: paceKs });
       const getJSON = discovery.makeDiscoveryFetch({ timeoutMs: 60000 });
-      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       // Kalshi and Polymarket are different hosts; crawl them side by side. Discovery uses its own
       // fetch, so a slow or refused crawl never counts toward TESS's API-error halt.
       const [k, p] = await Promise.all([
         // A Kalshi market nobody holds and nobody traded today has no counterparty to arb against;
         // skipping it as the page is read keeps the crawl's memory to what can matter.
-        discovery.crawlKalshi({ getJSON, seriesInfo: ks.seriesInfo, sleep, keep: (m) => (m.oi || 0) > 0 || (m.vol24 || 0) > 0 }),
+        discovery.crawlKalshi({ getJSON: getJSONks, seriesInfo: ks.seriesInfo, sleep, keep: (m) => (m.oi || 0) > 0 || (m.vol24 || 0) > 0 }),
         discovery.crawlPolymarket({ getJSON, minEventVol: cfg.pmDiscoverMinVol, sleep }),
       ]);
       if (!k.markets.length || !p.markets.length) {
@@ -139,6 +149,9 @@ function makeAnyMarket(cfg, deps = {}) {
   async function refresh(E) {
     if (!candidates.length) return;
     const now = clock();
+    // not every cycle: see ANY_REFRESH_SEC. A restored or newly adopted set is repriced at once.
+    if (lastRefresh && now - lastRefresh < (cfg.anyRefreshSec || 0) * 1000) return;
+    lastRefresh = now;
     const tickers = [...new Set(candidates.map((c) => c.ks.ticker))];
     const tokens = [...new Set(candidates.map((c) => c.pm.tokenIds && c.pm.tokenIds[c.tokenIndex || 0]).filter(Boolean))];
     const [kr, pr] = await Promise.allSettled([ks.fetchMarketsByTickers(tickers), pm.fetchPrices(tokens)]);
