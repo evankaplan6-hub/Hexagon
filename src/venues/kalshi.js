@@ -60,8 +60,9 @@ async function fetchAll(seriesList) {
 }
 
 // Many markets by ticker in one call per chunk. `GET /markets?tickers=A,B,...` answered 200 tickers
-// in 111ms on 2026-09-14 and refused 500 (HTTP 414, the URL is too long), so chunks of 100. This is
-// how the any-market pairs are repriced every cycle without listing whole series. Returns the
+// in 111ms on 2026-09-14 and refused 500 (HTTP 414, the URL is too long), so chunks of 200: every
+// call counts against the rate limit the whole desk shares. This is how the any-market pairs are
+// repriced without listing whole series. Returns the
 // normalized markets that came back, every status included -- the caller decides what a closed or
 // decided market means for it.
 async function fetchMarketsByTickers(tickers, { chunk = 200 } = {}) {
