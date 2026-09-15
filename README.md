@@ -19,7 +19,7 @@ Every 15 seconds the engine pulls the top 300 Polymarket markets by volume and e
 | # | Agent | Desk | Job |
 |---|-------|------|-----|
 | 05 | **HOLT** | Scanner | Matches the same outcome on both venues: Fed brackets and games from a fast matcher, every other category from the any-market scanner (see *Any market*). Fast matcher: Fed brackets by month/code; games and matches by team/player name plus US/Eastern date. Rejects any match where a figure in the text — a year, a date, a percentage, a bps count, a dollar amount, a bare number like a doubleheader's game number — differs between the venues, and any match where the venues disagree by 30c+; either means the match is wrong. |
-| 06 | **ILSA** | Sentiment | Tracks each pair's price drift and whether the venue gap is narrowing or widening. Execution skips trades ILSA reads as diverging and sizes up ones it reads as converging. Also runs whale watch: calls out big bets by the top Polymarket sports wallets (advisory only). |
+| 06 | **ILSA** | Sentiment | Tracks each pair's price drift and whether the venue gap is narrowing or widening. Execution skips trades ILSA reads as diverging and sizes up ones it reads as converging. Also runs whale watch: calls out big bets by top wallets on Polymarket's sports, politics, economics, crypto, culture, tech and finance leaderboards (advisory only). |
 | 04 | **TESS** | Ops | Health and risk: halts new risk on stale quotes, API error storms, or a daily drawdown past the limit. Sets the per-trade budget. |
 | 03 | **RIGO** | Settlement | Marks positions, exits convergence trades (gap closed, stop, max hold, event going in-play, or its Kalshi market about to close), settles resolved markets at their settlement price ($1, $0, or 50c when Polymarket resolves a question 50-50), realizes P&L, scores wins/losses. |
 | 01 | **BRAM** | Pricing | Two signal types, at most one per pair per cycle, arb first. **Locked arb**: YES on one venue + NO on the other costs under $1 after fees, so it pays $1 at resolution regardless of outcome. **Convergence**: venues disagree by ≥ `MIN_GAP` (3c) on a pre-game or macro market. Fair value is the volume-weighted mid (the thin book is usually the wrong one), and the trade is whichever side of the off-fair venue is cheap relative to fair, YES or NO. The signal fires only if the **round trip** clears `MIN_EDGE` — see below. Exits when the venues agree again. |
@@ -565,11 +565,14 @@ Kalshi's historical endpoints (markets settled before 2026-07-15) are where more
 
 ### Whale watch: copying the best sports bettors does not pay
 
-Paid "insider trackers" (sharpai.us, for one) sell a feed of what Polymarket's top sports wallets
-just bought. That feed is public: Polymarket serves its sports leaderboard and every wallet's fills
-with no key. `src/whales.js` reads it. ILSA follows the top 25 wallets by profit this month, polling
-five every 15 seconds. When one wallet's net buying on one outcome passes $10K within six hours,
-it calls the bet out on the floor. Each line has the size, side and price, the wallet's rank, the
+Paid "insider trackers" (sharpai.us, for one) sell a feed of what Polymarket's top wallets just
+bought. That feed is public: Polymarket serves a leaderboard per category and every wallet's fills
+with no key. `src/whales.js` reads it. ILSA follows the top 25 sports wallets and the top 10 on each
+of the politics, economics, crypto, culture, tech and finance boards (`WHALE_CATEGORIES`) by profit
+this month -- 72 wallets on 2026-09-15, since the same wallets top several boards -- polling five
+every 15 seconds. When one wallet's net buying on one outcome passes $10K (sports) or $5K (the
+other boards, whose best wallets bet smaller) within six hours, it calls the bet out on the floor,
+naming the board the wallet ranks best on. Each line has the size, side and price, the wallet's rank, the
 Kalshi price of the same outcome where HOLT has matched the market, and whether the game had
 already started. Each bet is also appended to `data/whales-YYYY-MM-DD.jsonl`. Both sides of one
 market are flagged as a hedge. **It never trades.** Turn it off with `WHALE_WATCH=0`.
@@ -588,6 +591,8 @@ bottom 10 picked the same way                275    219  54%   53c   −5.2%  -0
 today's top 25 by month profit (look-ahead)  481    364  57%   51c   +8.2%   1.7
 the same top 10, on the half they were picked on:  +12.3%, t 2.0
 ```
+
+That test covers the **sports** boards only; the other boards are followed but untested.
 
 **Picking wallets on past results does not carry forward.** The ten best wallets returned +12% in
 the half that picked them and −2.8% in the next, no better than the bottom ten. The leaderboard
@@ -648,7 +653,7 @@ src/broker.js          paper broker + live Kalshi adapter
 src/venues/            Polymarket (Gamma + CLOB) and Kalshi public data
 src/tape.js            the maker's batched market data: the trade tape (socket first, poll as fallback) and top of book
 src/kalshi-ws.js       Kalshi's trade channel over WebSocket, dependency-free and read-only
-src/whales.js          whale watch: top Polymarket sports wallets' big bets, called out on the floor (never trades)
+src/whales.js          whale watch: top wallets' big bets on Polymarket's leaderboards, called out on the floor (never trades)
 src/ask.js             the Ask panel: a read-only Claude tool loop over the desk, with its own daily ceiling
 src/ask-tools.js       the Ask panel's ten read-only tools (whitelisted fields, bounded output, secrets scrubbed)
 public/                dashboard (index.html, style.css, app.js)
@@ -689,7 +694,7 @@ tape and a synthetic clock (`tools/replay.js`) instead of a network and a wall c
 guard it, and both are worth running after any change to the gates:
 
 ```bash
-npm test                      # all 1570 assertions across nineteen suites
+npm test                      # all 1583 assertions across nineteen suites
 node tools/maker-test.js      # ...or one suite at a time while working on one file
 ```
 

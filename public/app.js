@@ -130,7 +130,7 @@
   // one-line job descriptions, because "RIGO · MANAGING" tells you nothing on its own
   const ROLE = {
     HOLT: 'finds and pairs markets across both venues',
-    ILSA: 'reads price moves, and what the top Polymarket sports bettors just bought',
+    ILSA: "reads price moves, and what Polymarket's top bettors just bought",
     BRAM: 'looks for convergence signals worth trading',
     KETT: 'sizes and places the convergence trades',
     RIGO: 'manages open positions and exits them',

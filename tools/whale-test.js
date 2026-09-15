@@ -331,6 +331,46 @@ async function watchTests() {
       await broken.step(E2);
       ok('a record that cannot even be looked for does not stop the watch', whaleLines(E2).length === 1 && !broken.snapshot().lastError, [E2.logs, broken.snapshot().lastError]);
     }
+
+    // ---- more than one leaderboard
+    {
+      const { boardsFrom } = require('../src/whales');
+      const b = boardsFrom({ whaleCategories: ['sports', 'POLITICS', 'GEOPOLITICS', 'POLITICS'], whaleTop: 25, whaleTopOther: 10, whaleMinUsd: 10000, whaleMinUsdOther: 5000 });
+      ok('boards are upper-cased, deduplicated, and a board the API refuses is dropped by name', JSON.stringify(b.boards.map((x) => x.category)) === '["SPORTS","POLITICS"]' && JSON.stringify(b.unknown) === '["GEOPOLITICS"]', b);
+      ok('sports keeps its depth and bar; the others get their own', b.boards[0].top === 25 && b.boards[0].minUsd === 10000 && b.boards[1].top === 10 && b.boards[1].minUsd === 5000, b.boards);
+      ok('no categories configured means sports only, as before', JSON.stringify(boardsFrom({ whaleTop: 25, whaleMinUsd: 10000 }).boards.map((x) => x.category)) === '["SPORTS"]');
+
+      const boards = {
+        SPORTS: [{ wallet: '0xs', name: 'sportsguy', rank: 4, pnl: 900000, vol: 1 }, { wallet: '0xm', name: 'multi', rank: 9, pnl: 200000, vol: 1 }],
+        POLITICS: [{ wallet: '0xm', name: 'multi', rank: 2, pnl: 300000, vol: 1 }, { wallet: '0xp', name: 'wonk', rank: 1, pnl: 500000, vol: 1 }],
+        FINANCE: 'down',
+      };
+      pm.fetchLeaderboard = async ({ category, offset = 0 }) => { if (boards[category] === 'down') throw new Error('HTTP 500'); return offset ? [] : (boards[category] || []); };
+      const cfg = config({ whaleCategories: ['SPORTS', 'POLITICS', 'FINANCE'], whaleTopOther: 10, whaleMinUsdOther: 5000 });
+      // $6,000 of buying: over the politics bar, under the sports one
+      feed = [row({ proxyWallet: '0xp', name: 'wonk', usdcSize: 6000, conditionId: 'P1', outcome: 'Yes', outcomeIndex: 0, title: 'Will the Democrats win the Iowa Senate race in 2026?', transactionHash: '0xp1' }),
+        row({ proxyWallet: '0xs', name: 'sportsguy', usdcSize: 6000, conditionId: 'S1', transactionHash: '0xs1' }),
+        row({ proxyWallet: '0xm', name: 'multi', usdcSize: 6000, conditionId: 'M1', outcome: 'Yes', outcomeIndex: 0, title: 'Fed decision in October?', transactionHash: '0xm1' })];
+      const E = desk(), w = makeWhaleWatch(cfg);
+      await w.step(E);
+      const scan = E.logs.find((l) => l.kind === 'SCAN');
+      ok('the start line names the boards it follows and both bars', scan && /following 3 top Polymarket wallets this month across 2 sports, 2 politics/.test(scan.text) && /\$10K or \$5K\+/.test(scan.text), scan && scan.text);
+      ok('a board that fails is reported and the others are followed', E.logs.some((l) => /could not load finance/.test(l.text)) && w.snapshot().watching === 3, E.logs.map((l) => l.text));
+      const calls = whaleLines(E).map((l) => l.text);
+      ok('a politics wallet is called at the politics bar', calls.some((t) => /^wonk bought \$6K/.test(t) && / · #1 in politics this month/.test(t)), calls);
+      ok('a sports-only wallet is not, at the sports bar', !calls.some((t) => /^sportsguy/.test(t)), calls);
+      ok('a wallet on two boards is shown by its best rank and called at the lower bar', calls.some((t) => /^multi bought \$6K/.test(t) && / · #2 in politics this month/.test(t)), calls);
+      const line = recordLines(cfg.dataDir).map((l) => JSON.parse(l)).find((r) => r.name === 'multi');
+      ok('the record keeps the board and every rank', line && line.board === 'POLITICS' && line.ranks.length === 2, line);
+      ok('the panel says which board', w.snapshot().recent.some((r) => r.name === 'multi' && r.board === 'POLITICS'), w.snapshot().recent);
+      ok('the snapshot lists the boards and how long a full read takes', w.snapshot().boards.length === 3 && w.snapshot().rotationSec === 15, w.snapshot());
+      const { panelEntry: pe } = require('../src/whales');
+      ok('a line recorded before boards existed reads as sports', pe({ ts: 1, rank: 3 }).board === 'SPORTS');
+      boards.SPORTS = []; boards.POLITICS = 'down';
+      const E3 = desk(), none = makeWhaleWatch(cfg);
+      await none.step(E3);
+      ok('every board failing or empty is an error, named', /every leaderboard failed/.test(none.snapshot().lastError), none.snapshot().lastError);
+    }
   } finally {
     Object.assign(pm, real);
     for (const d of dirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch {} }
