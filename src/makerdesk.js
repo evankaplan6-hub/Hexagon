@@ -301,7 +301,7 @@ function makeMakerDesk(cfg) {
       const g = maker.toxicGate(m, cfg, Date.now());
       m.tox = g.tox; m.cooledUntil = g.cooledUntil;
       if (g.tripped) {
-        E.log('MAKR', 'OPS', null, `${u.ticker} cooled ${cfg.makerToxCooldownMin}m: ${(g.rate * 100).toFixed(0)}% of its last ${m.fills < 30 ? m.fills : 30} fills were run over (limit ${(cfg.makerMaxRunOver * 100).toFixed(0)}%) · quotes withdrawn, ${Math.abs(m.inv)} held`);
+        E.log('MAKR', 'OPS', null, `${u.ticker} cooled ${cfg.makerToxCooldownMin}m: ${(g.rate * 100).toFixed(0)}% of ${cfg.makerToxByContracts ? 'the contracts in ' : ''}its last ${m.fills < 30 ? m.fills : 30} fills were run over (limit ${(cfg.makerMaxRunOver * 100).toFixed(0)}%) · quotes withdrawn, ${Math.abs(m.inv)} held`);
         E.journal(E, 'MAKER_COOL', { ticker: u.ticker, rate: r4(g.rate), inv: m.inv, until: new Date(g.cooledUntil).toISOString() });
       }
       // reduce-only: drop whichever side would grow the position

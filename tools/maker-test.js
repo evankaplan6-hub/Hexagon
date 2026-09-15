@@ -344,6 +344,21 @@ group('the run-over gate cools a market whose touch keeps getting swept');
   ok('the live book-wide share (43%) would have been cooled', maker.toxicGate({ tox }, c, 0).tripped === true);
   ok('a market with no fills is never cooled', maker.toxicGate({}, c, 0).cooled === false);
   ok('the gate can be switched off by raising the bar to 1', maker.toxicGate({ tox: fillsOf(...Array(30).fill(ro)) }, cfg({ makerMaxRunOver: 1 }), 0).cooled === false);
+
+  // A sweep is one big fill. Counted in fills it is one of ten; counted in contracts it is most of them.
+  const byC = cfg({ makerMaxRunOver: 0.40, makerToxCooldownMin: 240, makerToxMinFills: 10, makerToxByContracts: true });
+  tox = fillsOf({ runOver: true, qty: 300 }, ...Array(9).fill({ runOver: false, qty: 10 }));
+  ok('one 300-contract sweep among nine small clean fills is 10% of fills', Math.abs(maker.toxicGate({ tox }, c, 0).rate - 0.1) < 1e-9 && !maker.toxicGate({ tox }, c, 0).cooled);
+  g = maker.toxicGate({ tox }, byC, 0);
+  ok('...and 77% of contracts, which trips the contract-counted gate', g.tripped && Math.abs(g.rate - 300 / 390) < 1e-9, g);
+  ok('...for its own cooldown', g.cooledUntil === 240 * 60000, g);
+  tox = fillsOf(...Array(5).fill({ runOver: true, qty: 1 }), ...Array(5).fill({ runOver: false, qty: 50 }));
+  ok('five 1-lot run-overs against five 50-lot clean fills: half the fills, 2% of contracts', maker.toxicGate({ tox }, c, 0).tripped && !maker.toxicGate({ tox }, byC, 0).cooled);
+  // Windows saved by the old code hold bare 1s and 0s; they must still read the same.
+  const old = [1, 1, 1, 1, 1, 0, 0, 0, 0, 0];
+  ok('an old saved window reads 50% of fills', Math.abs(maker.toxicGate({ tox: old }, c, 0).rate - 0.5) < 1e-9);
+  ok('...and the same 50% counted in contracts, not 100%', Math.abs(maker.toxicGate({ tox: old }, byC, 0).rate - 0.5) < 1e-9);
+  ok('a fill with no qty counts as one contract', maker.toxWindow([], { runOver: true })[0] === 1 && maker.toxWindow([], { runOver: false })[0] === -1);
 }
 
 group('the drawdown rail measures from the peak, not from the opening balance');

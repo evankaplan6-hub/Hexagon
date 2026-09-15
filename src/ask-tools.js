@@ -486,6 +486,7 @@ const SETTINGS = [
   ['makerStream', 'MAKER_STREAM', 'read the Kalshi trade socket when a key is configured'],
   ['makerMaxRunOver', 'MAKER_MAX_RUNOVER', 'run-over share that cools a maker market; 1 is off'],
   ['makerToxCooldownMin', 'MAKER_TOX_COOLDOWN_MIN', 'minutes a cooled maker market rests'],
+  ['makerToxByContracts', 'MAKER_TOX_BY_CONTRACTS', 'run-over share counted in contracts (1) or fills (0)'],
   ['makerMaxDrawdownPct', 'MAKER_MAX_DRAWDOWN_PCT', 'maker drawdown from its peak that halts it'],
   ['kalshiGapMs', 'KALSHI_GAP_MS', 'milliseconds between Kalshi API calls'],
   ['brainEnabled', 'BRAIN', "desks' Claude minds on or off"],

@@ -15,10 +15,13 @@ primary_region = "iad"          # Ashburn, Virginia — close to the exchange, a
   DATA_DIR = "/data"
   # Phase 1 of ops/rework-plan-2026-09-12.md shipped as 1a (tape pagination) and 1b (reduce in
   # the tails) only. The toxicity gate (1c) and the soft cap (1d) replayed with no effect on
-  # run-over contracts, the number they exist to cut, so they stay off here until re-scored.
-  # Both are switched off by their own knobs: a run-over bar of 1 never trips, a soft cap of 1
-  # is the hard cap.
-  MAKER_MAX_RUNOVER = "1"
+  # run-over contracts, the number they exist to cut, so both were switched off here: a run-over
+  # bar of 1 never trips, a soft cap of 1 is the hard cap. The soft cap is still off.
+  # The toxicity gate came back on 2026-09-15, counted in contracts with a four-hour rest: re-scored
+  # on five days of tape it was the setting better in every period and queue tried (src/config.js).
+  MAKER_MAX_RUNOVER = "0.40"
+  MAKER_TOX_BY_CONTRACTS = "1"
+  MAKER_TOX_COOLDOWN_MIN = "240"
   MAKER_SOFT_CAP = "1"
   # The desks' Claude minds stay off here. The box has no ANTHROPIC_API_KEY today, so they are
   # already off; pinning it keeps them off if the key is added for the Ask panel, so the key only
