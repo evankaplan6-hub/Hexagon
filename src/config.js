@@ -178,7 +178,13 @@ module.exports = {
   // because the budget handed to sizePlan already IS the cap. Locked arbs are unaffected -- they
   // are hedged, and always size to the full cap.
   baseSizeMult: num('BASE_SIZE_MULT', 0.8),
+  // Unhedged convergence positions held at once. Locked arbs have their own limit below: this used
+  // to count every LEG of everything, so on 2026-09-15 six hedged Fed arbs (two legs each, about
+  // $1,000 of a $9,800 book) filled all twelve slots and the desk could take nothing else.
   maxOpenPositions: num('MAX_OPEN_POSITIONS', 12),
+  // Locked arbs held at once, counted as arbs (one per pair of legs), not legs. Each is sized to
+  // maxPositionPct of equity like any trade, so twelve is at most ~24% of the book, and it is hedged.
+  maxArbGroups: num('MAX_ARB_GROUPS', 12),
   maxDailyDrawdownPct: num('MAX_DAILY_DRAWDOWN_PCT', 0.03),
   maxDataAgeSec: num('MAX_DATA_AGE_SEC', 90),
   // API errors in a 5m window before TESS halts new risk. Was hardcoded as `errs >= 25` inside

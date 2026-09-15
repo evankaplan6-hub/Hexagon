@@ -119,7 +119,7 @@ function deskOverview(E, _in, now) {
     takerBook: {
       what: 'the six trading desks share this book; the maker has its own',
       startingBalance: money(s.initial), cash: money(s.cash), equityAtMarks: money(eq),
-      inOpenPositions: money(r2(deployed)), openPositions: s.positions.length, maxOpenPositions: E.cfg.maxOpenPositions,
+      inOpenPositions: money(r2(deployed)), openPositions: s.positions.length, maxOpenPositions: E.cfg.maxOpenPositions, maxArbGroups: E.cfg.maxArbGroups,
       realizedPnlAllTime: signed(s.stats.realized), unrealizedPnlAtMarks: signed(r2(unrealized)), feesPaidAllTime: money(s.stats.fees),
       groupsWon: s.stats.wins, groupsLost: s.stats.losses,
       today: { easternDay: s.dayKey || etDay(now), equityAtDayStart: money(s.dayStartEquity), pnlToday: fin(s.dayStartEquity) ? signed(r2(eq - s.dayStartEquity)) : null },
@@ -432,7 +432,8 @@ const SETTINGS = [
   ['initialBalance', 'INITIAL_BALANCE', 'starting balance of each book, dollars'],
   ['maxPositionPct', 'MAX_POSITION_PCT', 'largest single position as a share of equity'],
   ['baseSizeMult', 'BASE_SIZE_MULT', 'share of the position cap a neutral convergence bet takes'],
-  ['maxOpenPositions', 'MAX_OPEN_POSITIONS', 'most open taker positions at once'],
+  ['maxOpenPositions', 'MAX_OPEN_POSITIONS', 'most open convergence bets (unhedged) at once'],
+  ['maxArbGroups', 'MAX_ARB_GROUPS', 'most locked arbs at once, counted per arb, not per leg'],
   ['maxDailyDrawdownPct', 'MAX_DAILY_DRAWDOWN_PCT', 'daily loss share that halts new taker trades'],
   ['maxDataAgeSec', 'MAX_DATA_AGE_SEC', 'quote age in seconds that halts new trades'],
   ['maxApiErrors', 'MAX_API_ERRORS', 'API errors in 5 minutes that halt new trades'],

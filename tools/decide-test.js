@@ -284,6 +284,21 @@ group('pairs stop trading before their Kalshi market closes, not only before a g
   ok('arb legs are still left to settlement', d.exitIntent({ ...pos, strategy: 'arb' }, undefined, cfg, NOW) === null);
 }
 
+group('arbs and convergence bets have separate books, and an arb counts once');
+{
+  const c = { ...cfg, maxOpenPositions: 12, maxArbGroups: 12 };
+  const arbLegs = (n) => Array.from({ length: n }, (_, i) => [
+    { strategy: 'arb', group: `g${i}`, venue: 'PM' }, { strategy: 'arb', group: `g${i}`, venue: 'KS' }]).flat();
+  const arb = { type: 'arb', legs: [{}, {}] }, conv = { type: 'converge', legs: [{}] };
+  ok('six arbs (twelve legs) leave room for more arbs', d.bookFull(arbLegs(6), arb, c) === null);
+  ok('...and for a convergence bet', d.bookFull(arbLegs(6), conv, c) === null);
+  ok('the twelfth arb is allowed', d.bookFull(arbLegs(11), arb, c) === null);
+  ok('the thirteenth is not, and says so', /arb book full at 12 arbs/.test(d.bookFull(arbLegs(12), arb, c)), d.bookFull(arbLegs(12), arb, c));
+  const bets = Array.from({ length: 12 }, (_, i) => ({ strategy: 'converge', group: `c${i}` }));
+  ok('twelve convergence bets fill their book', /book full at 12 positions/.test(d.bookFull(bets, conv, c)));
+  ok('...but not the arb book', d.bookFull(bets, arb, c) === null);
+}
+
 group('property: the arb is the better signal wherever both are available');
 {
   let both = 0, convWon = 0, worst = 0;

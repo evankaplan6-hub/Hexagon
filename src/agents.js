@@ -157,7 +157,7 @@ function TESS(E) {
   const budget = E.budget();
   E.touch('TESS', halt ? `HALT ${halt}` : `budget ${money(budget)}`);
   if (!halt && E.due('tess-log', 180)) {
-    E.log('TESS', 'OPS', null, `data age ${Math.round(age)}s, window is clean · ${E.state.positions.length}/${E.cfg.maxOpenPositions} open · per-trade budget ${money(budget)} · day ${dd >= 0 ? '−' : '+'}${(Math.abs(dd) * 100).toFixed(2)}% · ${errs} api errs/5m`);
+    E.log('TESS', 'OPS', null, `data age ${Math.round(age)}s, window is clean · ${E.state.positions.filter((p) => p.strategy !== 'arb').length}/${E.cfg.maxOpenPositions} bets, ${new Set(E.state.positions.filter((p) => p.strategy === 'arb').map((p) => p.group)).size}/${E.cfg.maxArbGroups} arbs open · per-trade budget ${money(budget)} · day ${dd >= 0 ? '−' : '+'}${(Math.abs(dd) * 100).toFixed(2)}% · ${errs} api errs/5m`);
   }
 }
 
@@ -281,10 +281,9 @@ async function KETT(E) {
     if (E.state.positions.some((p) => p.pairId === s.pair.id)) continue;
     if (Date.now() - (E.cooldown.get(s.pair.id) || 0) < E.cfg.reentryCooldownMs) continue; // no churn after an exit
     if (live && s.legs.some((l) => l.venue !== 'KS')) continue; // live mode trades Kalshi legs only
-    if (E.state.positions.length + s.legs.length > E.cfg.maxOpenPositions) {
-      if (E.due('kett-full', 300)) E.log('KETT', 'PASS', null, `book full at ${E.state.positions.length} positions, passing on ${s.pair.label}`);
-      break;
-    }
+    const full = decide.bookFull(E.state.positions, s, E.cfg);
+    // an arb book that is full does not stop a convergence trade further down the list, or the reverse
+    if (full) { if (E.due(`kett-full-${s.type}`, 300)) E.log('KETT', 'PASS', null, `${full}, passing on ${s.pair.label}`); continue; }
     considered++;
     const budget = E.budget();
     if (budget < 5) { if (E.due('kett-cash', 300)) E.log('KETT', 'PASS', null, `budget ${money(budget)} below floor, standing down`); break; }

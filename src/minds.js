@@ -235,7 +235,8 @@ function ilsaView(E) {
         equity: r3(E.equity()),
         perTradeBudget: r3(E.budget()),
         openPositions: E.state.positions.length,
-        maxOpenPositions: E.cfg.maxOpenPositions,
+        maxOpenPositions: E.cfg.maxOpenPositions,   // unhedged convergence positions; arbs have their own limit
+        maxArbGroups: E.cfg.maxArbGroups,
         alreadyHoldingPairIds: E.state.positions.map((x) => x.pairId),
       },
       thresholds: {
