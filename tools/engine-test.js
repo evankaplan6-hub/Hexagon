@@ -402,7 +402,7 @@ const position = (over = {}) => ({
       await E.pinPositions();
       ok('a finalized market with a result is not pinned', !E.quotes.ks.has('KXDONE'));
       const r = await E.resolution(E.state.positions[0]);
-      ok('so resolution() sees it and settles it', r && r.resolved === true && r.yesWins === false, r);
+      ok('so resolution() sees it and settles it', r && r.resolved === true && r.yesPx === 0, r);
 
       const O = engine();
       O.state.positions = [position({ id: 'live', ref: 'KXOPEN' })];
@@ -410,6 +410,89 @@ const position = (over = {}) => ({
       await O.pinPositions();
       ok('an open market is still pinned', O.quotes.ks.has('KXOPEN'));
     } finally { ksv.fetchMarket = real; }
+  }
+
+  group('settlement is a price, not a winner');
+  {
+    const ksv = require('../src/venues/kalshi');
+    const pmv = require('../src/venues/polymarket');
+    const realK = ksv.fetchMarket, realP = pmv.fetchMarket;
+    try {
+      const K = engine();
+      K.state.positions = [position({ id: 'k1', ref: 'KXSV' })];
+      ksv.fetchMarket = async () => ({ ticker: 'KXSV', status: 'determined', result: '', settlementValue: 0.35 });
+      const rk = await K.resolution(K.state.positions[0]);
+      ok('a determined Kalshi market with no yes/no result settles at its settlement value', rk && rk.yesPx === 0.35, rk);
+      ksv.fetchMarket = async () => ({ ticker: 'KXSV', status: 'closed', result: '', settlementValue: null });
+      const K2 = engine();
+      K2.state.positions = [position({ id: 'k2', ref: 'KXSV' })];
+      ok('a closed, undecided Kalshi market does not settle', (await K2.resolution(K2.state.positions[0])) === null);
+
+      // Polymarket resolves an ambiguous question 50-50. The old code read that as "NO won".
+      const pmPos = (over) => position({ venue: 'PM', ref: 'tok0', pmId: 'm1', tokenIndex: 0, qty: 100, cost: 40, entry: 0.40, mark: 0.40, ...over });
+      pmv.fetchMarket = async () => ({ id: 'm1', closed: true, resolved: true, prices: [0.5, 0.5], tokenIds: ['tok0', 'tok1'] });
+      const P = engine();
+      P.state.positions = [pmPos({ id: 'pmy', side: 'yes' }), pmPos({ id: 'pmn', side: 'no', group: 'g2' })];
+      const rp = await P.resolution(P.state.positions[0]);
+      ok('a 50-50 Polymarket resolution is a price of 0.5', rp && rp.yesPx === 0.5, rp);
+      P.resolutionChecks.clear();   // the direct call above used this minute's check
+      await RIGO(P);
+      const cy = P.state.closed.find((c) => c.id === 'pmy'), cn = P.state.closed.find((c) => c.id === 'pmn');
+      ok('RIGO settles the YES leg at 50c, not $0', cy && cy.exit === 0.5 && /50-50/.test(cy.reason), cy);
+      ok('...and the NO leg at 50c, not $1', cn && cn.exit === 0.5, cn);
+      pmv.fetchMarket = async () => ({ id: 'm1', closed: true, resolved: true, prices: [0.73, 0.27], tokenIds: ['tok0', 'tok1'] });
+      const Q = engine();
+      Q.state.positions = [pmPos({ id: 'odd' })];
+      ok('a resolved price that is not 0, 0.5 or 1 is left for a person', (await Q.resolution(Q.state.positions[0])) === null);
+      pmv.fetchMarket = async () => ({ id: 'm1', closed: true, resolved: true, prices: [0, 1], tokenIds: ['tok0', 'tok1'] });
+      const T = engine();
+      T.state.positions = [pmPos({ id: 't1', tokenIndex: 1 })];
+      ok('the pair\'s YES is read from its own token index', (await T.resolution(T.state.positions[0])).yesPx === 1);
+
+      // A market still in the listing is asked once its Kalshi close has passed.
+      const L = engine();
+      L.state.positions = [position({ id: 'l1', ref: 'KXLIST' })];
+      L.quotes.ks.set('KXLIST', { ticker: 'KXLIST', status: 'active', closeTime: new Date(Date.now() - 60000).toISOString(), yesBid: 0.5, yesAsk: 0.52 });
+      ksv.fetchMarket = async () => ({ ticker: 'KXLIST', status: 'finalized', result: 'yes' });
+      const rl = await L.resolution(L.state.positions[0]);
+      ok('a listed market past its close is checked for resolution', rl && rl.yesPx === 1, rl);
+      const A = engine();
+      A.state.positions = [position({ id: 'a1', ref: 'KXLIVE' })];
+      A.quotes.ks.set('KXLIVE', { ticker: 'KXLIVE', status: 'active', closeTime: new Date(Date.now() + 3600000).toISOString() });
+      ok('a listed, active market before its close is not polled', (await A.resolution(A.state.positions[0])) === null);
+    } finally { ksv.fetchMarket = realK; pmv.fetchMarket = realP; }
+  }
+
+  group('an arb whose first venue has settled is half settled, not broken');
+  {
+    const E = engine();
+    E.state.positions = [position({ id: 'hs-pm', group: 'hs', strategy: 'arb', venue: 'PM', side: 'no', qty: 20, cost: 12.0, mark: 0.99, pairId: 'same' })];
+    E.state.closed = [{ ...position({ id: 'hs-ks', group: 'hs', strategy: 'arb', venue: 'KS', side: 'yes', qty: 20, cost: 7.0, pairId: 'same' }), exit: 0, reason: 'resolved NO', pnl: -7 }];
+    E.state.arbGroups.hs = { pairId: 'same', qty: 20, expectedPayout: 20, status: 'filled' };
+    const g = E.arbScorecard()[0];
+    ok('integrity is half_settled', g.integrity === 'half_settled', g);
+    ok('the open leg is valued at the complement of what the settled leg paid', g.settlementValue === 20 && Math.abs(g.lockedPnl - 8) < 0.001, g);
+    ok('and it raises no integrity alert', E.pnlScorecard().integrityAlerts === 0, E.pnlScorecard());
+    const U = engine();
+    U.state.positions = [position({ id: 'u-pm', group: 'u', strategy: 'arb', venue: 'PM', side: 'no', qty: 20, cost: 12.0 })];
+    U.state.closed = [{ ...position({ id: 'u-ks', group: 'u', strategy: 'arb', venue: 'KS', side: 'yes', qty: 20 }), exit: 0.1, reason: 'unwound: second leg failed', pnl: -1 }];
+    ok('a leg closed by an unwind is still an orphan', U.arbScorecard()[0].integrity === 'orphan_leg', U.arbScorecard()[0]);
+  }
+
+  group('quotes carry the Polymarket fee rate and positions carry their market\'s close');
+  {
+    const E = engine();
+    E.quotes.pm.set('m1', { id: 'm1', bestBid: 0.40, bestAsk: 0.41, vol24: 1000, feeRate: 0.04, tokenIds: ['t0', 't1'], at: Date.now() });
+    E.quotes.ks.set('KX-1', { ticker: 'KX-1', yesBid: 0.45, yesAsk: 0.46, vol24: 1000, at: Date.now() });
+    const pair = { id: 'p', label: 'x', pm: { id: 'm1', tokenIndex: 0, tokenId: 't0' }, ks: { ticker: 'KX-1' }, closesAt: 1788900000000, settlesAt: 1788900360000 };
+    const q = E.quote(pair);
+    ok('the quote is stamped with its market\'s rate', q && q.pmFeeRate === 0.04, q);
+    E.quotes.pm.get('m1').feeRate = null;
+    ok('a market that does not publish one gets the fallback', E.quote(pair).pmFeeRate === base.pmFeeFallback);
+    pair.q = q;
+    const pos = E.open({ type: 'converge', pair }, { venue: 'PM', side: 'yes' }, { filled: 10, avg: 0.41, fee: 0.1, cost: 4.2 }, 'grp', 'n');
+    ok('a Polymarket position records the rate it was priced at', pos.feeRate === 0.04, pos);
+    ok('...and its market\'s close and settlement times', pos.closesAt === 1788900000000 && pos.settlesAt === 1788900360000, pos);
   }
 
   group('operator sell closes every open leg of one group, and only that group');

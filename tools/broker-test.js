@@ -69,8 +69,15 @@ group('PaperBroker reports fills net of the venue fee');
     ok('and is charged a Kalshi fee', kb.fee > 0, kb);
     ok('cost = contracts + fee', Math.abs(kb.cost - (10 * 0.50 + kb.fee)) < 0.005, kb);
 
-    const pb = await b.buy({ venue: 'PM', ref: null, qty: 10, limit: 0.50, book: L([0.50, 100]) });
-    ok('a Polymarket buy is charged PM_TAKER_FEE (0 by default)', pb.fee === 0, pb);
+    // Polymarket charges shares x rate x p x (1-p) at the market's own rate: 10 x 0.05 x 0.5 x 0.5
+    const pb = await b.buy({ venue: 'PM', ref: null, qty: 10, limit: 0.50, book: L([0.50, 100]), feeRate: 0.05 });
+    ok('a Polymarket buy is charged its market\'s taker fee', Math.abs(pb.fee - 0.13) < 1e-9 && Math.abs(pb.cost - 5.13) < 1e-9, pb);
+    const gp = await b.buy({ venue: 'PM', ref: null, qty: 10, limit: 0.50, book: L([0.50, 100]), feeRate: 0 });
+    ok('a zero-fee (geopolitics) market is charged nothing', gp.fee === 0, gp);
+    const unk = await b.buy({ venue: 'PM', ref: null, qty: 100, limit: 0.50, book: L([0.50, 100]) });
+    ok('a caller that does not know the rate is billed at the fallback, never zero', Math.abs(unk.fee - Math.round(100 * base.pmFeeFallback * 0.25 * 100) / 100) < 1e-9 && unk.fee > 0, unk);
+    const ps = await b.sell({ venue: 'PM', ref: null, qty: 100, px: 0.90, feeRate: 0.04 });
+    ok('a Polymarket sell nets the fee at the sell price', Math.abs(ps.fee - 0.36) < 1e-9 && Math.abs(ps.proceeds - 89.64) < 1e-9, ps);
 
     const none = await b.buy({ venue: 'KS', ref: 'KXTEST-A', qty: 10, limit: 0.20, book: L([0.50, 100]) });
     ok('no depth inside the limit is refused by name', none.filled === 0 && /no depth/.test(none.reason), none);

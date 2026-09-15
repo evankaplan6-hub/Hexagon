@@ -159,7 +159,13 @@ function matchPairs(pmList, ksList) {
       // bracket, which resolves differently at exactly 25bps: the two legs of a "locked" arb would
       // then settle opposite ways on the single most likely outcome of a Fed meeting. A question
       // that spans two brackets has no counterpart here, and no pair is the right answer.
-      code = bps === 25 && !plus ? `${dir}25` : (bps >= 50 && !plus) ? `${dir}26` : null;
+      //
+      // "50+ bps" is the other way round, and it is the wording Polymarket actually lists: its rules
+      // round any move UP to the nearest 25, so "50+" is every move over 25 -- exactly Kalshi's
+      // ">25bps". Mapping it to nothing left the two biggest September legs unpaired ($4.0M and
+      // $0.78M a day on 2026-09-15). An EXACT "50 bps" used to map to >25 and must not: a 75bp move
+      // is Yes on Kalshi and No on Polymarket.
+      code = bps === 25 && !plus ? `${dir}25` : bps === 50 && plus ? `${dir}26` : null;
       mon = r[4]; yr = r[5];
     } else if ((r = q.match(/no change in Fed interest rates after the (\w+) (\d{4}) meeting/i))) {
       code = 'H0'; mon = r[1]; yr = r[2];
@@ -235,6 +241,9 @@ function matchPairs(pmList, ksList) {
       continue;
     }
     if (usedKs.has(hit.ks.ticker)) continue;
+    // An empty Kalshi book is not a price. It comes back as bid 0 / ask 1 -- a mid of exactly 50c --
+    // and the 30c agreement guard below would pair that with any Polymarket market priced 20-80c.
+    if (!(hit.ks.yesBid > 0 && hit.ks.yesAsk < 1)) continue;
 
     // sanity: venues should roughly agree; a 30c+ disagreement means we matched the wrong thing
     // Validate the LEGS, not the average. `null + null` is 0 in JS and Number.isFinite(0) is true,
@@ -254,6 +263,10 @@ function matchPairs(pmList, ksList) {
       kind: hit.kind,
       series: series(hit.ks.ticker),
       startsAt: hit.kind === 'game' ? startMs(m.gameStart) : null,
+      // When the Kalshi market stops trading, and when its answer is expected (decide.liveWindow,
+      // the close-guard exit, and the arb's lock-up all read these)
+      closesAt: startMs(hit.ks.closeTime),
+      settlesAt: startMs(hit.ks.expectedExpiration) ?? startMs(hit.ks.closeTime),
       pm: { id: m.id, tokenIndex: hit.tokenIndex, tokenId: m.tokenIds[hit.tokenIndex], question: m.question, url: m.url },
       ks: { ticker: hit.ks.ticker, title: hit.ks.title, eventTicker: hit.ks.eventTicker, url: hit.ks.url },
     });

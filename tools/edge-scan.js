@@ -52,7 +52,9 @@ async function polymarketPairs() {
     const a = prices.get(m.tokenIds[0]), b = prices.get(m.tokenIds[1]);
     if (!a || !b) continue;
     const cost = a.ask + b.ask;
-    rows.push({ q: String(m.question).slice(0, 50), askSum: cost, bidSum: a.bid + b.bid, edge: 1 - cost - cfg.pmTakerFee * cost });
+    // both legs pay this market's own taker fee: rate x p x (1-p) at each leg's price
+    const rate = Number.isFinite(m.feeRate) ? m.feeRate : cfg.pmFeeFallback;
+    rows.push({ q: String(m.question).slice(0, 50), askSum: cost, bidSum: a.bid + b.bid, edge: 1 - cost - pm.feePerShare(a.ask, rate) - pm.feePerShare(b.ask, rate) });
   }
   return { scanned: mkts.length, rows: rows.sort((x, y) => y.edge - x.edge) };
 }

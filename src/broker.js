@@ -3,6 +3,7 @@
 const fs = require('fs');
 const crypto = require('crypto');
 const ks = require('./venues/kalshi');
+const pm = require('./venues/polymarket');
 
 const r2 = (x) => Math.round(x * 100) / 100;
 const r4 = (x) => Math.round(x * 10000) / 10000;
@@ -39,16 +40,21 @@ function walk(asks, qty, limit) {
 class PaperBroker {
   constructor(cfg, engine) { this.cfg = cfg; this.E = engine; this.kind = 'paper'; }
   async init() {}
-  feeFor(venue, qty, px, ref) { return venue === 'KS' ? ks.fee(qty, px, this.cfg.ksFeeRate, ref) : r2(this.cfg.pmTakerFee * qty * px); }
+  // `feeRate` is the Polymarket market's own taker rate (shares x rate x p x (1-p)); a caller that
+  // does not know it is billed at cfg.pmFeeFallback, the highest category rate.
+  feeFor(venue, qty, px, ref, feeRate) {
+    if (venue === 'KS') return ks.fee(qty, px, this.cfg.ksFeeRate, ref);
+    return r2(pm.fee(qty, px, Number.isFinite(feeRate) ? feeRate : this.cfg.pmFeeFallback));
+  }
   // book: asks for the side being bought (already oriented: YES asks or NO asks)
-  async buy({ venue, ref, qty, limit, book }) { // `key` accepted and ignored: paper fills cannot double-send
+  async buy({ venue, ref, qty, limit, book, feeRate }) { // `key` accepted and ignored: paper fills cannot double-send
     const { filled, avg } = walk(book, qty, limit);
     if (filled < 1) return { filled: 0, reason: 'no depth inside limit' };
-    const fee = this.feeFor(venue, filled, avg, ref);
+    const fee = this.feeFor(venue, filled, avg, ref, feeRate);
     return { filled, avg: r4(avg), fee, cost: r2(filled * avg + fee) };
   }
-  async sell({ venue, ref, qty, px }) {
-    const fee = this.feeFor(venue, qty, px, ref);
+  async sell({ venue, ref, qty, px, feeRate }) {
+    const fee = this.feeFor(venue, qty, px, ref, feeRate);
     return { filled: qty, avg: r4(px), fee, proceeds: r2(qty * px - fee) };
   }
 }

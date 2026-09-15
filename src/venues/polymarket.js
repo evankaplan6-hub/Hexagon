@@ -7,6 +7,40 @@ const CLOB = 'https://clob.polymarket.com';
 const num = (x) => { const n = parseFloat(x); return Number.isFinite(n) ? n : null; };
 const arr = (s) => { try { return Array.isArray(s) ? s : JSON.parse(s || '[]'); } catch { return []; } };
 
+// ---------------------------------------------------------------- taker fees
+// Polymarket charges takers, and this desk modelled it as zero for its whole life. Measured on
+// 2026-09-15 across the open universe and confirmed against docs.polymarket.com/trading/fees:
+//
+//     fee = shares x feeRate x p x (1 - p)          (USDC, rounded to 5 decimals; makers pay nothing)
+//
+// The rate is per category -- crypto 0.07, sports games 0.05 (futures 0.03), economics, culture and
+// weather 0.05, politics, finance, mentions and tech 0.04 -- and geopolitics is `feesEnabled: false`.
+// The Fed pair this desk already traded (market 2252244) is `economics_fees` at 0.05: 1.25c a share
+// at 50c, charged on the way in and again on the way out. Every Gamma market row carries its own
+// `feeSchedule`, so the rate is read per market rather than assumed per category.
+//
+// The schedule also has an `exponent`. At 1 it is the formula above. p(1-p) is at most 0.25, so a
+// higher exponent can only make the real fee SMALLER; pricing it as exponent 1 is the conservative
+// upper bound, and that is what this does.
+//
+// Returns the rate, or null when the market does not say (the caller applies cfg.pmFeeFallback,
+// which defaults to the highest category rate so that "unknown" never under-charges).
+function feeRateOf(m) {
+  if (m.feesEnabled === false) return 0;
+  const rate = num(m.feeSchedule && m.feeSchedule.rate);
+  return rate != null && rate >= 0 ? rate : null;
+}
+// Per share, for signal math. Symmetric around 50c, zero at the tails.
+function feePerShare(price, rate) {
+  if (!(price > 0 && price < 1) || !(rate > 0)) return 0;
+  return rate * price * (1 - price);
+}
+// For an order: what the venue would actually charge, at its own 5-decimal rounding.
+function fee(qty, price, rate) {
+  if (!(qty > 0)) return 0;
+  return Math.round(qty * feePerShare(price, rate) * 1e5) / 1e5;
+}
+
 function normalize(m) {
   const outcomes = arr(m.outcomes);
   const tokenIds = arr(m.clobTokenIds);
@@ -30,6 +64,8 @@ function normalize(m) {
     endDate: m.endDate || null,
     gameStart: m.gameStartTime || null,
     sport: m.sportsMarketType || null,
+    feeRate: feeRateOf(m),               // null = the market does not say; see feeRateOf
+    feeType: m.feeType || null,
     eventTitle: ev.title || m.question,
     closed: !!m.closed,
     accepting: m.acceptingOrders !== false,
@@ -187,4 +223,4 @@ async function fetchByConditions(ids) {
   return out;
 }
 
-module.exports = { fetchUniverse, fetchMarket, fetchBook, fetchPrices, fetchLeaderboard, fetchActivity, fetchActivityPage, fetchByConditions, normalizeFill, outcomeIndex, fillKey };
+module.exports = { fetchUniverse, fetchMarket, fetchBook, fetchPrices, fetchLeaderboard, fetchActivity, fetchActivityPage, fetchByConditions, normalizeFill, outcomeIndex, fillKey, normalize, feeRateOf, feePerShare, fee };

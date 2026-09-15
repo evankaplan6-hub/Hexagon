@@ -140,6 +140,8 @@ function makeRecorder(cfg, { io = fs, clock = Date.now } = {}) {
         pmBid: r3(q.pmBid), pmAsk: r3(q.pmAsk), pmVol: Math.round(q.pmVol || 0),
         ksBid: r3(q.ksBid), ksAsk: r3(q.ksAsk), ksVol: Math.round(q.ksVol || 0),
       };
+      // The Polymarket taker rate this line was priced at, so tools/replay.js charges the same fee.
+      if (Number.isFinite(q.pmFeeRate)) row.pmFee = q.pmFeeRate;
       // present only when BRAM priced this pair this cycle (it skips in-play pairs entirely)
       if (p.fair != null) row.fair = r4(p.fair);
       if (p.best) { row.edge = r4(p.best.edge); row.venue = p.best.venue; row.side = p.best.side; }

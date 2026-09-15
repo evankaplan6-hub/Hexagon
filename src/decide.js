@@ -16,8 +16,15 @@
 // on this strategy the interesting output is almost always "nothing traded, and here is exactly
 // which rail stopped it" -- silent `continue`s made that unanswerable without a debugger.
 const ks = require('./venues/kalshi');
+const pm = require('./venues/polymarket');
 
 const r2 = (x) => Math.round(x * 100) / 100;
+
+// The Polymarket taker fee rate a quote is priced at. The engine stamps each quote with its own
+// market's rate (engine.quote); a quote that does not carry one -- an old tape, a hand-built view
+// -- is priced at the fallback, which is the highest category rate. One definition, so the signal,
+// the size and the fill can never disagree about what the Polymarket leg costs.
+const pmRate = (q, cfg) => (q && Number.isFinite(q.pmFeeRate) ? q.pmFeeRate : cfg.pmFeeFallback);
 
 // Fair value leans on the venue with more volume: when two books disagree, the thin one is usually wrong.
 function fairValue(q) {
@@ -54,8 +61,13 @@ function convEdge(v, side, q, fair, cfg, ref) {
   const exit = target - spread / 2;                // ...but we sell into the bid
   // `ref` is the Kalshi ticker: the taker multiplier is per-series, not global (MLB is 0.5,
   // fourteen series are 0). Omitting it bills at full rate, which is the safe direction.
-  const feeIn = v === 'PM' ? cfg.pmTakerFee * px : ks.feePerContract(px, cfg.ksFeeRate, ref);
-  const feeOut = v === 'PM' ? cfg.pmTakerFee * exit : ks.feePerContract(exit, cfg.ksFeeRate, ref);
+  // Polymarket's fee is the same shape as Kalshi's, rate x p x (1-p), at the market's own rate
+  // (0 on geopolitics, 0.03-0.07 elsewhere). It used to be a flat 0, which flattered every
+  // Polymarket leg by up to 1.75c each way and made the "Polymarket legs are free" argument true
+  // only on paper.
+  const rate = pmRate(q, cfg);
+  const feeIn = v === 'PM' ? pm.feePerShare(px, rate) : ks.feePerContract(px, cfg.ksFeeRate, ref);
+  const feeOut = v === 'PM' ? pm.feePerShare(exit, rate) : ks.feePerContract(exit, cfg.ksFeeRate, ref);
   return { px, edge: exit - px - feeIn - feeOut };
 }
 
@@ -88,7 +100,10 @@ const rankSignals = (a, b) => (CLASS[a.type] - CLASS[b.type]) || (b.edge - a.edg
 //   signals at most ONE intent: the best arb if one exists, otherwise the convergence candidate.
 //           Emitting both on the same event stacked a hedged and an unhedged position on one
 //           outcome, sized independently, each unaware of the other.
-function pairSignals(p, cfg) {
+//
+// `now` is optional: without it the time-to-close gate is skipped, so a caller that only wants the
+// arithmetic (the golden fixture, a test) gets exactly the old behaviour.
+function pairSignals(p, cfg, now) {
   const q = p.q;
   const out = { fair: null, best: null, veto: null, signals: [] };
   const fault = quoteFault(q);
@@ -97,10 +112,10 @@ function pairSignals(p, cfg) {
   const ref = p.ks && p.ks.ticker;
   const ksFeeYes = ks.feePerContract(q.ksAsk, cfg.ksFeeRate, ref);
   const ksFeeNo = ks.feePerContract(1 - q.ksBid, cfg.ksFeeRate, ref);
-  const pmFee = cfg.pmTakerFee;
+  const rate = pmRate(q, cfg);
   // locked arbs: YES here + NO there must cost < $1 after fees
-  const edgeA = 1 - (q.pmAsk + (1 - q.ksBid) + pmFee * q.pmAsk + ksFeeNo);
-  const edgeB = 1 - (q.ksAsk + (1 - q.pmBid) + pmFee * (1 - q.pmBid) + ksFeeYes);
+  const edgeA = 1 - (q.pmAsk + (1 - q.ksBid) + pm.feePerShare(q.pmAsk, rate) + ksFeeNo);
+  const edgeB = 1 - (q.ksAsk + (1 - q.pmBid) + pm.feePerShare(1 - q.pmBid, rate) + ksFeeYes);
   const arbs = [];
   if (edgeA >= cfg.minArbEdge) arbs.push({ type: 'arb', pair: p, edge: edgeA, legs: [{ venue: 'PM', side: 'yes', px: q.pmAsk }, { venue: 'KS', side: 'no', px: r2(1 - q.ksBid) }] });
   if (edgeB >= cfg.minArbEdge) arbs.push({ type: 'arb', pair: p, edge: edgeB, legs: [{ venue: 'KS', side: 'yes', px: q.ksAsk }, { venue: 'PM', side: 'no', px: r2(1 - q.pmBid) }] });
@@ -136,6 +151,10 @@ function pairSignals(p, cfg) {
   // the shape of the desk's largest taker loss. The edge itself is already measured from the entry
   // price to fair (convEdge), never from the gap; this gate is about whether fair means anything.
   const conv = (() => {
+    // A convergence trade is a bet on the next few hours. If the Kalshi market closes before max
+    // hold would end it, the close guard (exitIntent) flattens it first -- the round trip is paid
+    // for a position that was never given the time its edge assumes.
+    if (Number.isFinite(now) && Number.isFinite(p.closesAt) && p.closesAt - now < (cfg.maxHoldMin + cfg.closeGuardMin) * 60000) return { veto: 'closes inside max hold' };
     if (!(fair > cfg.minMid && fair < cfg.maxMid)) return { veto: 'mid outside band' };
     if (Math.abs(gap) < cfg.minGap) return { veto: 'gap under minGap' };
     const thick = Math.max(q.pmVol || 0, q.ksVol || 0), thin = Math.min(q.pmVol || 0, q.ksVol || 0);
@@ -170,10 +189,10 @@ function scan(pairs, cfg, now) {
     // read "data age 0s". Quotes carry their own observation time; trust that. Checked BEFORE
     // in-play so the counts match what the desk reported before this was extracted.
     if (q.t && now - q.t > cfg.maxDataAgeSec * 1000) { staleN++; reject('stale quote'); continue; }
-    // games are untradeable from 2 minutes before start: listings lag live play by far more than
-    // any gap is worth
+    // untradeable once the event is live or its market is about to close (liveWindow): listings
+    // lag live play and a scheduled print by far more than any gap is worth
     if (p.inPlay) { inPlayN++; reject('in-play'); continue; }
-    const r = pairSignals(p, cfg);
+    const r = pairSignals(p, cfg, now);
     fair.set(p.id, r.fair); best.set(p.id, r.best);
     // A pair that could not be priced at all never becomes `widest`: a crossed or non-finite book
     // reports whatever garbage gap its mids imply, and `widest` is what the desk narrates.
@@ -193,6 +212,19 @@ function scan(pairs, cfg, now) {
   return { signals, widest, inPlayN, staleN, fair, best, veto, rejects };
 }
 
+// Is this pair live, or about to be decided? Either way it is untradeable, and a convergence
+// position on it is flattened. Two rules, either of which is enough:
+//   - a game from 2 minutes before its start (listings lag live play by far more than any gap);
+//   - ANY pair from closeGuardMin before its Kalshi market closes. Scheduled prints close their
+//     Kalshi market just before the number lands (the Fed at 17:59Z for an 18:00Z statement, CPI
+//     at 12:25Z for 12:30Z) while Polymarket keeps trading through it.
+// Close time never REPLACES the game rule: a Kalshi game market closes days after the game.
+// Pure; stamped in HOLT because RIGO reads it before BRAM runs.
+function liveWindow(pair, now, cfg) {
+  if (pair.kind === 'game' && (!pair.startsAt || now >= pair.startsAt - 120000)) return true;
+  return Number.isFinite(pair.closesAt) && now >= pair.closesAt - cfg.closeGuardMin * 60000;
+}
+
 // Should this position be closed, and why? Pure: the caller has already marked it.
 // Order matters and is deliberate: the CLOCK-DRIVEN exits come first and do not require a quote.
 // Nested behind a quote check (the old behaviour) a position whose pair stopped being rebuilt was
@@ -209,6 +241,12 @@ function exitIntent(pos, pair, cfg, now) {
   const c = (x) => `${(x * 100).toFixed(1)}c`;
   if (heldMin >= cfg.maxHoldMin) {
     return { px: mark, reason: `max hold ${cfg.maxHoldMin}m reached${q ? `, gap still ${c(Math.abs(q.ksMid - q.pmMid))}` : ' (no live quote)'}` };
+  }
+  // The position carries its market's close time from entry, so this fires even when the pair
+  // itself is gone -- and the pair is exactly what disappears when a Kalshi market closes.
+  if (Number.isFinite(pos.closesAt) && now >= pos.closesAt - cfg.closeGuardMin * 60000) {
+    const mins = Math.max(0, Math.round((pos.closesAt - now) / 60000));
+    return { px: mark, reason: `market closes in ${mins}m, flattening directional risk` };
   }
   if (pair && pair.inPlay) return { px: mark, reason: 'event going live, flattening directional risk' };
   if (!q) return null; // held on the last mark; the time exits above stay armed
@@ -228,7 +266,9 @@ function arbUnwind(legs, cfg) {
   if (legs.length !== 2 || !legs.every((l) => l.mark != null)) return null;
   const qty = Math.min(legs[0].qty, legs[1].qty);
   const bidSum = legs[0].mark + legs[1].mark;
-  const fee = legs.reduce((a, l) => a + (l.venue === 'KS' ? ks.fee(l.qty, l.mark, cfg.ksFeeRate, l.ref) : r2(cfg.pmTakerFee * l.qty * l.mark)), 0);
+  // The Polymarket leg pays its own market's taker fee on the way out too, at the rate recorded on
+  // the position when it opened (older positions carry none and are billed at the fallback).
+  const fee = legs.reduce((a, l) => a + (l.venue === 'KS' ? ks.fee(l.qty, l.mark, cfg.ksFeeRate, l.ref) : r2(pm.fee(l.qty, l.mark, Number.isFinite(l.feeRate) ? l.feeRate : cfg.pmFeeFallback))), 0);
   const gain = r2((bidSum - 1) * qty - fee);
   if (gain < cfg.arbUnwindMargin * qty) return null;
   return { gain, fee, bidSum, reason: `early unwind, bids sum ${bidSum.toFixed(3)}, +$${gain.toFixed(2)} over holding after $${fee.toFixed(2)} exit fee` };
@@ -268,8 +308,9 @@ function biasFor(history, cfg) {
 // constraint, so sizing up is a preference that the risk limit still outranks.
 function sizePlan(signal, { budget, sizeMult = 1, books, cfg }) {
   const ref = signal.pair && signal.pair.ks && signal.pair.ks.ticker;
+  const rate = pmRate(signal.pair && signal.pair.q, cfg);
   const unitCost = signal.legs.reduce((a, l) => a + l.px, 0)
-    + signal.legs.reduce((a, l) => a + (l.venue === 'KS' ? ks.fee(1, l.px, cfg.ksFeeRate, ref) : cfg.pmTakerFee * l.px), 0);
+    + signal.legs.reduce((a, l) => a + (l.venue === 'KS' ? ks.fee(1, l.px, cfg.ksFeeRate, ref) : pm.feePerShare(l.px, rate)), 0);
   // A leg priced at 0 (or a book that reported one) makes unitCost 0 and `budget / 0` Infinity,
   // which floors to Infinity and sizes the whole account into one contract-less order.
   if (!(unitCost > 0)) return { qty: 0, unitCost, capped: false, reason: 'unit cost is not positive' };
@@ -285,4 +326,4 @@ function sizePlan(signal, { budget, sizeMult = 1, books, cfg }) {
   return { qty: Math.max(0, qty), unitCost, capped: wanted > budget, reason: limited ? `${limited} depth inside limit` : null };
 }
 
-module.exports = { fairValue, quoteFault, convEdge, pairSignals, scan, exitIntent, arbUnwind, riskState, biasFor, sizePlan, rankSignals };
+module.exports = { fairValue, quoteFault, convEdge, pairSignals, scan, liveWindow, exitIntent, arbUnwind, riskState, biasFor, sizePlan, rankSignals, pmRate };

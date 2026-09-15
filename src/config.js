@@ -211,6 +211,14 @@ module.exports = {
   // netted $2-6. Unwind only when the gain over holding, net of the modelled exit fee, clears
   // this much per contract. 0.005 is the old threshold's margin, now applied after the fee.
   arbUnwindMargin: num('ARB_UNWIND_MARGIN', 0.005),
+  // A pair stops being tradeable this many minutes before its KALSHI market closes, and a
+  // convergence position on it is flattened. Games already had a rule (2 minutes before start);
+  // nothing else did. KXFEDDECISION-26SEP closes 2026-09-16 17:59Z, one minute before the 18:00Z
+  // statement, while the Polymarket leg trades straight through it -- so a convergence position
+  // could lose its Kalshi quote at 17:59 and ride the announcement on the Polymarket leg until max
+  // hold. KXCPI closes 12:25Z for a 12:30Z print; the same shape. Close time is an ADDITIONAL rule
+  // for games, never a replacement: Kalshi game markets close days after the game is played.
+  closeGuardMin: num('CLOSE_GUARD_MIN', 60),
   exitGap: num('EXIT_GAP', 0.01),
   stopLoss: num('STOP_LOSS', 0.06),
   maxHoldMin: num('MAX_HOLD_MIN', 240),
@@ -314,7 +322,12 @@ module.exports = {
   whaleBoardMin: num('WHALE_BOARD_MIN', 30),      // leaderboard refresh
 
   // fees
-  pmTakerFee: num('PM_TAKER_FEE', 0),
+  // Polymarket's taker fee is read PER MARKET from its feeSchedule (src/venues/polymarket.js
+  // feeRateOf): shares x rate x p x (1-p), rate 0.03-0.07 by category, 0 on geopolitics. This was
+  // PM_TAKER_FEE, a flat rate per dollar of notional defaulting to 0 -- wrong in shape and, on 99% of
+  // markets, wrong in level. What is left is the rate for a market that does not say, and it is the
+  // highest category rate (crypto) so that not knowing can never make a trade look cheaper.
+  pmFeeFallback: num('PM_FEE_FALLBACK', 0.07),
   ksFeeRate: num('KS_FEE_RATE', 0.07),
 
   // universe

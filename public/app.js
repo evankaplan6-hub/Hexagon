@@ -522,7 +522,8 @@
     const out = [];
     if (S.halt) out.push({ agent: 'TESS', text: `Trading stopped: ${S.halt}` });
     for (const g of S.arbGroups || []) {
-      if (g.integrity === 'valid') continue;
+      // half settled: one venue has paid out and the other has not yet -- normal, not broken
+      if (g.integrity === 'valid' || g.integrity === 'half_settled') continue;
       const why = g.integrity === 'orphan_leg' ? 'only one side filled, nothing hedges it' : String(g.integrity).replace(/_/g, ' ');
       out.push({ agent: 'RIGO', group: g.id, text: `Broken arb: ${g.label}`, sub: `${why} · ${signed(g.liquidationPnl)} if sold now` });
     }

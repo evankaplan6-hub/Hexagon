@@ -10,6 +10,7 @@
 //   node tools/decide-test.js
 const d = require('../src/decide');
 const ks = require('../src/venues/kalshi');
+const pmv = require('../src/venues/polymarket');
 const cfg = require('../src/config');
 
 let pass = 0, fail = 0;
@@ -112,7 +113,9 @@ group('scan reports a counted rejection ledger');
 
 group('conviction scales within the position cap, and still scales');
 {
-  const sig = { pair: mk(0.4, 0.41, 0.5, 0.51), legs: [{ venue: 'PM', side: 'yes', px: 0.40 }] };
+  // a zero-fee (geopolitics) Polymarket market, so the arithmetic below is the cap alone
+  const zfp = mk(0.4, 0.41, 0.5, 0.51); zfp.q.pmFeeRate = 0;
+  const sig = { pair: zfp, legs: [{ venue: 'PM', side: 'yes', px: 0.40 }] };
   const books = [{ asks: [{ price: 0.40, size: 1e6 }] }];
   // KETT passes a FRACTION of the cap: baseSizeMult when neutral, 1 when ILSA reads converging.
   const neutral = d.sizePlan(sig, { budget: 200, sizeMult: cfg.baseSizeMult, books, cfg });
@@ -132,6 +135,10 @@ group('conviction scales within the position cap, and still scales');
     d.sizePlan(sig, { budget: 200, sizeMult: 1, books: [{ asks: [{ price: 0.40, size: 7 }] }], cfg }).qty === 7);
   const zero = d.sizePlan({ pair: sig.pair, legs: [{ venue: 'PM', side: 'yes', px: 0 }] }, { budget: 200, books: [{ asks: [] }], cfg });
   ok('a zero unit cost cannot size Infinity', zero.qty === 0 && Number.isFinite(zero.qty), zero);
+  // on a 0.05 market the unit cost carries 0.05 x 0.40 x 0.60 = 1.2c of taker fee
+  const feeP = mk(0.4, 0.41, 0.5, 0.51); feeP.q.pmFeeRate = 0.05;
+  const withFee = d.sizePlan({ pair: feeP, legs: sig.legs }, { budget: 200, sizeMult: 1, books, cfg });
+  ok('a Polymarket leg\'s unit cost includes its market\'s taker fee', Math.abs(withFee.unitCost - 0.412) < 1e-9 && withFee.qty === Math.floor(200 / 0.412), withFee);
 }
 
 group('exitIntent reads one mark in every branch');
@@ -192,8 +199,9 @@ group('a locked arb is unwound only when the gain clears the exit fee');
 {
   // 202 pairs, marks summing to 1.010: $2.02 over holding, before a $3.30 Kalshi exit fee
   // (ceil(0.07 x 202 x 0.36 x 0.64) = $3.26 -> $3.30 at the 0.37 mark below)
-  const leg = (venue, mark, qty = 202) => ({ venue, mark, qty, ref: 'KXTEST' });
-  const c = { ...cfg, ksFeeRate: 0.07, pmTakerFee: 0, arbUnwindMargin: 0.005 };
+  // Polymarket legs here are on a zero-fee market; the Polymarket fee has its own assertion below
+  const leg = (venue, mark, qty = 202) => ({ venue, mark, qty, ref: 'KXTEST', feeRate: venue === 'PM' ? 0 : undefined });
+  const c = { ...cfg, ksFeeRate: 0.07, arbUnwindMargin: 0.005 };
   ok('the cloud box\'s three unwinds would not have happened', d.arbUnwind([leg('PM', 0.65), leg('KS', 0.36)], c) === null);
   // bids summing to 1.03: $6.06 over holding, $3.30 of fee, $2.76 net = 1.37c a contract > 0.5c
   const u = d.arbUnwind([leg('PM', 0.66), leg('KS', 0.37)], c);
@@ -201,7 +209,12 @@ group('a locked arb is unwound only when the gain clears the exit fee');
   ok('...netting the fee in the reason', u && /exit fee/.test(u.reason) && Math.abs(u.fee - 3.3) < 0.01, u);
   ok('...and stating the gain over holding', u && Math.abs(u.gain - 2.76) < 0.02, u);
   ok('the margin is per contract and from config', d.arbUnwind([leg('PM', 0.66), leg('KS', 0.37)], { ...c, arbUnwindMargin: 0.02 }) === null);
-  ok('a pair on Polymarket alone pays no exit fee', d.arbUnwind([leg('PM', 0.65), leg('PM', 0.36)], c) !== null);
+  ok('a pair on zero-fee Polymarket markets alone pays no exit fee', d.arbUnwind([leg('PM', 0.65), leg('PM', 0.36)], c) !== null);
+  // the same Polymarket leg on a 0.05 market pays 0.05 x 202 x 0.66 x 0.34 = $2.27 on the way out,
+  // which turns the $2.76 unwind above into $0.49 -- under the 0.5c x 202 = $1.01 margin
+  const feeLeg = { ...leg('PM', 0.66), feeRate: 0.05 };
+  ok('a Polymarket leg pays its market\'s exit fee too', d.arbUnwind([feeLeg, leg('KS', 0.37)], c) === null);
+  ok('...and a leg with no recorded rate pays the fallback, never zero', d.arbUnwind([{ ...leg('PM', 0.66), feeRate: undefined }, leg('KS', 0.37)], c) === null);
   ok('an unmarked leg is never unwound', d.arbUnwind([leg('PM', 0.66), { venue: 'KS', mark: null, qty: 202 }], c) === null);
   ok('a lone leg is not a pair', d.arbUnwind([leg('PM', 0.9)], c) === null);
 }
@@ -211,11 +224,64 @@ group('the Polymarket leg wins when both venues are similarly off fair');
   // Same gap either way: PM 0.40/0.41 against KS 0.48/0.49 with equal volume puts fair in the
   // middle. Buying YES on PM and NO on KS are both 4c from fair before fees; PM pays none. (The
   // even split is vetoed for trading, but `best` is priced regardless, which is what is tested.)
-  const r = d.pairSignals(mk(0.40, 0.41, 0.48, 0.49, 5e5, 5e5), { ...cfg, minArbEdge: 1 });
+  // That holds on a ZERO-fee Polymarket market (geopolitics). On the rest, Polymarket charges too.
+  const zq = () => { const p = mk(0.40, 0.41, 0.48, 0.49, 5e5, 5e5); p.q.pmFeeRate = 0; return p; };
+  const r = d.pairSignals(zq(), { ...cfg, minArbEdge: 1 });
   ok('the best candidate is on Polymarket', r.best && r.best.venue === 'PM', r.best);
-  const pm = d.convEdge('PM', 'yes', mk(0.40, 0.41, 0.48, 0.49, 5e5, 5e5).q, 0.445, cfg, 'KXTEST');
-  const ksn = d.convEdge('KS', 'no', mk(0.40, 0.41, 0.48, 0.49, 5e5, 5e5).q, 0.445, cfg, 'KXTEST');
+  const pm = d.convEdge('PM', 'yes', zq().q, 0.445, cfg, 'KXTEST');
+  const ksn = d.convEdge('KS', 'no', zq().q, 0.445, cfg, 'KXTEST');
   ok('...by exactly the Kalshi fee, both ways', pm.edge > ksn.edge && Math.abs((pm.edge - ksn.edge) - (ks.feePerContract(0.52, 0.07, 'KXTEST') + ks.feePerContract(0.55, 0.07, 'KXTEST'))) < 1e-6, { pm: pm.edge, ks: ksn.edge });
+  const fq = mk(0.40, 0.41, 0.48, 0.49, 5e5, 5e5).q; fq.pmFeeRate = 0.05;
+  const pmFee = d.convEdge('PM', 'yes', fq, 0.445, cfg, 'KXTEST');
+  // in at 0.41, out at fair minus half the spread
+  const exit = 0.445 - 0.005;
+  ok('a 0.05 Polymarket market costs exactly its fee in and out', Math.abs((pm.edge - pmFee.edge) - (pmv.feePerShare(0.41, 0.05) + pmv.feePerShare(exit, 0.05))) < 1e-9, { free: pm.edge, charged: pmFee.edge });
+  const unknown = mk(0.40, 0.41, 0.48, 0.49, 5e5, 5e5).q;
+  ok('a quote that does not carry a rate is priced at the fallback', Math.abs(d.convEdge('PM', 'yes', unknown, 0.445, cfg, 'KXTEST').edge - (pm.edge - pmv.feePerShare(0.41, cfg.pmFeeFallback) - pmv.feePerShare(exit, cfg.pmFeeFallback))) < 1e-9);
+  ok('the fallback is never below the highest category rate', cfg.pmFeeFallback >= 0.07, cfg.pmFeeFallback);
+}
+
+group('a locked arb nets the Polymarket fee on its Polymarket leg');
+{
+  const base = mk(0.40, 0.41, 0.50, 0.51); base.q.pmFeeRate = 0;
+  const charged = mk(0.40, 0.41, 0.50, 0.51); charged.q.pmFeeRate = 0.04;
+  const a = d.pairSignals(base, cfg).signals[0], b = d.pairSignals(charged, cfg).signals[0];
+  ok('both are arbs', a && b && a.type === 'arb' && b.type === 'arb', [a && a.type, b && b.type]);
+  ok('the edge falls by exactly the fee on the Polymarket YES at its ask', a && b && Math.abs((a.edge - b.edge) - pmv.feePerShare(0.41, 0.04)) < 1e-9, a && b && { free: a.edge, charged: b.edge });
+}
+
+group('pairs stop trading before their Kalshi market closes, not only before a game');
+{
+  const NOW = 1788900000000;
+  const H = 3600000;
+  const game = { kind: 'game', startsAt: NOW + 10 * 60000, closesAt: NOW + 72 * H };
+  ok('a game is tradeable 10 minutes before start', d.liveWindow(game, NOW, cfg) === false);
+  ok('...and live from 2 minutes before', d.liveWindow({ ...game, startsAt: NOW + 60000 }, NOW, cfg) === true);
+  ok('a game with no start time is live', d.liveWindow({ kind: 'game' }, NOW, cfg) === true);
+  // the Fed: Kalshi closes 17:59Z for an 18:00Z statement
+  const fed = { kind: 'fed', closesAt: NOW + 2 * H };
+  ok('a Fed pair two hours from close is tradeable', d.liveWindow(fed, NOW, cfg) === false);
+  ok(`...and not from ${cfg.closeGuardMin} minutes before close`, d.liveWindow({ ...fed, closesAt: NOW + (cfg.closeGuardMin - 1) * 60000 }, NOW, cfg) === true);
+  ok('a pair with no close time and no start is never live on time alone', d.liveWindow({ kind: 'fed' }, NOW, cfg) === false);
+  ok('close time is an extra rule for games, not a replacement', d.liveWindow({ ...game, closesAt: NOW + 5 * 60000 }, NOW, cfg) === true);
+
+  // convergence is not opened on a market that closes inside max hold plus the guard
+  const soon = { ...mk(0.05, 0.06, 0.07, 0.11, 1e5, 5e5), closesAt: NOW + (cfg.maxHoldMin + cfg.closeGuardMin - 1) * 60000 };
+  soon.q.pmFeeRate = 0;
+  const far = { ...soon, closesAt: NOW + (cfg.maxHoldMin + cfg.closeGuardMin + 1) * 60000 };
+  ok('a market closing inside max hold is vetoed by name', d.pairSignals(soon, cfg, NOW).veto === 'closes inside max hold', d.pairSignals(soon, cfg, NOW).veto);
+  ok('...and one closing after it is not', d.pairSignals(far, cfg, NOW).veto !== 'closes inside max hold', d.pairSignals(far, cfg, NOW).veto);
+  ok('without a clock the gate is skipped', d.pairSignals(soon, cfg).veto !== 'closes inside max hold');
+  const sc = d.scan([{ ...soon, q: { ...soon.q, t: NOW } }], cfg, NOW);
+  ok('scan passes its clock through', sc.rejects.get('closes inside max hold') === 1, [...sc.rejects]);
+
+  // a held convergence position is flattened at close minus the guard, even with no pair at all
+  const pos = { strategy: 'converge', entry: 0.40, mark: 0.41, openedAt: NOW - 10 * 60000, closesAt: NOW + 30 * 60000 };
+  const x = d.exitIntent(pos, undefined, cfg, NOW);
+  ok('a position inside the close guard exits with its pair gone', x && /market closes in 30m/.test(x.reason) && x.px === 0.41, x);
+  ok('...and not before the guard', d.exitIntent({ ...pos, closesAt: NOW + (cfg.closeGuardMin + 5) * 60000 }, undefined, cfg, NOW) === null);
+  ok('a position with no close time keeps the old behaviour', d.exitIntent({ ...pos, closesAt: undefined }, undefined, cfg, NOW) === null);
+  ok('arb legs are still left to settlement', d.exitIntent({ ...pos, strategy: 'arb' }, undefined, cfg, NOW) === null);
 }
 
 group('property: the arb is the better signal wherever both are available');

@@ -33,6 +33,26 @@ const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 // retry loop until reconciliation can say whether the exchange accepted it.
 const ambiguousOrder = (e) => !!(e && (e.ambiguousOrder || e.code === 'KALSHI_ORDER_UNKNOWN'));
 
+// The settlement price of a Kalshi market's YES, or null while it is undecided. `result` is the
+// normal signal; a determined or finalized market with no yes/no result but a settlement value
+// settles at that value.
+function ksSettlement(m) {
+  if (!m) return null;
+  if (m.result === 'yes') return 1;
+  if (m.result === 'no') return 0;
+  if ((m.status === 'determined' || m.status === 'finalized') && Number.isFinite(m.settlementValue) && m.settlementValue >= 0 && m.settlementValue <= 1) return m.settlementValue;
+  return null;
+}
+// A resolved Polymarket outcome price, accepted only at the three values Polymarket actually
+// settles at: 1, 0, or 0.5 for a question resolved 50-50. Anything else is not a settlement this
+// code understands, and guessing would book real P&L on a guess.
+function pmSettlement(px) {
+  const x = Number(px);
+  if (!Number.isFinite(x)) return null;
+  for (const v of [0, 0.5, 1]) if (Math.abs(x - v) <= 0.001) return v;
+  return null;
+}
+
 class Engine {
   constructor(cfg) {
     this.cfg = cfg;
@@ -177,7 +197,13 @@ class Engine {
       const qtys = new Set(legs.map((p) => p.qty));
       const pairIds = new Set(legs.map((p) => p.pairId));
       let integrity = 'valid';
-      if (legs.length !== 2) integrity = legs.length < 2 ? 'orphan_leg' : 'too_many_legs';
+      // One venue settling before the other is the normal shape outside games: Kalshi settles the
+      // Fed minutes after the statement, Polymarket waits hours for UMA. A group whose other leg
+      // closed on a resolution is half settled, not broken, and what the open leg will pay is
+      // already known: the complement of what the settled leg paid.
+      const settledLeg = legs.length === 1 ? this.state.closed.find((c) => c.group === id && c.strategy === 'arb' && /^resolved/.test(String(c.reason || '')) && c.venue !== legs[0].venue && c.side !== legs[0].side) : null;
+      if (settledLeg) integrity = 'half_settled';
+      else if (legs.length !== 2) integrity = legs.length < 2 ? 'orphan_leg' : 'too_many_legs';
       else if (sides.size !== 2 || !sides.has('yes') || !sides.has('no')) integrity = 'missing_complement';
       else if (venues.size !== 2 || !venues.has('PM') || !venues.has('KS')) integrity = 'venue_mismatch';
       else if (qtys.size !== 1) integrity = 'quantity_mismatch';
@@ -203,7 +229,8 @@ class Engine {
       const entryCost = r2(legs.reduce((a, p) => a + p.cost, 0));
       const liquidationValue = r2(legs.reduce((a, p) => a + p.qty * (p.mark ?? p.entry), 0));
       const qty = legs.length ? Math.min(...legs.map((p) => p.qty)) : 0;
-      const settlementValue = integrity === 'valid' ? qty : null;
+      const settlementValue = integrity === 'valid' ? qty
+        : integrity === 'half_settled' && Number.isFinite(settledLeg.exit) ? r2(qty * (1 - settledLeg.exit)) : null;
       groups.push({
         id, label: legs[0] && legs[0].label, pairId: legs[0] && legs[0].pairId,
         qty, legs: legs.length, integrity, venueGap, entryCost, liquidationValue,
@@ -231,7 +258,7 @@ class Engine {
       realized: this.state.stats.realized, convergenceUnrealized, arbLocked, arbUnvouched, arbLiquidation, makerNet,
       totalLiquidation: r2(this.state.stats.realized + arbLiquidation + convergenceUnrealized),
       totalAtSettlement: r2(this.state.stats.realized + arbLocked + arbUnvouched + convergenceUnrealized),
-      integrityAlerts: groups.filter((g) => g.integrity !== 'valid').length,
+      integrityAlerts: groups.filter((g) => g.integrity !== 'valid' && g.integrity !== 'half_settled').length,
     };
   }
   createArbGroup(signal, group, legs, refs, qty) {
@@ -253,7 +280,7 @@ class Engine {
     const score = this.arbScorecard().find((g) => g.id === group);
     const record = this.state.arbGroups[group];
     if (!record || !score) return;
-    record.status = score.integrity === 'valid' ? 'filled' : 'alert';
+    record.status = score.integrity === 'valid' || score.integrity === 'half_settled' ? 'filled' : 'alert';
     record.integrity = score.integrity;
     if (score.integrity === 'valid') this.journal(this, 'ARB_FILLED', { group, pairId: score.pairId, qty: score.qty, entryCost: score.entryCost, lockedPnl: score.lockedPnl });
     else this.journal(this, 'ARB_INTEGRITY_ALERT', { group, pairId: score.pairId, integrity: score.integrity });
@@ -276,6 +303,8 @@ class Engine {
       pmMid: (pmBid + pmAsk) / 2, ksMid: (ksBid + ksAsk) / 2,
       pmSpread: pmAsk - pmBid, ksSpread: ksAsk - ksBid,
       pmVol: m.vol24, ksVol: k.vol24,
+      // this Polymarket market's own taker fee rate; decide.pmRate falls back when it is unknown
+      pmFeeRate: Number.isFinite(m.feeRate) ? m.feeRate : this.cfg.pmFeeFallback,
       // this pair's OWN observation time, not the global clock: see refreshQuotes
       t: Math.min(m.at || this.lastQuoteAt, k.at || this.lastQuoteAt),
     };
@@ -336,21 +365,42 @@ class Engine {
     return { asks: side === 'yes' ? b.yesAsks : b.noAsks, yesBid: b.yesBids[0] ? b.yesBids[0].price : null, yesAsk: b.yesAsks[0] ? b.yesAsks[0].price : null };
   }
 
-  // Has the market behind a position resolved? Checked only once the market leaves the open listing.
+  // Has the market behind a position resolved? Returns { resolved, yesPx }: the settlement price of
+  // the PAIR's YES outcome, which RIGO turns into this leg's price. A price rather than a winner,
+  // because not every market settles at 0 or 1. Polymarket resolves an ambiguous or cancelled
+  // question 50-50, and the old `prices[tokenIndex] > 0.5` booked that YES leg at $0 and its NO leg
+  // at $1. Kalshi can settle at a settlement value that is not a clean yes/no.
+  //
+  // Checked when the market has left the open listing (a finished game drops out of it), and also
+  // when it is still listed but its Kalshi close time has passed or it is no longer active -- a
+  // closed market that lingers in a listing would otherwise never be asked.
   async resolution(pos) {
-    if (pos.venue === 'KS' ? this.quotes.ks.has(pos.ref) : this.quotes.pm.has(pos.pmId)) return null;
+    const listed = pos.venue === 'KS' ? this.quotes.ks.get(pos.ref) : this.quotes.pm.get(pos.pmId);
+    if (listed) {
+      const closeMs = pos.venue === 'KS' ? Date.parse(listed.closeTime || '') : NaN;
+      const inactive = pos.venue === 'KS' ? (listed.status && listed.status !== 'active') : (listed.closed || listed.accepting === false);
+      if (!inactive && !(Number.isFinite(closeMs) && Date.now() >= closeMs)) return null;
+    }
     const last = this.resolutionChecks.get(pos.id) || 0;
     if (Date.now() - last < 60000) return null;
     this.resolutionChecks.set(pos.id, Date.now());
     if (pos.venue === 'KS') {
       const m = await ks.fetchMarket(pos.ref);
-      if (m && (m.result === 'yes' || m.result === 'no')) return { resolved: true, yesWins: m.result === 'yes' };
-      if (m && m.status === 'open') this.quotes.ks.set(m.ticker, m); // just fell out of the top listing
+      const yesPx = ksSettlement(m);
+      if (yesPx != null) return { resolved: true, yesPx };
+      // Kalshi reports an open market as 'active', never 'open': this re-pin compared against
+      // 'open' and so never ran
+      if (m && m.status === 'active' && !listed) this.quotes.ks.set(m.ticker, m); // just fell out of the top listing
       return null;
     }
     const m = await pm.fetchMarket(pos.pmId);
-    if (m && m.closed && m.resolved && m.prices.length > pos.tokenIndex) return { resolved: true, yesWins: m.prices[pos.tokenIndex] > 0.5 };
-    if (m && !m.closed) this.quotes.pm.set(m.id, m);
+    if (m && m.closed && m.resolved && m.prices.length > pos.tokenIndex) {
+      const yesPx = pmSettlement(m.prices[pos.tokenIndex]);
+      if (yesPx != null) return { resolved: true, yesPx };
+      if (this.due(`odd-settle-${pos.id}`, 3600)) this.log('RIGO', 'HALT', null, `${pos.label}: Polymarket resolved at ${m.prices[pos.tokenIndex]}, not 0, 0.5 or 1 · not settling it automatically, needs a person`);
+      return null;
+    }
+    if (m && !m.closed && !listed) this.quotes.pm.set(m.id, m);
     return null;
   }
 
@@ -375,7 +425,12 @@ class Engine {
       side: leg.side, qty: fill.filled, entry: fill.avg, fee: fill.fee, cost: fill.cost, mark: fill.avg,
       openedAt: Date.now(), strategy: signal.type, entryGap: signal.gap != null ? r3(Math.abs(signal.gap)) : null, note,
       orderId: fill.orderId || null,
+      // Carried on the position, not only the pair: the pair is what disappears when a Kalshi
+      // market closes, and both the close-guard exit and the Polymarket exit fee still need these.
+      closesAt: Number.isFinite(signal.pair.closesAt) ? signal.pair.closesAt : null,
+      settlesAt: Number.isFinite(signal.pair.settlesAt) ? signal.pair.settlesAt : null,
     };
+    if (leg.venue === 'PM') pos.feeRate = signal.pair.q && Number.isFinite(signal.pair.q.pmFeeRate) ? signal.pair.q.pmFeeRate : this.cfg.pmFeeFallback;
     this.state.cash = r2(this.state.cash - fill.cost);
     this.state.stats.fees = r2(this.state.stats.fees + fill.fee);
     this.state.positions.push(pos);
@@ -409,7 +464,7 @@ class Engine {
       // A position whose exit does not fill is STUCK, not closed. Flag it so RIGO keeps trying
       // every cycle instead of leaving naked directional risk sitting in the book unattended.
       pos.exitSeq = (pos.exitSeq || 0) + 1;
-      try { fill = await this.broker.sell({ venue: pos.venue, ref: pos.ref, side: pos.side, qty: pos.qty, px, key: `${pos.id}-out-${pos.exitSeq}` }); }
+      try { fill = await this.broker.sell({ venue: pos.venue, ref: pos.ref, side: pos.side, qty: pos.qty, px, feeRate: pos.feeRate, key: `${pos.id}-out-${pos.exitSeq}` }); }
       catch (e) {
         if (ambiguousOrder(e)) {
           // The broker has already durably recorded the order intent. Keep the same local marker
@@ -633,8 +688,18 @@ class Engine {
     // build engines, and nothing that never starts should be paced.
     http.paceHost(ks.BASE, this.cfg.kalshiGapMs);
     // per-series taker multipliers before anything prices: MLB bills at half, fourteen series at
-    // zero, and a flat rate made the desk decline trades that were cheaper than it believed
-    await ks.loadFeeMultipliers(this.cfg.ksSeries).catch(() => {});
+    // zero, and a flat rate made the desk decline trades that were cheaper than it believed. One
+    // call covers every series on the exchange; the per-series loop is the fallback if it fails.
+    const loadSeries = async (first) => {
+      try { await ks.loadSeriesIndex(); }
+      catch (e) {
+        if (first) await ks.loadFeeMultipliers(this.cfg.ksSeries).catch(() => {});
+        this.log('TESS', 'OPS', null, `Kalshi series list failed to load (${String(e.message).slice(0, 80)}) · ${first ? 'fee multipliers loaded per series instead' : 'keeping the last good list'}`);
+      }
+    };
+    await loadSeries(true);
+    // Kalshi adds series and can change a fee schedule; a box that runs for weeks re-reads it daily.
+    setInterval(() => { loadSeries(false); }, 24 * 3600 * 1000);
     if (this.cfg.mode === 'live') await this.broker.init();
     this.log('TESS', 'OPS', null, `desk online · ${this.cfg.mode.toUpperCase()} mode${this.cfg.demo ? ' with DEMO quote noise' : ''} · equity $${this.equity().toFixed(2)} · ${this.cfg.ksSeries.length} Kalshi series vs top ${this.cfg.pmUniverse} Polymarket markets`);
     await this.step();
