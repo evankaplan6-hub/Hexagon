@@ -858,7 +858,14 @@
       // stop short of it for exactly this reason, and the strip is one line deep. So the sentence is
       // cut to what one line of THIS width holds, not to a fixed number of characters: a bubble that
       // wraps is a bubble standing on the screen it is talking about.
-      const maxw = Math.min(440, Math.max(200, st.w * k * 2.1));
+      //
+      // Sideways is the front row's only clear direction, and a bubble as wide as the room allows
+      // reaches straight across the gap onto the next bot's face -- TESS talking over HOLT, whose
+      // name it also buried. Stop it one blob short of the neighbour. The back row is speaking into
+      // an empty strip and keeps the full width.
+      const reach = L ? (L.pitch - st.w / 2 - 9) * k : 200;
+      const maxw = st.back ? Math.min(440, Math.max(200, st.w * k * 2.1))
+        : Math.min(440, Math.max(150, reach));
       const room = Math.max(22, Math.floor(maxw / (fs * 0.62)) - st.key.length - 2);
       // a cut on a word boundary can leave the line ending on a word that was going somewhere
       const line = clip(b.text, room).replace(/[\s·@:,+-]+$/, '');
@@ -877,6 +884,19 @@
       if (st.back) Object.assign(n.bub.style, { left: `${X(st.bx)}px`, right: '', top: `${Y(st.top - 5)}px` });
       else if (flip) Object.assign(n.bub.style, { left: '', right: `${fx.clientWidth - X(st.bx - 12)}px`, top: `${Y(st.by - 10)}px` });
       else Object.assign(n.bub.style, { left: `${X(st.bx + 12)}px`, right: '', top: `${Y(st.by - 10)}px` });
+    }
+
+    // A narrow room leaves no sideways space to stop short of: the desks are shoulder to shoulder
+    // and the bubble has nowhere to go but onto its neighbour. Covering a desk is survivable --
+    // burying the name of the bot it is covering is not, so any tag the bubble lands on steps
+    // aside, the same way the speaker's own does on the back row. One bot speaks, so this is one
+    // rectangle against seven.
+    const sp = speaking && nodes[speaking.key] && !nodes[speaking.key].bub.hidden && nodes[speaking.key].bub.getBoundingClientRect();
+    if (sp) for (const st of seats) {
+      const n = nodes[st.key];
+      if (!n || n.name.hidden) continue;
+      const r = n.name.getBoundingClientRect();
+      if (!(r.right < sp.left || sp.right < r.left || r.bottom < sp.top || sp.bottom < r.top)) n.name.hidden = true;
     }
   }
 
