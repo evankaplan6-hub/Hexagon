@@ -15,7 +15,7 @@ to Fly once tests pass (paper only; see ops/DEPLOY.md → Auto-deploy).
 ## Running it
 
 ```bash
-npm test                                      # 1603 assertions, no network, no clock
+npm test                                      # 1680 assertions, no network, no clock
 node server.js                                # paper account, live market data → localhost:8787
 DEMO=1 DATA_DIR=./data-demo node server.js    # synthetic fills/settles, separate account
 npm run reset                                 # wipe the paper account
@@ -53,8 +53,10 @@ src/ask.js        the dashboard Ask panel: read-only Claude tool loop (src/ask-t
 tools/            edge-scan, replay, maker-replay, maker-rank, pm-maker-scan, maker-report, fillcheck,
                   history-scan, golden, api, lab-fetch + lab (strategy tournament on settled markets),
                   whale-fetch + whale-lab (does copying top sports wallets pay? no, out of sample),
+                  stock-fetch + stock-lab (ETF strategy tournament on Yahoo daily bars, walk-forward vs SPY;
+                  research only, no broker code -- nothing beat buy-and-hold),
                   fly-pull (copies the box's finished days to data/fly/archive, verifies, then trims old box tapes)
-                  tests: test.js (npm test) + decide/probe/maker/broker/fees/matcher/match-any/rules/discovery/anymarket/stream/engine/brain/lab/whale/http/disk/ask/askui-test.js
+                  tests: test.js (npm test) + decide/probe/maker/broker/fees/matcher/match-any/rules/discovery/anymarket/stream/engine/brain/lab/stock-lab/whale/http/disk/ask/askui-test.js
 data/fly/         gitignored: journals, state and tick tapes copied down from the Fly box, plus
                   kstrades.jsonl (the trade history maker-replay scores against) and
                   rank-listing.json + rank-trades.jsonl (the 440-market pool maker-rank scores).
@@ -65,6 +67,7 @@ data/             gitignored: state.json, journal-*.jsonl, ticks-*.jsonl, desk.l
 data/lab/         gitignored: series-busy.json + universe.json (cached listings) and markets.jsonl (hourly bars)
                   for tools/lab.js; markets-volume-picked.jsonl is the biased first sample, kept as the counterexample
 data/lab/whales/  gitignored: pool, fills, conditions, markets for tools/whale-lab.js
+data/stocks/bars/ gitignored: one Yahoo daily-bar file per ETF/index (tools/stock-fetch.js) for tools/stock-lab.js
 data/whales-*.jsonl  gitignored: every bet whale watch announced, for scoring once they settle
 ```
 
