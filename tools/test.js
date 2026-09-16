@@ -21,6 +21,7 @@ const SUITES = [
   ['engine', 'the ledger: the operator latch, partial exits, and one close per position'],
   ['brain', 'the minds: the proposal clamp, request shaping, cost metering and backoff'],
   ['lab', 'the strategy lab: fees, fills, settlement, and no strategy seeing the answer'],
+  ['stock-lab', 'the ETF lab: next-open fills, costs per side, metric arithmetic, no peeking, no test data in the pick'],
   ['whale', 'whale watch: what counts as a bet, said once across a restart, what copying pays'],
   ['http', "the Kalshi pacer: calls spaced apart, the maker's calls first, nothing else waits"],
   ['disk', 'the box disk: pull copies and verifies before any delete, the brake only trims old tapes'],

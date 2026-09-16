@@ -613,6 +613,84 @@ node tools/whale-fetch.js    # ~10 minutes, data/lab/whales/
 node tools/whale-lab.js      # --minUsd 100000 --slip 0.02 --fee 0 --minBets 5 --top 25
 ```
 
+## Stocks and ETFs: the same lab, a bigger market
+
+Both brokers this desk's owner uses now let software trade for them: Public has a trading API and
+an agent framework, Robinhood opened a separate agent account in 2026. The question that matters
+before wiring anything to either is not whether a bot *can* trade stocks, but whether any rule worth
+running exists. So the prediction-market lab's method was pointed at equities.
+
+```bash
+node tools/stock-fetch.js               # once: 23 ETFs + ^BXM/^PUT/^VIX daily bars → data/stocks/bars/
+node tools/stock-lab.js                 # the tournament
+node tools/stock-lab.js --detail rotation --bps 10 --cash SHY
+```
+
+RESEARCH ONLY. Nothing here talks to a broker, reads a key, or places an order.
+
+**The universe is fixed in `tools/stock-fetch.js`, before any result was seen**: 23 broad ETFs —
+the four index funds, the nine sector SPDRs, five bond funds, gold, silver, developed and emerging
+markets, REITs — plus Cboe's `^BXM` (buy-write) and `^PUT` (put-write) indexes, which are the only
+honest free proxy for an options-income strategy, since free historical option chains do not exist.
+Picking single stocks from a 2026 list would have meant backtesting on the survivors.
+
+**The fill model.** A strategy decides on a day's close and trades at the **next day's open**. Every
+order pays 5 basis points of what it trades, each side (`--bps`), and US brokers charge no commission
+on ETFs. Prices are dividend-adjusted, so holding earns dividends; idle cash earns nothing unless
+`--cash SHY`. Parameters are chosen on 2003 → March 2017 and the table reports April 2017 → today,
+years the choice never saw. Taxes are ignored, and every timing rule here would pay short-term rates
+in a taxable account — a real drag the table does not show.
+
+```
+TEST WINDOW 2017-03-20 → 2026-09-15, each strategy with the settings it chose on the older years
+strategy        picked on the older years         CAGR  vs SPY   maxDD  Sharpe  orders   beat SPY both halves
+buyHold         (no parameters)                  14.8%    +0.0  -33.7%    0.84       1   0/1  · 0/1
+vixFilter       below=40                         12.4%    -2.3  -25.8%    0.82      17   0/4  · 0/4
+volTarget       target=0.15 lookback=20          12.2%    -2.6  -18.7%    0.93     108   0/6  · 4/6
+randomTiming    median of 25 seeds (control)      9.7%    -5.1  -28.5%    0.73      52   0/25 · 1/25
+randomRotation  median of 25 seeds (control)      9.1%    -5.6  -28.0%    0.71     643   0/25 · 0/25
+putWrite        Cboe PUT index                    8.2%    -6.6  -28.9%    0.67       1   0/1  · 0/1
+buyWrite        Cboe BXM index                    7.7%    -7.1  -30.3%    0.62       1   0/1  · 0/1
+tsmomSpy        months=6                          6.4%    -8.4  -33.7%    0.49      15   0/4  · 1/4
+trendSma        sma=200 band=0 check=month        6.4%    -8.4  -36.4%    0.48      19   0/8  · 6/8
+rotation        top=5 months=6                    6.3%    -8.5  -38.0%    0.43     692   0/12 · 0/12
+dualMomentum    months=6 bond=IEF intl=false      6.0%    -8.7  -36.2%    0.47      27   0/8  · 0/8
+rsi2            below=25 trend=false exit=sma5    5.3%    -9.4  -26.1%    0.44     596   0/12 · 0/12
+tsmomMulti      months=6                          3.1%   -11.7  -18.9%    0.47     483   0/3  · 0/3
+dropBuy         down=4 hold=5                     3.0%   -11.8  -13.0%    0.41     105   0/6  · 0/6
+```
+
+**Nothing beat owning SPY. Not one of the 66 parameter settings, across twelve strategies, beat it on
+return in both halves of the calendar** — the last column counts settings that beat SPY on the older
+years *and* on the newer ones, and every row reads 0. The two controls are the tell: a coin flip that
+holds SPY on random days finished mid-table, above six of the ten real strategies. That is what
+"these rules are noise plus costs" looks like. Expanding folds say the same thing — every strategy is
+behind SPY in three of the four slices, and the one slice several of them win is 2007-12, the crash,
+which is the one thing a timing rule reliably does: it is out of the market when the market falls,
+and it is also out when the market rises.
+
+**What survived, honestly.** Nothing on return; two rules on *risk*. Volatility targeting — hold less
+SPY when SPY has been swinging — kept a higher Sharpe than SPY in four of its six settings and cut
+the worst drawdown from 34% to 19%, at a cost of 2.6 points of return a year. The 200-day moving
+average did the same in six of eight settings but not on drawdown. That is the textbook result, and
+it is a decision about how much risk to carry, not a way to make more money.
+
+Rerun with cash earning T-bills (`--cash SHY`) or at double the cost (`--bps 10`) and the ordering
+does not change: buy-and-hold first, 0 of 66 settings beating it in both halves either way.
+
+**What this cannot see.** Daily bars only, so nothing intraday. ETFs only — no single stocks, and no
+real options (the two Cboe indexes are one canned strategy each, and both lost to SPY over this
+window). One market, mostly one long bull run: a nine-year test window that contains 2020 and 2022 is
+still one sample of one country's decade. And the universe, though fixed before scoring, was written
+down in 2026 by someone who knows which ETFs still exist.
+
+**Two data traps worth naming**, both of which produced plausible-looking wrong answers before they
+were caught. Yahoo's chart endpoint returns **monthly** bars for `range=max&interval=1d` — SPY comes
+back as 405 rows for 1993-2026 instead of 8,464 daily ones, with nothing in the response saying so —
+so `tools/stock-fetch.js` asks for an explicit `period1`/`period2` window instead. And it answers 429
+to every request on a **reused connection** while serving fresh ones immediately, which looks exactly
+like a rate limit and is not; the fetcher sends `connection: close`.
+
 ## Operating it
 
 The dashboard is read-only. Two control endpoints exist, both POST, both requiring `FLATTEN_TOKEN`
@@ -666,6 +744,8 @@ tools/lab-fetch.js     settled Kalshi markets with hourly bid/ask history, for t
 tools/lab.js           the strategy lab: many strategies, tuned on older markets, scored on newer
 tools/whale-fetch.js   sports-leaderboard wallets' fills and how their markets settled, for the whale lab
 tools/whale-lab.js     would copying those wallets pay: picked on the first half, scored on the second
+tools/stock-fetch.js   daily bars for a fixed list of 23 ETFs and three Cboe indexes, from Yahoo's public chart endpoint
+tools/stock-lab.js     the ETF lab: stock/ETF strategies tuned on older years, scored on newer ones against owning SPY
 tools/fly-pull.js      copy the Fly box's finished days to data/fly/archive, verify, then trim old box tapes (ops/DEPLOY.md)
 tools/test.js          every suite in one command (npm test)
 tools/decide-test.js   assertions for the taker decision core
@@ -681,6 +761,7 @@ tools/matcher-test.js  assertions for cross-venue matching
 tools/stream-test.js   assertions for the trade socket and the tape's fallback to the poll
 tools/engine-test.js   assertions for the ledger: operator latch, partial exits, and close serialization
 tools/lab-test.js      assertions for the lab's fees, fills, settlement, and that no strategy sees the result
+tools/stock-lab-test.js  assertions for the ETF lab: next-open fills, costs per side, metric arithmetic, no peeking
 tools/whale-test.js    assertions for what counts as a whale bet, said once across a restart, and what copying pays
 tools/http-test.js     assertions for the Kalshi pacer
 tools/disk-test.js     assertions for the tape pull and the box's disk brake: nothing deleted before it is copied and verified
@@ -694,7 +775,7 @@ tape and a synthetic clock (`tools/replay.js`) instead of a network and a wall c
 guard it, and both are worth running after any change to the gates:
 
 ```bash
-npm test                      # all 1603 assertions across nineteen suites
+npm test                      # all 1680 assertions across twenty suites
 node tools/maker-test.js      # ...or one suite at a time while working on one file
 ```
 
