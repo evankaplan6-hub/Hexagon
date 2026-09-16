@@ -65,6 +65,23 @@ function harness(list, over = {}) {
 }
 
 (async () => {
+  group('the crawl feeds the maker its universe on the way past');
+  {
+    // The maker's candidate list comes from this crawl (src/maker.js candidatesFrom): it is the only
+    // walk of every open Kalshi market the desk makes, so handing it over costs no extra call.
+    const seen = [];
+    const h = harness([], { crawl: { k: { markets: [{ ticker: 'X-1', seriesTicker: 'X' }], complete: true }, p: { markets: [1], complete: true } } });
+    h.E.maker = { noteCrawl: (E, markets, feeTypeOf) => { seen.push({ markets, feeTypeOf }); return markets.length; } };
+    h.E.touch = () => {};
+    await h.A.discover(h.E);
+    ok('the maker is handed the crawl', seen.length === 1 && seen[0].markets.length === 1, seen);
+    ok('...with a way to ask what a series charges', typeof seen[0].feeTypeOf === 'function', seen[0] && typeof seen[0].feeTypeOf);
+
+    const noMaker = harness([]);
+    await noMaker.A.discover(noMaker.E);   // no maker on the engine at all
+    ok('a desk with no maker still finishes its crawl', noMaker.logs.some((l) => l.agent === 'HOLT'), noMaker.logs.map((l) => l.agent));
+  }
+
   group('discovery keeps verified pairs first, drops different rules, and respects the cap');
   {
     const list = [

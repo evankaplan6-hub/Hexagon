@@ -16,6 +16,10 @@ function normalize(m) {
     yesBid: num(m.yes_bid_dollars),
     yesAsk: num(m.yes_ask_dollars),
     last: num(m.last_price_dollars),
+    // Top-of-book size on each side. Free with every listing, and the only depth number the maker
+    // has without a second call per market: joining the touch means joining the back of this queue.
+    yesBidSize: num(m.yes_bid_size_fp) || 0,
+    yesAskSize: num(m.yes_ask_size_fp) || 0,
     vol24: num(m.volume_24h_fp) || 0,
     oi: num(m.open_interest_fp) || 0,
     closeTime: m.close_time || null,

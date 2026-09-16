@@ -361,6 +361,42 @@ group('the run-over gate cools a market whose touch keeps getting swept');
   ok('a fill with no qty counts as one contract', maker.toxWindow([], { runOver: true })[0] === 1 && maker.toxWindow([], { runOver: false })[0] === -1);
 }
 
+group('the wide universe: which crawled markets this desk may quote');
+{
+  // The ceiling was never the code, it was MAKER_SERIES: Kalshi runs 13,929 fee-free series and the
+  // list named 39. candidatesFrom filters the any-market crawl instead, which walks them all anyway.
+  const c = cfg({ makerMinMid: 0.08, makerMaxMid: 0.92, makerMinSpread: 0.01, makerMinVol24: 5000, makerMinDaysToClose: 7 });
+  const NOW = Date.parse('2026-09-16T00:00:00Z');
+  const day = (n) => new Date(NOW + n * 86400000).toISOString();
+  const mk = (over = {}) => ({ ticker: 'SENATETX-26-D', seriesTicker: 'SENATETX', yesBid: 0.44, yesAsk: 0.45,
+    vol24: 100000, closeTime: day(400), yesBidSize: 100, yesAskSize: 300, title: 'Texas Senate', yesSubTitle: 'Democrat', ...over });
+  const free = (s) => (s === 'PAID' ? 'quadratic_with_combo_maker_fees' : s === 'UNKNOWN' ? null : 'quadratic');
+  const only = (ms) => maker.candidatesFrom(ms, free, c, NOW);
+
+  const one = only([mk()]);
+  ok('a fee-free, liquid, mid-priced market is a candidate', one.length === 1 && one[0].ticker === 'SENATETX-26-D', one);
+  ok('...carrying its series, spread, days and depth', one[0].series === 'SENATETX' && Math.abs(one[0].spread - 0.01) < 1e-9 && Math.round(one[0].days) === 400 && one[0].depth === 200, one[0]);
+
+  ok('a series that charges makers is refused', only([mk({ seriesTicker: 'PAID' })]).length === 0);
+  ok('a series the index has never heard of is refused, not assumed free', only([mk({ seriesTicker: 'UNKNOWN' })]).length === 0);
+  ok('a market with no series is refused', only([mk({ seriesTicker: null })]).length === 0);
+  ok('a one-tick spread under the minimum is refused', only([mk({ yesBid: 0.445, yesAsk: 0.45 })]).length === 0);
+  ok('a crossed or locked book is refused', only([mk({ yesBid: 0.45, yesAsk: 0.45 })]).length === 0 && only([mk({ yesBid: 0.50, yesAsk: 0.45 })]).length === 0);
+  ok('the tails are refused', only([mk({ yesBid: 0.02, yesAsk: 0.05 })]).length === 0 && only([mk({ yesBid: 0.95, yesAsk: 0.97 })]).length === 0);
+  ok('a market under the volume bar is refused', only([mk({ vol24: 4999 })]).length === 0);
+  ok('a market settling inside the guard is refused', only([mk({ closeTime: day(3) })]).length === 0);
+  ok('...and one with no close time at all', only([mk({ closeTime: null })]).length === 0);
+  ok('a market missing a quote is refused', only([mk({ yesAsk: null })]).length === 0);
+  ok('an empty crawl gives an empty list, not a throw', only([]).length === 0 && maker.candidatesFrom(null, free, c, NOW).length === 0);
+
+  const many = only([mk({ ticker: 'A', vol24: 10000 }), mk({ ticker: 'B', vol24: 90000 }), mk({ ticker: 'C', vol24: 90000, yesBid: 0.40, yesAsk: 0.45 })]);
+  ok('busiest first, and a wider spread breaks the tie', many.map((r) => r.ticker).join('') === 'CBA', many.map((r) => [r.ticker, r.vol, r.spread]));
+
+  // the point of the whole exercise: markets outside MAKER_SERIES are allowed in
+  const wide = only([mk(), mk({ ticker: 'KXMAYORLA-26-NRAM', seriesTicker: 'KXMAYORLA', vol24: 82941 })]);
+  ok('a fee-free series nobody listed by hand is a candidate', wide.length === 2 && wide.some((r) => r.series === 'KXMAYORLA'), wide);
+}
+
 group('the drawdown rail measures from the peak, not from the opening balance');
 {
   const I = 10000;
