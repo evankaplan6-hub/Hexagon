@@ -529,8 +529,12 @@ Stopping out a mean-reverting book locks in the loss and forfeits the recovery.
 
 Its ledger is separate from the taker book on purpose — one blended equity number makes it
 impossible to tell which strategy is working. It carries its own `MAKER_MAX_DRAWDOWN_PCT`, because
-TESS's drawdown watches the taker book and would never see this desk bleeding. `POST /api/flatten`
-liquidates its inventory too, at the touch, paying the taker fee.
+TESS's drawdown watches the taker book and would never see this desk bleeding. That rail measures
+the fall from the book's **high-water mark**, not from the opening balance: against a fixed opening
+reference it loosened with every dollar earned, so a book that ran to $10,500 and bled back to
+$9,050 had given up 13.8% of its high while the test read 9.5% and never fired. A high-water mark
+can only ever halt earlier, and the two agree exactly on a book that has never been in profit.
+`POST /api/flatten` liquidates its inventory too, at the touch, paying the taker fee.
 
 **Paper only.** What no simulation here can model: our own size changing other people's behaviour,
 and Kalshi's real queue at our price level.
@@ -866,11 +870,14 @@ Named here rather than left in a transcript. None are reachable today; all are r
 - **`liveBalance` is fetched, streamed to the dashboard, and never constrains sizing.** In live mode
   the desk would size off `state.cash` — the paper-initialised balance — not the money actually at
   the exchange. This is a blocker for funding the account, not a bug in paper.
-- **The maker's drawdown rail measures loss from `initialBalance`, not drawdown from peak**, so a
-  book that runs +$500 and bleeds back to +$50 never trips it.
-- **Same-date bucketing cannot separate the two games of a doubleheader.**
-- **A market whose listing reports zero top-of-book size ranks first** (an empty queue looks like a
-  queue that clears instantly) and is then modelled with no queue at all.
+- **Same-date bucketing cannot separate the two games of a doubleheader** unless the venues label
+  them. The figure guard rejects "Game 1" against "Game 2" per candidate and keeps searching, so a
+  labelled pair still finds its own row; two unlabelled games on one date are indistinguishable to
+  the bucket.
+- **A market whose listing reports zero top-of-book size is logged as a queue that clears
+  instantly** — `clear` is depth over contract rate, so no depth reads as `0.0h` in the scan line.
+  Cosmetic as of the re-scored ranking: the book is picked by trade rate, which never reads `depth`,
+  and the live queue is seeded from the real orderbook at quote time rather than from the listing.
 
 ## License
 
