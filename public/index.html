@@ -35,7 +35,11 @@
   </header>
 
   <section class="panel" id="floor">
-    <div class="ph"><span><i>◆</i> Trading Floor</span><span id="floor-meta"></span></div>
+    <div class="ph"><span><i>◆</i><span class="desktop-title">Trading Floor</span><span class="mobile-title">Desk Overview</span></span><span id="floor-meta"></span></div>
+    <!-- Phones get the facts as real type instead of a desktop control room shrunk to 390px.
+         The animated floor remains the desktop interface; app.js fills this glanceable card from
+         the same state on every frame. -->
+    <section id="mobile-summary" aria-label="Desk overview"></section>
     <div class="stage">
       <div class="room">
         <canvas id="floorc" width="480" height="262"></canvas>

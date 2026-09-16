@@ -48,6 +48,36 @@
       fact('locked', Number.isFinite(P.arbLocked) ? signed(P.arbLocked) : '—', P.arbLocked >= 0 ? 'pos' : 'neg') +
       (P.integrityAlerts ? `<span class="alertfact">alerts<b>${P.integrityAlerts}</b></span>` : '');
   }
+
+  // A phone is not a tiny desktop trading floor. Put the four things a person opens the page for
+  // into normal HTML type: current maker P&L, market/inventory counts, the last fill, and which
+  // desks are awake. The illustrated room is intentionally left to larger screens, where its
+  // boards and click targets have enough physical size to work.
+  function renderMobileSummary() {
+    const el = $('mobile-summary'), M = S.maker || {};
+    if (!el) return;
+    const halted = S.halt || M.halted, gone = stale(), working = !halted && M.quoting > 0;
+    const [state, cls] = gone ? ['No signal', 'bad'] : halted ? ['Stopped', 'bad'] : working ? ['Working', 'good'] : ['Idle', 'warn'];
+    const net = Number.isFinite(M.equity) && Number.isFinite(M.initial) ? M.equity - M.initial : null;
+    const held = (M.markets || []).filter((m) => m.inv).length;
+    const lf = M.lastFill;
+    const agents = (S.agents || []).filter((a) => a.key !== 'MAKR').map((a) => {
+      const on = isActive(a);
+      return `<span class="m-agent${on ? ' on' : ''}" style="--agent:${a.color || '#6b7384'}"><i></i>${esc(a.key)}</span>`;
+    }).join('');
+    const latest = lf
+      ? `<div class="m-fill"><div><span class="m-label">Latest fill</span><b>${lf.side === 'buy' ? 'Bought' : 'Sold'} ${lf.qty} at ${cc(lf.px)}</b></div>` +
+        `<p>${esc(marketName(lf.ticker))}<small>${ago(lf.at)}</small></p></div>`
+      : `<div class="m-fill empty"><div><span class="m-label">Latest fill</span><b>${M.fills ? `${M.fills} before restart` : 'No fills yet'}</b></div></div>`;
+    el.innerHTML = `<div class="m-hero"><div><span class="m-label">Maker desk · net</span>` +
+      `<strong class="${net != null && net < 0 ? 'neg' : 'pos'}">${net == null ? '—' : signed(net)}</strong>` +
+      `<small>${net == null ? 'Waiting for a mark' : 'if every position closed now'}</small></div>` +
+      `<span class="m-state ${cls}"><i></i>${esc(state)}<small>${S.mode === 'live' ? 'REAL MONEY' : 'PAPER'}</small></span></div>` +
+      `<div class="m-stats"><div><span>Quoting</span><b>${M.quoting || 0}</b><small>markets</small></div>` +
+      `<div><span>Holding</span><b>${(+M.inv || 0).toLocaleString()}</b><small>in ${held}</small></div>` +
+      `<div><span>Fills</span><b>${(+M.fills || 0).toLocaleString()}</b><small>total</small></div></div>` +
+      latest + `<div class="m-agents"><span class="m-label">Desks</span><div>${agents}</div></div>`;
+  }
   // renderTiles is gone with the tiles it fed. They reported the convergence book -- the desk that
   // found no edge -- so the page opened on "$10,000.00 / +$0.00" while the maker desk was trading.
   // A prominent number describing the wrong desk is worse than no number.
@@ -1706,7 +1736,7 @@
   askSave();
 
   // ------------------------------------------------------------ wiring
-  function render() { frameSeq++; renderHeader(); ingest(); renderAsk(); }
+  function render() { frameSeq++; renderHeader(); renderMobileSummary(); ingest(); renderAsk(); }
   function connect() {
     const es = new EventSource('/api/stream');
     es.onmessage = (ev) => { try { S = JSON.parse(ev.data); S._rx = S.now; S._rxPerf = performance.now(); lastFrameAt = Date.now(); render(); } catch (e) { console.error(e); } };

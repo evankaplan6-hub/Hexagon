@@ -115,6 +115,7 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 }
 #floor .ph i { color: #d4a72c; }
 #floorc { border-radius: 0; }
+.mobile-title, #mobile-summary { display: none; }
 
 /* ---- notices over the floor ---------------------------------------------- */
 /* The room stays a canvas; the words on it are HTML so they render at a size a person can read.
@@ -554,7 +555,71 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 .askd #ask-send:hover:not(:disabled) { background: #1c3b6d; }
 
 /* phone: a sheet from the bottom, most of the screen, with a big close target */
-@media (max-width: 640px) {
+@media (max-width: 640px), (max-width: 900px) and (max-height: 500px) {
+  /* Mobile is an information dashboard, not a scaled-down control room. Let the document scroll,
+     keep all touch targets readable, and replace the canvas wall with a compact state summary. */
+  html, body { height: auto; min-height: 100%; overflow-x: hidden; overflow-y: auto; }
+  body { min-height: 100dvh; }
+  .wrap { width: 100%; height: auto; min-height: 100dvh; padding: max(8px, env(safe-area-inset-top)) 8px max(12px, env(safe-area-inset-bottom)); gap: 8px; justify-content: flex-start; }
+  header { min-height: 44px; gap: 8px; padding: 1px 4px; }
+  .brand { gap: 8px; min-width: 0; }
+  .brand svg { width: 24px; height: 24px; }
+  h1 { font-size: 17px; }
+  .hside { margin-left: auto; gap: 7px; }
+  .pill { gap: 6px; padding: 5px 9px 5px 8px; font-size: 10px; }
+  #askbtn { min-height: 34px; padding: 7px 10px; }
+
+  #floor { flex: none; min-height: 0; overflow: visible; }
+  #floor .ph { min-height: 36px; padding: 8px 10px; }
+  .desktop-title { display: none; }
+  .mobile-title { display: inline; }
+  #floor-meta { max-width: 54%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #floor-meta.alert { padding: 2px 7px; font-size: 10px; }
+  #floor-meta.alert small, #floor-meta.alert .open { display: none; }
+
+  #mobile-summary { display: block; padding: 12px; background: #080c13; border-bottom: 1px solid #1a2233; font-family: var(--sans); }
+  .m-label { display: block; margin-bottom: 5px; color: #67718a; font: 700 9px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; }
+  .m-hero { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+  .m-hero strong { display: block; font: 700 28px/1 var(--mono); letter-spacing: -.04em; }
+  .m-hero > div > small { display: block; margin-top: 5px; color: #6f788a; font-size: 11px; }
+  .m-state { display: inline-flex; align-items: center; gap: 6px; padding: 6px 8px; border: 1px solid #293244; border-radius: 999px; color: #9aa3b3; font: 700 9px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; white-space: nowrap; }
+  .m-state > i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; box-shadow: 0 0 7px currentColor; }
+  .m-state > small { padding-left: 6px; border-left: 1px solid rgba(255,255,255,.1); color: #687185; font-size: 8px; }
+  .m-state.good { color: #4ade80; border-color: rgba(34,197,94,.28); background: rgba(34,197,94,.08); }
+  .m-state.warn { color: #e8c35a; border-color: rgba(212,167,44,.28); }
+  .m-state.bad { color: #fca5a5; border-color: rgba(239,68,68,.32); }
+
+  .m-stats { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: 13px; border: 1px solid #1c2535; border-radius: 8px; overflow: hidden; }
+  .m-stats > div { padding: 9px 10px 8px; min-width: 0; }
+  .m-stats > div + div { border-left: 1px solid #1c2535; }
+  .m-stats span { display: block; color: #67718a; font: 700 8px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+  .m-stats b { display: inline-block; margin-top: 5px; color: #eef1f6; font: 700 16px/1 var(--mono); }
+  .m-stats small { margin-left: 4px; color: #737d90; font-size: 9px; white-space: nowrap; }
+
+  .m-fill { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; align-items: center; margin-top: 10px; padding: 10px; border: 1px solid #1c2535; border-radius: 8px; background: rgba(255,255,255,.015); }
+  .m-fill b { color: #eef1f6; font-size: 13px; }
+  .m-fill p { min-width: 0; margin: 0; color: #aeb6c4; font-size: 11px; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
+  .m-fill p small { display: block; color: #59647a; }
+  .m-fill.empty { grid-template-columns: 1fr; }
+
+  .m-agents { display: flex; align-items: center; gap: 10px; margin-top: 11px; }
+  .m-agents > .m-label { flex: none; margin: 0; }
+  .m-agents > div { display: flex; flex: 1 1 auto; justify-content: space-between; gap: 4px; min-width: 0; }
+  .m-agent { display: inline-flex; align-items: center; gap: 3px; color: #566073; font: 700 8px/1 var(--mono); }
+  .m-agent i { width: 5px; height: 5px; border-radius: 50%; background: #394255; }
+  .m-agent.on { color: #aeb6c4; }
+  .m-agent.on i { background: var(--agent); box-shadow: 0 0 6px var(--agent); }
+
+  .stage { display: block; min-height: 0; }
+  .room { display: none; }
+  #feed { height: min(390px, 48dvh); min-height: 260px; border-top: 0; border-radius: 0 0 7px 7px; font-size: 13px; }
+  #feed .fh { padding: 12px 11px 6px; }
+  #feedlist { padding: 0 7px 8px; }
+  #feedlist li { grid-template-columns: 3em 3.3em minmax(0, 1fr) auto; gap: 5px; padding: 7px 4px; line-height: 1.35; }
+  #feedlist li:first-child { padding: 10px 4px 10px 9px; font-size: 1em; }
+  #feedlist .fs { overflow-wrap: anywhere; }
+  #alertpanel { position: fixed; top: 7dvh; width: calc(100% - 20px); max-height: 86dvh; padding: 16px; }
+
   .askd { top: auto; left: 0; width: 100%; height: 88vh; height: 88dvh; border-left: 0; border-top: 1px solid #2a3140;
     border-radius: 14px 14px 0 0; box-shadow: 0 -30px 80px -20px #000; transform: translateY(100%); }
   .askh { border-radius: 14px 14px 0 0; }
@@ -563,4 +628,32 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
   #ask-count { flex: 1 1 auto; }
   #ask-q { font-size: 16px; }   /* under 16px, iOS zooms the whole page when the box takes focus */
   .hside { gap: 10px; }
+}
+
+/* A phone turned sideways has width but almost no height after Safari's two toolbars. Put the
+   overview and activity beside each other; stacking them would merely replace a crushed canvas
+   with a page that needs several screens of scrolling. */
+@media (max-width: 900px) and (max-height: 500px) {
+  html, body { height: 100%; overflow: hidden; }
+  body { min-height: 0; }
+  .wrap { height: 100dvh; min-height: 0; padding: 4px max(8px, env(safe-area-inset-right)) 6px max(8px, env(safe-area-inset-left)); gap: 4px; }
+  header { min-height: 36px; }
+  #floor { display: grid; grid-template-columns: minmax(310px, 42%) minmax(0, 1fr); grid-template-rows: 32px minmax(0, 1fr); flex: 1 1 auto; min-height: 0; }
+  #floor .ph { grid-column: 1 / -1; grid-row: 1; min-height: 32px; padding: 6px 10px; }
+  #mobile-summary { grid-column: 1; grid-row: 2; min-height: 0; overflow-y: auto; padding: 10px; border-right: 1px solid #1a2233; border-bottom: 0; }
+  .stage { grid-column: 2; grid-row: 2; min-width: 0; min-height: 0; }
+  .m-hero strong { font-size: 23px; }
+  .m-hero > div > small { margin-top: 3px; }
+  .m-state { padding: 5px 7px; }
+  .m-stats { margin-top: 9px; }
+  .m-stats > div { padding: 7px 8px 6px; }
+  .m-stats b { font-size: 14px; }
+  .m-fill { margin-top: 8px; padding: 8px; }
+  .m-agents { margin-top: 8px; }
+  #feed { width: 100%; height: 100%; min-height: 0; border-left: 0; border-radius: 0 0 7px; }
+  #feed .fh { padding: 9px 10px 5px; }
+  #feedlist li { grid-template-columns: 2.8em 3.2em minmax(0, 1fr) auto; padding: 5px 3px; }
+  #feedlist li:first-child { padding: 7px 3px 7px 8px; }
+  .askd { height: 100dvh; border-radius: 0; }
+  .askh { border-radius: 0; }
 }
