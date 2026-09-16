@@ -112,11 +112,16 @@
     if (L && L.RW === RW) return L;
     // the desks live between the P&L stand on the left and the server rack on the right
     const bandL = 132, bandR = RW - 46, band = bandR - bandL, gap = 12;
-    // Four desks across the front row say how big a desk MAY be side to side; the wall's height says
-    // how big it may be before the two rows climb into each other. The smaller of the two wins, so
-    // the cast grows with the window and never overlaps itself.
+    // How big a desk MAY be is a question about HEIGHT, not width. The back row, the front row and
+    // the front row's nametag all have to fit in the 150 units under the wall, and 1.45 is where the
+    // nametag reaches the floor line -- so past a certain width the desks stop growing no matter how
+    // much room there is. Widening the room therefore cannot make the cast bigger. What it can do is
+    // spread it out: on a 2.8:1 window the desks used to take 70% of the floor they stand on and
+    // huddle in the middle of an empty plain. The width the seats cannot use goes into the gap
+    // between them instead, up to half a desk, and then stops -- seven desks scattered to the far
+    // corners is the same mistake in the other direction.
     const SEAT = Math.max(0.95, Math.min(1.45, (band - 3 * gap) / 256));
-    const dw = 64 * SEAT, pitch = dw + gap;
+    const dw = 64 * SEAT, pitch = Math.min(dw * 1.5, Math.max(dw + gap, (band - dw) / 3));
     const backY = Math.round(WALL_H + 4 + 16 * SEAT), frontY = Math.round(backY + 43 * SEAT);
     // centre the row on the room, then slide it inside the band if it does not fit there
     const row = (n, y, p) => {
