@@ -4,4 +4,4 @@ data-demo/
 .env
 *.pem
 .DS_Store
-.claude/worktrees/
+.claude/
