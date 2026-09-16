@@ -30,20 +30,23 @@
   // ------------------------------------------------------------ header + tiles
   function renderHeader() {
     const day = Math.floor((S.now - S.startedAt) / 86400000) + 1;
-    const modeCls = S.halt ? 'halt' : 'live';
-    const modeTxt = S.halt ? `HALT · ${esc(S.halt)}` : (S.mode === 'live' ? 'LIVE' : 'PAPER');
-    const P = S.pnl || {};
-    const arb = Number.isFinite(P.arbLocked) ? signed(P.arbLocked) : '—';
-    const alert = P.integrityAlerts ? `<span><span class="k">Arb check</span><b class="halt">${P.integrityAlerts} ALERT${P.integrityAlerts === 1 ? '' : 'S'}</b></span>` : '';
+    const M = S.maker || {}, P = S.pnl || {};
+    const halted = S.halt || M.halted;
+    // The pill is the headline: one word for the state, then whose money is at risk. The counts
+    // beside it are reference -- they are set to look like reference so the eye can skip them.
+    const [state, cls] = stale() ? ['No signal', 'bad'] : halted ? ['Stopped', 'bad']
+      : M.quoting > 0 ? ['Working', 'good'] : ['Idle', 'warn'];
+    const pill = $('deskstate');
+    pill.className = `pill ${cls}`;
+    pill.innerHTML = `<i></i>${esc(state)}` +
+      (halted ? `<span class="why">${esc(String(halted))}</span>` : '') +
+      `<span class="mode${S.mode === 'live' ? ' real' : ''}">${S.mode === 'live' ? 'LIVE · real money' : 'Paper'}</span>` +
+      (S.demo ? `<span class="mode demo">Demo quotes</span>` : '');
+    const fact = (k, v, c) => `<span>${k}<b class="${c || ''}">${v}</b></span>`;
     $('meta').innerHTML =
-      `<span><span class="k">Day</span><b>${day}</b></span>` +
-      `<span><span class="k">Uptime</span><b>${dur(S.now - S.startedAt)}</b></span>` +
-      `<span><span class="k">Pairs</span><b>${S.pairCount}</b></span>` +
-      `<span><span class="k">Open</span><b>${S.positions.length}</b></span>` +
-      `<span><span class="k">Arb locked</span><b class="${P.arbLocked >= 0 ? 'live' : 'halt'}">${arb}</b></span>` +
-      alert +
-      (S.demo ? `<span class="demo">● DEMO QUOTES</span>` : '') +
-      `<span><span class="k">Position</span><b class="${modeCls}">● ${modeTxt}</b></span>`;
+      fact('day', day) + fact('pairs', S.pairCount) + fact('open', S.positions.length) +
+      fact('locked', Number.isFinite(P.arbLocked) ? signed(P.arbLocked) : '—', P.arbLocked >= 0 ? 'pos' : 'neg') +
+      (P.integrityAlerts ? `<span class="alertfact">alerts<b>${P.integrityAlerts}</b></span>` : '');
   }
   // renderTiles is gone with the tiles it fed. They reported the convergence book -- the desk that
   // found no edge -- so the page opened on "$10,000.00 / +$0.00" while the maker desk was trading.
@@ -95,7 +98,46 @@
     window.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') { sel = null; chart.band = null; } });
   }
 
-  const DESKS = [[132, 158], [216, 158], [300, 158], [132, 200], [216, 200], [300, 200], [384, 200]];
+  // Where the room's furniture goes. The room is drawn at a fixed HEIGHT whose width follows the
+  // shape of the box the page gives it (floorCtx), so a wide window gets a wide room instead of two
+  // black bars down the sides. Everything pinned -- the boards on the wall, the rack, the P&L stand
+  // -- is placed from an edge; the desks are a cluster in what is left.
+  //
+  // The wall used to take 150 of 262 units and the seven desks shared the 112 below it, which is the
+  // whole reason the cast was drawn so small. The wall is 118 now: the boards on it are HTML text and
+  // lose nothing by being shorter, and every unit the floor gains goes into the size of the bots.
+  const ROOM_H = 268, WALL_H = 118, SIDE_W = 112;
+  let L = null;
+  function layout(RW) {
+    if (L && L.RW === RW) return L;
+    // the desks live between the P&L stand on the left and the server rack on the right
+    const bandL = 132, bandR = RW - 46, band = bandR - bandL, gap = 12;
+    // Four desks across the front row say how big a desk MAY be side to side; the wall's height says
+    // how big it may be before the two rows climb into each other. The smaller of the two wins, so
+    // the cast grows with the window and never overlaps itself.
+    const SEAT = Math.max(0.95, Math.min(1.45, (band - 3 * gap) / 256));
+    const dw = 64 * SEAT, pitch = dw + gap;
+    const backY = Math.round(WALL_H + 4 + 16 * SEAT), frontY = Math.round(backY + 43 * SEAT);
+    // centre the row on the room, then slide it inside the band if it does not fit there
+    const row = (n, y, p) => {
+      const w = (n - 1) * p + dw;
+      const x0 = Math.round(Math.max(bandL, bandL + (band - w) / 2));
+      return Array.from({ length: n }, (_, i) => [x0 + Math.round(i * p), y]);
+    };
+    L = {
+      RW, SEAT, dw, pitch,
+      seats: [...row(3, backY, pitch * 0.94), ...row(4, frontY, pitch)],
+      status: { x: 8, y: 6, w: SIDE_W, h: WALL_H - 26 },
+      clock:  { x: RW - SIDE_W - 8, y: 6, w: SIDE_W, h: 22 },
+      tape:   { x: RW - SIDE_W - 8, y: 32, w: SIDE_W, h: WALL_H - 52 },
+      // the glass stops 20 units short of the floor line: that strip is where the back row's bubbles
+      // go, and it is the only reason a bubble can no longer cover the number it is talking about
+      screen: { x: 134, y: 2, w: RW - 268, h: WALL_H - 26 },
+      chart:  { x: 4, y: WALL_H + 34, w: 124, h: ROOM_H - WALL_H - 38 },
+      rack:   { x: RW - 40, y: WALL_H + 38, w: 26, h: 60 },
+    };
+    return L;
+  }
   function hash(i, j, k) { let x = (i * 374761393 + j * 668265263 + k * 2246822519) | 0; x = (x ^ (x >>> 13)) * 1274126177; return ((x ^ (x >>> 16)) >>> 0) / 4294967295; }
   function px(ctx, x, y, w, h, c) { ctx.fillStyle = c; ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h)); }
   function text(ctx, s, x, y, c, size = 7, align = 'left') { ctx.fillStyle = c; ctx.font = `${size}px JetBrains Mono, monospace`; ctx.textAlign = align; ctx.textBaseline = 'top'; ctx.fillText(s, Math.round(x), Math.round(y)); }
@@ -230,176 +272,202 @@
   // The room ends at the floor's front edge. The ledge that hung below it (P&L and the log) is gone:
   // the chart stands on the empty floor to the left of the desks, and the log is the HTML feed
   // under the room, where it can take whatever height the window has left.
-  const ROOM_H = 262;
+  // The room's width is not fixed. Deriving it from the box's own shape is what removed the two
+  // black bars: at 1512px the old 480-wide room letterboxed nearly 300px away, and every one of
+  // those pixels is now floor the desks can stand on.
+  const ROOM_W_MIN = 480, ROOM_W_MAX = 780;
+  let RW = 480;
   function floorCtx() {
     const cv = $('floorc'), r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
     const w = Math.max(1, Math.round(r.width * dpr)), h = Math.max(1, Math.round(r.height * dpr));
     const key = `${w}x${h}`;
     if (key !== floorSized) { cv.width = w; cv.height = h; floorSized = key; }
+    RW = Math.round(Math.max(ROOM_W_MIN, Math.min(ROOM_W_MAX, ROOM_H * (w / h))));
     const ctx = cv.getContext('2d');
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = '#0b0e14'; ctx.fillRect(0, 0, w, h);       // paint the letterbox
-    const scale = Math.min(w / 480, h / ROOM_H);
+    const scale = Math.min(w / RW, h / ROOM_H);
     floorBox.scale = scale / dpr;                              // css px per drawing unit
-    floorBox.ox = (w - 480 * scale) / 2 / dpr;
+    floorBox.ox = (w - RW * scale) / 2 / dpr;
     floorBox.oy = (h - ROOM_H * scale) / 2 / dpr;
-    ctx.setTransform(scale, 0, 0, scale, (w - 480 * scale) / 2, (h - ROOM_H * scale) / 2);
+    ctx.setTransform(scale, 0, 0, scale, (w - RW * scale) / 2, (h - ROOM_H * scale) / 2);
     return ctx;
   }
 
   function drawFloor(t) {
     const ctx = floorCtx(); ctx.imageSmoothingEnabled = false;
-    ctx.clearRect(0, 0, 480, ROOM_H);   // the letterbox is repainted in floorCtx
+    layout(RW);
+    const VPX = RW / 2;
+    ctx.clearRect(0, 0, RW, ROOM_H);   // the letterbox is repainted in floorCtx
     hits = [];                               // rebuilt every frame; the pointer tests against them
     // ---- the room -----------------------------------------------------------------------------
     // wall: darker at the corners, lifting toward the middle where the big screen hangs
-    const wall = ctx.createLinearGradient(0, 0, 0, 150);
+    const wall = ctx.createLinearGradient(0, 0, 0, WALL_H);
     wall.addColorStop(0, '#080b14'); wall.addColorStop(0.55, '#0e1422'); wall.addColorStop(1, '#121a2b');
-    ctx.fillStyle = wall; ctx.fillRect(0, 0, 480, 150);
+    ctx.fillStyle = wall; ctx.fillRect(0, 0, RW, WALL_H);
     // floor: a gradient away from the wall, so the far edge reads as further away
-    const flr = ctx.createLinearGradient(0, 150, 0, 262);
+    const flr = ctx.createLinearGradient(0, WALL_H, 0, ROOM_H);
     flr.addColorStop(0, '#0c1017'); flr.addColorStop(1, '#070910');
-    ctx.fillStyle = flr; ctx.fillRect(0, 150, 480, 112);
-    px(ctx, 0, 149, 480, 1, '#243047'); px(ctx, 0, 150, 480, 1, '#161d2b');   // skirting
-    // Perspective grid. The old one was a plain lattice, which read as graph paper; verticals now
-    // converge on a vanishing point behind the wall screen and horizontals space out toward us.
+    ctx.fillStyle = flr; ctx.fillRect(0, WALL_H, RW, ROOM_H - WALL_H);
+    px(ctx, 0, WALL_H - 1, RW, 1, '#243047'); px(ctx, 0, WALL_H, RW, 1, '#161d2b');   // skirting
+    // Perspective grid. Verticals converge on a vanishing point behind the wall screen and
+    // horizontals space out toward us, so the floor reads as depth rather than graph paper.
     ctx.save(); ctx.globalAlpha = 0.5;
-    const VPX = 240;
-    for (let i = -10; i <= 10; i++) {
-      const xTop = VPX + i * 13;
+    const cols = Math.ceil(RW / 24);
+    for (let i = -cols; i <= cols; i++) {
       ctx.strokeStyle = '#131a26'; ctx.lineWidth = 0.5;
-      ctx.beginPath(); ctx.moveTo(xTop, 150); ctx.lineTo(VPX + i * 46, 262); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(VPX + i * 13, WALL_H); ctx.lineTo(VPX + i * 46, ROOM_H); ctx.stroke();
     }
-    for (let k = 1, y = 150; y < 262; k++) { y = 150 + Math.pow(k, 1.55) * 3.1; px(ctx, 0, y, 480, 0.5, '#141c29'); }
+    for (let k = 1, y = WALL_H; y < ROOM_H; k++) { y = WALL_H + Math.pow(k, 1.55) * 3.1; px(ctx, 0, y, RW, 0.5, '#141c29'); }
     ctx.restore();
-    if (!S) { text(ctx, 'CONNECTING TO THE DESK', 240, 120, '#4b5563', 8, 'center'); return; }
+    if (!S) { text(ctx, 'CONNECTING TO THE DESK', VPX, WALL_H / 2, '#4b5563', 8, 'center'); return; }
 
     // The room is lit by its own screens: a wide cool pool from the wall display and two smaller
     // ones from the side boards. This is what stops the floor reading as a flat black rectangle.
-    glow(ctx, 240, 78, 210, '#1b3a6b', 0.55);
-    glow(ctx, 64, 105, 95, '#14304f', 0.30);
-    glow(ctx, 421, 90, 95, '#123d2a', 0.30);
+    glow(ctx, VPX, 58, Math.max(210, RW * 0.42), '#1b3a6b', 0.55);
+    glow(ctx, 64, 80, 95, '#14304f', 0.30);
+    glow(ctx, RW - 64, 70, 95, '#123d2a', 0.30);
 
     // ---- everything below is the MAKER desk, because the maker desk is the one that trades ----
-    // The boards used to show convergence pairs and convergence thresholds: the desk that measured
-    // no edge and correctly does nothing. Reading them told you nothing about whether the machine
-    // was working, which is the only question the floor should answer at a glance.
     const M = S.maker || {};
     const halted = S.halt || M.halted;
     // ---- status board (left) : the "is it working" answer, in words
     // The board is drawn here; its words are HTML laid over it (placeStatus), for the same reason
     // as the bubbles -- 5-unit canvas text was unreadable and its lines ran into each other.
-    // It runs the full height of the wall now that the emblem is gone (the page header has the logo).
-    panel(ctx, 8, 8, 112, 138, '#080c14', '#243047');
-    scanlines(ctx, 9, 9, 110, 136, 0.10);
-    statusBox = { x: 8, y: 8, w: 112, h: 138 };
+    panel(ctx, L.status.x, L.status.y, L.status.w, L.status.h, '#080c14', '#243047');
+    scanlines(ctx, L.status.x + 1, L.status.y + 1, L.status.w - 2, L.status.h - 2, 0.10);
+    statusBox = L.status;
 
     // ---- wall screen : the book, or whatever you clicked on
     // bezel, then glass. A single flat rect read as a hole in the wall; a lit top edge and a
-    // shadowed bottom make it an object hanging on it.
-    px(ctx, 134, 6, 212, 142, '#0a0e17');
-    px(ctx, 134, 6, 212, 1, '#2c3a55'); px(ctx, 134, 147, 212, 1, '#04060a');
-    px(ctx, 134, 6, 1, 142, '#222d42'); px(ctx, 345, 6, 1, 142, '#04060a');
-    px(ctx, 140, 12, 200, 130, '#050810');
-    const glass = ctx.createLinearGradient(0, 12, 0, 142);
+    // shadowed bottom make it an object hanging on it. It is as wide as the room allows now --
+    // the desk's own number is the biggest thing in the frame, which is what a scoreboard is for.
+    const ws = L.screen, gx = ws.x + 6, gy = ws.y + 6, gw = ws.w - 12, gh = ws.h - 12;
+    px(ctx, ws.x, ws.y, ws.w, ws.h, '#0a0e17');
+    px(ctx, ws.x, ws.y, ws.w, 1, '#2c3a55'); px(ctx, ws.x, ws.y + ws.h - 1, ws.w, 1, '#04060a');
+    px(ctx, ws.x, ws.y, 1, ws.h, '#222d42'); px(ctx, ws.x + ws.w - 1, ws.y, 1, ws.h, '#04060a');
+    px(ctx, gx, gy, gw, gh, '#050810');
+    const glass = ctx.createLinearGradient(0, gy, 0, gy + gh);
     glass.addColorStop(0, 'rgba(70,120,190,0.10)'); glass.addColorStop(1, 'rgba(70,120,190,0.02)');
-    ctx.fillStyle = glass; ctx.fillRect(140, 12, 200, 130);
+    ctx.fillStyle = glass; ctx.fillRect(gx, gy, gw, gh);
 
     // The screen's words are HTML (placeBoards): the canvas draws only the glass and its light.
     if (sel && sel.kind === 'market' && !sel.at && !(M.markets || []).some((x) => x.ticker === sel.key)) sel = null;
     if (sel && sel.kind === 'agent' && !S.agents.some((x) => x.key === sel.key)) sel = null;
-    wallBox = { x: 140, y: 12, w: 200, h: 130 };
-    scanlines(ctx, 140, 12, 200, 130, 0.16);
-    glow(ctx, 240, 30, 120, '#1e4e8a', 0.18);              // the screen lighting itself
-    px(ctx, 238, 148, 6, 6, '#141b28'); px(ctx, 232, 152, 18, 2, '#0d1420');   // wall mount
+    wallBox = { x: gx, y: gy, w: gw, h: gh };
+    scanlines(ctx, gx, gy, gw, gh, 0.16);
+    glow(ctx, VPX, gy + 16, Math.max(120, gw * 0.4), '#1e4e8a', 0.18);              // the screen lighting itself
+    px(ctx, VPX - 3, ws.y + ws.h, 6, 5, '#141b28'); px(ctx, VPX - 9, ws.y + ws.h + 3, 18, 2, '#0d1420');   // wall mount
 
     // ---- clock + the fill tape (right): boards drawn here, words laid over them (placeBoards)
-    panel(ctx, 370, 8, 102, 24, '#080c14', '#243047');
-    clockBox = { x: 370, y: 8, w: 102, h: 24 };
-    panel(ctx, 370, 36, 102, 110, '#060f0a', '#1e4a2c');
-    scanlines(ctx, 371, 37, 100, 108, 0.12);
-    tapeBox = { x: 370, y: 36, w: 102, h: 110 };
+    panel(ctx, L.clock.x, L.clock.y, L.clock.w, L.clock.h, '#080c14', '#243047');
+    clockBox = L.clock;
+    panel(ctx, L.tape.x, L.tape.y, L.tape.w, L.tape.h, '#060f0a', '#1e4a2c');
+    scanlines(ctx, L.tape.x + 1, L.tape.y + 1, L.tape.w - 2, L.tape.h - 2, 0.12);
+    tapeBox = L.tape;
 
     // desks + agents
     // advance the shared clock between SSE frames so the stagger animates smoothly
     S.now = Math.max(S.now, (S._rx || 0) + (performance.now() - (S._rxPerf || performance.now())));
-    const labels = [];
+    const labels = [], wires = [];
     S.agents.forEach((a, i) => {
-      if (!DESKS[i]) return;                 // more agents than seats: skip rather than throw
-      const [x, y] = DESKS[i];
+      const seat = L.seats[i];
+      if (!seat) return;                     // more agents than seats: skip rather than throw
+      const [x, y] = seat, Z = L.SEAT;
       const act = isActive(a);
       // the whole desk is the target, not just the blob -- a 14px character is not a click target
-      hits.push({ x: x - 4, y: y - 18, w: 72, h: 60, kind: 'agent', key: a.key });
+      hits.push({ x: x - 4 * Z, y: y - 18 * Z, w: 72 * Z, h: 60 * Z, kind: 'agent', key: a.key });
       const hot = (hover && hover.kind === 'agent' && hover.key === a.key);
       const picked = (sel && sel.kind === 'agent' && sel.key === a.key);
-      if (hot || picked) {
-        // a soft pool of the agent's own colour, so the highlight reads as light rather than a box
-        ctx.save(); ctx.globalAlpha = picked ? 0.16 : 0.09; px(ctx, x - 4, y - 18, 72, 60, a.color); ctx.restore();
-        if (picked) { px(ctx, x - 4, y - 18, 72, 1, a.color); px(ctx, x - 4, y + 41, 72, 1, a.color); }
-      }
-      // contact shadow first, so everything above it sits ON the floor rather than floating
-      shadow(ctx, x + 2, y + 26, 60, 10, 0.45);
-      // monitor: bezel, screen, and its own light thrown back onto the desk
-      px(ctx, x + 12, y - 16, 40, 24, '#1a2029'); px(ctx, x + 12, y - 16, 40, 1, '#2f3a4c');
-      px(ctx, x + 14, y - 14, 36, 20, '#04070c');
-      const bars = 9;
-      for (let j = 0; j < bars; j++) { const hgt = 3 + Math.round(hash(i, j, Math.floor(a.runs / 2)) * 12); px(ctx, x + 16 + j * 4, y + 4 - hgt, 3, hgt, act ? a.color : '#1e2836'); }
-      scanlines(ctx, x + 14, y - 14, 36, 20, 0.22);
-      if (act) glow(ctx, x + 32, y - 4, 30, a.color, 0.20);
-      px(ctx, x + 30, y + 8, 4, 3, '#1a2029');
-      if (act && Math.floor(t * 6) % 2) px(ctx, x + 47, y - 12, 2, 2, a.color);
       // Every animation means the desk's real job. They only light while that agent's
       // engine step is current, and KETT's order packet appears only for a real FILL.
       const latest = (S.log || []).find((e) => e.agent === a.key);
       const beat = (Math.sin(t * 7 + i * 1.7) + 1) / 2;
+      const bob = act ? Math.round(Math.sin(t * 9 + i) * 1.5) : 0;
+
+      // One desk is drawn once, at the origin, and the room decides how big it is. Everything from
+      // here to the restore() is in DESK units -- that is what lets the cast grow with the window
+      // without every coordinate below being rewritten.
+      ctx.save();
+      ctx.translate(x, y); ctx.scale(Z, Z);
+      if (hot || picked) {
+        // a soft pool of the agent's own colour, so the highlight reads as light rather than a box
+        ctx.save(); ctx.globalAlpha = picked ? 0.16 : 0.09; px(ctx, -4, -18, 72, 60, a.color); ctx.restore();
+        if (picked) { px(ctx, -4, -18, 72, 1, a.color); px(ctx, -4, 41, 72, 1, a.color); }
+      }
+      // contact shadow first, so everything above it sits ON the floor rather than floating
+      shadow(ctx, 2, 26, 60, 10, 0.45);
+      // monitor: bezel, screen, and its own light thrown back onto the desk
+      px(ctx, 12, -16, 40, 24, '#1a2029'); px(ctx, 12, -16, 40, 1, '#2f3a4c');
+      px(ctx, 14, -14, 36, 20, '#04070c');
+      for (let j = 0; j < 9; j++) { const hgt = 3 + Math.round(hash(i, j, Math.floor(a.runs / 2)) * 12); px(ctx, 16 + j * 4, 4 - hgt, 3, hgt, act ? a.color : '#1e2836'); }
+      scanlines(ctx, 14, -14, 36, 20, 0.22);
+      if (act) glow(ctx, 32, -4, 30, a.color, 0.20);
+      px(ctx, 30, 8, 4, 3, '#1a2029');
+      if (act && Math.floor(t * 6) % 2) px(ctx, 47, -12, 2, 2, a.color);
       if (act && a.key === 'HOLT') { // scanner sweep
         ctx.save(); ctx.strokeStyle = a.color; ctx.globalAlpha = 0.65; ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.arc(x + 32, y - 8, 12, -Math.PI / 2, -Math.PI / 2 + beat * Math.PI * 2); ctx.stroke(); ctx.restore();
+        ctx.beginPath(); ctx.arc(32, -8, 12, -Math.PI / 2, -Math.PI / 2 + beat * Math.PI * 2); ctx.stroke(); ctx.restore();
       }
       if (act && a.key === 'ILSA') { // incoming-flow pulses
-        for (let n = 0; n < 3; n++) { const r = 3 + ((beat * 12 + n * 4) % 12); ctx.save(); ctx.globalAlpha = 0.35 - n * 0.08; ctx.strokeStyle = a.color; ctx.beginPath(); ctx.arc(x + 32, y - 4, r, 0, Math.PI * 2); ctx.stroke(); ctx.restore(); }
-      }
-      if (act && a.key === 'BRAM') { // pricing comparison running to the shared wall
-        ctx.save(); ctx.globalAlpha = 0.7; ctx.strokeStyle = a.color; ctx.setLineDash([2, 2]); ctx.lineDashOffset = -t * 12;
-        ctx.beginPath(); ctx.moveTo(x + 32, y - 17); ctx.lineTo(238, 145); ctx.stroke(); ctx.restore();
-      }
-      if (act && a.key === 'KETT' && latest && latest.kind === 'FILL') { // confirmed order heads to the fill tape
-        const run = (t * 2.5) % 1, ox = x + 32 + (421 - (x + 32)) * run, oy = y - 6 + (70 - (y - 6)) * run;
-        px(ctx, ox - 1, oy - 1, 3, 3, latest.pnl != null && latest.pnl < 0 ? '#ef4444' : '#22c55e'); glow(ctx, ox, oy, 7, a.color, 0.7);
+        for (let n = 0; n < 3; n++) { const r = 3 + ((beat * 12 + n * 4) % 12); ctx.save(); ctx.globalAlpha = 0.35 - n * 0.08; ctx.strokeStyle = a.color; ctx.beginPath(); ctx.arc(32, -4, r, 0, Math.PI * 2); ctx.stroke(); ctx.restore(); }
       }
       if (act && a.key === 'RIGO') { // settlement ledger strokes
-        px(ctx, x + 17, y - 11, 8 + Math.round(beat * 8), 1, latest && latest.pnl < 0 ? '#ef4444' : '#22c55e');
-        px(ctx, x + 17, y - 8, 14 - Math.round(beat * 5), 1, '#5b6270');
+        px(ctx, 17, -11, 8 + Math.round(beat * 8), 1, latest && latest.pnl < 0 ? '#ef4444' : '#22c55e');
+        px(ctx, 17, -8, 14 - Math.round(beat * 5), 1, '#5b6270');
       }
       if (act && a.key === 'TESS') { // the risk beacon always has a state
-        const risk = halted ? '#ef4444' : '#ec4899'; px(ctx, x + 4, y + 3, 3, 3, risk); glow(ctx, x + 5, y + 4, 8, risk, 0.5 + beat * 0.3);
+        const risk = halted ? '#ef4444' : '#ec4899'; px(ctx, 4, 3, 3, 3, risk); glow(ctx, 5, 4, 8, risk, 0.5 + beat * 0.3);
       }
       if (act && a.key === 'MAKR') { // two-sided maker quotes blink independently
-        px(ctx, x + 18, y - 12, 4, 2, '#22c55e'); px(ctx, x + 42, y - 12, 4, 2, '#ef4444');
-        if (Math.floor(t * 5) % 2) px(ctx, x + 26, y - 10, 12, 1, '#a855f7');
+        px(ctx, 18, -12, 4, 2, '#22c55e'); px(ctx, 42, -12, 4, 2, '#ef4444');
+        if (Math.floor(t * 5) % 2) px(ctx, 26, -10, 12, 1, '#a855f7');
       }
       // desk: lit top edge, dark front face, legs
-      px(ctx, x, y + 11, 64, 9, '#33291d'); px(ctx, x, y + 11, 64, 1, '#6b5942'); px(ctx, x, y + 19, 64, 1, '#1b150e');
-      px(ctx, x + 2, y + 20, 4, 8, '#221b13'); px(ctx, x + 58, y + 20, 4, 8, '#221b13');
-      px(ctx, x + 24, y + 30, 16, 5, '#12151b'); px(ctx, x + 22, y + 24, 20, 6, '#1a1e27'); px(ctx, x + 22, y + 24, 20, 1, '#28303d');
+      px(ctx, 0, 11, 64, 9, '#33291d'); px(ctx, 0, 11, 64, 1, '#6b5942'); px(ctx, 0, 19, 64, 1, '#1b150e');
+      px(ctx, 2, 20, 4, 8, '#221b13'); px(ctx, 58, 20, 4, 8, '#221b13');
+      px(ctx, 24, 30, 16, 5, '#12151b'); px(ctx, 22, 24, 20, 6, '#1a1e27'); px(ctx, 22, 24, 20, 1, '#28303d');
       // blob agent (sits in front of the desk, bobs when active)
-      const bob = act ? Math.round(Math.sin(t * 9 + i) * 1.5) : 0;
-      const bx = x + 32, by = y + 22 + bob;
-      shadow(ctx, bx - 7, by + 3, 14, 5, 0.35);
-      ctx.fillStyle = a.color; ctx.beginPath(); ctx.roundRect(bx - 7, by - 8, 14, 13, [6, 6, 5, 5]); ctx.fill();
+      const by = 22 + bob;
+      shadow(ctx, 25, by + 3, 14, 5, 0.35);
+      ctx.fillStyle = a.color; ctx.beginPath(); ctx.roundRect(25, by - 8, 14, 13, [6, 6, 5, 5]); ctx.fill();
       ctx.save(); ctx.globalAlpha = 0.35; ctx.fillStyle = '#fff';   // rim light off the screens
-      ctx.beginPath(); ctx.roundRect(bx - 7, by - 8, 14, 4, [6, 6, 0, 0]); ctx.fill(); ctx.restore();
-      if (act) glow(ctx, bx, by - 2, 16, a.color, 0.22);
+      ctx.beginPath(); ctx.roundRect(25, by - 8, 14, 4, [6, 6, 0, 0]); ctx.fill(); ctx.restore();
+      if (act) glow(ctx, 32, by - 2, 16, a.color, 0.22);
       const blink = Math.floor(t * 1.3 + i * 0.7) % 6 === 0 && ((t * 1.3 + i * 0.7) % 1) < 0.18;
-      if (blink) { px(ctx, bx - 4, by - 3, 3, 1, '#fff'); px(ctx, bx + 1, by - 3, 3, 1, '#fff'); }
-      else { px(ctx, bx - 4, by - 4, 3, 3, '#fff'); px(ctx, bx + 1, by - 4, 3, 3, '#fff'); px(ctx, bx - 3, by - 3, 1, 1, '#111'); px(ctx, bx + 2, by - 3, 1, 1, '#111'); }
+      if (blink) { px(ctx, 28, by - 3, 3, 1, '#fff'); px(ctx, 33, by - 3, 3, 1, '#fff'); }
+      else { px(ctx, 28, by - 4, 3, 3, '#fff'); px(ctx, 33, by - 4, 3, 3, '#fff'); px(ctx, 29, by - 3, 1, 1, '#111'); px(ctx, 34, by - 3, 1, 1, '#111'); }
+      ctx.restore();
+
+      // The two animations that cross the room belong to the ROOM, not to a desk: they are drawn
+      // after every seat so a later desk cannot paint over them.
+      if (act && a.key === 'BRAM') wires.push({ kind: 'wire', color: a.color, fx: x + 32 * Z, fy: y - 17 * Z, tx: VPX, ty: ws.y + ws.h });
+      if (act && a.key === 'KETT' && latest && latest.kind === 'FILL') {
+        wires.push({ kind: 'packet', color: a.color, fx: x + 32 * Z, fy: y - 6 * Z, tx: L.tape.x + L.tape.w / 2, ty: L.tape.y + 30, down: latest.pnl != null && latest.pnl < 0 });
+      }
       // where this agent's name and speech bubble go; placeFx lays them over the room as HTML
-      labels.push({ key: a.key, bx, by, deskY: y, back: i < 3, color: a.color, act, lit: hot || picked, note: a.note });
+      labels.push({ key: a.key, bx: x + 32 * Z, by: y + (22 + bob) * Z, top: y - 18 * Z, foot: y + 31 * Z,
+        back: i < 3, color: a.color, act, lit: hot || picked, note: a.note, w: 64 * Z });
     });
+    for (const w of wires) {
+      if (w.kind === 'wire') {
+        ctx.save(); ctx.globalAlpha = 0.7; ctx.strokeStyle = w.color; ctx.setLineDash([2, 2]); ctx.lineDashOffset = -t * 12;
+        ctx.beginPath(); ctx.moveTo(w.fx, w.fy); ctx.lineTo(w.tx, w.ty); ctx.stroke(); ctx.restore();
+      } else {
+        const run = (t * 2.5) % 1, ox = w.fx + (w.tx - w.fx) * run, oy = w.fy + (w.ty - w.fy) * run;
+        px(ctx, ox - 1, oy - 1, 3, 3, w.down ? '#ef4444' : '#22c55e'); glow(ctx, ox, oy, 7, w.color, 0.7);
+      }
+    }
     // furniture
-    shadow(ctx, 438, 216, 30, 10, 0.5);
-    px(ctx, 440, 162, 26, 60, '#0f131b'); px(ctx, 440, 162, 26, 1, '#2a3446'); px(ctx, 440, 162, 1, 60, '#1e2635');
-    for (let i = 0; i < 6; i++) { px(ctx, 443, 166 + i * 9, 20, 6, '#06090e'); const on = (Math.floor(t * 4) + i) % 3; px(ctx, 459, 168 + i * 9, 2, 2, on ? '#22c55e' : '#0f3a1f'); if (on) glow(ctx, 460, 169 + i * 9, 5, '#22c55e', 0.5); }
+    const rk = L.rack;
+    shadow(ctx, rk.x, rk.y + rk.h - 6, 30, 10, 0.5);
+    px(ctx, rk.x, rk.y, rk.w, rk.h, '#0f131b'); px(ctx, rk.x, rk.y, rk.w, 1, '#2a3446'); px(ctx, rk.x, rk.y, 1, rk.h, '#1e2635');
+    for (let i = 0; i < 6; i++) {
+      px(ctx, rk.x + 3, rk.y + 4 + i * 9, 20, 6, '#06090e');
+      const on = (Math.floor(t * 4) + i) % 3;
+      px(ctx, rk.x + 19, rk.y + 6 + i * 9, 2, 2, on ? '#22c55e' : '#0f3a1f');
+      if (on) glow(ctx, rk.x + 20, rk.y + 7 + i * 9, 5, '#22c55e', 0.5);
+    }
 
     // Names and speech bubbles are no longer painted into the canvas. At 6 drawing units they came
     // out around 9px on a laptop and could not be read from a chair. They are HTML now (placeFx),
@@ -408,21 +476,21 @@
 
     // vignette: pulls the eye to the middle of the board and hides the hard canvas corners
     ctx.save();
-    const vig = ctx.createRadialGradient(240, 130, 90, 240, 130, 320);
+    const vig = ctx.createRadialGradient(VPX, ROOM_H * 0.48, RW * 0.2, VPX, ROOM_H * 0.48, RW * 0.66);
     vig.addColorStop(0, 'transparent'); vig.addColorStop(1, 'rgba(0,0,0,0.55)');
-    ctx.fillStyle = vig; ctx.fillRect(0, 0, 480, ROOM_H);
+    ctx.fillStyle = vig; ctx.fillRect(0, 0, RW, ROOM_H);
     ctx.restore();
 
     // P&L board, standing on the floor left of the desks (after the vignette, which would bury it)
-    panel(ctx, 4, 153, 124, 105, '#080c14', '#243047');
-    chartBox = { x: 5, y: 154, w: 122, h: 103 };   // the chart itself is HTML (drawChart)
+    panel(ctx, L.chart.x, L.chart.y, L.chart.w, L.chart.h, '#080c14', '#243047');
+    chartBox = { x: L.chart.x + 1, y: L.chart.y + 1, w: L.chart.w - 2, h: L.chart.h - 2 };
 
     // a dead feed greys the room out entirely: no chance of reading a frozen board as a live one
     if (stale()) {
-      ctx.save(); ctx.globalAlpha = 0.55; ctx.fillStyle = '#05070c'; ctx.fillRect(0, 0, 480, ROOM_H); ctx.restore();
-      px(ctx, 150, 122, 180, 16, '#1a0d0f'); px(ctx, 150, 122, 180, 1, '#ef4444');
-      text(ctx, 'NO SIGNAL FROM THE DESK', 240, 126, '#f87171', 7, 'center');
-      text(ctx, 'this page is showing the last state it received', 240, 133, '#7f1d1d', 5, 'center');
+      ctx.save(); ctx.globalAlpha = 0.55; ctx.fillStyle = '#05070c'; ctx.fillRect(0, 0, RW, ROOM_H); ctx.restore();
+      px(ctx, VPX - 90, WALL_H - 4, 180, 16, '#1a0d0f'); px(ctx, VPX - 90, WALL_H - 4, 180, 1, '#ef4444');
+      text(ctx, 'NO SIGNAL FROM THE DESK', VPX, WALL_H, '#f87171', 7, 'center');
+      text(ctx, 'this page is showing the last state it received', VPX, WALL_H + 7, '#7f1d1d', 5, 'center');
     }
   }
 
@@ -440,6 +508,28 @@
   const cap = (s) => { const t = String(s || '').trim(); return t.charAt(0).toUpperCase() + t.slice(1); };
   const cc = (p) => `${+(p * 100).toFixed(1)}¢`;
   const move = (s) => `${s.replace('-', '−').replace(/\.0$/, '')}¢`;
+
+  // Categories as glyphs. The desk counts its board by category -- "42 sports, 6 elections, 2 crypto,
+  // 2 climate and weather" -- and from a chair that is a hedge of words hiding three numbers. One
+  // emoji per category leaves the counts standing on their own. The word is still there for a screen
+  // reader and on hover, so nothing is lost by not knowing a glyph.
+  const CAT_EMOJI = {
+    sports: '⚽', fed: '🏦', economics: '📊', financials: '💵', finance: '💵',
+    crypto: '🪙', politics: '🏛️', elections: '🗳️', mentions: '💬',
+    entertainment: '🎬', culture: '🎭', music: '🎵', awards: '🏆',
+    'science and technology': '🔬', science: '🔬', technology: '💻', tech: '💻',
+    'climate and weather': '🌦️', climate: '🌦️', weather: '🌦️',
+    commodities: '🛢️', companies: '🏢', health: '🏥', world: '🌍',
+    geopolitics: '🌐', transportation: '✈️', other: '🗂️',
+  };
+  // Only the shapes the desk actually writes a category in: a count ("12 sports") and a whale's
+  // leaderboard rank ("#6 in sports this day"). A market question is left alone -- "Will crypto end
+  // the year above $100k?" is a market, not a category, and should read as one.
+  const CAT_RE = new RegExp(`(\\d+ |#\\d+ in )(${Object.keys(CAT_EMOJI).sort((a, b) => b.length - a.length).join('|')})\\b`, 'g');
+  // Runs on already-escaped html: a category name is plain lowercase letters, so a match can never
+  // land inside a tag or an entity, and the span it inserts is ours.
+  const cats = (html) => String(html).replace(CAT_RE, (m, pre, w) =>
+    `${pre}<span class="cat" role="img" aria-label="${w}" title="${w}">${CAT_EMOJI[w]}</span>`);
   const marketName = (tk) => { const m = byTicker(S.maker || {}, tk); return (m && (OUTCOME(m) || QUESTION(m))) || tk.replace(/^KX/, ''); };
 
   // One log entry -> { text, sub, level }. level: trade (money moved), warn (needs a look),
@@ -696,25 +786,53 @@
     const list = $('feedlist'), top = list.scrollTop;
     list.innerHTML = rows.map(({ e, s }) => {
       const pl = e.kind === 'SETTLE' && e.pnl != null ? `<span class="fp ${e.pnl >= 0 ? 'pos' : 'neg'}">${signed(e.pnl)}</span>` : '';
-      return `<li class="lv-${s.level}"><span class="ft">${hhmm(e.t)}</span><span class="fa" style="color:${agentColor(e.agent)}">${e.agent}</span>` +
-        `<span class="fs">${esc(s.text)}${s.sub && s.level !== 'quiet' ? `<small>${esc(s.sub)}</small>` : ''}</span>${pl}</li>`;
+      return `<li class="lv-${s.level}" style="--a:${agentColor(e.agent)}"><span class="ft">${hhmm(e.t)}</span><span class="fa" style="color:${agentColor(e.agent)}">${e.agent}</span>` +
+        `<span class="fs">${cats(esc(s.text))}${s.sub && s.level !== 'quiet' ? `<small>${cats(esc(s.sub))}</small>` : ''}</span>${pl}</li>`;
     }).join('') || '<li class="lv-quiet"><span class="fs">Waiting for the first desk cycle</span></li>';
     list.scrollTop = top;
   }
 
   // Every animation frame: put the names, bubbles and feed where the room currently is on screen.
   const nodes = {};
+  // Who is talking. The floor used to give all seven bots a bubble at once, including one for the
+  // routine note each desk carries every cycle, and at full width those seven boxes covered the
+  // room -- the screen they were talking about, each other, and the bots themselves. A trading
+  // floor on television does not caption seven people at once. It mics one.
+  //
+  // So: one bubble, one line, and only for something that actually happened. The running commentary
+  // lives in the feed below the room, where a list belongs, and the desk's standing note lives on
+  // the status board, where it already was.
+  const RANK = { warn: 3, trade: 2, info: 1, quiet: 0 };
+  let speaking = null;                     // { key, sig } -- held until something louder arrives
   function placeFx() {
     const fx = $('fx');
     if (!S || !seats.length) return;
     const k = floorBox.scale, X = (x) => floorBox.ox + x * k, Y = (y) => floorBox.oy + y * k;
-    const fs = Math.max(11, Math.min(15, k * 5.4));
+    const fs = Math.max(12, Math.min(17, k * 6));
     fx.style.fontSize = `${fs}px`;
     fx.classList.toggle('stale', !!stale());
     placeStatus(X, Y, k);
     placeBoards(X, Y, k);
 
     const now = Date.now(), al = alerts();
+    // what each seat WOULD say, if it were the one holding the microphone
+    const lines = {};
+    for (const st of seats) {
+      const ev = said[st.key] && said[st.key].until > now ? said[st.key] : null;
+      const nAl = al.filter((a) => a.agent === st.key && !a.kept).length;
+      const b = nAl ? { text: `${nAl} problem${nAl > 1 ? 's' : ''} to look at`, level: 'warn' }
+        : ev && ev.level !== 'quiet' ? ev : null;
+      if (b) lines[st.key] = b;
+    }
+    // the loudest line wins, and keeps the floor until it expires or something louder lands
+    let best = null;
+    for (const key of Object.keys(lines)) {
+      const r = RANK[lines[key].level] || 0;
+      if (!best || r > best.r) best = { key, r };
+    }
+    if (speaking && !lines[speaking.key]) speaking = null;
+    if (best && (!speaking || (RANK[lines[best.key].level] || 0) > (RANK[lines[speaking.key].level] || 0))) speaking = { key: best.key };
+
     for (const st of seats) {
       let n = nodes[st.key];
       if (!n) {
@@ -722,35 +840,38 @@
         n.name.className = 'nametag'; n.name.textContent = st.key;
         $('bubbles').append(n.name, n.bub);
       }
-      // name: under the bot in the front row; on the wall below the screen for the back row
-      Object.assign(n.name.style, { left: `${X(st.bx)}px`, top: `${Y(st.back ? st.deskY - 7 : st.deskY + 35)}px`, color: st.lit || st.act ? st.color : '' });
+      const b = speaking && speaking.key === st.key ? lines[st.key] : null;
+      // name: on the wall above the back row's monitors, on the floor under the front row's bots.
+      // A bubble carries its own name badge, so the tag steps aside rather than fighting it.
+      Object.assign(n.name.style, { left: `${X(st.bx)}px`, top: `${Y(st.back ? st.top - 11 : st.foot)}px`, color: st.lit || st.act ? st.color : '' });
       n.name.classList.toggle('on', st.act || st.lit);
+      n.name.hidden = !!(b && st.back);
 
-      // what to say: a fresh event beats a standing alert beats the desk's own running note
-      const ev = said[st.key] && said[st.key].until > now ? said[st.key] : null;
-      const alarm = al.find((a) => a.agent === st.key && !a.kept);
-      // the standing alert stays short here -- it hangs over the wall screen, and the title bar has the detail
-      const b = ev || (alarm && { text: ((n) => `⚠ ${n} problem${n > 1 ? 's' : ''}`)(al.filter((a) => a.agent === st.key && !a.kept).length), level: 'warn' })
-        || (st.act && st.note ? { text: cap(st.note), level: 'quiet' } : null);
       if (!b) { n.bub.hidden = true; continue; }
-      const html = `${esc(b.text)}${b.sub && b.level !== 'quiet' ? `<small>${esc(b.sub)}</small>` : ''}`;
-      // Back row speaks upward, over the bottom of the wall screen. The front row cannot -- the back
-      // row's bots sit right above its monitors -- so it speaks sideways, across its own desk.
-      const maxw = Math.max(150, Math.min(260, (st.back ? 96 : 70) * k));
-      const flip = !st.back && X(480) - X(st.bx + 10) < maxw;
+      // One line. A sentence that needs two is a sentence for the feed, which has every word of it.
+      // The back row speaks up into the clear strip between the boards and the floor -- the boards
+      // stop short of it for exactly this reason, and the strip is one line deep. So the sentence is
+      // cut to what one line of THIS width holds, not to a fixed number of characters: a bubble that
+      // wraps is a bubble standing on the screen it is talking about.
+      const maxw = Math.min(440, Math.max(200, st.w * k * 2.1));
+      const room = Math.max(22, Math.floor(maxw / (fs * 0.62)) - st.key.length - 2);
+      // a cut on a word boundary can leave the line ending on a word that was going somewhere
+      const line = clip(b.text, room).replace(/[\s·@:,+-]+$/, '');
+      const html = `<b class="who" style="color:${st.color}">${esc(st.key)}</b>${cats(esc(line))}`;
+      const flip = !st.back && X(RW) - X(st.bx) < maxw * 0.7;
       const cls = `bub lv-${b.level} ${st.back ? 'up' : flip ? 'side flip' : 'side'}`;
       if (html !== n.html || n.cls !== cls) {
         n.bub.innerHTML = html; n.cls = cls;
         n.bub.className = cls;
-        if (ev && html !== n.html) { void n.bub.offsetWidth; n.bub.classList.add('pop'); }   // restart the pop animation
+        if (html !== n.html) { void n.bub.offsetWidth; n.bub.classList.add('pop'); }   // restart the pop animation
         n.html = html;
       }
       n.bub.hidden = false;
       n.bub.style.setProperty('--c', st.color);
       n.bub.style.maxWidth = `${maxw}px`;
-      if (st.back) Object.assign(n.bub.style, { left: `${X(st.bx)}px`, right: '', top: `${Y(st.deskY - 19)}px` });
-      else if (flip) Object.assign(n.bub.style, { left: '', right: `${fx.clientWidth - X(st.bx - 10)}px`, top: `${Y(st.deskY + 6)}px` });
-      else Object.assign(n.bub.style, { left: `${X(st.bx + 10)}px`, right: '', top: `${Y(st.deskY + 6)}px` });
+      if (st.back) Object.assign(n.bub.style, { left: `${X(st.bx)}px`, right: '', top: `${Y(st.top - 5)}px` });
+      else if (flip) Object.assign(n.bub.style, { left: '', right: `${fx.clientWidth - X(st.bx - 12)}px`, top: `${Y(st.by - 10)}px` });
+      else Object.assign(n.bub.style, { left: `${X(st.bx + 12)}px`, right: '', top: `${Y(st.by - 10)}px` });
     }
   }
 
@@ -764,8 +885,6 @@
     el.classList.toggle('compact', statusBox.h * k < 150);
     const halted = S.halt || M.halted, working = !halted && M.quoting > 0, gone = stale();
     const [state, cls] = gone ? ['No signal', 'bad'] : halted ? ['Stopped', 'bad'] : working ? ['Working', 'good'] : ['Idle', 'warn'];
-    const latest = (S.log || [])[0];
-    const now = gone ? 'The desk stopped answering' : halted ? `Trading stopped: ${halted}` : latest ? say(latest).text : 'Waiting for the first desk cycle';
     const nHeld = (M.markets || []).filter((m) => m.inv).length;
     const lf = M.lastFill;
     // the ledger survives a restart but the last-fill detail does not; say which
@@ -773,8 +892,8 @@
       : M.fills ? `${M.fills} fills before the last restart` : 'No fills yet';
     const feed = M.feed || {};
     const html = `<div class="st ${cls}"><i></i>${state}</div>` +
-      `<p class="now">${esc(now)}</p>` +
-      `<p class="extra">${working ? `Quoting ${M.quoting} markets` : 'Not quoting'} · ${nHeld ? `holding ${M.inv} contracts in ${nHeld}` : 'nothing held'}</p>` +
+      (gone || halted ? `<p class="now">${esc(gone ? 'The desk stopped answering' : `Trading stopped: ${halted}`)}</p>` : '') +
+      `<p class="now">${working ? `Quoting ${M.quoting} markets` : 'Not quoting'} · ${nHeld ? `holding ${M.inv} contracts in ${nHeld}` : 'nothing held'}</p>` +
       `<p>${esc(fill)}</p>` +
       // the taker's reach: markets matched on both venues, across every category
       (S.anyMarket && S.anyMarket.enabled ? `<p class="extra">Both venues: ${S.pairCount || 0} matched · ${S.anyMarket.rulesVerified || 0} scanned pairs cleared to trade, ${S.anyMarket.watchOnly || 0} watched</p>` : '') +
@@ -849,7 +968,7 @@
     const col = up ? '#22c55e' : '#ef4444';
     const line = pts.map((p, i) => `${i ? 'L' : 'M'}${X(p.t).toFixed(1)},${Y(p.v).toFixed(1)}`).join('');
     const zy = Y(0).toFixed(1);
-    let g = `<defs><linearGradient id="cg-${big ? 'b' : 's'}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${col}" stop-opacity=".32"/><stop offset="1" stop-color="${col}" stop-opacity="0"/></linearGradient></defs>`;
+    let g = `<defs><linearGradient id="cg-${big ? 'b' : 's'}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${col}" stop-opacity=".18"/><stop offset="1" stop-color="${col}" stop-opacity="0"/></linearGradient></defs>`;
     if (chart.band) {
       const a = Math.min(chart.band[0], chart.band[1]), b = Math.max(chart.band[0], chart.band[1]);
       g += `<rect x="${X(a).toFixed(1)}" y="0" width="${Math.max(2, X(b) - X(a)).toFixed(1)}" height="400" fill="#5ec8e0" fill-opacity=".12"/>`;
@@ -937,23 +1056,29 @@
   let wallKey = '', tapeKey = '', clockTxt = '', wallAll = false;
   const sideTag = (inv) => `<span class="sd ${inv > 0 ? 'long' : 'short'}">${inv > 0 ? 'LONG' : 'SHORT'} ${Math.abs(inv)}</span>`;
 
+  // The screen used to be a tall-ish rectangle and the home view was a column: number, then a list
+  // under it. It is a wide, shallow band now, so on a wide room the number takes a side and the
+  // book takes the rest -- which is the only reason five positions fit where three did.
+  let wallWide = false;
   function wallHome(M) {
     const net = (M.equity ?? M.initial ?? 0) - (M.initial ?? 0);
     const held = (M.markets || []).filter((m) => m.inv)
       .map((m) => ({ m, pl: m.mark - m.cost }))
       .sort((a, b) => Math.abs(b.pl) - Math.abs(a.pl) || Math.abs(b.m.inv) - Math.abs(a.m.inv));
     const rows = wallAll ? held : held.slice(0, WALL_ROWS);
+    const num = `<div class="wbig ${net >= 0 ? 'pos' : 'neg'}">${signed(net)}</div>` +
+      `<div class="wsub">if everything closed now<br>banked ${signed(M.realized || 0)} · holding ${M.inv || 0} contracts</div>`;
     let h = `<div class="wh"><span>Maker desk</span><span>${M.fills || 0} fills</span></div>`;
-    h += `<div class="wbig ${net >= 0 ? 'pos' : 'neg'}">${signed(net)}</div>`;
-    h += `<div class="wsub">if everything closed now · banked ${signed(M.realized || 0)} · holding ${M.inv || 0} contracts</div>`;
-    if (!held.length) h += `<p class="wempty">Nothing held. Quoting ${M.quoting || 0} markets and waiting to be traded against.</p>`;
-    else {
-      h += `<div class="wlist${wallAll ? ' all' : ''}">${rows.map(({ m, pl }) => `<button class="wr" data-m="${esc(m.ticker)}" title="${esc(m.title || '')}">` +
-        `<span class="nm">${esc(OUTCOME(m) || QUESTION(m))}${OUTCOME(m) && QUESTION(m) ? `<i> · ${esc(QUESTION(m))}</i>` : ''}</span>${sideTag(m.inv)}<span class="pl ${pl >= 0 ? 'pos' : 'neg'}">${signed(pl)}</span></button>`).join('')}</div>`;
-      h += held.length > WALL_ROWS
-        ? `<button class="wmore" data-all="1">${wallAll ? 'Show fewer' : `Biggest ${WALL_ROWS} of ${held.length} positions · show all`}</button>`
-        : `<div class="wfoot">${held.length} position${held.length === 1 ? '' : 's'} · click one for details</div>`;
+    if (!held.length) {
+      h += num + `<p class="wempty">Nothing held. Quoting ${M.quoting || 0} markets and waiting to be traded against.</p>`;
+      return h;
     }
+    const list = `<div class="wlist${wallAll ? ' all' : ''}">${rows.map(({ m, pl }) => `<button class="wr" data-m="${esc(m.ticker)}" title="${esc(m.title || '')}">` +
+      `<span class="nm">${esc(OUTCOME(m) || QUESTION(m))}${OUTCOME(m) && QUESTION(m) ? `<i> · ${esc(QUESTION(m))}</i>` : ''}</span>${sideTag(m.inv)}<span class="pl ${pl >= 0 ? 'pos' : 'neg'}">${signed(pl)}</span></button>`).join('')}</div>`;
+    const foot = held.length > WALL_ROWS || wallAll
+      ? `<button class="wmore" data-all="1">${wallAll ? 'Show fewer' : `Biggest ${WALL_ROWS} of ${held.length} positions · show all`}</button>`
+      : `<div class="wfoot">${held.length} position${held.length === 1 ? '' : 's'} · click one for details</div>`;
+    h += `<div class="wbody">${`<div class="wnum">${num}</div>`}<div class="wbook">${list}${foot}</div></div>`;
     return h;
   }
 
@@ -995,7 +1120,7 @@
     }
     return `<div class="wh"><button class="wback" data-back="1">‹ Back</button><span style="color:${a.color}">${esc(a.key)} · ${esc(cap(String(a.role).toLowerCase()))}</span></div>` +
       `<div class="wq">${esc(cap(ROLE[a.key] || ''))}</div>` +
-      (lines.length ? `<ol class="wlog">${lines.map(({ e, sx }) => `<li class="lv-${sx.level}"><span class="t">${hhmm(e.t)}</span><span>${esc(sx.text)}</span></li>`).join('')}</ol>`
+      (lines.length ? `<ol class="wlog">${lines.map(({ e, sx }) => `<li class="lv-${sx.level}"><span class="t">${hhmm(e.t)}</span><span>${cats(esc(sx.text))}</span></li>`).join('')}</ol>`
         : `<p class="wempty">Nothing logged yet.</p>`);
   }
 
@@ -1007,7 +1132,11 @@
       const el = $('wall');
       const wallFs = Math.max(10, Math.min(17, k * 5.6));
       fit(el, wallBox, null);             // type size is set on rebuild, where fitText may shrink it
-      const key = `${frameSeq}|${sel ? sel.kind + sel.key + (sel.at || '') : ''}|${wallAll}|${Math.round(wallBox.w * k)}`;
+      // two columns need real width, not just a wide ratio: beside the Ask drawer the screen keeps
+      // its shape but loses a third of its pixels, and 26% of a narrow screen is not a column.
+      wallWide = wallBox.w > wallBox.h * 2.3 && wallBox.w * k > 560;
+      el.classList.toggle('wide', wallWide);
+      const key = `${frameSeq}|${sel ? sel.kind + sel.key + (sel.at || '') : ''}|${wallAll}|${wallWide}|${Math.round(wallBox.w * k)}`;
       if (key !== wallKey) {
         const list = el.querySelector('.wlist, .wlog'), top = list && key.split('|')[1] === wallKey.split('|')[1] ? list.scrollTop : 0;
         wallKey = key;
