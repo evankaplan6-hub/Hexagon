@@ -112,11 +112,20 @@
     if (L && L.RW === RW) return L;
     // the desks live between the P&L stand on the left and the server rack on the right
     const bandL = 132, bandR = RW - 46, band = bandR - bandL, gap = 12;
-    // Four desks across the front row say how big a desk MAY be side to side; the wall's height says
-    // how big it may be before the two rows climb into each other. The smaller of the two wins, so
-    // the cast grows with the window and never overlaps itself.
+    // How big a desk MAY be is a question about HEIGHT, not width. The back row, the front row and
+    // the front row's nametag all have to fit in the 150 units under the wall, and 1.45 is where the
+    // nametag reaches the floor line -- so past a certain width the desks stop growing no matter how
+    // much room there is. Widening the room therefore cannot make the cast bigger. What it can do is
+    // spread it out: on a 2.8:1 window the desks used to take 70% of the floor they stand on and
+    // huddle in the middle of an empty plain. The width the seats cannot use goes into the gap
+    // between them instead, up to half a desk, and then stops -- seven desks scattered to the far
+    // corners is the same mistake in the other direction.
     const SEAT = Math.max(0.95, Math.min(1.45, (band - 3 * gap) / 256));
-    const dw = 64 * SEAT, pitch = dw + gap;
+    const dw = 64 * SEAT, pitch = Math.min(dw * 1.5, Math.max(dw + gap, (band - dw) / 3));
+    // The back row sits a little tighter than the front, for perspective -- but 0.94 of a pitch that
+    // is already at its minimum is not perspective, it is two desks touching: the back row was down
+    // to a 6-unit gap where the front had 12. The nudge only applies to a pitch that can afford it.
+    const backPitch = Math.max(dw + gap, pitch * 0.94);
     const backY = Math.round(WALL_H + 4 + 16 * SEAT), frontY = Math.round(backY + 43 * SEAT);
     // centre the row on the room, then slide it inside the band if it does not fit there
     const row = (n, y, p) => {
@@ -126,7 +135,12 @@
     };
     L = {
       RW, SEAT, dw, pitch,
-      seats: [...row(3, backY, pitch * 0.94), ...row(4, frontY, pitch)],
+      seats: [...row(3, backY, backPitch), ...row(4, frontY, pitch)],
+      // A desk's cell: its highlight and its click target. 72 desk-units was hard-coded and the back
+      // row's pitch is smaller than that, so the two boxes overlapped -- the hover pool bled onto the
+      // neighbour's desk and a click in the overlap picked whichever bot was tested last. Never wider
+      // than the row it is in.
+      cell: [0, 1, 2].map(() => Math.min(72, backPitch / SEAT - 2)).concat([0, 1, 2, 3].map(() => Math.min(72, pitch / SEAT - 2))),
       status: { x: 8, y: 6, w: SIDE_W, h: WALL_H - 26 },
       clock:  { x: RW - SIDE_W - 8, y: 6, w: SIDE_W, h: 22 },
       tape:   { x: RW - SIDE_W - 8, y: 32, w: SIDE_W, h: WALL_H - 52 },
@@ -375,8 +389,10 @@
       if (!seat) return;                     // more agents than seats: skip rather than throw
       const [x, y] = seat, Z = L.SEAT;
       const act = isActive(a);
-      // the whole desk is the target, not just the blob -- a 14px character is not a click target
-      hits.push({ x: x - 4 * Z, y: y - 18 * Z, w: 72 * Z, h: 60 * Z, kind: 'agent', key: a.key });
+      // the whole desk is the target, not just the blob -- a 14px character is not a click target,
+      // but the cell is bounded by the row's pitch so two neighbours can never both own a point
+      const cw = L.cell[i], cx = (64 - cw) / 2;
+      hits.push({ x: x + cx * Z, y: y - 18 * Z, w: cw * Z, h: 60 * Z, kind: 'agent', key: a.key });
       const hot = (hover && hover.kind === 'agent' && hover.key === a.key);
       const picked = (sel && sel.kind === 'agent' && sel.key === a.key);
       // Every animation means the desk's real job. They only light while that agent's
@@ -392,8 +408,8 @@
       ctx.translate(x, y); ctx.scale(Z, Z);
       if (hot || picked) {
         // a soft pool of the agent's own colour, so the highlight reads as light rather than a box
-        ctx.save(); ctx.globalAlpha = picked ? 0.16 : 0.09; px(ctx, -4, -18, 72, 60, a.color); ctx.restore();
-        if (picked) { px(ctx, -4, -18, 72, 1, a.color); px(ctx, -4, 41, 72, 1, a.color); }
+        ctx.save(); ctx.globalAlpha = picked ? 0.16 : 0.09; px(ctx, cx, -18, cw, 60, a.color); ctx.restore();
+        if (picked) { px(ctx, cx, -18, cw, 1, a.color); px(ctx, cx, 41, cw, 1, a.color); }
       }
       // contact shadow first, so everything above it sits ON the floor rather than floating
       shadow(ctx, 2, 26, 60, 10, 0.45);
@@ -405,12 +421,16 @@
       if (act) glow(ctx, 32, -4, 30, a.color, 0.20);
       px(ctx, 30, 8, 4, 3, '#1a2029');
       if (act && Math.floor(t * 6) % 2) px(ctx, 47, -12, 2, 2, a.color);
+      // The sweep and the pulses are things happening ON a screen, so they have to fit on it. The
+      // glass is 36x20 at (14,-14); a radius-12 arc centred at -8 needed 24 of those 20 units and
+      // climbed straight out of the bezel onto the desk behind -- from a chair it read as a stray
+      // line lying across two desks. Both are centred on the glass now and sized to stay inside it.
       if (act && a.key === 'HOLT') { // scanner sweep
         ctx.save(); ctx.strokeStyle = a.color; ctx.globalAlpha = 0.65; ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.arc(32, -8, 12, -Math.PI / 2, -Math.PI / 2 + beat * Math.PI * 2); ctx.stroke(); ctx.restore();
+        ctx.beginPath(); ctx.arc(32, -4, 7, -Math.PI / 2, -Math.PI / 2 + beat * Math.PI * 2); ctx.stroke(); ctx.restore();
       }
       if (act && a.key === 'ILSA') { // incoming-flow pulses
-        for (let n = 0; n < 3; n++) { const r = 3 + ((beat * 12 + n * 4) % 12); ctx.save(); ctx.globalAlpha = 0.35 - n * 0.08; ctx.strokeStyle = a.color; ctx.beginPath(); ctx.arc(32, -4, r, 0, Math.PI * 2); ctx.stroke(); ctx.restore(); }
+        for (let n = 0; n < 3; n++) { const r = 2 + ((beat * 6 + n * 2) % 6); ctx.save(); ctx.globalAlpha = 0.35 - n * 0.08; ctx.strokeStyle = a.color; ctx.beginPath(); ctx.arc(32, -4, r, 0, Math.PI * 2); ctx.stroke(); ctx.restore(); }
       }
       if (act && a.key === 'RIGO') { // settlement ledger strokes
         px(ctx, 17, -11, 8 + Math.round(beat * 8), 1, latest && latest.pnl < 0 ? '#ef4444' : '#22c55e');
@@ -853,7 +873,14 @@
       // stop short of it for exactly this reason, and the strip is one line deep. So the sentence is
       // cut to what one line of THIS width holds, not to a fixed number of characters: a bubble that
       // wraps is a bubble standing on the screen it is talking about.
-      const maxw = Math.min(440, Math.max(200, st.w * k * 2.1));
+      //
+      // Sideways is the front row's only clear direction, and a bubble as wide as the room allows
+      // reaches straight across the gap onto the next bot's face -- TESS talking over HOLT, whose
+      // name it also buried. Stop it one blob short of the neighbour. The back row is speaking into
+      // an empty strip and keeps the full width.
+      const reach = L ? (L.pitch - st.w / 2 - 9) * k : 200;
+      const maxw = st.back ? Math.min(440, Math.max(200, st.w * k * 2.1))
+        : Math.min(440, Math.max(150, reach));
       const room = Math.max(22, Math.floor(maxw / (fs * 0.62)) - st.key.length - 2);
       // a cut on a word boundary can leave the line ending on a word that was going somewhere
       const line = clip(b.text, room).replace(/[\s·@:,+-]+$/, '');
@@ -872,6 +899,19 @@
       if (st.back) Object.assign(n.bub.style, { left: `${X(st.bx)}px`, right: '', top: `${Y(st.top - 5)}px` });
       else if (flip) Object.assign(n.bub.style, { left: '', right: `${fx.clientWidth - X(st.bx - 12)}px`, top: `${Y(st.by - 10)}px` });
       else Object.assign(n.bub.style, { left: `${X(st.bx + 12)}px`, right: '', top: `${Y(st.by - 10)}px` });
+    }
+
+    // A narrow room leaves no sideways space to stop short of: the desks are shoulder to shoulder
+    // and the bubble has nowhere to go but onto its neighbour. Covering a desk is survivable --
+    // burying the name of the bot it is covering is not, so any tag the bubble lands on steps
+    // aside, the same way the speaker's own does on the back row. One bot speaks, so this is one
+    // rectangle against seven.
+    const sp = speaking && nodes[speaking.key] && !nodes[speaking.key].bub.hidden && nodes[speaking.key].bub.getBoundingClientRect();
+    if (sp) for (const st of seats) {
+      const n = nodes[st.key];
+      if (!n || n.name.hidden) continue;
+      const r = n.name.getBoundingClientRect();
+      if (!(r.right < sp.left || sp.right < r.left || r.bottom < sp.top || sp.bottom < r.top)) n.name.hidden = true;
     }
   }
 
