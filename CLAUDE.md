@@ -78,8 +78,10 @@ the fast working copy.
 
 ## Repo facts
 
-- Branch `main`. A second branch `worktree-hexagon-research` is checked out as a git worktree at
-  `.claude/worktrees/hexagon-research` (locked, gitignored).
+- Branch `main`. There is no long-lived second worktree: the `hexagon-research` one this file used
+  to describe is gone, and its branch was a leftover, fully merged into `main`. Claude Code makes
+  its own session worktrees under `.claude/worktrees/` and they come and go with the sessions, so
+  `git worktree list` is the only honest record of which exist. `.claude/` is gitignored.
 - Remote `origin` is `git@github.com:evankaplan6-hub/Hexagon.git` (added 2026-09-12, SSH).
   `data/`, `.env`, and `*.pem` are gitignored, so the working copy is still the only place those
   exist — back them up separately.
