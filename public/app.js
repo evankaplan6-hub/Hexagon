@@ -147,7 +147,9 @@
       // the glass stops 20 units short of the floor line: that strip is where the back row's bubbles
       // go, and it is the only reason a bubble can no longer cover the number it is talking about
       screen: { x: 134, y: 2, w: RW - 268, h: WALL_H - 26 },
-      chart:  { x: 4, y: WALL_H + 34, w: 124, h: ROOM_H - WALL_H - 38 },
+      // the stand starts just under the wall: the 24 units above it were empty floor that no
+      // desk can use (the desks start at bandL), and the plot is the one board that wants height
+      chart:  { x: 4, y: WALL_H + 10, w: 124, h: ROOM_H - WALL_H - 14 },
       rack:   { x: RW - 40, y: WALL_H + 38, w: 26, h: 60 },
     };
     return L;
@@ -926,18 +928,30 @@
     const halted = S.halt || M.halted, working = !halted && M.quoting > 0, gone = stale();
     const [state, cls] = gone ? ['No signal', 'bad'] : halted ? ['Stopped', 'bad'] : working ? ['Working', 'good'] : ['Idle', 'warn'];
     const nHeld = (M.markets || []).filter((m) => m.inv).length;
-    const lf = M.lastFill;
-    // the ledger survives a restart but the last-fill detail does not; say which
-    const fill = lf ? `Last fill ${ago(lf.at)}: ${lf.side === 'buy' ? 'bought' : 'sold'} ${lf.qty} ${marketName(lf.ticker)} at ${cc(lf.px)}`
-      : M.fills ? `${M.fills} fills before the last restart` : 'No fills yet';
-    const feed = M.feed || {};
-    const html = `<div class="st ${cls}"><i></i>${state}</div>` +
-      (gone || halted ? `<p class="now">${esc(gone ? 'The desk stopped answering' : `Trading stopped: ${halted}`)}</p>` : '') +
-      `<p class="now">${working ? `Quoting ${M.quoting} markets` : 'Not quoting'} · ${nHeld ? `holding ${M.inv} contracts in ${nHeld}` : 'nothing held'}</p>` +
-      `<p>${esc(fill)}</p>` +
+    // the ledger survives a restart but the last-fill detail does not; the Last fill row says which
+    const lf = M.lastFill, feed = M.feed || {};
+    // Whose money it is belongs on the state line, where the eye already is, not buried in the
+    // footer sentence: those two facts are the whole first glance.
+    const live = S.mode === 'live';
+    // These were five sentences that wrapped. On a real book -- 3261 contracts in 36 markets, a
+    // market name of its own on the fill line -- they wrapped to nine lines and the board answered
+    // by shrinking its own type to 11px. A label and its figure wrap far less than a sentence
+    // saying the same thing, and the labels give the eye somewhere to land.
+    const row = (k, v, cls) => `<div class="${cls || ''}"><dt>${k}</dt><dd>${v}</dd></div>`;
+    const html = `<div class="st ${cls}"><i></i>${state}<em class="${live ? 'real' : ''}">${live ? 'LIVE' : 'PAPER'}</em></div>` +
+      (gone || halted ? `<p class="alarm">${esc(gone ? 'The desk stopped answering' : `Trading stopped: ${halted}`)}</p>` : '') +
+      `<dl class="sf">` +
+      row('Quoting', working ? `${M.quoting} markets` : '<span class="off">not quoting</span>') +
+      row('Holding', nHeld ? `${M.inv.toLocaleString()} <span class="in">in ${nHeld}</span>` : '<span class="off">nothing</span>') +
+      row('Last fill', lf
+        ? `${lf.side === 'buy' ? 'Bought' : 'Sold'} ${lf.qty} at ${cc(lf.px)} <span class="in">· ${ago(lf.at)}</span><small>${esc(marketName(lf.ticker))}</small>`
+        : `<span class="off">${M.fills ? `${M.fills} before the restart` : 'none yet'}</span>`) +
       // the taker's reach: markets matched on both venues, across every category
-      (S.anyMarket && S.anyMarket.enabled ? `<p class="extra">Both venues: ${S.pairCount || 0} matched · ${S.anyMarket.rulesVerified || 0} scanned pairs cleared to trade, ${S.anyMarket.watchOnly || 0} watched</p>` : '') +
-      `<p class="dim">${S.mode === 'live' ? 'LIVE · real money' : 'Paper · no real money'} · up ${dur(S.now - S.startedAt)} · ${feed.mode === 'stream' && feed.connected ? 'live trade feed' : 'polling for trades'}</p>`;
+      (S.anyMarket && S.anyMarket.enabled
+        ? row('Both venues', `${S.pairCount || 0} matched <span class="in">· ${S.anyMarket.rulesVerified || 0} cleared to trade, ${S.anyMarket.watchOnly || 0} watched</span>`, 'extra')
+        : '') +
+      `</dl>` +
+      `<p class="dim">${live ? 'Real money' : 'No real money'} · up ${dur(S.now - S.startedAt)} · ${feed.mode === 'stream' && feed.connected ? 'live trade feed' : 'polling for trades'}</p>`;
     const key = `${html}|${Math.round(statusBox.w * k)}x${Math.round(statusBox.h * k)}`;
     if (key !== statusHtml) { el.innerHTML = html; statusHtml = key; fitText(el, Math.max(10, Math.min(17, k * 5.6)), 8); }
   }
@@ -983,10 +997,14 @@
   const nearest = (pts, t) => pts.reduce((b, p) => (Math.abs(p.t - t) < Math.abs(b.t - t) ? p : b), pts[0]);
   const spanTxt = (ms) => { const m = Math.round(ms / 60000); return m < 60 ? `${m}m` : m < 1440 ? `${(m / 60).toFixed(m < 600 ? 1 : 0)}h` : `${(m / 1440).toFixed(1)}d`; };
 
+  // Four rows, each with one job: which series, the number, the plot, the range. The number used
+  // to share the top row with the series buttons and the change over the range sat at the bottom
+  // beside the range buttons, where it read as a caption on them rather than as the headline fact.
   function chartSkeleton(big) {
     return `<div class="ct">` +
       `<span class="seg">${[['maker', big ? 'Maker desk' : 'Maker'], ['acct', big ? 'Whole account' : 'Account']].map(([k, l]) => `<button data-series="${k}">${l}</button>`).join('')}</span>` +
-      `<span class="cv"></span>${big ? '' : '<button class="cx" data-expand="1" title="Open large on the wall screen">⤢</button>'}</div>` +
+      `${big ? '' : '<button class="cx" data-expand="1" title="Open large on the wall screen">⤢</button>'}</div>` +
+      `<div class="chead"><span class="cv"></span><span class="cd"></span></div>` +
       `<div class="cplot"><svg viewBox="0 0 1000 400" preserveAspectRatio="none"></svg><span class="yhi"></span><span class="ylo"></span>` +
       `<i class="cdot" hidden></i><div class="ctip" hidden></div></div>` +
       `<div class="cb"><span class="seg">${RANGES.map(([r]) => `<button data-range="${r}">${r}</button>`).join('')}</span><span class="cr"></span></div>`;
@@ -998,33 +1016,73 @@
     el.querySelectorAll('[data-series]').forEach((b) => b.classList.toggle('on', b.dataset.series === chart.series));
     el.querySelectorAll('[data-range]').forEach((b) => b.classList.toggle('on', b.dataset.range === chart.range));
     const pts = chartPoints(), svg = el.querySelector('svg'), tip = el.querySelector('.ctip'), dot = el.querySelector('.cdot');
-    if (pts.length < 2) { svg.innerHTML = ''; el.querySelector('.cr').textContent = 'collecting, one point a minute'; return; }
+    if (pts.length < 2) {
+      svg.innerHTML = '';
+      el.querySelector('.cv').textContent = signed(pts.length ? pts[0].v : 0);
+      el.querySelector('.cd').innerHTML = '';
+      el.querySelector('.cr').textContent = 'collecting, one point a minute';
+      return;
+    }
 
     const t0 = pts[0].t, t1 = Math.max(pts[pts.length - 1].t, t0 + 1);
-    let lo = Math.min(0, ...pts.map((p) => p.v)), hi = Math.max(0, ...pts.map((p) => p.v));
-    const pad = Math.max(0.25, (hi - lo) * 0.12); lo -= pad; hi += pad;
+    // The scale, which has two ways to lie. Pinned to zero -- as it was -- a desk parked at -$84
+    // with 22c of movement in it spends the whole plot on the empty distance back to zero: the line
+    // lies flat on the floor of the box and the fill floods the panel. Pinned to the data instead,
+    // that same 22c of drift is stretched over the full height and a flat day reads as a
+    // rollercoaster. So: follow the data, keep zero when the line is near enough to it to be worth
+    // the room, and hold the window open to a floor -- a dollar, or 2% of the level, whichever is
+    // larger -- so that small really does look small.
+    let lo = Math.min(...pts.map((p) => p.v)), hi = Math.max(...pts.map((p) => p.v));
+    const seen = Math.max(hi - lo, 0.02);
+    if (lo > 0 && lo <= seen * 0.35) lo = 0;
+    if (hi < 0 && -hi <= seen * 0.35) hi = 0;
+    const floor = Math.max(1, Math.abs(pts[pts.length - 1].v) * 0.02);
+    if (hi - lo < floor) { const mid = (hi + lo) / 2; lo = mid - floor / 2; hi = mid + floor / 2; }
+    const pad = (hi - lo) * 0.12; lo -= pad; hi += pad;
     const X = (t) => ((t - t0) / (t1 - t0)) * 1000, Y = (v) => 400 - ((v - lo) / (hi - lo)) * 400;
     const last = pts[pts.length - 1], first = pts[0], up = last.v >= 0;
-    const col = up ? '#22c55e' : '#ef4444';
+    const zeroIn = lo < 0 && hi > 0;   // only draw the zero line when it is actually on the plot
+    // The line's colour is about the range on show, not the sign of the level: a desk down $84 that
+    // has made 22c back today draws green over the last hour, red over the week, and the headline
+    // number stays red throughout. That is what the range buttons are for.
+    const col = last.v >= first.v ? '#22c55e' : '#ef4444';
     const line = pts.map((p, i) => `${i ? 'L' : 'M'}${X(p.t).toFixed(1)},${Y(p.v).toFixed(1)}`).join('');
     const zy = Y(0).toFixed(1);
-    let g = `<defs><linearGradient id="cg-${big ? 'b' : 's'}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${col}" stop-opacity=".18"/><stop offset="1" stop-color="${col}" stop-opacity="0"/></linearGradient></defs>`;
+    let g = `<defs><linearGradient id="cg-${big ? 'b' : 's'}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${col}" stop-opacity=".16"/><stop offset="1" stop-color="${col}" stop-opacity="0"/></linearGradient></defs>`;
+    // Gridlines first, then the band, then the line: a plot with nothing behind it gives the eye no
+    // way to judge how far a wiggle actually is. Quarters of the drawn range, faint enough to ignore.
+    for (let i = 1; i < 4; i++) g += `<line x1="0" x2="1000" y1="${i * 100}" y2="${i * 100}" stroke="#8ca8d2" stroke-opacity=".07" vector-effect="non-scaling-stroke"/>`;
     if (chart.band) {
       const a = Math.min(chart.band[0], chart.band[1]), b = Math.max(chart.band[0], chart.band[1]);
       g += `<rect x="${X(a).toFixed(1)}" y="0" width="${Math.max(2, X(b) - X(a)).toFixed(1)}" height="400" fill="#5ec8e0" fill-opacity=".12"/>`;
     }
-    g += `<line x1="0" x2="1000" y1="${zy}" y2="${zy}" stroke="#334155" stroke-dasharray="6 6" vector-effect="non-scaling-stroke"/>`;
-    g += `<path d="${line}L${X(last.t).toFixed(1)},${zy}L${X(first.t).toFixed(1)},${zy}Z" fill="url(#cg-${big ? 'b' : 's'})"/>`;
-    g += `<path d="${line}" fill="none" stroke="${col}" stroke-width="${big ? 2 : 1.5}" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`;
+    // The reference the eye reads against: zero when zero is on the plot, otherwise where this
+    // range opened -- which is the line the change beside the number is measured from anyway.
+    const ry = zeroIn ? zy : Y(first.v).toFixed(1);
+    g += `<line x1="0" x2="1000" y1="${ry}" y2="${ry}" stroke="#44526b" stroke-dasharray="5 5" vector-effect="non-scaling-stroke"/>`;
+    // the area hangs off the foot of the plot: it is there to give the line a body, and it says
+    // nothing about zero -- hanging it off the zero line is what painted the whole board red
+    g += `<path d="${line}L${X(last.t).toFixed(1)},400L${X(first.t).toFixed(1)},400Z" fill="url(#cg-${big ? 'b' : 's'})"/>`;
+    g += `<path d="${line}" fill="none" stroke="${col}" stroke-width="${big ? 2.5 : 2}" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>`;
     if (chart.hoverT != null) g += `<line x1="${X(chart.hoverT).toFixed(1)}" x2="${X(chart.hoverT).toFixed(1)}" y1="0" y2="400" stroke="#94a3b8" stroke-opacity=".6" vector-effect="non-scaling-stroke"/>`;
     svg.innerHTML = g;
-    el.querySelector('.yhi').textContent = signed(hi - pad < 0 ? 0 : hi - pad);
-    el.querySelector('.ylo').textContent = signed(lo + pad > 0 ? 0 : lo + pad);
+    // the labels are the top and bottom of the box, so they say what those edges are worth
+    el.querySelector('.yhi').textContent = signed(r2(hi));
+    el.querySelector('.ylo').textContent = signed(r2(lo));
 
     const cv = el.querySelector('.cv');
     cv.textContent = signed(last.v); cv.className = `cv ${up ? 'pos' : 'neg'}`;
+    // The headline number is a level; on its own it does not say whether the desk is having a good
+    // hour. The change over the range, beside it, does -- so it sits with the number, not under the
+    // range buttons where it used to look like a label on them.
     const chg = r2(last.v - first.v);
-    let read = `<b class="${chg >= 0 ? 'pos' : 'neg'}">${signed(chg)}</b> in ${spanTxt(t1 - t0)}`;
+    // On a small window the stand is barely wider than the number itself. The change gives up its
+    // tail, and then itself, rather than running off the edge of the board.
+    const room = el.clientWidth;
+    el.querySelector('.cd').innerHTML = room < 130 ? ''
+      : `<b class="${chg >= 0 ? 'pos' : 'neg'}">${chg >= 0 ? '▲' : '▼'} ${signed(chg)}</b>${room < 185 ? '' : ` in ${spanTxt(t1 - t0)}`}`;
+    // the bottom line is the time axis, until a drag asks it a question
+    let read = `${hhmm(t0)} → ${hhmm(t1)}`;
     if (chart.band) {
       const a = nearest(pts, Math.min(...chart.band)), b = nearest(pts, Math.max(...chart.band)), d = r2(b.v - a.v);
       read = `${hhmm(a.t)}→${hhmm(b.t)} <b class="${d >= 0 ? 'pos' : 'neg'}">${signed(d)}</b>`;
@@ -1039,7 +1097,12 @@
       tip.innerHTML = `<b>${hhmm(p.t)}</b> <span class="${p.v >= 0 ? 'pos' : 'neg'}">${signed(p.v)}</span><br><small>${signed(since)} since ${hhmm(first.t)}</small>`;
       const leftPct = X(p.t) / 10;
       Object.assign(tip.style, leftPct > 55 ? { left: '', right: `${100 - leftPct + 2}%` } : { right: '', left: `${leftPct + 2}%` });
-    } else { dot.hidden = true; tip.hidden = true; }
+    } else {
+      // no hover: the dot rests on the newest point, so the end of the line is never ambiguous
+      dot.hidden = false;
+      Object.assign(dot.style, { left: `${X(last.t) / 10}%`, top: `${Y(last.v) / 4}%`, background: col });
+      tip.hidden = true;
+    }
   }
 
   // One set of handlers serves both charts: they find their own container and redraw it at once,
@@ -1106,14 +1169,18 @@
       .map((m) => ({ m, pl: m.mark - m.cost }))
       .sort((a, b) => Math.abs(b.pl) - Math.abs(a.pl) || Math.abs(b.m.inv) - Math.abs(a.m.inv));
     const rows = wallAll ? held : held.slice(0, WALL_ROWS);
+    // A number, what it means, and the two standing facts as labelled figures. They used to run
+    // together in one dim sentence, which is the slowest way to read two numbers.
     const num = `<div class="wbig ${net >= 0 ? 'pos' : 'neg'}">${signed(net)}</div>` +
-      `<div class="wsub">if everything closed now<br>banked ${signed(M.realized || 0)} · holding ${M.inv || 0} contracts</div>`;
+      `<div class="wsub">if everything closed now</div>` +
+      `<dl class="wstats"><div><dt>Banked</dt><dd class="${(M.realized || 0) >= 0 ? 'pos' : 'neg'}">${signed(M.realized || 0)}</dd></div>` +
+      `<div><dt>Holding</dt><dd>${M.inv || 0}</dd></div></dl>`;
     let h = `<div class="wh"><span>Maker desk</span><span>${M.fills || 0} fills</span></div>`;
     if (!held.length) {
       h += num + `<p class="wempty">Nothing held. Quoting ${M.quoting || 0} markets and waiting to be traded against.</p>`;
       return h;
     }
-    const list = `<div class="wlist${wallAll ? ' all' : ''}">${rows.map(({ m, pl }) => `<button class="wr" data-m="${esc(m.ticker)}" title="${esc(m.title || '')}">` +
+    const list = `<div class="wlist${wallAll ? ' all' : ''}">${rows.map(({ m, pl }) => `<button class="wr ${m.inv > 0 ? 'long' : 'short'}" data-m="${esc(m.ticker)}" title="${esc(m.title || '')}">` +
       `<span class="nm">${esc(OUTCOME(m) || QUESTION(m))}${OUTCOME(m) && QUESTION(m) ? `<i> · ${esc(QUESTION(m))}</i>` : ''}</span>${sideTag(m.inv)}<span class="pl ${pl >= 0 ? 'pos' : 'neg'}">${signed(pl)}</span></button>`).join('')}</div>`;
     const foot = held.length > WALL_ROWS || wallAll
       ? `<button class="wmore" data-all="1">${wallAll ? 'Show fewer' : `Biggest ${WALL_ROWS} of ${held.length} positions · show all`}</button>`
@@ -1195,6 +1262,7 @@
           el.innerHTML = sel && sel.kind === 'market' ? wallRecap(sel.key, sel.at, M) : a ? wallAgent(a) : wallHome(M);
           const list2 = el.querySelector('.wlist, .wlog');
           if (list2) list2.scrollTop = top;
+          el.classList.toggle('more', !!list2 && list2.scrollHeight > list2.clientHeight + 2);
           if (m) fitText(el, wallFs, 8);
         }
       }
@@ -1219,9 +1287,11 @@
         }
         el.innerHTML = `<div class="th"><span>Fills</span><span>${M.fills || 0} total</span></div>` +
           (groups.length
-            ? `<ol>${groups.map((g) => `<li class="${g.side}${sel && sel.at === g.at ? ' on' : ''}" data-t="${esc(g.ticker)}" data-at="${g.at}"><span class="act">${g.side === 'buy' ? 'Bought' : 'Sold'} ${g.qty}</span><span class="px">${cc(g.val / g.qty)}</span>` +
+            ? `<ol>${groups.map((g) => `<li class="${g.side}${sel && sel.at === g.at ? ' on' : ''}" data-t="${esc(g.ticker)}" data-at="${g.at}"><span class="act"><b>${g.side === 'buy' ? 'Bought' : 'Sold'}</b> ${g.qty}</span><span class="px">${cc(g.val / g.qty)}</span>` +
               `<span class="nm">${esc(marketName(g.ticker))}</span><span class="ago">${ago(g.at).replace(' ago', '')}</span></li>`).join('')}</ol>`
             : `<p class="none">${M.fills ? `${M.fills} fills before the last restart` : 'No fills yet'}</p>`);
+        const ol = el.querySelector('ol');
+        el.classList.toggle('more', !!ol && ol.scrollHeight > ol.clientHeight + 2);
       }
     }
 
@@ -1230,7 +1300,8 @@
       fit(el, clockBox, Math.max(12, Math.min(26, k * 10)));
       const halted = S.halt || M.halted, on = !halted && M.quoting > 0;
       const t = new Date(S.now).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
-      const html = `<b class="${on ? 'on' : ''}">${t.replace(/ [AP]M$/, '')}</b><small>${t.slice(-2)} ET</small>`;
+      const hm = t.replace(/ [AP]M$/, '');
+      const html = `<b class="${on ? 'on' : ''}">${hm.slice(0, -3)}<span class="sec">${hm.slice(-3)}</span></b><small>${t.slice(-2)} ET</small>`;
       if (html !== clockTxt) { el.innerHTML = html; clockTxt = html; }
     }
   }
