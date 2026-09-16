@@ -129,6 +129,16 @@ function makeAnyMarket(cfg, deps = {}) {
         E.log('HOLT', 'OPS', null, `any-market discovery came back empty (${k.markets.length} Kalshi, ${p.markets.length} Polymarket markets) · keeping the last good set of ${candidates.length} pairs`);
         return;
       }
+      // The maker's universe comes from this same crawl (src/maker.js candidatesFrom): it is the
+      // only walk of every open Kalshi market the desk makes, and handing it over here costs no
+      // call. It filters immediately and keeps only the rows it could quote.
+      if (E.maker && typeof E.maker.noteCrawl === 'function') {
+        const n = E.maker.noteCrawl(E, k.markets, (series) => {
+          const info = ks.seriesInfo && ks.seriesInfo.get ? ks.seriesInfo.get(series) : null;
+          return info ? info.feeType : null;
+        });
+        if (n && typeof E.touch === 'function') E.touch('MAKR', `${n} quotable markets from the crawl`);
+      }
       const m = matchAny(p.markets, k.markets, {});
       rejectedCount = (m.rejected || []).length;
       const dropped = adopt(m.candidates || [], clock());

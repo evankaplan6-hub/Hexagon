@@ -144,6 +144,48 @@ function applyFill(pos, f) {
   };
 }
 
+// ---------------------------------------------------------------- the candidate universe
+// Which markets this desk may quote, out of a list of Kalshi markets someone else already fetched.
+//
+// The desk's universe was a hand-written list of 39 series (MAKER_SERIES) listed one call each. That
+// list, not the code, was the ceiling: Kalshi runs 13,929 series whose fee_type is plain `quadratic`
+// and therefore charge makers nothing, and the desk looked at 0.3% of them. The any-market scanner
+// already walks every open non-sports event every DISCOVER_EVERY_MIN -- 41,155 markets over 66 pages
+// in about five seconds -- so the wide universe costs no call of its own; this filters that crawl.
+//
+// Measured on 2026-09-16, the same cheap filters over the crawl pass 123 markets across 73 series
+// against 39 from the series list, and 37 of the 38 listed series are in it anyway. The bar that
+// actually binds is liquidity, not the list: 29,729 of the rejects are under MAKER_MIN_VOL24 and
+// 10,179 are priced outside the band. So this widens the pool the trade-rate probe chooses from by
+// about three times; it does not change what the desk is looking for.
+//
+// Pure, so the filter is assertable without a network: `feeTypeOf` is series ticker -> fee_type
+// string (ks.seriesInfo), and a market whose series is unknown is not tradeable rather than assumed
+// free. Rows come back in the same shape refreshUniverse builds by hand, busiest first.
+function candidatesFrom(markets, feeTypeOf, cfg, now = Date.now()) {
+  const rows = [];
+  for (const m of markets || []) {
+    const series = m.seriesTicker || null;
+    if (!series || feeTypeOf(series) !== 'quadratic') continue;   // unknown fee structure is not free
+    const b = m.yesBid, a = m.yesAsk;
+    if (!Number.isFinite(b) || !Number.isFinite(a) || !(a > b)) continue;
+    const mid = (a + b) / 2;
+    if (mid < cfg.makerMinMid || mid > cfg.makerMaxMid) continue;
+    if (a - b < cfg.makerMinSpread - 1e-9) continue;
+    if ((m.vol24 || 0) < cfg.makerMinVol24) continue;
+    // Do not be holding inventory when the market settles: that is a 0-or-1 coin flip, not a spread.
+    const days = m.closeTime ? (Date.parse(m.closeTime) - now) / 86400000 : 0;
+    if (!(days >= cfg.makerMinDaysToClose)) continue;
+    rows.push({
+      ticker: m.ticker, series, vol: m.vol24 || 0, spread: a - b, days,
+      depth: ((m.yesBidSize || 0) + (m.yesAskSize || 0)) / 2,
+      title: m.title || '', sub: m.yesSubTitle || m.subTitle || '',
+    });
+  }
+  rows.sort((x, y) => (y.vol - x.vol) || (y.spread - x.spread));
+  return rows;
+}
+
 // ---------------------------------------------------------------- toxicity
 // Run-over is adverse selection made visible: the tape traded through a resting quote, so we sold
 // below the print or bought above it. It is where the maker's money went (43% of live fills, 59%
@@ -215,4 +257,4 @@ async function eligibleSeries(candidates) {
   return ok;
 }
 
-module.exports = { desiredQuotes, fillsFrom, applyFill, toxWindow, toxicGate, drawdownFrom, eligibleSeries };
+module.exports = { desiredQuotes, fillsFrom, applyFill, toxWindow, toxicGate, drawdownFrom, eligibleSeries, candidatesFrom };

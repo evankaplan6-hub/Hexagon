@@ -69,6 +69,10 @@ function makeMakerDesk(cfg) {
   let universe = [];         // tickers we are quoting
   let eligible = null;       // series that actually charge makers nothing
   let lastUniverseAt = 0;
+  // The wide universe: the any-market crawl hands its Kalshi markets over as it finishes, and they
+  // are filtered to quotable rows THERE AND THEN. The crawl is ~41,000 records and is released the
+  // moment it has been matched; what is kept here is the couple of hundred rows that pass.
+  let crawled = null, crawledAt = 0, crawlSeen = null;
   let refreshing = null;     // in-flight refresh, so the scan never runs twice or blocks the tick
   let blocked = false;       // did the last step wait on a scan? (the engine's slow-round warning asks)
   const tape = makeTape({ maxPages: cfg.makerTapePages });   // batched exchange-wide trades + per-series books
@@ -102,16 +106,59 @@ function makeMakerDesk(cfg) {
     }
   }
 
+  // Called by the any-market scanner with the Kalshi side of its crawl (src/anymarket.js), which
+  // runs every DISCOVER_EVERY_MIN. Filtering here rather than at the next scan is deliberate: the
+  // crawl's own arrays are freed as soon as it returns, and holding a reference to them on a 512 MB
+  // box is how a scanner becomes a memory leak.
+  function noteCrawl(E, markets, feeTypeOf) {
+    if (!cfg.makerWiden) return 0;
+    try {
+      crawled = maker.candidatesFrom(markets, feeTypeOf, cfg);
+      // Which series the crawl SAW, quotable or not. The any-market crawl excludes Sports (the fast
+      // path covers games), so a listed sports series is absent from it entirely rather than absent
+      // on merit, and those few are still scanned by name below. A series the crawl saw and dropped
+      // was judged on the same filters as everything else and is not re-scanned.
+      crawlSeen = new Set();
+      for (const m of markets || []) if (m && m.seriesTicker) crawlSeen.add(m.seriesTicker);
+      crawledAt = Date.now();
+      return crawled.length;
+    } catch (e) {
+      E.log('MAKR', 'OPS', null, `wide universe not built (${String(e.message).slice(0, 80)}) · falling back to the ${cfg.makerSeries.length}-series list`);
+      crawled = null;
+      return 0;
+    }
+  }
+
   // Pick the most liquid mid-priced markets from the fee-free series.
   async function refreshUniverse(E) {
+    // The wide universe first, when the crawl is recent enough to price off. Older than two crawl
+    // intervals means the scanner is off, stuck or failing, and a stale list of tickers is worse
+    // than a fresh narrow one: prices move, and a market that has closed is not worth probing.
+    const crawlAge = crawledAt ? Date.now() - crawledAt : Infinity;
+    if (cfg.makerWiden && crawled && crawlAge < Math.max(2 * cfg.discoverEveryMin, 45) * 60000) {
+      const missed = cfg.makerSeries.filter((x) => !(crawlSeen && crawlSeen.has(x)));
+      const extra = missed.length ? await scanSeries(E, missed) : [];
+      const rows = [...crawled, ...extra].sort((x, y) => (y.vol - x.vol) || (y.spread - x.spread));
+      const known = rows.filter((r) => cfg.makerSeries.includes(r.series)).length;
+      E.log('MAKR', 'SCAN', null, `wide universe: ${rows.length} quotable markets across ${new Set(rows.map((r) => r.series)).size} fee-free series (${known} from the ${cfg.makerSeries.length}-series list, ${rows.length - known} beyond it) · crawl ${Math.round(crawlAge / 60000)}m old${missed.length ? ` · ${missed.length} listed series scanned by name (${extra.length} quotable): the crawl skips ${missed.slice(0, 3).join(', ')}${missed.length > 3 ? '…' : ''}` : ''}`);
+      await probeAndPick(E, rows);
+      return;
+    }
     if (!eligible) {
       eligible = await maker.eligibleSeries(cfg.makerSeries);
       const rejected = cfg.makerSeries.filter((s) => !eligible.includes(s));
       E.log('MAKR', 'OPS', null, `${eligible.length}/${cfg.makerSeries.length} candidate series charge makers nothing${rejected.length ? ` · excluded ${rejected.join(', ')}` : ''}`);
     }
+    const rows = await scanSeries(E, eligible);
+    await probeAndPick(E, rows);
+  }
+
+  // One listing call per series, filtered as it is read. The narrow path's whole scan, and the wide
+  // path's top-up for series the crawl does not cover.
+  async function scanSeries(E, seriesList) {
     const rows = [];
     const failed = [];
-    for (const s of eligible) {
+    for (const s of seriesList) {
       try {
         const d = await getWithBackoff(`${ks.BASE}/markets?series_ticker=${s}&status=open&limit=200`);
         for (const m of (d.markets || [])) {
@@ -135,18 +182,25 @@ function makeMakerDesk(cfg) {
       await sleep(150);                    // pace the scan; it runs once every 15 minutes
     }
     // A partial scan silently narrows the universe to whatever survived, so say so.
-    if (failed.length) E.log('MAKR', 'OPS', null, `universe scan incomplete: ${failed.length}/${eligible.length} series failed to load (${failed.slice(0, 3).join(', ')}) · quoting from the rest`);
-    // Rank by observed trade rate, busiest first. Not by spread (backwards: P&L correlates -0.33
-    // with it, and ranking on it put six dead markets at 10-14c on the book), not by volume (a
-    // snapshot one block trade inflates), and no longer by how fast the queue at the touch clears.
-    // Clear-time was the rule from 2026-09-10 to 2026-09-12, chosen because the backtest's whole
-    // surviving edge sat in markets whose queue cleared inside a day. Scored walk-forward on 66
-    // days of tape (tools/maker-rank.js) it was the worst of three rankings in every setting and
-    // carried the most run-over in every setting: a queue that clears fast is a level that gets
-    // swept, and a sweep through a resting quote is the fill this desk loses money on. Trade rate
-    // was best or tied everywhere, with a third of the run-over at real depth. The queue is still
-    // measured and logged; it just no longer picks the book.
+    if (failed.length) E.log('MAKR', 'OPS', null, `universe scan incomplete: ${failed.length}/${seriesList.length} series failed to load (${failed.slice(0, 3).join(', ')}) · quoting from the rest`);
     rows.sort((x, y) => (y.vol - x.vol) || (y.spread - x.spread));
+    return rows;
+  }
+
+  // Rank by observed trade rate, busiest first. Not by spread (backwards: P&L correlates -0.33
+  // with it, and ranking on it put six dead markets at 10-14c on the book), not by volume (a
+  // snapshot one block trade inflates), and no longer by how fast the queue at the touch clears.
+  // Clear-time was the rule from 2026-09-10 to 2026-09-12, chosen because the backtest's whole
+  // surviving edge sat in markets whose queue cleared inside a day. Scored walk-forward on 66
+  // days of tape (tools/maker-rank.js) it was the worst of three rankings in every setting and
+  // carried the most run-over in every setting: a queue that clears fast is a level that gets
+  // swept, and a sweep through a resting quote is the fill this desk loses money on. Trade rate
+  // was best or tied everywhere, with a third of the run-over at real depth. The queue is still
+  // measured and logged; it just no longer picks the book.
+  //
+  // The list it ranks is now the wide one, so the same rule chooses from about three times as many
+  // markets: MAKER_MARKETS still caps the book at 24.
+  async function probeAndPick(E, rows) {
     const probe = rows.slice(0, cfg.makerRateProbe);
     for (const r of probe) { Object.assign(r, await marketStats(r.ticker, r.depth)); await sleep(80); }
     const live = probe
@@ -422,7 +476,7 @@ function makeMakerDesk(cfg) {
     };
   }
 
-  return { step, flatten, resume, snapshot, blockedOnScan: () => blocked };
+  return { step, flatten, resume, snapshot, noteCrawl, blockedOnScan: () => blocked };
 }
 
 module.exports = { makeMakerDesk };

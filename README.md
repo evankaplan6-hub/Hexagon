@@ -336,6 +336,40 @@ stay positive, out of sample included — but it is roughly **$150–250 per 68 
 working capital**, not two thousand dollars. Everything below is written against the corrected
 numbers.
 
+### The universe was a hand-written list, and that was the ceiling
+
+The desk chose its markets from `MAKER_SERIES`: 39 series, typed out by hand, one listing call each.
+Kalshi runs **13,929 series whose `fee_type` is plain `quadratic`** and therefore charge makers
+nothing. The desk was looking at 0.3% of them, and no amount of tuning the ranking changes what is
+not in the pool.
+
+The any-market scanner already walks every open non-sports Kalshi event every `DISCOVER_EVERY_MIN`
+— 41,155 markets over 66 pages in about five seconds — and then throws the crawl away. So the wide
+universe costs **no call of its own**: `src/maker.js candidatesFrom` filters that same crawl with the
+same cheap filters the series scan used (fee-free series, price in band, spread at least a tick,
+`MAKER_MIN_VOL24` traded in 24h, at least `MAKER_MIN_DAYS_TO_CLOSE` to run).
+
+```
+2026-09-16, the same filters over the two sources
+  MAKER_SERIES, 39 listing calls        39 quotable markets across 38 series
+  the crawl, 0 extra calls             123 quotable markets across 73 series
+                                        37 of the 38 listed series are in it anyway
+```
+
+Three times the pool, and the binding constraint is visible in what it rejects: of the markets the
+crawl offers, **29,729 fail on liquidity** and 10,179 on price band, against 1,012 on maker fees. The
+list was never selecting for quality — it was just a list.
+
+**Widening the pool is not widening the book.** `MAKER_MARKETS` (24) still caps what is quoted, the
+trade-rate probe still picks it, and the run-over gate still benches markets that keep getting swept.
+The change is what the probe gets to choose from.
+
+Two things it is careful about. The crawl excludes Sports (the taker's fast path covers games), so a
+listed sports series is missing from it for a reason that is not merit; those few series are still
+scanned by name, which keeps the new pool a superset of the old one. And if the scanner is off, or
+its last crawl is older than two intervals, the desk falls back to the 39-series scan rather than
+quoting off stale tickers. `MAKER_WIDEN=0` turns the whole thing off.
+
 ### Where the surviving edge actually lives
 
 Split the same markets by how long the queue in front of us takes to trade through:
@@ -775,7 +809,7 @@ tape and a synthetic clock (`tools/replay.js`) instead of a network and a wall c
 guard it, and both are worth running after any change to the gates:
 
 ```bash
-npm test                      # all 1680 assertions across twenty suites
+npm test                      # all 1698 assertions across twenty suites
 node tools/maker-test.js      # ...or one suite at a time while working on one file
 ```
 

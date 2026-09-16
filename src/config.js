@@ -94,6 +94,13 @@ module.exports = {
   // How many markets QUALIFY is what limits this desk -- widening the search is the only lever
   // that is not just leverage.
   makerRateProbe: num('MAKER_RATE_PROBE', 80),
+  // Where the candidate list comes from. 1: every fee-free market in the any-market crawl (which
+  // runs anyway, so this costs no call of its own) -- 123 quotable markets across 73 series on
+  // 2026-09-16 against 39 from MAKER_SERIES, all of which the crawl finds too. 0: the MAKER_SERIES
+  // list only, one listing call each, which is also the automatic fallback whenever the crawl is
+  // off, older than two DISCOVER_EVERY_MIN, or failed. Widening the POOL is not widening the BOOK:
+  // MAKER_MARKETS still caps what is quoted, and the trade-rate probe still picks it.
+  makerWiden: env('MAKER_WIDEN', '1') !== '0',
   makerMinMid: num('MAKER_MIN_MID', 0.08),
   makerMaxMid: num('MAKER_MAX_MID', 0.92),
   // How often the maker requotes, in seconds. This is THE number: a quote resting unattended is

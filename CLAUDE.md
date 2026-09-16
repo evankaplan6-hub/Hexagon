@@ -15,7 +15,7 @@ to Fly once tests pass (paper only; see ops/DEPLOY.md → Auto-deploy).
 ## Running it
 
 ```bash
-npm test                                      # 1680 assertions, no network, no clock
+npm test                                      # 1698 assertions, no network, no clock
 node server.js                                # paper account, live market data → localhost:8787
 DEMO=1 DATA_DIR=./data-demo node server.js    # synthetic fills/settles, separate account
 npm run reset                                 # wipe the paper account
@@ -45,6 +45,8 @@ src/agents.js     the six desks         src/matcher.js   cross-venue matching (F
 src/anymarket.js  any-market scanner: src/discovery.js crawls both venues, src/match-any.js pairs any
                   category, src/rules.js decides which pairs' resolution rules match (only those trade)
 src/broker.js     paper broker + live Kalshi adapter
+src/makerdesk.js  the maker's loop: universe from the any-market crawl (MAKER_WIDEN, no extra calls),
+                  trade-rate probe, run-over gate; src/maker.js holds the pure decisions
 src/venues/       Polymarket (Gamma + CLOB) and Kalshi public data
 src/recorder.js   tick tape writer      public/          dashboard
 src/tape.js       maker market data     src/kalshi-ws.js Kalshi trade socket (read-only; needs the key, else the tape polls)
