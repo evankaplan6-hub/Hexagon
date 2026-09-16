@@ -122,6 +122,10 @@
     // corners is the same mistake in the other direction.
     const SEAT = Math.max(0.95, Math.min(1.45, (band - 3 * gap) / 256));
     const dw = 64 * SEAT, pitch = Math.min(dw * 1.5, Math.max(dw + gap, (band - dw) / 3));
+    // The back row sits a little tighter than the front, for perspective -- but 0.94 of a pitch that
+    // is already at its minimum is not perspective, it is two desks touching: the back row was down
+    // to a 6-unit gap where the front had 12. The nudge only applies to a pitch that can afford it.
+    const backPitch = Math.max(dw + gap, pitch * 0.94);
     const backY = Math.round(WALL_H + 4 + 16 * SEAT), frontY = Math.round(backY + 43 * SEAT);
     // centre the row on the room, then slide it inside the band if it does not fit there
     const row = (n, y, p) => {
@@ -131,7 +135,12 @@
     };
     L = {
       RW, SEAT, dw, pitch,
-      seats: [...row(3, backY, pitch * 0.94), ...row(4, frontY, pitch)],
+      seats: [...row(3, backY, backPitch), ...row(4, frontY, pitch)],
+      // A desk's cell: its highlight and its click target. 72 desk-units was hard-coded and the back
+      // row's pitch is smaller than that, so the two boxes overlapped -- the hover pool bled onto the
+      // neighbour's desk and a click in the overlap picked whichever bot was tested last. Never wider
+      // than the row it is in.
+      cell: [0, 1, 2].map(() => Math.min(72, backPitch / SEAT - 2)).concat([0, 1, 2, 3].map(() => Math.min(72, pitch / SEAT - 2))),
       status: { x: 8, y: 6, w: SIDE_W, h: WALL_H - 26 },
       clock:  { x: RW - SIDE_W - 8, y: 6, w: SIDE_W, h: 22 },
       tape:   { x: RW - SIDE_W - 8, y: 32, w: SIDE_W, h: WALL_H - 52 },
@@ -380,8 +389,10 @@
       if (!seat) return;                     // more agents than seats: skip rather than throw
       const [x, y] = seat, Z = L.SEAT;
       const act = isActive(a);
-      // the whole desk is the target, not just the blob -- a 14px character is not a click target
-      hits.push({ x: x - 4 * Z, y: y - 18 * Z, w: 72 * Z, h: 60 * Z, kind: 'agent', key: a.key });
+      // the whole desk is the target, not just the blob -- a 14px character is not a click target,
+      // but the cell is bounded by the row's pitch so two neighbours can never both own a point
+      const cw = L.cell[i], cx = (64 - cw) / 2;
+      hits.push({ x: x + cx * Z, y: y - 18 * Z, w: cw * Z, h: 60 * Z, kind: 'agent', key: a.key });
       const hot = (hover && hover.kind === 'agent' && hover.key === a.key);
       const picked = (sel && sel.kind === 'agent' && sel.key === a.key);
       // Every animation means the desk's real job. They only light while that agent's
@@ -397,8 +408,8 @@
       ctx.translate(x, y); ctx.scale(Z, Z);
       if (hot || picked) {
         // a soft pool of the agent's own colour, so the highlight reads as light rather than a box
-        ctx.save(); ctx.globalAlpha = picked ? 0.16 : 0.09; px(ctx, -4, -18, 72, 60, a.color); ctx.restore();
-        if (picked) { px(ctx, -4, -18, 72, 1, a.color); px(ctx, -4, 41, 72, 1, a.color); }
+        ctx.save(); ctx.globalAlpha = picked ? 0.16 : 0.09; px(ctx, cx, -18, cw, 60, a.color); ctx.restore();
+        if (picked) { px(ctx, cx, -18, cw, 1, a.color); px(ctx, cx, 41, cw, 1, a.color); }
       }
       // contact shadow first, so everything above it sits ON the floor rather than floating
       shadow(ctx, 2, 26, 60, 10, 0.45);
@@ -410,12 +421,16 @@
       if (act) glow(ctx, 32, -4, 30, a.color, 0.20);
       px(ctx, 30, 8, 4, 3, '#1a2029');
       if (act && Math.floor(t * 6) % 2) px(ctx, 47, -12, 2, 2, a.color);
+      // The sweep and the pulses are things happening ON a screen, so they have to fit on it. The
+      // glass is 36x20 at (14,-14); a radius-12 arc centred at -8 needed 24 of those 20 units and
+      // climbed straight out of the bezel onto the desk behind -- from a chair it read as a stray
+      // line lying across two desks. Both are centred on the glass now and sized to stay inside it.
       if (act && a.key === 'HOLT') { // scanner sweep
         ctx.save(); ctx.strokeStyle = a.color; ctx.globalAlpha = 0.65; ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.arc(32, -8, 12, -Math.PI / 2, -Math.PI / 2 + beat * Math.PI * 2); ctx.stroke(); ctx.restore();
+        ctx.beginPath(); ctx.arc(32, -4, 7, -Math.PI / 2, -Math.PI / 2 + beat * Math.PI * 2); ctx.stroke(); ctx.restore();
       }
       if (act && a.key === 'ILSA') { // incoming-flow pulses
-        for (let n = 0; n < 3; n++) { const r = 3 + ((beat * 12 + n * 4) % 12); ctx.save(); ctx.globalAlpha = 0.35 - n * 0.08; ctx.strokeStyle = a.color; ctx.beginPath(); ctx.arc(32, -4, r, 0, Math.PI * 2); ctx.stroke(); ctx.restore(); }
+        for (let n = 0; n < 3; n++) { const r = 2 + ((beat * 6 + n * 2) % 6); ctx.save(); ctx.globalAlpha = 0.35 - n * 0.08; ctx.strokeStyle = a.color; ctx.beginPath(); ctx.arc(32, -4, r, 0, Math.PI * 2); ctx.stroke(); ctx.restore(); }
       }
       if (act && a.key === 'RIGO') { // settlement ledger strokes
         px(ctx, 17, -11, 8 + Math.round(beat * 8), 1, latest && latest.pnl < 0 ? '#ef4444' : '#22c55e');
