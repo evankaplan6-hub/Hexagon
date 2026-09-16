@@ -384,12 +384,20 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #tape.more ol, #wall.more .wlist { -webkit-mask-image: linear-gradient(#000 calc(100% - 1.5em), transparent);
   mask-image: linear-gradient(#000 calc(100% - 1.5em), transparent); }
 #tape .none { color: #5a6478; text-align: center; margin: auto 0; font-size: .9em; }
-/* the clock: minutes are the fact, seconds are the pulse -- so the seconds sit a shade back */
-#clock { position: absolute; z-index: 1; display: flex; align-items: baseline; justify-content: center; gap: .35em; }
+/* The clock: minutes are the fact, seconds are the pulse, so the seconds sit a shade back.
+   align-items must stay CENTRE. Aligning the row on its baseline instead lines the meridiem up
+   with the numerals nicely and stops centring the pair in the box at all -- the clock sits high
+   in its case, which is what it was doing. */
+#clock { position: absolute; z-index: 1; display: flex; align-items: center; justify-content: center; }
 #clock b { font: 600 1em/1 var(--mono); color: #99a3b7; font-variant-numeric: tabular-nums; letter-spacing: .01em; }
 #clock b .sec { color: #59627a; }
 #clock b.on { color: #34d399; } #clock b.on .sec { color: rgba(52,211,153,.55); }
-#clock small { font: 600 .4em/1 var(--mono); letter-spacing: .16em; color: #59627a; }
+/* The meridiem sits beside the time but takes no width in the row, so what gets centred in the
+   case is the clock face itself. Laid out normally it pushed the numerals a tenth of the board
+   to the left: the pair was centred, the time was not. Keep align-self at centre -- ending it
+   at the foot of the box is what dropped it onto a line of its own. */
+#clock small { width: 0; transform: translateX(.4em); overflow: visible; white-space: nowrap; align-self: center;
+  font: 600 .42em/1 var(--mono); letter-spacing: .16em; color: #59627a; }
 #wall .wr .nm i { font-style: normal; color: var(--brd-label); font-size: .85em; }
 #wall .wrecap { flex: none; list-style: none; margin: .7em 0 0; padding: .55em 0 0; border-top: 1px solid var(--brd-rule); font-size: .92em; color: #c9cfd9; }
 #wall .wrecap li { padding: .24em 0; }
