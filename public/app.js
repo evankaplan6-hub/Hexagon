@@ -53,6 +53,44 @@
   // into normal HTML type: current maker P&L, market/inventory counts, the last fill, and which
   // desks are awake. The illustrated room is intentionally left to larger screens, where its
   // boards and click targets have enough physical size to work.
+  let mobileInfo = null;
+  function mobileInfoPanel(M) {
+    if (!mobileInfo) return '';
+    let title = '', note = '', rows = [];
+    if (mobileInfo === 'quoting') {
+      const markets = (M.markets || []).filter((m) => m.quoting);
+      title = `Quoting ${markets.length} market${markets.length === 1 ? '' : 's'}`;
+      note = 'The prices where the maker is currently offering to trade.';
+      rows = markets.map((m) => {
+        const px = m.bid == null && m.ask == null ? 'waiting for prices'
+          : `${m.bid == null ? '—' : cc(m.bid)} bid · ${m.ask == null ? '—' : cc(m.ask)} ask`;
+        return `<li><div><b>${esc(OUTCOME(m) || QUESTION(m) || m.ticker)}</b>` +
+          `${OUTCOME(m) && QUESTION(m) ? `<small>${esc(QUESTION(m))}</small>` : ''}</div>` +
+          `<span>${px}${m.tpd != null ? `<small>${m.tpd.toLocaleString()}/day</small>` : ''}</span></li>`;
+      });
+    } else if (mobileInfo === 'holding') {
+      const markets = (M.markets || []).filter((m) => m.inv)
+        .sort((a, b) => Math.abs(b.inv) - Math.abs(a.inv));
+      title = `Holding ${markets.length} market${markets.length === 1 ? '' : 's'}`;
+      note = `${(+M.inv || 0).toLocaleString()} contracts in the book right now.`;
+      rows = markets.map((m) => {
+        const pl = r2((m.mark || 0) - (m.cost || 0));
+        return `<li><div><b>${esc(OUTCOME(m) || QUESTION(m) || m.ticker)}</b>` +
+          `${OUTCOME(m) && QUESTION(m) ? `<small>${esc(QUESTION(m))}</small>` : ''}</div>` +
+          `<span class="${pl >= 0 ? 'pos' : 'neg'}">${m.inv > 0 ? 'Long' : 'Short'} ${Math.abs(m.inv).toLocaleString()}<small>${signed(pl)} marked</small></span></li>`;
+      });
+    } else {
+      const fills = M.recent || [];
+      title = `${(+M.fills || 0).toLocaleString()} fills total`;
+      note = fills.length < (+M.fills || 0) ? `Showing the latest ${fills.length}; the full count survives restarts.` : 'Most recent trades first.';
+      rows = fills.map((f) => `<li><div><b>${esc(marketName(f.ticker))}</b><small>${ago(f.at)}</small></div>` +
+        `<span class="${f.side === 'buy' ? 'pos' : 'neg'}">${f.side === 'buy' ? 'Bought' : 'Sold'} ${(+f.qty || 0).toLocaleString()}<small>at ${cc(f.px)}</small></span></li>`);
+    }
+    return `<section class="m-detail" id="mobile-detail"><div class="m-detail-head"><div><b>${title}</b><small>${note}</small></div>` +
+      `<button type="button" data-mobile-close="1" aria-label="Close ${mobileInfo} details">✕</button></div>` +
+      (rows.length ? `<ol>${rows.join('')}</ol>` : `<p>Nothing to show yet.</p>`) + `</section>`;
+  }
+
   function renderMobileSummary() {
     const el = $('mobile-summary'), M = S.maker || {};
     if (!el) return;
@@ -73,11 +111,19 @@
       `<strong class="${net != null && net < 0 ? 'neg' : 'pos'}">${net == null ? '—' : signed(net)}</strong>` +
       `<small>${net == null ? 'Waiting for a mark' : 'if every position closed now'}</small></div>` +
       `<span class="m-state ${cls}"><i></i>${esc(state)}<small>${S.mode === 'live' ? 'REAL MONEY' : 'PAPER'}</small></span></div>` +
-      `<div class="m-stats"><div><span>Quoting</span><b>${M.quoting || 0}</b><small>markets</small></div>` +
-      `<div><span>Holding</span><b>${(+M.inv || 0).toLocaleString()}</b><small>in ${held}</small></div>` +
-      `<div><span>Fills</span><b>${(+M.fills || 0).toLocaleString()}</b><small>total</small></div></div>` +
-      latest + `<div class="m-agents"><span class="m-label">Desks</span><div>${agents}</div></div>`;
+      `<div class="m-stats">` +
+      `<button type="button" data-mobile-info="quoting" aria-expanded="${mobileInfo === 'quoting'}" aria-controls="mobile-detail" class="${mobileInfo === 'quoting' ? 'on' : ''}"><span>Quoting</span><b>${M.quoting || 0}</b><small>markets</small><i>›</i></button>` +
+      `<button type="button" data-mobile-info="holding" aria-expanded="${mobileInfo === 'holding'}" aria-controls="mobile-detail" class="${mobileInfo === 'holding' ? 'on' : ''}"><span>Holding</span><b>${(+M.inv || 0).toLocaleString()}</b><small>in ${held}</small><i>›</i></button>` +
+      `<button type="button" data-mobile-info="fills" aria-expanded="${mobileInfo === 'fills'}" aria-controls="mobile-detail" class="${mobileInfo === 'fills' ? 'on' : ''}"><span>Fills</span><b>${(+M.fills || 0).toLocaleString()}</b><small>total</small><i>›</i></button></div>` +
+      mobileInfoPanel(M) + latest + `<div class="m-agents"><span class="m-label">Desks</span><div>${agents}</div></div>`;
   }
+  $('mobile-summary').addEventListener('click', (ev) => {
+    const tab = ev.target.closest('[data-mobile-info]');
+    if (tab) mobileInfo = mobileInfo === tab.dataset.mobileInfo ? null : tab.dataset.mobileInfo;
+    else if (ev.target.closest('[data-mobile-close]')) mobileInfo = null;
+    else return;
+    renderMobileSummary();
+  });
   // renderTiles is gone with the tiles it fed. They reported the convergence book -- the desk that
   // found no edge -- so the page opened on "$10,000.00 / +$0.00" while the maker desk was trading.
   // A prominent number describing the wrong desk is worse than no number.

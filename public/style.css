@@ -590,11 +590,34 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
   .m-state.bad { color: #fca5a5; border-color: rgba(239,68,68,.32); }
 
   .m-stats { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: 13px; border: 1px solid #1c2535; border-radius: 8px; overflow: hidden; }
-  .m-stats > div { padding: 9px 10px 8px; min-width: 0; }
-  .m-stats > div + div { border-left: 1px solid #1c2535; }
+  .m-stats > button { position: relative; min-width: 0; padding: 9px 18px 8px 10px; border: 0; border-radius: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .m-stats > button + button { border-left: 1px solid #1c2535; }
+  .m-stats > button:focus-visible { z-index: 1; outline: 2px solid #5b8fd6; outline-offset: -2px; }
+  .m-stats > button.on { background: rgba(59,130,246,.11); box-shadow: inset 0 -2px #5b8fd6; }
+  .m-stats > button > i { position: absolute; right: 7px; top: 50%; color: #59647a; font: normal 14px/1 var(--sans); transform: translateY(-50%) rotate(90deg); transition: transform .16s ease; }
+  .m-stats > button.on > i { color: #9cc3f0; transform: translateY(-50%) rotate(-90deg); }
   .m-stats span { display: block; color: #67718a; font: 700 8px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; }
   .m-stats b { display: inline-block; margin-top: 5px; color: #eef1f6; font: 700 16px/1 var(--mono); }
   .m-stats small { margin-left: 4px; color: #737d90; font-size: 9px; white-space: nowrap; }
+
+  .m-detail { margin-top: 8px; border: 1px solid #26344b; border-radius: 8px; background: #0a101a; overflow: hidden; }
+  .m-detail-head { display: flex; align-items: flex-start; gap: 8px; padding: 10px; border-bottom: 1px solid #1c2940; }
+  .m-detail-head > div { flex: 1 1 auto; min-width: 0; }
+  .m-detail-head b { display: block; color: #eef1f6; font-size: 12px; }
+  .m-detail-head small { display: block; margin-top: 2px; color: #737d90; font-size: 10px; line-height: 1.35; }
+  .m-detail-head button { flex: none; width: 30px; height: 30px; margin: -4px -4px 0 0; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #778197; font: 13px var(--sans); cursor: pointer; }
+  .m-detail-head button:hover { background: #151e2d; color: #eef1f6; }
+  .m-detail-head button:focus-visible { outline: 2px solid #5b8fd6; }
+  .m-detail ol { max-height: min(310px, 38dvh); margin: 0; padding: 0; overflow-y: auto; list-style: none; overscroll-behavior: contain; }
+  .m-detail li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 9px 10px; border-bottom: 1px solid rgba(140,168,210,.09); }
+  .m-detail li:last-child { border-bottom: 0; }
+  .m-detail li > div { min-width: 0; }
+  .m-detail li b { display: block; overflow: hidden; color: #dce2ec; font-size: 11px; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
+  .m-detail li small { display: block; margin: 2px 0 0; overflow: hidden; color: #667188; font-size: 9px; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
+  .m-detail li > span { color: #aeb6c4; font: 600 10px/1.25 var(--mono); text-align: right; white-space: nowrap; }
+  .m-detail li > span.pos { color: #6ee7a0; }
+  .m-detail li > span.neg { color: #fca5a5; }
+  .m-detail p { margin: 0; padding: 18px 10px; color: #737d90; font-size: 11px; text-align: center; }
 
   .m-fill { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; align-items: center; margin-top: 10px; padding: 10px; border: 1px solid #1c2535; border-radius: 8px; background: rgba(255,255,255,.015); }
   .m-fill b { color: #eef1f6; font-size: 13px; }
@@ -646,8 +669,9 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
   .m-hero > div > small { margin-top: 3px; }
   .m-state { padding: 5px 7px; }
   .m-stats { margin-top: 9px; }
-  .m-stats > div { padding: 7px 8px 6px; }
+  .m-stats > button { padding: 7px 16px 6px 8px; }
   .m-stats b { font-size: 14px; }
+  .m-detail ol { max-height: 170px; }
   .m-fill { margin-top: 8px; padding: 8px; }
   .m-agents { margin-top: 8px; }
   #feed { width: 100%; height: 100%; min-height: 0; border-left: 0; border-radius: 0 0 7px; }
