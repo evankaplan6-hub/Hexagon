@@ -1157,16 +1157,14 @@
   function drawChart(el, big) {
     if (!S) return;
     if (el.dataset.built !== (big ? 'big' : 'small')) { el.innerHTML = chartSkeleton(big); el.dataset.built = big ? 'big' : 'small'; }
+    // Every range stays clickable. Greying out ranges longer than the history (and forcing 'All')
+    // left a freshly reset ledger with one live button, which read as a chart that ignored clicks.
+    // A range longer than the history simply shows all of it, and the time axis says so.
     const allPts = (() => { const old = chart.range; chart.range = 'All'; const p = chartPoints(); chart.range = old; return p; })();
     const available = allPts.length > 1 ? allPts[allPts.length - 1].t - allPts[0].t : 0;
     const selectedSpan = RANGES.find(([r]) => r === chart.range)[1];
-    if (Number.isFinite(selectedSpan) && available < selectedSpan) chart.range = 'All';
-    el.querySelectorAll('[data-range]').forEach((b) => {
-      const span = RANGES.find(([r]) => r === b.dataset.range)[1];
-      b.classList.toggle('on', b.dataset.range === chart.range);
-      b.disabled = Number.isFinite(span) && available < span;
-      b.title = b.disabled ? `Available after ${spanTxt(span - available)} more history` : '';
-    });
+    const short = Number.isFinite(selectedSpan) && available < selectedSpan;
+    el.querySelectorAll('[data-range]').forEach((b) => b.classList.toggle('on', b.dataset.range === chart.range));
     const pts = chartPoints(), svg = el.querySelector('svg'), tip = el.querySelector('.ctip'), dot = el.querySelector('.cdot');
     if (pts.length < 2) {
       svg.innerHTML = '';
@@ -1230,7 +1228,8 @@
     el.querySelector('.cd').innerHTML = room < 130 ? ''
       : `<b class="${chg >= 0 ? 'pos' : 'neg'}">${chg >= 0 ? '▲' : '▼'} ${signed(chg)}</b>${room < 185 ? '' : ` in ${spanTxt(t1 - t0)}`}`;
     // the bottom line is the time axis, until a drag asks it a question
-    let read = `${hhmm(t0)} → ${hhmm(t1)}`;
+    // a range longer than the history says how much there is instead of the start and end times
+    let read = short ? `only ${spanTxt(available)} of history` : `${hhmm(t0)} → ${hhmm(t1)}`;
     if (chart.band) {
       const a = nearest(pts, Math.min(...chart.band)), b = nearest(pts, Math.max(...chart.band)), d = r2(b.v - a.v);
       read = `${hhmm(a.t)}→${hhmm(b.t)} <b class="${d >= 0 ? 'pos' : 'neg'}">${signed(d)}</b>`;
