@@ -28,6 +28,7 @@ const SUITES = [
   ['ask', 'the Ask panel: the tool loop, append-only chats, limits and budget, route locks, no secrets'],
   ['askui', "the Ask drawer's page code: the answer escaped before it is formatted, and when a chat is over"],
   ['chart', 'the dashboard chart: combined ledgers, exact time windows and honest dollar axes'],
+  ['lookout', 'the lookout page: the painted room, read-only, fed by the same stream as the floor'],
 ];
 
 let failed = 0, totalPassed = 0;

@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Lookout · The Hexagon</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600;700&family=Inter:wght@600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="lookout.css">
+</head>
+<body>
+  <header>
+    <div class="brand"><span>⬡</span><b>The Hexagon</b><small>LOOKOUT</small></div>
+    <div class="notice" id="notice">Connecting to the desk…</div>
+    <a class="back" href="/">‹ Trading floor</a>
+  </header>
+
+  <main>
+    <section class="scene" id="scene" aria-label="The Hexagon trading floor seen from the lookout">
+      <img src="assets/lookout-concept-a.png" alt="Pixel-art trading office with seven color-coded Hexagon agents at their desks, viewed from an executive lookout">
+      <div class="wash" aria-hidden="true"></div>
+
+      <section class="wall-display" aria-label="Account overview">
+        <article class="screen account">
+          <div class="screenbar"><span>All paper trades</span><em>Marked now</em></div>
+          <div class="screenhero"><small>Maker + cross-venue</small><b id="pnl">—</b></div>
+          <div class="facts">
+            <span><i>Cross-venue</i><strong id="equity">—</strong></span>
+            <span><i>Open</i><strong id="positions">—</strong></span>
+            <span><i>Locked</i><strong id="locked">—</strong></span>
+          </div>
+        </article>
+        <article class="screen brief">
+          <div class="screenbar"><span>Desk now</span><em><i></i><strong id="deskStatus">Connecting</strong></em></div>
+          <h2 id="brief">Waiting for the desk</h2>
+          <p id="detail">&nbsp;</p>
+          <div class="agent-strip" aria-label="Agent status"><i class="a-bram" data-k="BRAM">B</i><i class="a-rigo" data-k="RIGO">R</i><i class="a-kett" data-k="KETT">K</i><i class="a-ilsa" data-k="ILSA">I</i><i class="a-makr" data-k="MAKR">M</i><i class="a-holt" data-k="HOLT">H</i><i class="a-tess" data-k="TESS">T</i></div>
+        </article>
+        <article class="screen maker">
+          <div class="screenbar"><span>Market maker</span><em id="makerState">—</em></div>
+          <div class="screenhero"><small>Net P&amp;L</small><b id="maker">—</b></div>
+          <div class="facts">
+            <span><i>Markets</i><strong id="quotes">—</strong></span>
+            <span><i>Inventory</i><strong id="inventory">—</strong></span>
+            <span><i>Fills</i><strong id="fills">—</strong></span>
+          </div>
+        </article>
+      </section>
+
+      <section class="agents" aria-label="The seven desks">
+        <button class="agent bram" data-agent="BRAM" aria-label="BRAM pricing"><i></i><b>BRAM</b><span>Pricing</span><em>—</em></button>
+        <button class="agent rigo" data-agent="RIGO" aria-label="RIGO settlement"><i></i><b>RIGO</b><span>Settlement</span><em>—</em></button>
+        <button class="agent kett" data-agent="KETT" aria-label="KETT execution"><i></i><b>KETT</b><span>Execution</span><em>—</em></button>
+        <button class="agent ilsa" data-agent="ILSA" aria-label="ILSA sentiment"><i></i><b>ILSA</b><span>Sentiment</span><em>—</em></button>
+        <button class="agent makr" data-agent="MAKR" aria-label="MAKR making"><i></i><b>MAKR</b><span>Making</span><em>—</em></button>
+        <button class="agent holt" data-agent="HOLT" aria-label="HOLT scanner"><i></i><b>HOLT</b><span>Scanner</span><em>—</em></button>
+        <button class="agent tess" data-agent="TESS" aria-label="TESS operations"><i></i><b>TESS</b><span>Operations</span><em>—</em></button>
+      </section>
+
+      <div class="scan-beam" aria-hidden="true"></div>
+      <div class="order-packet" aria-hidden="true"></div>
+      <div class="event" id="event" role="status"><i></i><div><b>—</b><span>Waiting for the desk</span></div><time></time></div>
+      <div class="mode" id="mode"><i></i><b>—</b><span></span></div>
+      <div class="curtain" id="curtain" hidden><b id="curtainTitle">THE FLOOR WENT QUIET</b><span id="curtainText">No new frame from the desk.</span></div>
+    </section>
+  </main>
+  <script src="lookout.js"></script>
+</body>
+</html>

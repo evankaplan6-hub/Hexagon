@@ -48,7 +48,7 @@ src/broker.js     paper broker + live Kalshi adapter
 src/makerdesk.js  the maker's loop: universe from the any-market crawl (MAKER_WIDEN, no extra calls),
                   trade-rate probe, run-over gate; src/maker.js holds the pure decisions
 src/venues/       Polymarket (Gamma + CLOB) and Kalshi public data
-src/recorder.js   tick tape writer      public/          dashboard
+src/recorder.js   tick tape writer      public/          dashboard (lookout.html: the same desk as one painted room, read-only)
 src/tape.js       maker market data     src/kalshi-ws.js Kalshi trade socket (read-only; needs the key, else the tape polls)
 src/whales.js     whale watch: top wallets' big bets on Polymarket's sports/politics/economics/crypto/culture/tech/finance boards (advisory, never trades; WHALE_WATCH=0 off)
 src/ask.js        the dashboard Ask panel: read-only Claude tool loop (src/ask-tools.js), ASK_DAILY_USD ceiling; needs ANTHROPIC_API_KEY
