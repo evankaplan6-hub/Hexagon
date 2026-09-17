@@ -54,11 +54,14 @@
   // desks are awake. The illustrated room is intentionally left to larger screens, where its
   // boards and click targets have enough physical size to work.
   let mobileInfo = null;
+  let mobileSort = 'size';
   function mobileInfoPanel(M) {
     if (!mobileInfo) return '';
     let title = '', note = '', rows = [];
     if (mobileInfo === 'quoting') {
-      const markets = (M.markets || []).filter((m) => m.quoting);
+      let markets = (M.markets || []).filter((m) => m.quoting);
+      if (mobileSort === 'name') markets.sort((a, b) => String(OUTCOME(a) || QUESTION(a) || a.ticker).localeCompare(String(OUTCOME(b) || QUESTION(b) || b.ticker)));
+      else markets.sort((a, b) => (b.tpd || 0) - (a.tpd || 0));
       title = `Quoting ${markets.length} market${markets.length === 1 ? '' : 's'}`;
       note = 'The prices where the maker is currently offering to trade.';
       rows = markets.map((m) => {
@@ -69,8 +72,10 @@
           `<span>${px}${m.tpd != null ? `<small>${m.tpd.toLocaleString()}/day</small>` : ''}</span></li>`;
       });
     } else if (mobileInfo === 'holding') {
-      const markets = (M.markets || []).filter((m) => m.inv)
-        .sort((a, b) => Math.abs(b.inv) - Math.abs(a.inv));
+      let markets = (M.markets || []).filter((m) => m.inv);
+      if (mobileSort === 'name') markets.sort((a, b) => String(OUTCOME(a) || QUESTION(a) || a.ticker).localeCompare(String(OUTCOME(b) || QUESTION(b) || b.ticker)));
+      else if (mobileSort === 'pnl') markets.sort((a, b) => ((b.mark || 0) - (b.cost || 0)) - ((a.mark || 0) - (a.cost || 0)));
+      else markets.sort((a, b) => Math.abs(b.inv) - Math.abs(a.inv));
       title = `Holding ${markets.length} market${markets.length === 1 ? '' : 's'}`;
       note = `${(+M.inv || 0).toLocaleString()} contracts in the book right now.`;
       rows = markets.map((m) => {
@@ -80,14 +85,18 @@
           `<span class="${pl >= 0 ? 'pos' : 'neg'}">${m.inv > 0 ? 'Long' : 'Short'} ${Math.abs(m.inv).toLocaleString()}<small>${signed(pl)} marked</small></span></li>`;
       });
     } else {
-      const fills = M.recent || [];
+      let fills = [...(M.recent || [])];
+      if (mobileSort === 'size') fills.sort((a, b) => (+b.qty || 0) - (+a.qty || 0));
+      else if (mobileSort === 'name') fills.sort((a, b) => marketName(a.ticker).localeCompare(marketName(b.ticker)));
       title = `${(+M.fills || 0).toLocaleString()} fills total`;
       note = fills.length < (+M.fills || 0) ? `Showing the latest ${fills.length}; the full count survives restarts.` : 'Most recent trades first.';
       rows = fills.map((f) => `<li><div><b>${esc(marketName(f.ticker))}</b><small>${ago(f.at)}</small></div>` +
         `<span class="${f.side === 'buy' ? 'pos' : 'neg'}">${f.side === 'buy' ? 'Bought' : 'Sold'} ${(+f.qty || 0).toLocaleString()}<small>at ${cc(f.px)}</small></span></li>`);
     }
+    const sorts = mobileInfo === 'holding' ? [['size', 'Largest'], ['pnl', 'P&amp;L'], ['name', 'Name']] : [['size', mobileInfo === 'quoting' ? 'Flow' : 'Size'], ['name', 'Name']];
     return `<section class="m-detail" id="mobile-detail"><div class="m-detail-head"><div><b>${title}</b><small>${note}</small></div>` +
       `<button type="button" data-mobile-close="1" aria-label="Close ${mobileInfo} details">✕</button></div>` +
+      `<div class="m-sort" role="toolbar" aria-label="Sort ${mobileInfo} list">${sorts.map(([k, l]) => `<button type="button" data-mobile-sort="${k}" class="${mobileSort === k ? 'on' : ''}">${l}</button>`).join('')}</div>` +
       (rows.length ? `<ol>${rows.join('')}</ol>` : `<p>Nothing to show yet.</p>`) + `</section>`;
   }
 
@@ -120,6 +129,8 @@
     if (chartEl) { delete chartEl.dataset.built; drawChart(chartEl, false); wireChart(chartEl, false); }
   }
   $('mobile-summary').addEventListener('click', (ev) => {
+    const sort = ev.target.closest('[data-mobile-sort]');
+    if (sort) { mobileSort = sort.dataset.mobileSort; renderMobileSummary(); return; }
     const tab = ev.target.closest('[data-mobile-info]');
     if (tab) mobileInfo = mobileInfo === tab.dataset.mobileInfo ? null : tab.dataset.mobileInfo;
     else if (ev.target.closest('[data-mobile-close]')) mobileInfo = null;
@@ -1079,7 +1090,7 @@
   // to share the top row with the series buttons and the change over the range sat at the bottom
   // beside the range buttons, where it read as a caption on them rather than as the headline fact.
   function chartSkeleton(big) {
-    return `<div class="ct">` +
+    return `<div class="ct"><span class="ctitle">P&amp;L trend</span>` +
       `<span class="seg">${[['maker', big ? 'Maker desk' : 'Maker'], ['acct', big ? 'Whole account' : 'Account']].map(([k, l]) => `<button data-series="${k}">${l}</button>`).join('')}</span>` +
       `${big ? '' : '<button class="cx" data-expand="1" title="Open large on the wall screen">⤢</button>'}</div>` +
       `<div class="chead"><span class="cv"></span><span class="cd"></span></div>` +

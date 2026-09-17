@@ -608,6 +608,10 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
   .m-detail-head button { flex: none; width: 30px; height: 30px; margin: -4px -4px 0 0; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #778197; font: 13px var(--sans); cursor: pointer; }
   .m-detail-head button:hover { background: #151e2d; color: #eef1f6; }
   .m-detail-head button:focus-visible { outline: 2px solid #5b8fd6; }
+  .m-sort { display: flex; gap: 5px; padding: 7px 10px; border-bottom: 1px solid rgba(140,168,210,.09); }
+  .m-sort button { padding: 4px 8px; border: 1px solid #27344a; border-radius: 999px; background: #111a28; color: #7f8ba0; font: 700 9px/1 var(--mono); cursor: pointer; }
+  .m-sort button.on { border-color: #4f77ae; background: #1c3150; color: #dceaff; }
+  .m-sort button:focus-visible { outline: 2px solid #5b8fd6; outline-offset: 1px; }
   .m-detail ol { max-height: min(310px, 38dvh); margin: 0; padding: 0; overflow-y: auto; list-style: none; overscroll-behavior: contain; }
   .m-detail li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 9px 10px; border-bottom: 1px solid rgba(140,168,210,.09); }
   .m-detail li:last-child { border-bottom: 0; }
@@ -621,6 +625,7 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 
   .m-chart { height: 150px; margin-top: 9px; padding: 10px; border: 1px solid #1c2535; border-radius: 8px; background: rgba(255,255,255,.015); box-sizing: border-box; }
   .m-chart .ct { gap: 6px; }
+  .m-chart .ctitle { margin-right: auto; color: #9aa7bc; font: 700 9px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; }
   .m-chart .seg button { min-height: 24px; }
   .m-chart .cplot { min-height: 58px; }
 
@@ -677,6 +682,7 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
   .m-stats > button { padding: 7px 16px 6px 8px; }
   .m-stats b { font-size: 14px; }
   .m-detail ol { max-height: 170px; }
+  .m-sort { padding: 6px 8px; }
   .m-chart { height: 128px; margin-top: 8px; padding: 8px; }
   .m-chart .cplot { min-height: 42px; }
   .m-fill { margin-top: 8px; padding: 8px; }
