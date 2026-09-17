@@ -472,6 +472,11 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #askbtn { position: relative; display: inline-flex; align-items: center; gap: 6px; flex: none; cursor: pointer;
   font: 600 10px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: #c9d3e6;
   background: #111827; border: 1px solid #2a3140; border-radius: 999px; padding: 6px 12px 6px 10px; }
+#lookoutlink { flex: none; font: 600 10px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: #9aa4ba;
+  text-decoration: none; border: 1px solid #2a3140; border-radius: 999px; padding: 6px 12px; }
+#lookoutlink:hover { color: #dbe8ff; border-color: #3a4560; }
+/* the painted room needs a real screen; phones get the summary card, as with the floor */
+@media (max-width: 640px), (max-width: 900px) and (max-height: 500px) { #lookoutlink { display: none; } }
 #askbtn:hover, #askbtn.on { background: #16305a; border-color: #2c5596; color: #dbe8ff; }
 #askbtn:focus-visible { outline: 2px solid #5b8fd6; outline-offset: 2px; }
 #askbtn i { display: none; position: absolute; top: -2px; right: -2px; width: 8px; height: 8px; border-radius: 50%;
