@@ -316,6 +316,12 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
    band there is not, and two lines of chrome are two positions that no longer fit */
 #wall:not(.wide) .wstats { gap: .25em 1.2em; margin: .45em 0 .3em; }
 #wall:not(.wide) .wstats div { flex-direction: row; align-items: baseline; gap: .45em; }
+/* Too short to stack a hero digit, its label and a breakdown above the list and still show any
+   positions: drop to one line -- the number alone, no subtitle, no Maker/Cross-venue split (both
+   are still one click away by opening a position or reading the header stats elsewhere). */
+#wall.compact .wnum { display: flex; align-items: baseline; gap: .5em; }
+#wall.compact .wbig { margin-top: 0; font-size: 1.3em; }
+#wall.compact .wsub, #wall.compact .wstats { display: none; }
 #wall .wstats dt { font: 600 .68em/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--brd-label); }
 #wall .wstats dd { margin: 0; font: 600 .95em/1 var(--mono); color: #d5dae3; }
 /* Wide and shallow: the number takes a column of its own and the book takes the rest, instead of
@@ -333,9 +339,9 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 /* The header row is the sort control, Finder- or TradingView-style: click a column to sort by it,
    click the active one again to flip the arrow. Side isn't sortable, just a label. */
 #wall .wcols { flex: none; display: grid; grid-template-columns: 1fr auto 5.4em; gap: .9em; align-items: center;
-  padding: 0 .35em .4em .75em; margin-bottom: .15em; border-bottom: 1px solid var(--brd-rule);
-  font: 600 .66em/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--brd-label); }
-#wall .wcols button { display: inline-flex; align-items: center; gap: .3em; }
+  padding: 0 .35em .5em .75em; margin-bottom: .2em; border-bottom: 1px solid var(--brd-rule);
+  font: 600 .8em/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--brd-label); }
+#wall .wcols button { display: inline-flex; align-items: center; gap: .3em; padding: .3em 0; margin: -.3em 0; }
 #wall .wcols button:hover { color: #cdd6e6; }
 #wall .wcols button.on { color: #dceaff; }
 #wall .wcols button[data-wcol="pl"] { justify-content: flex-end; text-align: right; }
