@@ -28,13 +28,22 @@ primary_region = "iad"          # Ashburn, Virginia — close to the exchange, a
   # pays for questions someone asks (ASK_DAILY_USD caps it). Research is click-only with its own
   # cap (RESEARCH_DAILY_USD).
   BRAIN = "0"
-  # The any-market scanner runs here too, at half the default pair cap until a day of tape and memory
-  # on this 512 MB machine says it can take more. It is paper, and only rules-verified pairs trade.
-  ANY_MAX_PAIRS = "150"
+  # Raised back to src/config.js's own default on 2026-09-17: the half-size cap set on 2026-09-13
+  # was meant to hold until "a day of tape and memory says it can take more," and four days in the
+  # box was dropping 223 already-matched, already-rules-verified pairs a cycle for it -- more pairs
+  # thrown away than kept. Free memory measured ~245 MB of 512 MB at the time. Watch memory after
+  # this deploy; if the box gets tight, the number to pull back down is this one.
+  ANY_MAX_PAIRS = "300"
   # Raised from the 3% default (src/config.js) on 2026-09-17: the desk hit 3% intraday and TESS
   # correctly halted new risk, but 3% of a $10k paper account is $300 -- tight enough that one bad
   # day parks the desk for the rest of it. Widened by request; it is still paper money.
   MAX_DAILY_DRAWDOWN_PCT = "0.05"
+  # Both raised 2026-09-17, same request: the long-dated budget (src/config.js MAX_LONG_ARB_GROUPS)
+  # was full at 3/3 and turning away a real arb (Game Awards Best Audio Design), and the main arb
+  # book (MAX_ARB_GROUPS) was one slot from doing the same at 11/12. Paper capital, not real money
+  # tied up -- widened to give the book more room before the next one binds.
+  MAX_LONG_ARB_GROUPS = "6"
+  MAX_ARB_GROUPS = "20"
 
 # The ledger, the journals and the tick tape. Without this a redeploy silently resets the evidence.
 [[mounts]]
