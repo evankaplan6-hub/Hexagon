@@ -273,6 +273,16 @@ module.exports = {
   closeGuardMin: num('CLOSE_GUARD_MIN', 60),
   exitGap: num('EXIT_GAP', 0.01),
   stopLoss: num('STOP_LOSS', 0.06),
+  // Paper positions also use a percentage stop so a cheap contract cannot lose nearly all of
+  // its value before the flat-dollar STOP_LOSS fires. The tighter of the two stops wins. Keep
+  // this paper-only: changing a funded account's exits requires a separate live review.
+  paperStopLossPct: num('PAPER_STOP_LOSS_PCT', 0.20),
+  // Paper-only gain lock: once a directional position is meaningfully ahead, retain a runner
+  // while protecting part of the peak. The engine applies this as a partial close; maker inventory
+  // uses the same trigger to become reduce-only, avoiding a taker fee just to bank spread.
+  gainLockTriggerPct: num('GAIN_LOCK_TRIGGER_PCT', 0.10),
+  gainLockGivebackPct: num('GAIN_LOCK_GIVEBACK_PCT', 0.35),
+  gainLockRetainPct: num('GAIN_LOCK_RETAIN_PCT', 0.50),
   maxHoldMin: num('MAX_HOLD_MIN', 240),
   minMid: 0.03, // ignore convergence signals on near-certain outcomes (tick noise dominates)
   maxMid: 0.97,

@@ -349,6 +349,14 @@ function makeMakerDesk(cfg) {
       // 2) rest a fresh quote for the next cycle. No sleep here any more -- there is no per-market
       // request left to pace, so the whole book requotes in one pass.
       const q = maker.desiredQuotes(bk, m.inv, cfg);
+      // A profitable maker inventory stops growing once its mark has made a meaningful gain.
+      // Keep the reducing quote resting (so the position can still work down without crossing),
+      // but withdraw the side that would add risk. This is the maker form of gain-lock.
+      const markPnl = m.inv ? (m.inv * (q.mid ?? m.mid ?? 0.5) - (m.cost || 0)) : 0;
+      m.gainPeak = Math.max(Number.isFinite(m.gainPeak) ? m.gainPeak : markPnl, markPnl);
+      const gainTrigger = Math.abs(m.cost || 0) * (cfg.gainLockTriggerPct || 0);
+      const gainFloor = m.gainPeak - Math.abs(m.cost || 0) * (cfg.gainLockGivebackPct || 0);
+      const gainLocked = m.inv !== 0 && m.gainPeak >= gainTrigger && markPnl <= gainFloor;
       // The run-over gate: a market whose touch keeps getting swept is withdrawn from entirely,
       // inventory included, for the cooling period. Said once per market per trip, and journalled,
       // because a market that is quietly not being quoted looks exactly like a quiet market.
@@ -361,6 +369,7 @@ function makeMakerDesk(cfg) {
       // reduce-only: drop whichever side would grow the position
       const next = g.cooled ? { bid: null, ask: null }
         : u.reduceOnly ? { bid: m.inv < 0 ? q.bid : null, ask: m.inv > 0 ? q.ask : null }
+        : gainLocked ? { bid: m.inv < 0 ? q.bid : null, ask: m.inv > 0 ? q.ask : null }
         : { bid: q.bid, ask: q.ask };
       // Queue position. Moving to a new price puts us at the back of whatever is resting there;
       // staying put keeps the position we have already worked down. A cancel-replace at the same

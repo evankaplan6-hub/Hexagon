@@ -156,6 +156,31 @@ group('exitIntent reads one mark in every branch');
   ok('arb positions are left to resolution', d.exitIntent({ strategy: 'arb', entry: 0.4, mark: 0.1, openedAt: 0 }, { inPlay: false, q }, cfg, 1e12) === null);
 }
 
+group('paper convergence positions use the tighter percentage stop');
+{
+  // Keep the venue gap open so the convergence exit does not outrank the stop in these fixtures.
+  const pair = { inPlay: false, q: mk(0.08, 0.09, 0.13, 0.14).q };
+  const paper = { ...cfg, mode: 'paper', stopLoss: 0.06, paperStopLossPct: 0.20 };
+  const live = { ...paper, mode: 'live' };
+  const pos = { strategy: 'converge', entry: 0.10, mark: 0.079, openedAt: 0 };
+  const stopped = d.exitIntent(pos, pair, paper, 60000);
+  ok('a cheap paper contract stops at a 20% loss instead of waiting for 6c', stopped && /^stop:/.test(stopped.reason), stopped);
+  ok('the journal reason names both the percentage loss and effective limit', /21\.0% loss, 2\.0c limit/.test(stopped.reason), stopped);
+  ok('the same move does not change live-mode exits', d.exitIntent(pos, pair, live, 60000) === null);
+  ok('a paper move inside the percentage limit stays open', d.exitIntent({ ...pos, mark: 0.081 }, pair, paper, 60000) === null);
+  ok('locked arbs remain exempt from the proportional stop', d.exitIntent({ ...pos, strategy: 'arb' }, pair, paper, 60000) === null);
+}
+
+group('paper gain lock protects a peak and keeps a runner');
+{
+  const gc = { ...cfg, mode: 'paper', gainLockTriggerPct: 0.10, gainLockGivebackPct: 0.03, gainLockRetainPct: 0.50 };
+  const pos = { strategy: 'converge', entry: 0.50, mark: 0.60, gainPeak: 0.60, gainLockDone: false, qty: 10 };
+  ok('no lock while the peak holds', d.gainLockIntent(pos, gc) === null);
+  const lock = d.gainLockIntent({ ...pos, mark: 0.56 }, gc);
+  ok('retracement returns a partial close', lock && lock.qty === 5, lock);
+  ok('a live-mode position is untouched', d.gainLockIntent({ ...pos, mark: 0.56 }, { ...gc, mode: 'live' }) === null);
+}
+
 group('riskState and biasFor take their numbers from config');
 {
   const base = { operatorHalt: null, age: 1, drawdown: 0, errs: 0, mode: 'paper', liveReady: true, cfg };

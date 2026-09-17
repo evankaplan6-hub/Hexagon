@@ -282,9 +282,35 @@ function exitIntent(pos, pair, cfg, now) {
   if (!q) return null; // held on the last mark; the time exits above stay armed
   const gap = Math.abs(q.ksMid - q.pmMid);
   const perContract = mark - pos.entry;
+  // A fixed 6c stop is meaningful on a 60c contract and almost useless on a 6c contract. Paper
+  // mode therefore adds a proportional stop and uses whichever threshold is tighter. This is
+  // deliberately not applied to live mode: changing funded-account exits needs explicit review.
+  const pctStop = cfg.mode === 'paper' && cfg.paperStopLossPct > 0
+    ? pos.entry * cfg.paperStopLossPct
+    : Infinity;
+  const stopAt = Math.min(cfg.stopLoss, pctStop);
   if (gap <= cfg.exitGap) return { px: mark, reason: `gap closed to ${c(gap)}, held ${Math.round(heldMin)}m` };
-  if (perContract <= -cfg.stopLoss) return { px: mark, reason: `stop: mark ${c(perContract)} vs entry` };
+  if (perContract <= -stopAt) {
+    const pct = pos.entry > 0 ? Math.abs(perContract / pos.entry) : 0;
+    return { px: mark, reason: `stop: mark ${c(perContract)} vs entry (${(pct * 100).toFixed(1)}% loss, ${c(stopAt)} limit)` };
+  }
   return null;
+}
+
+// After a meaningful gain, protect part of the best mark while leaving a runner open. The caller
+// persists `gainPeak`/`gainLockDone`; this remains pure and paper-only so live exits are unchanged.
+function gainLockIntent(pos, cfg) {
+  if (!pos || pos.strategy !== 'converge' || cfg.mode !== 'paper' || pos.gainLockDone) return null;
+  const entry = Number(pos.entry), mark = Number(pos.mark), peak = Number(pos.gainPeak);
+  if (!(entry > 0) || !Number.isFinite(mark) || !Number.isFinite(peak)) return null;
+  const trigger = entry * (1 + Math.max(0, cfg.gainLockTriggerPct || 0));
+  if (peak < trigger) return null;
+  const floor = peak - entry * Math.max(0, cfg.gainLockGivebackPct || 0);
+  if (mark > floor) return null;
+  const retain = Math.max(0.1, Math.min(0.9, cfg.gainLockRetainPct == null ? 0.5 : cfg.gainLockRetainPct));
+  const qty = Math.max(1, Math.floor(pos.qty * (1 - retain)));
+  if (qty >= pos.qty) return null;
+  return { qty, floor, peak, reason: `gain lock: sold ${qty}, retained ${pos.qty - qty} runner` };
 }
 
 // Should a locked arb be unwound early? Both legs sold at their bids pay `bidSum` a pair now,
@@ -413,4 +439,4 @@ function arbEdgeLive(signal, books, cfg) {
   return 1 - cost;
 }
 
-module.exports = { fairValue, quoteFault, convEdge, pairSignals, scan, liveWindow, exitIntent, arbUnwind, arbReturn, arbEdgeLive, riskState, biasFor, bookFull, persistFilter, sizePlan, rankSignals, pmRate };
+module.exports = { fairValue, quoteFault, convEdge, pairSignals, scan, liveWindow, exitIntent, gainLockIntent, arbUnwind, arbReturn, arbEdgeLive, riskState, biasFor, bookFull, persistFilter, sizePlan, rankSignals, pmRate };

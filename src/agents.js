@@ -195,6 +195,11 @@ async function RIGO(E) {
     // value (engine.legQuote says why). `typeof` because the golden/replay harnesses pass a
     // deliberately tiny engine-shaped object.
     else if (typeof E.venueMark === 'function') { const vm = E.venueMark(pos); if (vm != null) { pos.mark = vm; marked++; } }
+    if (pos.strategy === 'converge' && Number.isFinite(pos.mark)) {
+      pos.gainPeak = Math.max(Number.isFinite(pos.gainPeak) ? pos.gainPeak : pos.mark, pos.mark);
+      const lock = decide.gainLockIntent(pos, E.cfg);
+      if (lock) { pos.gainLockDone = true; await E.close(pos, pos.mark, lock.reason, false, lock.qty); continue; }
+    }
     // A stuck leg -- one whose exit failed or went unfilled -- is naked directional risk sitting
     // in the book. Retry it every cycle at the current mark, ahead of any strategy logic, until
     // it clears. Nothing here waits for a signal or a threshold.

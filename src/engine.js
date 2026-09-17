@@ -446,7 +446,7 @@ class Engine {
   // RIGO's await -- each minted a DIFFERENT idempotency key and sent a separate real sell for the
   // same contracts. Kalshi cannot dedupe two different client_order_ids. Paper hides it entirely:
   // PaperBroker.sell does no I/O, so the loop drains before anything can interleave.
-  async close(pos, px, reason, resolved = false) {
+  async close(pos, px, reason, resolved = false, qty = pos.qty) {
     // An uncertain sell may have filled at the exchange. Do not turn its next scheduled RIGO pass
     // into a new client-order ID and a possible oversell; reconciliation owns this position now.
     if (pos.pendingExit) {
@@ -455,18 +455,18 @@ class Engine {
     }
     if (this.closing.has(pos.id)) return;
     this.closing.add(pos.id);
-    try { return await this._close(pos, px, reason, resolved); }
+    try { return await this._close(pos, px, reason, resolved, Math.max(1, Math.min(pos.qty, Math.floor(qty)))); }
     finally { this.closing.delete(pos.id); }
   }
 
-  async _close(pos, px, reason, resolved = false) {
+  async _close(pos, px, reason, resolved = false, qty = pos.qty) {
     let fill;
-    if (resolved) fill = { filled: pos.qty, avg: px, fee: 0, proceeds: r2(pos.qty * px) };
+    if (resolved) fill = { filled: qty, avg: px, fee: 0, proceeds: r2(qty * px) };
     else {
       // A position whose exit does not fill is STUCK, not closed. Flag it so RIGO keeps trying
       // every cycle instead of leaving naked directional risk sitting in the book unattended.
       pos.exitSeq = (pos.exitSeq || 0) + 1;
-      try { fill = await this.broker.sell({ venue: pos.venue, ref: pos.ref, side: pos.side, qty: pos.qty, px, feeRate: pos.feeRate, key: `${pos.id}-out-${pos.exitSeq}` }); }
+      try { fill = await this.broker.sell({ venue: pos.venue, ref: pos.ref, side: pos.side, qty, px, feeRate: pos.feeRate, key: `${pos.id}-out-${pos.exitSeq}` }); }
       catch (e) {
         if (ambiguousOrder(e)) {
           // The broker has already durably recorded the order intent. Keep the same local marker
@@ -835,7 +835,7 @@ class Engine {
         ksTop: top([...this.quotes.ks.values()]).map((m) => ({ q: m.title, px: r3((m.yesBid + m.yesAsk) / 2), vol: Math.round(m.vol24), url: m.url })),
       },
       signals: this.signals.slice(0, 5).map((x) => ({ type: x.type, label: x.pair.label, edge: r3(x.edge), gap: x.gap != null ? r3(x.gap) : null })),
-      cfg: { minGap: this.cfg.minGap, minEdge: this.cfg.minEdge, exitGap: this.cfg.exitGap, stopLoss: this.cfg.stopLoss, minArbEdge: this.cfg.minArbEdge, maxPositionPct: this.cfg.maxPositionPct, maxOpenPositions: this.cfg.maxOpenPositions, maxArbGroups: this.cfg.maxArbGroups, maxDailyDrawdownPct: this.cfg.maxDailyDrawdownPct, maxHoldMin: this.cfg.maxHoldMin, priceEvery: this.cfg.priceEvery,
+      cfg: { minGap: this.cfg.minGap, minEdge: this.cfg.minEdge, exitGap: this.cfg.exitGap, stopLoss: this.cfg.stopLoss, paperStopLossPct: this.cfg.paperStopLossPct, gainLockTriggerPct: this.cfg.gainLockTriggerPct, gainLockGivebackPct: this.cfg.gainLockGivebackPct, gainLockRetainPct: this.cfg.gainLockRetainPct, minArbEdge: this.cfg.minArbEdge, maxPositionPct: this.cfg.maxPositionPct, maxOpenPositions: this.cfg.maxOpenPositions, maxArbGroups: this.cfg.maxArbGroups, maxDailyDrawdownPct: this.cfg.maxDailyDrawdownPct, maxHoldMin: this.cfg.maxHoldMin, priceEvery: this.cfg.priceEvery,
         makerMarkets: this.cfg.makerMarkets, makerMinTradesPerDay: this.cfg.makerMinTradesPerDay },
     };
   }
