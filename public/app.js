@@ -1147,7 +1147,7 @@
   // beside the range buttons, where it read as a caption on them rather than as the headline fact.
   function chartSkeleton(big) {
     return `<div class="ct"><span class="ctitle">All paper trades</span>` +
-      `${big ? '' : '<button class="cx" data-expand="1" title="Open large on the wall screen">⤢</button>'}</div>` +
+      `${big ? '' : '<button class="cx" data-expand="1" title="Open large">⤢</button>'}</div>` +
       `<div class="chead"><span class="cv"></span><span class="cd"></span></div>` +
       `<div class="cplot"><svg viewBox="0 0 1000 400" preserveAspectRatio="none"></svg><div class="cyaxis"></div>` +
       `<i class="cdot" hidden></i><div class="ctip" hidden></div></div>` +
@@ -1266,7 +1266,7 @@
       const b = ev.target.closest('button');
       if (!b) return;
       if (b.dataset.range) { chart.range = b.dataset.range; chart.band = null; saveChart(); }
-      if (b.dataset.expand) { sel = { kind: 'chart', key: 'pnl' }; wallKey = ''; }
+      if (b.dataset.expand) { openBigChart(); return; }
       redraw();
     });
     root.addEventListener('pointermove', (ev) => {
@@ -1400,15 +1400,7 @@
         const m = sel && sel.kind === 'market';
         const a = sel && sel.kind === 'agent' ? S.agents.find((x) => x.key === sel.key) : null;
         el.style.fontSize = `${wallFs}px`;
-        if (sel && sel.kind === 'chart') {
-          if (el.dataset.mode !== 'chart') {
-            el.innerHTML = `<div class="wh"><button class="wback" data-back="1">‹ Back</button><span>Profit and loss · drag to measure</span></div><div class="pnl big"></div>`;
-            wireChart(el.querySelector('.pnl'), true);
-          }
-          el.dataset.mode = 'chart';
-          drawChart(el.querySelector('.pnl'), true);
-        } else {
-          el.dataset.mode = '';
+        {
           el.innerHTML = sel && sel.kind === 'market' ? wallRecap(sel.key, sel.at, M) : a ? wallAgent(a) : wallHome(M);
           const list2 = el.querySelector('.wlist, .wlog');
           if (list2) list2.scrollTop = top;
@@ -1466,6 +1458,15 @@
   });
 
   wireChart($('chart'), false);
+
+  // The large chart used to open on the wall screen, which is a short strip of the room: its plot
+  // came out 60px tall, smaller than the stand it was opened from. It opens over the page instead.
+  const bigChart = $('chartbig');
+  wireChart($('chartbig-pnl'), true);
+  function openBigChart() { bigChart.hidden = false; chart.band = null; drawChart($('chartbig-pnl'), true); bigChart.querySelector('.cbback').focus(); }
+  function closeBigChart() { if (bigChart.hidden) return; bigChart.hidden = true; chart.hoverT = null; chart.dragFrom = null; chart.band = null; }
+  bigChart.addEventListener('click', (ev) => { if (ev.target === bigChart || ev.target.closest('[data-close]')) closeBigChart(); });
+  window.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') closeBigChart(); });
 
   $('wall').addEventListener('click', (ev) => {
     const b = ev.target.closest('button');
@@ -1856,7 +1857,7 @@
   askSave();
 
   // ------------------------------------------------------------ wiring
-  function render() { frameSeq++; renderHeader(); renderMobileSummary(); ingest(); renderAsk(); }
+  function render() { frameSeq++; renderHeader(); renderMobileSummary(); ingest(); renderAsk(); if (!bigChart.hidden) drawChart($('chartbig-pnl'), true); }
   function connect() {
     const es = new EventSource('/api/stream');
     es.onmessage = (ev) => { try { S = JSON.parse(ev.data); S._rx = S.now; S._rxPerf = performance.now(); lastFrameAt = Date.now(); render(); } catch (e) { console.error(e); } };
