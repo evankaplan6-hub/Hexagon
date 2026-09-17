@@ -628,6 +628,7 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
   .m-chart .ctitle { margin-right: auto; color: #9aa7bc; font: 700 9px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; }
   .m-chart .seg button { min-height: 24px; }
   .m-chart .cplot { min-height: 58px; }
+  .m-chart .cplot { touch-action: pan-y; cursor: default; }
 
   .m-fill { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; align-items: center; margin-top: 10px; padding: 10px; border: 1px solid #1c2535; border-radius: 8px; background: rgba(255,255,255,.015); }
   .m-fill b { color: #eef1f6; font-size: 13px; }

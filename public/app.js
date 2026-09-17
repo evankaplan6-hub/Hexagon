@@ -1213,6 +1213,7 @@
       redraw();
     });
     root.addEventListener('pointermove', (ev) => {
+      if (ev.pointerType === 'touch') return;
       if (!ev.target.closest('.cplot')) { if (chart.hoverT != null && chart.dragFrom == null) { chart.hoverT = null; redraw(); } return; }
       const t = tAt(ev);
       if (t == null) return;
@@ -1222,6 +1223,7 @@
     });
     root.addEventListener('pointerleave', () => { chart.hoverT = null; chart.dragFrom = null; redraw(); });
     root.addEventListener('pointerdown', (ev) => {
+      if (ev.pointerType === 'touch') return;
       if (!ev.target.closest('.cplot')) return;
       const t = tAt(ev);
       if (t == null) return;
