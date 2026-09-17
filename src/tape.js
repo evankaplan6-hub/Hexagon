@@ -124,6 +124,9 @@ function makeTape({ maxPages = 5, stream = null } = {}) {
   async function books(tickers) {
     const list = [...new Set(tickers)].filter(Boolean);
     const out = new Map();
+    // The same batched response carries lifecycle and result fields. Keep them beside the books so
+    // makerdesk can settle held inventory without adding one request per pinned market.
+    const markets = new Map();
     let failed = 0;
     // the URL is the only limit; chunk so a wide book cannot produce an over-long request
     for (let i = 0; i < list.length; i += 40) {
@@ -132,8 +135,15 @@ function makeTape({ maxPages = 5, stream = null } = {}) {
       try { d = await getWithBackoff(`${ks.BASE}/markets?tickers=${chunk.join(',')}&limit=1000`); }
       catch { failed += chunk.length; continue; }
       for (const m of (d.markets || [])) {
+        markets.set(m.ticker, {
+          status: m.status || null,
+          result: m.result || '',
+          settlementValue: num(m.settlement_value_dollars),
+        });
         const b = num(m.yes_bid_dollars), a = num(m.yes_ask_dollars);
-        if (b == null || a == null || !(a > b)) continue;
+        // A finalized market commonly reports 0 bid / 1 ask. That is an empty placeholder, not a
+        // tradeable 50c market and never a valid mark. Settlement metadata above owns that case.
+        if ((m.status && m.status !== 'active') || b == null || a == null || !(a > b) || (b === 0 && a === 1)) continue;
         out.set(m.ticker, {
           yesBids: [{ price: b, size: num(m.yes_bid_size_fp) || 0 }],
           yesAsks: [{ price: a, size: num(m.yes_ask_size_fp) || 0 }],
@@ -141,7 +151,7 @@ function makeTape({ maxPages = 5, stream = null } = {}) {
         });
       }
     }
-    return { books: out, failed };
+    return { books: out, markets, failed };
   }
 
   return { since, books, setStream, stats: () => ({ gaps, pages, streamed, polled }) };

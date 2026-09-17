@@ -302,13 +302,32 @@ function makeMakerDesk(cfg) {
       byTicker.get(t.ticker).push(t);
     }
 
-    let filled = 0, netQty = 0;
+    let filled = 0, netQty = 0, settled = 0, settledQty = 0, settledPnl = 0;
     for (const u of work) {
       const m = S.markets[u.ticker] || (S.markets[u.ticker] = { series: u.series, inv: 0, cost: 0, realized: 0, fills: 0, quotes: { bid: null, ask: null }, seen: [] });
       // A ticker like KXBALANCEPOWERCOMBO-27FEB-RR says nothing about what is being traded. Keep
       // the exchange's own words for it, and keep them on the ledger so a market that drops out of
       // the universe can still say what it was.
       if (u.title) { m.title = u.title; m.sub = u.sub || ''; }
+      const lifecycle = bookRes.markets && bookRes.markets.get(u.ticker);
+      const yesPx = lifecycle && (lifecycle.result === 'yes' ? 1 : lifecycle.result === 'no' ? 0
+        : ((lifecycle.status === 'determined' || lifecycle.status === 'finalized') && Number.isFinite(lifecycle.settlementValue)
+          ? lifecycle.settlementValue : null));
+      if (m.inv && yesPx != null && yesPx >= 0 && yesPx <= 1) {
+        const beforeInv = m.inv, beforeCost = m.cost || 0;
+        const res = maker.settlePosition(m, yesPx);
+        S.cash = r2(S.cash + res.cashDelta);
+        S.realized = r2((S.realized || 0) + res.pnl);
+        m.inv = res.inv; m.cost = res.cost; m.realized = res.realized;
+        m.mid = yesPx; m.quotes = { bid: null, ask: null };
+        m.settledPx = yesPx; m.settledAt = Date.now();
+        settled++; settledQty += Math.abs(beforeInv); settledPnl = r2(settledPnl + res.pnl);
+        E.journal(E, 'MAKER_SETTLE', {
+          ticker: u.ticker, qty: beforeInv, cost: beforeCost, yesPx,
+          cashDelta: res.cashDelta, pnl: res.pnl, cash: S.cash,
+        });
+        continue;
+      }
       const trades = byTicker.get(u.ticker) || [];        // already oldest-first
       const bk = bookRes.books.get(u.ticker);
       if (!bk) continue;                                   // no book this round: leave the quote alone
@@ -390,6 +409,7 @@ function makeMakerDesk(cfg) {
     let inv = 0, mtm = 0;
     for (const m of Object.values(S.markets)) { inv += Math.abs(m.inv); mtm += m.inv * (m.mid ?? 0.5); }
     S.equity = r2(S.cash + mtm);
+    if (settled) E.log('MAKR', 'SETTLE', settledPnl, `settled ${settled} finalized market${settled === 1 ? '' : 's'}, ${Math.round(settledQty)} contracts · realised ${settledPnl >= 0 ? '+' : '-'}${money(settledPnl)} · equity ${money(S.equity)}`);
 
     // Equity history. The board could say what the desk is worth right now but never which way it
     // had been going, and for a market maker that is the whole question -- banked cash only ever

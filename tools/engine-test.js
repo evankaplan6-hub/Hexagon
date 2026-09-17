@@ -71,6 +71,17 @@ const position = (over = {}) => ({
     ok('a broken pair has no locked settlement P&L', g.lockedPnl === null && E.pnlScorecard().integrityAlerts === 1, g);
   }
 
+  group('the dashboard fill feed includes cross-venue entries and closes');
+  {
+    const E = engine();
+    E.state.positions = [position({ id: 'open', openedAt: 300 })];
+    E.state.closed = [position({ id: 'done', openedAt: 100, exitAt: 200, exit: 0.50, exitPnl: -10.90, pnl: -10.90, reason: 'stop' })];
+    const fills = E.snapshot().takerFills;
+    ok('an open position contributes its entry fill', fills.some((f) => f.id === 'open:open' && f.action === 'Opened' && f.px === 0.60), fills);
+    ok('a closed position contributes both entry and close fills', fills.some((f) => f.id === 'done:open') && fills.some((f) => f.id === 'done:close' && f.action === 'Closed' && f.pnl === -10.90), fills);
+    ok('the combined feed is newest first', fills.map((f) => f.at).join(',') === '300,200,100', fills.map((f) => f.at));
+  }
+
   group('arb intent validation journals the durable group record');
   {
     const E = engine();
