@@ -216,6 +216,14 @@ function makeMakerDesk(cfg) {
   function book(E) {
     const s = E.state.maker;
     if (!s.markets) s.markets = {};
+    // Version 1 briefly marked finalized 0c/100c placeholder books at 50c. The settlement repair
+    // corrected the ledger, but the already-sampled chart points before that repair are not
+    // reconstructable market by market. Start the combined history at the repair boundary once,
+    // while preserving every accurate point after it. Fresh ledgers set 0 and never move it.
+    if (!Number.isFinite(s.historyValidFrom)) {
+      const repaired = Object.values(s.markets).map((m) => Number(m.settledAt) || 0).filter(Boolean);
+      s.historyValidFrom = repaired.length ? Math.max(...repaired) : 0;
+    }
     return s;
   }
 
@@ -414,16 +422,14 @@ function makeMakerDesk(cfg) {
     // Equity history. The board could say what the desk is worth right now but never which way it
     // had been going, and for a market maker that is the whole question -- banked cash only ever
     // rises, so the shape of the mark against it is the actual P&L story. Sampled once a minute and
-    // capped at twelve hours; older points are dropped rather than thinned, because a chart that
-    // silently changes resolution partway along is worse than a short one.
+    // capped at 5,000 minute samples (about 3.5 days). The former twelve-hour cutoff made the 24h
+    // button and "All" axis claim a range the combined chart did not actually possess.
     const nowMs = Date.now();
     S.hist = S.hist || [];
     const last = S.hist[S.hist.length - 1];
     if (!last || nowMs - last.t >= 60000) {
       S.hist.push({ t: nowMs, c: r2(S.realized || 0), m: r2(mtm), e: r2(S.equity - cfg.initialBalance) });
-      const cutoff = nowMs - 12 * 3600 * 1000;
-      while (S.hist.length && S.hist[0].t < cutoff) S.hist.shift();
-      if (S.hist.length > 800) S.hist.splice(0, S.hist.length - 800);
+      if (S.hist.length > 5000) S.hist.splice(0, S.hist.length - 5000);
     }
     E.touch('MAKR', filled ? `${filled} fills, ${Math.round(netQty)} contracts` : `${universe.length} quoted, ${Math.round(inv)} inv`);
     if (filled && E.due('makr-fill', 60)) {
@@ -494,7 +500,7 @@ function makeMakerDesk(cfg) {
     return {
       cash: S.cash, equity: S.equity, realized: S.realized || 0, fills: S.fills || 0, halted: S.halted || null,
       lastFill: S.lastFill || null, recent: (S.recent || []).slice(0, 12), lastScanAt: lastUniverseAt || null,
-      hist: S.hist || [],
+      hist: S.hist || [], historyValidFrom: S.historyValidFrom || 0,
       // where the tape is coming from, so "no fills" can be told apart from "not listening"
       feed: stream ? { mode: 'stream', ...stream.health(), ...tape.stats() } : { mode: 'poll', ...tape.stats() },
       initial: cfg.initialBalance, enabled: cfg.makerEnabled,

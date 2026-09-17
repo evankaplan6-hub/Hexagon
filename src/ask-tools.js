@@ -448,6 +448,7 @@ const SETTINGS = [
   ['arbUnwindMargin', 'ARB_UNWIND_MARGIN', 'gain per contract over holding needed to unwind an arb early'],
   ['exitGap', 'EXIT_GAP', 'gap at which a convergence bet is closed as done'],
   ['stopLoss', 'STOP_LOSS', 'loss per contract that stops out a convergence bet'],
+  ['paperStopLossPct', 'PAPER_STOP_LOSS_PCT', 'paper-only percentage loss that stops a convergence bet when tighter than STOP_LOSS'],
   ['maxHoldMin', 'MAX_HOLD_MIN', 'longest a convergence bet is held, minutes'],
   ['minMid', null, 'lowest price a convergence bet is taken at'],
   ['maxMid', null, 'highest price a convergence bet is taken at'],

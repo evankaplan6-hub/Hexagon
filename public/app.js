@@ -1076,16 +1076,16 @@
   } catch { /* private window: defaults */ }
   const saveChart = () => { try { localStorage.setItem('hex-chart', JSON.stringify({ range: chart.range })); } catch { /* ignore */ } };
 
-  function chartPoints() {
-    const M = S.maker || {};
-    const acct = (S.balanceHistory || []).map((p) => ({ t: p.t, v: r2(p.b - S.initial) })).sort((a, b) => a.t - b.t);
-    const making = (M.hist || []).map((p) => ({ t: p.t, v: p.e })).sort((a, b) => a.t - b.t);
-    const streams = [acct, making].filter((x) => x.length);
-    if (!streams.length) return [];
+  function combinePnlHistory(balanceHistory, makerHistory, initial, validFrom = 0) {
+    const acct = (balanceHistory || []).filter((p) => p.t >= validFrom).map((p) => ({ t: p.t, v: r2(p.b - initial) })).sort((a, b) => a.t - b.t);
+    const making = (makerHistory || []).filter((p) => p.t >= validFrom).map((p) => ({ t: p.t, v: p.e })).sort((a, b) => a.t - b.t);
+    // One ledger on its own is not an "all paper trades" history. Wait until both have an
+    // observation rather than silently treating the missing ledger as $0.
+    if (!acct.length || !making.length) return [];
     // Both ledgers are step functions sampled on different clocks. Start where every available
     // stream has a value, then carry each last observation forward at the union of timestamps.
-    const start = Math.max(...streams.map((x) => x[0].t));
-    const times = [...new Set(streams.flatMap((x) => x.filter((p) => p.t >= start).map((p) => p.t)))].sort((a, b) => a - b);
+    const start = Math.max(acct[0].t, making[0].t);
+    const times = [...new Set([...acct, ...making].filter((p) => p.t >= start).map((p) => p.t))].sort((a, b) => a - b);
     let ai = 0, mi = 0, av = 0, mv = 0;
     while (ai < acct.length && acct[ai].t <= start) av = acct[ai++].v;
     while (mi < making.length && making[mi].t <= start) mv = making[mi++].v;
@@ -1095,14 +1095,49 @@
       while (mi < making.length && making[mi].t <= t) mv = making[mi++].v;
       pts.push({ t, v: r2(av + mv) });
     }
+    return pts;
+  }
+
+  function windowPnlPoints(pts, now, span) {
+    if (!Number.isFinite(span) || pts.length < 2) return pts;
+    const cutoff = now - span, after = pts.filter((p) => p.t >= cutoff);
+    // A P&L history is a step series. The point immediately before the cutoff is the opening
+    // value at the cutoff and belongs in the requested range; omitting it shortens every range.
+    let before = null;
+    for (const p of pts) { if (p.t > cutoff) break; before = p; }
+    if (before && (!after.length || after[0].t !== before.t)) after.unshift(before);
+    return after.length >= 2 ? after : pts.slice(-2);
+  }
+
+  function niceAxis(pts) {
+    let lo = Math.min(...pts.map((p) => p.v)), hi = Math.max(...pts.map((p) => p.v));
+    const seen = Math.max(hi - lo, 0.02);
+    if (lo > 0 && lo <= seen * 0.35) lo = 0;
+    if (hi < 0 && -hi <= seen * 0.35) hi = 0;
+    const floor = Math.max(1, Math.abs(pts[pts.length - 1].v) * 0.02);
+    if (hi - lo < floor) { const mid = (hi + lo) / 2; lo = mid - floor / 2; hi = mid + floor / 2; }
+    const padded = (hi - lo) * 0.04, rough = ((hi - lo) + 2 * padded) / 4;
+    const mag = 10 ** Math.floor(Math.log10(Math.max(rough, 0.0001))), f = rough / mag;
+    const step = (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * mag;
+    lo = Math.floor((lo - padded) / step) * step;
+    hi = Math.ceil((hi + padded) / step) * step;
+    if (hi <= lo) hi = lo + step;
+    const ticks = [];
+    for (let v = lo, i = 0; v <= hi + step / 100 && i < 12; v += step, i++) ticks.push(r2(v));
+    return { lo: r2(lo), hi: r2(hi), step: r2(step), ticks };
+  }
+
+  function chartPoints() {
+    const M = S.maker || {};
+    const pts = combinePnlHistory(S.balanceHistory, M.hist, S.initial, M.historyValidFrom || 0);
+    if (!pts.length) return [];
     // End on the live combined value so the line is never stale.
     const makerLive = Number.isFinite(M.equity) && Number.isFinite(M.initial) ? M.equity - M.initial : 0;
     const acctLive = Number.isFinite(S.equity) && Number.isFinite(S.initial) ? S.equity - S.initial : 0;
     pts.push({ t: S.now, v: r2(makerLive + acctLive) });
     if (pts.length < 2) return pts;
     const span = RANGES.find(([r]) => r === chart.range)[1];
-    const inRange = pts.filter((p) => p.t >= S.now - span);
-    return inRange.length >= 2 ? inRange : pts.slice(-2);
+    return windowPnlPoints(pts, S.now, span);
   }
   const nearest = (pts, t) => pts.reduce((b, p) => (Math.abs(p.t - t) < Math.abs(b.t - t) ? p : b), pts[0]);
   const spanTxt = (ms) => { const m = Math.round(ms / 60000); return m < 60 ? `${m}m` : m < 1440 ? `${(m / 60).toFixed(m < 600 ? 1 : 0)}h` : `${(m / 1440).toFixed(1)}d`; };
@@ -1114,7 +1149,7 @@
     return `<div class="ct"><span class="ctitle">All paper trades</span>` +
       `${big ? '' : '<button class="cx" data-expand="1" title="Open large on the wall screen">⤢</button>'}</div>` +
       `<div class="chead"><span class="cv"></span><span class="cd"></span></div>` +
-      `<div class="cplot"><svg viewBox="0 0 1000 400" preserveAspectRatio="none"></svg><span class="yhi"></span><span class="ylo"></span>` +
+      `<div class="cplot"><svg viewBox="0 0 1000 400" preserveAspectRatio="none"></svg><div class="cyaxis"></div>` +
       `<i class="cdot" hidden></i><div class="ctip" hidden></div></div>` +
       `<div class="cb"><span class="seg">${RANGES.map(([r]) => `<button data-range="${r}">${r}</button>`).join('')}</span><span class="cr"></span></div>`;
   }
@@ -1122,10 +1157,21 @@
   function drawChart(el, big) {
     if (!S) return;
     if (el.dataset.built !== (big ? 'big' : 'small')) { el.innerHTML = chartSkeleton(big); el.dataset.built = big ? 'big' : 'small'; }
-    el.querySelectorAll('[data-range]').forEach((b) => b.classList.toggle('on', b.dataset.range === chart.range));
+    const allPts = (() => { const old = chart.range; chart.range = 'All'; const p = chartPoints(); chart.range = old; return p; })();
+    const available = allPts.length > 1 ? allPts[allPts.length - 1].t - allPts[0].t : 0;
+    const selectedSpan = RANGES.find(([r]) => r === chart.range)[1];
+    if (Number.isFinite(selectedSpan) && available < selectedSpan) chart.range = 'All';
+    el.querySelectorAll('[data-range]').forEach((b) => {
+      const span = RANGES.find(([r]) => r === b.dataset.range)[1];
+      b.classList.toggle('on', b.dataset.range === chart.range);
+      b.disabled = Number.isFinite(span) && available < span;
+      b.title = b.disabled ? `Available after ${spanTxt(span - available)} more history` : '';
+    });
     const pts = chartPoints(), svg = el.querySelector('svg'), tip = el.querySelector('.ctip'), dot = el.querySelector('.cdot');
     if (pts.length < 2) {
       svg.innerHTML = '';
+      el.querySelector('.cyaxis').innerHTML = '';
+      dot.hidden = true; tip.hidden = true;
       el.querySelector('.cv').textContent = signed(pts.length ? pts[0].v : 0);
       el.querySelector('.cd').innerHTML = '';
       el.querySelector('.cr').textContent = 'collecting, one point a minute';
@@ -1133,20 +1179,14 @@
     }
 
     const t0 = pts[0].t, t1 = Math.max(pts[pts.length - 1].t, t0 + 1);
-    // The scale, which has two ways to lie. Pinned to zero -- as it was -- a desk parked at -$84
+    // The scale has two ways to lie. Pinned to zero -- as it was -- a desk parked at -$84
     // with 22c of movement in it spends the whole plot on the empty distance back to zero: the line
     // lies flat on the floor of the box and the fill floods the panel. Pinned to the data instead,
     // that same 22c of drift is stretched over the full height and a flat day reads as a
     // rollercoaster. So: follow the data, keep zero when the line is near enough to it to be worth
     // the room, and hold the window open to a floor -- a dollar, or 2% of the level, whichever is
     // larger -- so that small really does look small.
-    let lo = Math.min(...pts.map((p) => p.v)), hi = Math.max(...pts.map((p) => p.v));
-    const seen = Math.max(hi - lo, 0.02);
-    if (lo > 0 && lo <= seen * 0.35) lo = 0;
-    if (hi < 0 && -hi <= seen * 0.35) hi = 0;
-    const floor = Math.max(1, Math.abs(pts[pts.length - 1].v) * 0.02);
-    if (hi - lo < floor) { const mid = (hi + lo) / 2; lo = mid - floor / 2; hi = mid + floor / 2; }
-    const pad = (hi - lo) * 0.12; lo -= pad; hi += pad;
+    const axis = niceAxis(pts), { lo, hi } = axis;
     const X = (t) => ((t - t0) / (t1 - t0)) * 1000, Y = (v) => 400 - ((v - lo) / (hi - lo)) * 400;
     const last = pts[pts.length - 1], first = pts[0], up = last.v >= 0;
     const zeroIn = lo < 0 && hi > 0;   // only draw the zero line when it is actually on the plot
@@ -1157,9 +1197,10 @@
     const line = pts.map((p, i) => `${i ? 'L' : 'M'}${X(p.t).toFixed(1)},${Y(p.v).toFixed(1)}`).join('');
     const zy = Y(0).toFixed(1);
     let g = `<defs><linearGradient id="cg-${big ? 'b' : 's'}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${col}" stop-opacity=".16"/><stop offset="1" stop-color="${col}" stop-opacity="0"/></linearGradient></defs>`;
-    // Gridlines first, then the band, then the line: a plot with nothing behind it gives the eye no
-    // way to judge how far a wiggle actually is. Quarters of the drawn range, faint enough to ignore.
-    for (let i = 1; i < 4; i++) g += `<line x1="0" x2="1000" y1="${i * 100}" y2="${i * 100}" stroke="#8ca8d2" stroke-opacity=".07" vector-effect="non-scaling-stroke"/>`;
+    // Gridlines and their labels use clean dollar increments. The old labels were merely the
+    // padded pixel bounds (for example -$252.61 and -$997.53), which looked precise but were not
+    // observations and made the scale needlessly hard to read.
+    for (const v of axis.ticks) g += `<line x1="0" x2="1000" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" stroke="#8ca8d2" stroke-opacity=".07" vector-effect="non-scaling-stroke"/>`;
     if (chart.band) {
       const a = Math.min(chart.band[0], chart.band[1]), b = Math.max(chart.band[0], chart.band[1]);
       g += `<rect x="${X(a).toFixed(1)}" y="0" width="${Math.max(2, X(b) - X(a)).toFixed(1)}" height="400" fill="#5ec8e0" fill-opacity=".12"/>`;
@@ -1174,9 +1215,8 @@
     g += `<path d="${line}" fill="none" stroke="${col}" stroke-width="${big ? 2.5 : 2}" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>`;
     if (chart.hoverT != null) g += `<line x1="${X(chart.hoverT).toFixed(1)}" x2="${X(chart.hoverT).toFixed(1)}" y1="0" y2="400" stroke="#94a3b8" stroke-opacity=".6" vector-effect="non-scaling-stroke"/>`;
     svg.innerHTML = g;
-    // the labels are the top and bottom of the box, so they say what those edges are worth
-    el.querySelector('.yhi').textContent = signed(r2(hi));
-    el.querySelector('.ylo').textContent = signed(r2(lo));
+    const digits = axis.step < 0.1 ? 2 : axis.step < 1 ? 1 : 0;
+    el.querySelector('.cyaxis').innerHTML = axis.ticks.map((v) => `<span style="top:${(Y(v) / 4).toFixed(2)}%">${v === 0 ? '$0' : signed(v, digits)}</span>`).join('');
 
     const cv = el.querySelector('.cv');
     cv.textContent = signed(last.v); cv.className = `cv ${up ? 'pos' : 'neg'}`;

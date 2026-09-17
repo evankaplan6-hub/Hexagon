@@ -423,6 +423,7 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 .pnl .seg button.on, #wall .pnl .seg button.on { background: #212b3c; color: var(--brd-bright);
   box-shadow: inset 0 1px 0 rgba(255,255,255,.05); }
 .pnl .seg button:hover:not(.on), #wall .pnl .seg button:hover:not(.on) { color: #c9cfd9; }
+.pnl .seg button:disabled, #wall .pnl .seg button:disabled { color: #3e4655; cursor: default; opacity: .55; }
 #wall .pnl.big .seg button { font-size: .8em; padding: .4em .95em; }
 /* a 6px glyph is not a button: the padding is the hit target, not decoration */
 .pnl .cx { margin-left: auto; padding: .2em .35em !important; color: var(--brd-label) !important; font-size: 1em !important; line-height: 1; }
@@ -435,11 +436,12 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 .pnl.big .cd { font-size: .95em; }
 .pnl .cplot { position: relative; flex: 1 1 auto; min-height: 0; margin: .3em 0 .4em; cursor: crosshair; touch-action: none; }
 .pnl svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
-/* the scale sits on the right, clear of the line's own start, on a fade so a peak cannot collide with it */
-.pnl .yhi, .pnl .ylo { position: absolute; right: 0; font: .6em/1 var(--mono); color: #5a6478; pointer-events: none;
-  padding: .15em 0 .15em .7em; background: linear-gradient(90deg, rgba(8,12,20,0), rgba(8,12,20,.92) 45%); }
-.pnl .yhi { top: -.15em; } .pnl .ylo { bottom: -.15em; }
-.pnl.big .yhi, .pnl.big .ylo { font-size: .72em; }
+/* Actual rounded dollar ticks, positioned on their matching gridlines. A right-edge fade keeps a
+   peak from colliding with the labels without pretending the padded plot bounds are observations. */
+.pnl .cyaxis { position: absolute; inset: 0; pointer-events: none; }
+.pnl .cyaxis span { position: absolute; right: 0; transform: translateY(-50%); padding: .15em 0 .15em .8em;
+  background: linear-gradient(90deg, rgba(8,12,20,0), rgba(8,12,20,.94) 45%); color: #657086; font: .6em/1 var(--mono); }
+.pnl.big .cyaxis span { font-size: .72em; }
 .pnl .cdot { position: absolute; width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; border-radius: 50%; box-shadow: 0 0 0 2px #0b0f17; pointer-events: none; }
 .pnl .ctip { position: absolute; top: 4%; padding: .4em .6em; border-radius: 7px; background: rgba(9,12,18,.96); border: 1px solid var(--brd-rule2);
   font: .7em/1.45 var(--mono); color: #d5dae3; white-space: nowrap; pointer-events: none; box-shadow: 0 6px 18px rgba(0,0,0,.45); }
