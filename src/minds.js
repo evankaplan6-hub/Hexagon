@@ -296,7 +296,7 @@ function ilsaApply(E, answer) {
     if (pr.side !== 'yes' && pr.side !== 'no') { drop('bad side'); continue; }
 
     // Price it ourselves. The mind chose the instrument; the book sets the number.
-    const fair = decide.fairValue(q);
+    const fair = decide.fairValue(q, E.cfg);
     const { px, edge } = decide.convEdge(pr.venue, pr.side, q, fair, E.cfg, p.ks && p.ks.ticker);
     if (!Number.isFinite(edge) || edge < E.cfg.llmMinEdge) { drop(`edge ${c(edge || 0)} under floor`); continue; }
 

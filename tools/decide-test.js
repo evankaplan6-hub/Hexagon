@@ -217,7 +217,36 @@ group('a convergence trade needs a thick venue to lean on');
   const flat = d.pairSignals(mk(0.50, 0.51, 0.50, 0.51, 5e5, 5e5), cfg);
   ok('no gap is still reported as no gap', flat.veto === 'gap under minGap', flat.veto);
   ok('the ratio comes from config', d.pairSignals(mk(0.40, 0.41, 0.44, 0.45, 5e5, 5e5), { ...cfg, minArbEdge: 1, convMinVolRatio: 1 }).veto !== 'venues too even');
-  ok('a venue with no volume at all is infinitely thin', d.pairSignals(mk(0.40, 0.41, 0.44, 0.45, 5e5, 0), { ...cfg, minArbEdge: 1 }).veto !== 'venues too even');
+  // zero 24h volume on either venue is not "infinitely thin," it is no data at all. The ratio check
+  // divides by `thin`, so a literal zero used to auto-pass regardless of how thin the OTHER side
+  // was too -- real losses this week cleared this gate on 0-vs-44, 20-vs-0 and even 0-vs-0. Named
+  // separately from `venues too even` so the gate ledger says which failure actually happened.
+  const oneSideZero = d.pairSignals(mk(0.40, 0.41, 0.44, 0.45, 5e5, 0), { ...cfg, minArbEdge: 1 });
+  ok('a venue with no reported volume is vetoed by name, not treated as infinitely thin',
+    oneSideZero.veto === 'no volume on one venue', oneSideZero.veto);
+  const bothSidesZero = d.pairSignals(mk(0.40, 0.41, 0.44, 0.45, 0, 0), { ...cfg, minArbEdge: 1 });
+  ok('two venues both reporting zero volume is the same failure, not "even"',
+    bothSidesZero.veto === 'no volume on one venue', bothSidesZero.veto);
+}
+
+group('fair value excludes a venue whose own spread is too wide to trust');
+{
+  // A tight, liquid Kalshi book straddled by a wide-open, untraded Polymarket one. Blending the
+  // Polymarket mid in at full weight (the old behaviour) drags fair value toward a number no one
+  // could actually trade into; excluding it should leave fair pinned to the tight venue.
+  const wideVsTight = { pmBid: 0.04, pmAsk: 0.48, ksBid: 0.49, ksAsk: 0.50, pmMid: 0.26, ksMid: 0.495, pmVol: 0, ksVol: 5e5 };
+  const fair = d.fairValue(wideVsTight, cfg);
+  ok('a 44c-wide, untraded venue does not move fair value off the tight one',
+    Math.abs(fair - wideVsTight.ksMid) < 0.005, fair);
+  // both venues wide: nothing to lean on, so fall back to a plain average rather than divide by zero
+  const bothWide = { pmBid: 0.10, pmAsk: 0.60, ksBid: 0.20, ksAsk: 0.70, pmMid: 0.35, ksMid: 0.45, pmVol: 0, ksVol: 0 };
+  const fairBoth = d.fairValue(bothWide, cfg);
+  ok('both venues wide falls back to a plain average, not NaN',
+    Math.abs(fairBoth - (bothWide.pmMid + bothWide.ksMid) / 2) < 1e-9, fairBoth);
+  // two venues inside maxSpread behave exactly as before: a plain volume-weighted blend
+  const tight = { pmBid: 0.40, pmAsk: 0.41, ksBid: 0.44, ksAsk: 0.45, pmMid: 0.405, ksMid: 0.445, pmVol: 5e5, ksVol: 1e5 };
+  const want = (0.405 * (5e5 + 100) + 0.445 * (1e5 + 100)) / (5e5 + 100 + 1e5 + 100);
+  ok('two tight venues still blend by volume as before', Math.abs(d.fairValue(tight, cfg) - want) < 1e-9);
 }
 
 group('a locked arb is unwound only when the gain clears the exit fee');
@@ -410,7 +439,7 @@ group('property: the arb is the better signal wherever both are available');
           const arb = r.signals.find((s) => s.type === 'arb');
           if (!arb || r.veto !== null) continue;
           both++;
-          const fair = d.fairValue(q);
+          const fair = d.fairValue(q, cfg);
           let bc = null;
           for (const v of ['PM', 'KS']) for (const side of ['yes', 'no']) {
             const c = d.convEdge(v, side, q, fair, cfg, 'KXTEST');

@@ -27,8 +27,19 @@ const r2 = (x) => Math.round(x * 100) / 100;
 const pmRate = (q, cfg) => (q && Number.isFinite(q.pmFeeRate) ? q.pmFeeRate : cfg.pmFeeFallback);
 
 // Fair value leans on the venue with more volume: when two books disagree, the thin one is usually wrong.
-function fairValue(q) {
-  const wp = (q.pmVol || 0) + 100, wk = (q.ksVol || 0) + 100;
+// A venue whose OWN spread is wider than maxSpread is excluded outright rather than merely
+// downweighted: a 44c-wide, untraded quote is noise, not price discovery, and should not move fair
+// value at all. Previously a wide venue was excluded only from being the tradable leg, but its mid
+// still counted at full weight here -- manufacturing apparent edge on dead markets. Five of one
+// week's thirteen convergence losses were Oscar "Best Picture Nomination" props hit by exactly
+// this: a zero-volume, 44c-wide Polymarket quote drifting for minutes made the pair look like it
+// had an 8c edge that was never really there.
+function fairValue(q, cfg) {
+  const pmWide = q.pmAsk - q.pmBid > cfg.maxSpread + 1e-9;
+  const ksWide = q.ksAsk - q.ksBid > cfg.maxSpread + 1e-9;
+  const wp = pmWide ? 0 : (q.pmVol || 0) + 100;
+  const wk = ksWide ? 0 : (q.ksVol || 0) + 100;
+  if (wp + wk === 0) return (q.pmMid + q.ksMid) / 2; // both too wide to trust either alone
   return (q.pmMid * wp + q.ksMid * wk) / (wp + wk);
 }
 
@@ -130,7 +141,7 @@ function pairSignals(p, cfg, now) {
   }
 
   const gap = q.ksMid - q.pmMid; // + => Kalshi rich, Polymarket cheap
-  const fair = fairValue(q);
+  const fair = fairValue(q, cfg);
   out.fair = fair;
   // Price every candidate first and gate afterwards: picking the max then testing it is the same
   // signal as testing each and keeping the max, but it leaves `best` set on pairs that miss.
@@ -167,6 +178,13 @@ function pairSignals(p, cfg, now) {
     if (!(fair > cfg.minMid && fair < cfg.maxMid)) return { veto: 'mid outside band' };
     if (Math.abs(gap) < cfg.minGap) return { veto: 'gap under minGap' };
     const thick = Math.max(q.pmVol || 0, q.ksVol || 0), thin = Math.min(q.pmVol || 0, q.ksVol || 0);
+    // thin === 0 used to auto-pass here: `thick < ratio * 0` is never true, so a venue with no
+    // reported 24h volume at all read as "infinitely thin," which this gate was written to treat
+    // as maximally trustworthy on the other side. In practice zero volume means that market is not
+    // trading, not that the other venue's price should be leaned on alone -- three of one week's
+    // thirteen convergence losses (Huon Valley Mayoral, Core CPI, and one of two "The Drama"
+    // entries, which was 0-vs-0 on both venues) cleared this gate for exactly that reason.
+    if (thin === 0) return { veto: 'no volume on one venue' };
     if (thick < cfg.convMinVolRatio * thin) return { veto: 'venues too even' };
     if (!tradable) return { veto: 'spread over maxSpread' };
     if (tradable.edge < cfg.minEdge) return { veto: 'edge under minEdge' };

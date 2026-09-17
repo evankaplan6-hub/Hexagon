@@ -364,7 +364,7 @@ async function KETT(E) {
         pmBid: isPM ? near.yesBid : far.yesBid, pmAsk: isPM ? near.yesAsk : far.yesAsk,
         ksBid: isPM ? far.yesBid : near.yesBid, ksAsk: isPM ? far.yesAsk : near.yesAsk,
       };
-      const fairLive = fairValue(liveQ);
+      const fairLive = fairValue(liveQ, E.cfg);
       const { px: pxLive, edge: edgeLive } = convEdge(leg.venue, leg.side, liveQ, fairLive, E.cfg, s.pair.ks.ticker);
       // A mind-originated trade is held to `llmMinEdge` rather than `minEdge`. `minEdge` is the
       // scanner's opinion about which gaps are worth the trouble, and a desk that can argue for a
