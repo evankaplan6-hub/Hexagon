@@ -413,7 +413,20 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #chart { position: absolute; z-index: 1; pointer-events: auto; box-sizing: border-box; padding: .5em .6em .45em; }
 .pnl { display: flex; flex-direction: column; font-family: var(--sans); color: var(--brd-body); user-select: none;
   font-variant-numeric: tabular-nums; }
-#wall .pnl.big { flex: 1 1 auto; min-height: 0; margin-top: .6em; font-size: .95em; }
+/* the chart opened large, over the page */
+#chartbig { position: fixed; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center;
+  padding: 24px; background: rgba(4,6,10,.72); }
+#chartbig[hidden] { display: none; }
+#chartbig .cbbox { display: flex; flex-direction: column; width: min(1100px, 100%); height: min(640px, 100%);
+  box-sizing: border-box; padding: 16px 20px 12px; border-radius: 12px; background: #0b0f17;
+  border: 1px solid var(--brd-rule2); box-shadow: 0 20px 60px rgba(0,0,0,.55); color: var(--brd-body); font: 15px/1.35 var(--sans); }
+#chartbig .cbh { flex: none; display: flex; justify-content: space-between; align-items: center; gap: .8em;
+  font: 600 .72em/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--brd-label); }
+#chartbig .cbback { font: 600 1em var(--mono); letter-spacing: .08em; color: #9cc3f0; background: none; border: 0; padding: .3em 0; cursor: pointer; }
+#chartbig .pnl.big { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; margin-top: .6em; }
+#chartbig .pnl.big .seg button { font-size: .8em; padding: .4em .95em; }
+/* touch has no drag-to-measure, so a phone does not advertise it */
+@media (max-width: 640px) { #chartbig { padding: 8px; } #chartbig .cbbox { height: min(460px, 100%); padding: 12px; } #chartbig .cbh span { display: none; } }
 .pnl button { font: inherit; background: none; border: 0; cursor: pointer; color: inherit; padding: 0; }
 .pnl .ct, .pnl .cb { flex: none; display: flex; align-items: center; gap: .5em; }
 .pnl .seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 999px;
@@ -424,7 +437,6 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
   box-shadow: inset 0 1px 0 rgba(255,255,255,.05); }
 .pnl .seg button:hover:not(.on), #wall .pnl .seg button:hover:not(.on) { color: #c9cfd9; }
 .pnl .seg button:disabled, #wall .pnl .seg button:disabled { color: #3e4655; cursor: default; opacity: .55; }
-#wall .pnl.big .seg button { font-size: .8em; padding: .4em .95em; }
 /* a 6px glyph is not a button: the padding is the hit target, not decoration */
 .pnl .cx { margin-left: auto; padding: .2em .35em !important; color: var(--brd-label) !important; font-size: 1em !important; line-height: 1; }
 .pnl .cx:hover { color: #9cc3f0 !important; }
