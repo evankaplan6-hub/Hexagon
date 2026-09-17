@@ -31,6 +31,10 @@ primary_region = "iad"          # Ashburn, Virginia — close to the exchange, a
   # The any-market scanner runs here too, at half the default pair cap until a day of tape and memory
   # on this 512 MB machine says it can take more. It is paper, and only rules-verified pairs trade.
   ANY_MAX_PAIRS = "150"
+  # Raised from the 3% default (src/config.js) on 2026-09-17: the desk hit 3% intraday and TESS
+  # correctly halted new risk, but 3% of a $10k paper account is $300 -- tight enough that one bad
+  # day parks the desk for the rest of it. Widened by request; it is still paper money.
+  MAX_DAILY_DRAWDOWN_PCT = "0.05"
 
 # The ledger, the journals and the tick tape. Without this a redeploy silently resets the evidence.
 [[mounts]]
