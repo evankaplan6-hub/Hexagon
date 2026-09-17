@@ -1077,7 +1077,11 @@
   const saveChart = () => { try { localStorage.setItem('hex-chart', JSON.stringify({ range: chart.range })); } catch { /* ignore */ } };
 
   function combinePnlHistory(balanceHistory, makerHistory, initial, validFrom = 0) {
-    const acct = (balanceHistory || []).filter((p) => p.t >= validFrom).map((p) => ({ t: p.t, v: r2(p.b - initial) })).sort((a, b) => a.t - b.t);
+    // Only the maker ledger had the bad 50c marks, so only its history is cut at the repair. The
+    // account ledger was right all along: its last value before the repair carries into it. Cutting
+    // both made the chart wait for the account's first sample after the repair, and the server
+    // thins that ledger to 600 points, so the start drifted by up to a quarter of an hour.
+    const acct = (balanceHistory || []).map((p) => ({ t: p.t, v: r2(p.b - initial) })).sort((a, b) => a.t - b.t);
     const making = (makerHistory || []).filter((p) => p.t >= validFrom).map((p) => ({ t: p.t, v: p.e })).sort((a, b) => a.t - b.t);
     // One ledger on its own is not an "all paper trades" history. Wait until both have an
     // observation rather than silently treating the missing ledger as $0.
