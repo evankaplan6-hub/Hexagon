@@ -38,6 +38,9 @@ const { combinePnlHistory, windowPnlPoints, niceAxis } = new Function(
   eq('history before an accounting repair is excluded', JSON.stringify(combinePnlHistory(
     [{ t: 1, b: 95 }, { t: 4, b: 94 }], [{ t: 2, e: -2 }, { t: 4, e: -3 }], 100, 4)),
   JSON.stringify([{ t: 4, v: -9 }]));
+  eq('the account ledger carries into the repair; only the maker history is cut', JSON.stringify(combinePnlHistory(
+    [{ t: 1, b: 95 }], [{ t: 2, e: -2 }, { t: 5, e: -3 }], 100, 3)),
+  JSON.stringify([{ t: 5, v: -8 }]));
   ok('one ledger is never mislabeled as all paper trades', combinePnlHistory([{ t: 1, b: 95 }], [], 100).length === 0);
 
   const windowed = windowPnlPoints([{ t: 1, v: -1 }, { t: 5, v: -2 }, { t: 9, v: -3 }], 10, 3);
