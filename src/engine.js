@@ -806,6 +806,21 @@ class Engine {
       hist: (this.history.get(p.id) || []).slice(-60).map((h) => [r3(h.pmMid), r3(h.ksMid)]),
     })).sort((a, b) => (a.inPlay - b.inPlay) || Math.abs(b.gap) - Math.abs(a.gap));
     const top = (list, key) => list.sort((a, b) => b.vol24 - a.vol24).slice(0, 8);
+    // The maker has its own recent-fill ring. The taker ledger stores positions and closed legs
+    // instead, so expose their entries and exits in one small structured feed for the dashboard.
+    // Otherwise the board labelled "Fills" contradicts a taker close directly below it in the log.
+    const takerFills = [];
+    for (const p of [...s.positions, ...s.closed.slice(-80)]) {
+      if (Number.isFinite(p.openedAt)) takerFills.push({
+        id: `${p.id}:open`, at: p.openedAt, action: 'Opened', label: p.label,
+        qty: p.qty, px: p.entry, venue: p.venue, contractSide: p.side, pnl: null,
+      });
+      if (Number.isFinite(p.exitAt)) takerFills.push({
+        id: `${p.id}:close`, at: p.exitAt, action: /^resolved/.test(String(p.reason || '')) ? 'Settled' : 'Closed', label: p.label,
+        qty: p.qty, px: p.exit, venue: p.venue, contractSide: p.side, pnl: Number.isFinite(p.exitPnl) ? p.exitPnl : p.pnl,
+      });
+    }
+    takerFills.sort((a, b) => b.at - a.at);
     return {
       now, name: 'The Hexagon', mode: this.cfg.mode, demo: this.cfg.demo, startedAt: s.startedAt, halt: this.halt,
       initial: s.initial, cash: s.cash, equity, deployed, unrealized, realized: s.stats.realized, fees: s.stats.fees, pnl,
@@ -814,6 +829,7 @@ class Engine {
       positions: s.positions.map((p) => ({ id: p.id, group: p.group, label: p.label, venue: p.venue, side: p.side, qty: p.qty, entry: p.entry, mark: p.mark, cost: p.cost, pnl: r2(p.qty * (p.mark ?? p.entry) - p.cost), sellPx: this.venueMark(p) ?? p.mark ?? p.entry, strategy: p.strategy, openedAt: p.openedAt })),
       arbGroups,
       closed: s.closed.slice(-80).map((c) => ({ t: c.exitAt, pnl: c.pnl, label: c.label, reason: c.reason, strategy: c.strategy })),
+      takerFills: takerFills.slice(0, 120),
       log: s.log.slice(0, 150),
       balanceHistory: hist,
       // `thinking` is a live state the floor can draw: a desk with a Claude turn open right now.

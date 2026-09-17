@@ -144,6 +144,29 @@ function applyFill(pos, f) {
   };
 }
 
+// ---------------------------------------------------------------- settlement
+// A maker position is a YES inventory balance. At resolution, every long contract receives the
+// YES settlement value and every short contract owes it. Cash therefore moves by `inv * yesPx`
+// for either direction; subtracting the signed cost basis gives the realised P&L. This is not a
+// synthetic closing trade and pays no taker fee.
+//
+// Keeping this arithmetic pure matters because a finalized Kalshi market publishes an empty
+// 0c/100c book. Treating that placeholder as a 50c midpoint created a fictitious $365 gain on the
+// 2026-09-16 Trump-mention book. Settlement must retire the inventory instead of marking that book.
+function settlePosition(pos, yesPx) {
+  const px = Number(yesPx), inv = Number(pos && pos.inv) || 0, cost = Number(pos && pos.cost) || 0;
+  if (!Number.isFinite(px) || px < 0 || px > 1) throw new Error(`invalid maker settlement price ${yesPx}`);
+  const cashDelta = r2(inv * px);
+  const pnl = r2(cashDelta - cost);
+  return {
+    inv: 0,
+    cost: 0,
+    realized: r2((Number(pos && pos.realized) || 0) + pnl),
+    cashDelta,
+    pnl,
+  };
+}
+
 // ---------------------------------------------------------------- the candidate universe
 // Which markets this desk may quote, out of a list of Kalshi markets someone else already fetched.
 //
@@ -257,4 +280,4 @@ async function eligibleSeries(candidates) {
   return ok;
 }
 
-module.exports = { desiredQuotes, fillsFrom, applyFill, toxWindow, toxicGate, drawdownFrom, eligibleSeries, candidatesFrom };
+module.exports = { desiredQuotes, fillsFrom, applyFill, settlePosition, toxWindow, toxicGate, drawdownFrom, eligibleSeries, candidatesFrom };

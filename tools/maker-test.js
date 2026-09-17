@@ -277,6 +277,27 @@ group('applyFill: same-direction fills never realise anything');
   ok('opening from flat realises nothing', f.pnl === 0 && f.inv === -10, f);
 }
 
+group('settlement retires inventory at the outcome, never at an empty-book midpoint');
+{
+  const longNo = maker.settlePosition({ inv: 99, cost: 69.67, realized: 2 }, 0);
+  ok('a long YES that resolves NO loses its basis', longNo.inv === 0 && longNo.cost === 0 && longNo.cashDelta === 0 && longNo.pnl === -69.67, longNo);
+  ok('settlement adds to prior realised P&L', longNo.realized === -67.67, longNo);
+
+  const shortYes = maker.settlePosition({ inv: -100, cost: -57.03, realized: 0 }, 1);
+  ok('a short YES that resolves YES pays the $1 obligation', shortYes.cashDelta === -100, shortYes);
+  ok('...and realises obligation less its opening proceeds', shortYes.pnl === -42.97 && shortYes.realized === -42.97, shortYes);
+
+  const shortNo = maker.settlePosition({ inv: -76, cost: -11.48, realized: 0 }, 0);
+  ok('a short YES that resolves NO keeps its proceeds', shortNo.cashDelta === 0 && shortNo.pnl === 11.48, shortNo);
+
+  const split = maker.settlePosition({ inv: 10, cost: 4, realized: 0 }, 0.5);
+  ok('a non-binary settlement value is handled as a price', split.cashDelta === 5 && split.pnl === 1, split);
+
+  let threw = false;
+  try { maker.settlePosition({ inv: 1, cost: 0.5 }, 1.2); } catch { threw = true; }
+  ok('an impossible settlement price is refused', threw);
+}
+
 group('the flatten path realises what it closes');
 {
   // makerdesk.flatten() used to move cash and then zero `inv` and `cost` without booking a cent of
@@ -512,6 +533,17 @@ group('the tape poller pages back until it overlaps what it already returned');
     serve({ first: { trades: [], next: '' } });
     r = await tape.since(['A']);
     ok('an empty page returns nothing and no gap', r.trades.length === 0 && r.gap === false, r);
+
+    // The batched top-of-book response is also the maker settlement feed. A finalized market's
+    // 0/1 quote is an empty placeholder, not a midpoint at which the position is worth 50c.
+    http.getJSON = async () => ({ markets: [
+      { ticker: 'LIVE', status: 'active', result: '', yes_bid_dollars: '0.44', yes_ask_dollars: '0.45', yes_bid_size_fp: '10', yes_ask_size_fp: '20' },
+      { ticker: 'DONE', status: 'finalized', result: 'yes', yes_bid_dollars: '0.00', yes_ask_dollars: '1.00', settlement_value_dollars: '1.00' },
+    ] });
+    const br = await tape.books(['LIVE', 'DONE']);
+    ok('an active market still supplies a book', br.books.has('LIVE'), [...br.books.keys()]);
+    ok('a finalized 0/1 placeholder supplies no 50c book', !br.books.has('DONE'), [...br.books.keys()]);
+    ok('the same response exposes its final result for settlement', br.markets.get('DONE').status === 'finalized' && br.markets.get('DONE').result === 'yes' && br.markets.get('DONE').settlementValue === 1, br.markets.get('DONE'));
   };
   const done = run().catch((e) => { fail++; console.log(`  FAIL  tape pagination threw: ${e.message}`); }).finally(() => { http.getJSON = real; });
   // the suite is otherwise synchronous; hold the summary until this group has run

@@ -85,13 +85,13 @@
           `<span class="${pl >= 0 ? 'pos' : 'neg'}">${m.inv > 0 ? 'Long' : 'Short'} ${Math.abs(m.inv).toLocaleString()}<small>${signed(pl)} marked</small></span></li>`;
       });
     } else {
-      let fills = [...(M.recent || [])];
+      let fills = recentFills(M);
       if (mobileSort === 'size') fills.sort((a, b) => (+b.qty || 0) - (+a.qty || 0));
-      else if (mobileSort === 'name') fills.sort((a, b) => marketName(a.ticker).localeCompare(marketName(b.ticker)));
-      title = `${(+M.fills || 0).toLocaleString()} fills total`;
-      note = fills.length < (+M.fills || 0) ? `Showing the latest ${fills.length}; the full count survives restarts.` : 'Most recent trades first.';
-      rows = fills.map((f) => `<li><div><b>${esc(marketName(f.ticker))}</b><small>${ago(f.at)}</small></div>` +
-        `<span class="${f.side === 'buy' ? 'pos' : 'neg'}">${f.side === 'buy' ? 'Bought' : 'Sold'} ${(+f.qty || 0).toLocaleString()}<small>at ${cc(f.px)}</small></span></li>`);
+      else if (mobileSort === 'name') fills.sort((a, b) => fillName(a).localeCompare(fillName(b)));
+      title = 'Recent fills';
+      note = 'Maker and cross-venue entries and closes, newest first.';
+      rows = fills.map((f) => `<li><div><b>${esc(fillName(f))}</b><small>${ago(f.at)} · ${f.source === 'maker' ? 'maker' : f.venue}</small></div>` +
+        `<span class="${f.side === 'buy' ? 'pos' : 'neg'}">${esc(f.action)} ${(+f.qty || 0).toLocaleString()}<small>at ${cc(f.px)}${f.pnl == null ? '' : ` · ${signed(f.pnl)}`}</small></span></li>`);
     }
     const sorts = mobileInfo === 'holding' ? [['size', 'Largest'], ['pnl', 'P&amp;L'], ['name', 'Name']] : [['size', mobileInfo === 'quoting' ? 'Flow' : 'Size'], ['name', 'Name']];
     return `<section class="m-detail" id="mobile-detail"><div class="m-detail-head"><div><b>${title}</b><small>${note}</small></div>` +
@@ -105,25 +105,27 @@
     if (!el) return;
     const halted = S.halt || M.halted, gone = stale(), working = !halted && M.quoting > 0;
     const [state, cls] = gone ? ['No signal', 'bad'] : halted ? ['Stopped', 'bad'] : working ? ['Working', 'good'] : ['Idle', 'warn'];
-    const net = Number.isFinite(M.equity) && Number.isFinite(M.initial) ? M.equity - M.initial : null;
+    const makerNet = Number.isFinite(M.equity) && Number.isFinite(M.initial) ? M.equity - M.initial : null;
+    const pairNet = Number.isFinite(S.equity) && Number.isFinite(S.initial) ? S.equity - S.initial : null;
+    const net = makerNet == null || pairNet == null ? null : r2(makerNet + pairNet);
     const held = (M.markets || []).filter((m) => m.inv).length;
-    const lf = M.lastFill;
+    const lf = recentFills(M)[0] || null;
     const agents = (S.agents || []).filter((a) => a.key !== 'MAKR').map((a) => {
       const on = isActive(a);
       return `<span class="m-agent${on ? ' on' : ''}" style="--agent:${a.color || '#6b7384'}"><i></i>${esc(a.key)}</span>`;
     }).join('');
     const latest = lf
-      ? `<div class="m-fill"><div><span class="m-label">Latest fill</span><b>${lf.side === 'buy' ? 'Bought' : 'Sold'} ${lf.qty} at ${cc(lf.px)}</b></div>` +
-        `<p>${esc(marketName(lf.ticker))}<small>${ago(lf.at)}</small></p></div>`
+      ? `<div class="m-fill"><div><span class="m-label">Latest fill</span><b>${esc(lf.action)} ${lf.qty} at ${cc(lf.px)}</b></div>` +
+        `<p>${esc(fillName(lf))}<small>${ago(lf.at)} · ${lf.source === 'maker' ? 'maker' : lf.venue}</small></p></div>`
       : `<div class="m-fill empty"><div><span class="m-label">Latest fill</span><b>${M.fills ? `${M.fills} before restart` : 'No fills yet'}</b></div></div>`;
-    el.innerHTML = `<div class="m-hero"><div><span class="m-label">Maker desk · net</span>` +
+    el.innerHTML = `<div class="m-hero"><div><span class="m-label">All paper trades</span>` +
       `<strong class="${net != null && net < 0 ? 'neg' : 'pos'}">${net == null ? '—' : signed(net)}</strong>` +
-      `<small>${net == null ? 'Waiting for a mark' : 'if every position closed now'}</small></div>` +
+      `<small>${net == null ? 'Waiting for a mark' : `Maker ${signed(makerNet)} · Cross-venue ${signed(pairNet)}`}</small></div>` +
       `<span class="m-state ${cls}"><i></i>${esc(state)}<small>${S.mode === 'live' ? 'REAL MONEY' : 'PAPER'}</small></span></div>` +
       `<div class="m-stats">` +
       `<button type="button" data-mobile-info="quoting" aria-expanded="${mobileInfo === 'quoting'}" aria-controls="mobile-detail" class="${mobileInfo === 'quoting' ? 'on' : ''}"><span>Quoting</span><b>${M.quoting || 0}</b><small>markets</small><i>›</i></button>` +
-      `<button type="button" data-mobile-info="holding" aria-expanded="${mobileInfo === 'holding'}" aria-controls="mobile-detail" class="${mobileInfo === 'holding' ? 'on' : ''}"><span>Holding</span><b>${(+M.inv || 0).toLocaleString()}</b><small>in ${held}</small><i>›</i></button>` +
-      `<button type="button" data-mobile-info="fills" aria-expanded="${mobileInfo === 'fills'}" aria-controls="mobile-detail" class="${mobileInfo === 'fills' ? 'on' : ''}"><span>Fills</span><b>${(+M.fills || 0).toLocaleString()}</b><small>total</small><i>›</i></button></div>` +
+      `<button type="button" data-mobile-info="holding" aria-expanded="${mobileInfo === 'holding'}" aria-controls="mobile-detail" class="${mobileInfo === 'holding' ? 'on' : ''}"><span>Maker held</span><b>${(+M.inv || 0).toLocaleString()}</b><small>in ${held}</small><i>›</i></button>` +
+      `<button type="button" data-mobile-info="fills" aria-expanded="${mobileInfo === 'fills'}" aria-controls="mobile-detail" class="${mobileInfo === 'fills' ? 'on' : ''}"><span>Recent fills</span><b>${recentFills(M).length.toLocaleString()}</b><small>shown</small><i>›</i></button></div>` +
       mobileInfoPanel(M) + `<div id="mobile-chart" class="pnl m-chart" aria-label="Mobile P&amp;L chart"></div>` + latest + `<div class="m-agents"><span class="m-label">Desks</span><div>${agents}</div></div>`;
     const chartEl = $('mobile-chart');
     if (chartEl) { delete chartEl.dataset.built; drawChart(chartEl, false); wireChart(chartEl, false); }
@@ -642,6 +644,12 @@
   const cats = (html) => String(html).replace(CAT_RE, (m, pre, w) =>
     `${pre}<span class="cat" role="img" aria-label="${w}" title="${w}">${CAT_EMOJI[w]}</span>`);
   const marketName = (tk) => { const m = byTicker(S.maker || {}, tk); return (m && (OUTCOME(m) || QUESTION(m))) || tk.replace(/^KX/, ''); };
+  const fillName = (f) => f.label || (f.ticker ? marketName(f.ticker) : 'Unknown market');
+  function recentFills(M) {
+    const making = (M.recent || []).map((f) => ({ ...f, source: 'maker', action: f.side === 'buy' ? 'Bought' : 'Sold', label: marketName(f.ticker) }));
+    const crossing = (S.takerFills || []).map((f) => ({ ...f, source: 'taker', side: f.pnl == null || f.pnl >= 0 ? 'buy' : 'sell' }));
+    return [...making, ...crossing].sort((a, b) => b.at - a.at);
+  }
 
   // One log entry -> { text, sub, level }. level: trade (money moved), warn (needs a look),
   // info (a decision worth knowing), quiet (routine: the desk doing its rounds).
@@ -1018,7 +1026,7 @@
     const [state, cls] = gone ? ['No signal', 'bad'] : halted ? ['Stopped', 'bad'] : working ? ['Working', 'good'] : ['Idle', 'warn'];
     const nHeld = (M.markets || []).filter((m) => m.inv).length;
     // the ledger survives a restart but the last-fill detail does not; the Last fill row says which
-    const lf = M.lastFill, feed = M.feed || {};
+    const lf = recentFills(M)[0] || null, feed = M.feed || {};
     // Whose money it is belongs on the state line, where the eye already is, not buried in the
     // footer sentence: those two facts are the whole first glance.
     const live = S.mode === 'live';
@@ -1030,10 +1038,10 @@
     const html = `<div class="st ${cls}"><i></i>${state}<em class="${live ? 'real' : ''}">${live ? 'LIVE' : 'PAPER'}</em></div>` +
       (gone || halted ? `<p class="alarm">${esc(gone ? 'The desk stopped answering' : `Trading stopped: ${halted}`)}</p>` : '') +
       `<dl class="sf">` +
-      row('Quoting', working ? `${M.quoting} markets` : '<span class="off">not quoting</span>') +
-      row('Holding', nHeld ? `${M.inv.toLocaleString()} <span class="in">in ${nHeld}</span>` : '<span class="off">nothing</span>') +
+      row('Maker quotes', working ? `${M.quoting} markets` : '<span class="off">not quoting</span>') +
+      row('Maker held', nHeld ? `${M.inv.toLocaleString()} <span class="in">in ${nHeld}</span>` : '<span class="off">nothing</span>') +
       row('Last fill', lf
-        ? `${lf.side === 'buy' ? 'Bought' : 'Sold'} ${lf.qty} at ${cc(lf.px)} <span class="in">· ${ago(lf.at)}</span><small>${esc(marketName(lf.ticker))}</small>`
+        ? `${esc(lf.action)} ${lf.qty} at ${cc(lf.px)} <span class="in">· ${ago(lf.at)} · ${lf.source === 'maker' ? 'maker' : lf.venue}</span><small>${esc(fillName(lf))}</small>`
         : `<span class="off">${M.fills ? `${M.fills} before the restart` : 'none yet'}</span>`) +
       // the taker's reach: markets matched on both venues, across every category
       (S.anyMarket && S.anyMarket.enabled
@@ -1054,30 +1062,43 @@
   }
 
   // ------------------------------------------------------------ the P&L chart
-  // A chart you can ask things of. Two series (the maker desk's net, or the whole account), four
-  // ranges, a hover readout that says how far a moment is from the start of the range, and a drag
+  // A chart you can ask things of. The headline is one number: every paper trade, across the maker
+  // and cross-venue ledgers. Four ranges, a hover readout that says how far a moment is from the
+  // start of the range, and a drag
   // that measures the gain or loss between any two moments. The same chart opens large on the wall
   // screen. It is HTML and SVG over the canvas board, so its text is sharp and it takes a mouse.
   //
-  // Maker NET is realised plus the mark on what is still open -- the number that is actually money.
-  // The old canvas chart once plotted cash and called it banked; see makerdesk.step for why not.
   const RANGES = [['1h', 36e5], ['6h', 216e5], ['24h', 864e5], ['All', Infinity]];
-  const chart = { series: 'maker', range: 'All', hoverT: null, band: null, dragFrom: null };
+  const chart = { range: 'All', hoverT: null, band: null, dragFrom: null };
   try {
     const c = JSON.parse(localStorage.getItem('hex-chart') || '{}');
-    if (c.series === 'maker' || c.series === 'acct') chart.series = c.series;
     if (RANGES.some(([r]) => r === c.range)) chart.range = c.range;
   } catch { /* private window: defaults */ }
-  const saveChart = () => { try { localStorage.setItem('hex-chart', JSON.stringify({ series: chart.series, range: chart.range })); } catch { /* ignore */ } };
+  const saveChart = () => { try { localStorage.setItem('hex-chart', JSON.stringify({ range: chart.range })); } catch { /* ignore */ } };
 
   function chartPoints() {
     const M = S.maker || {};
-    const pts = chart.series === 'acct'
-      ? (S.balanceHistory || []).map((p) => ({ t: p.t, v: r2(p.b - S.initial) }))
-      : (M.hist || []).map((p) => ({ t: p.t, v: p.e }));
-    // the history is sampled once a minute; end it on the live value so the line is never stale
-    const live = chart.series === 'acct' ? r2(S.equity - S.initial) : (Number.isFinite(M.equity) ? r2(M.equity - M.initial) : null);
-    if (live != null) pts.push({ t: S.now, v: live });
+    const acct = (S.balanceHistory || []).map((p) => ({ t: p.t, v: r2(p.b - S.initial) })).sort((a, b) => a.t - b.t);
+    const making = (M.hist || []).map((p) => ({ t: p.t, v: p.e })).sort((a, b) => a.t - b.t);
+    const streams = [acct, making].filter((x) => x.length);
+    if (!streams.length) return [];
+    // Both ledgers are step functions sampled on different clocks. Start where every available
+    // stream has a value, then carry each last observation forward at the union of timestamps.
+    const start = Math.max(...streams.map((x) => x[0].t));
+    const times = [...new Set(streams.flatMap((x) => x.filter((p) => p.t >= start).map((p) => p.t)))].sort((a, b) => a - b);
+    let ai = 0, mi = 0, av = 0, mv = 0;
+    while (ai < acct.length && acct[ai].t <= start) av = acct[ai++].v;
+    while (mi < making.length && making[mi].t <= start) mv = making[mi++].v;
+    const pts = [];
+    for (const t of times) {
+      while (ai < acct.length && acct[ai].t <= t) av = acct[ai++].v;
+      while (mi < making.length && making[mi].t <= t) mv = making[mi++].v;
+      pts.push({ t, v: r2(av + mv) });
+    }
+    // End on the live combined value so the line is never stale.
+    const makerLive = Number.isFinite(M.equity) && Number.isFinite(M.initial) ? M.equity - M.initial : 0;
+    const acctLive = Number.isFinite(S.equity) && Number.isFinite(S.initial) ? S.equity - S.initial : 0;
+    pts.push({ t: S.now, v: r2(makerLive + acctLive) });
     if (pts.length < 2) return pts;
     const span = RANGES.find(([r]) => r === chart.range)[1];
     const inRange = pts.filter((p) => p.t >= S.now - span);
@@ -1090,8 +1111,7 @@
   // to share the top row with the series buttons and the change over the range sat at the bottom
   // beside the range buttons, where it read as a caption on them rather than as the headline fact.
   function chartSkeleton(big) {
-    return `<div class="ct"><span class="ctitle">P&amp;L trend</span>` +
-      `<span class="seg">${[['maker', big ? 'Maker desk' : 'Maker'], ['acct', big ? 'Whole account' : 'Account']].map(([k, l]) => `<button data-series="${k}">${l}</button>`).join('')}</span>` +
+    return `<div class="ct"><span class="ctitle">All paper trades</span>` +
       `${big ? '' : '<button class="cx" data-expand="1" title="Open large on the wall screen">⤢</button>'}</div>` +
       `<div class="chead"><span class="cv"></span><span class="cd"></span></div>` +
       `<div class="cplot"><svg viewBox="0 0 1000 400" preserveAspectRatio="none"></svg><span class="yhi"></span><span class="ylo"></span>` +
@@ -1102,7 +1122,6 @@
   function drawChart(el, big) {
     if (!S) return;
     if (el.dataset.built !== (big ? 'big' : 'small')) { el.innerHTML = chartSkeleton(big); el.dataset.built = big ? 'big' : 'small'; }
-    el.querySelectorAll('[data-series]').forEach((b) => b.classList.toggle('on', b.dataset.series === chart.series));
     el.querySelectorAll('[data-range]').forEach((b) => b.classList.toggle('on', b.dataset.range === chart.range));
     const pts = chartPoints(), svg = el.querySelector('svg'), tip = el.querySelector('.ctip'), dot = el.querySelector('.cdot');
     if (pts.length < 2) {
@@ -1207,7 +1226,6 @@
     root.addEventListener('click', (ev) => {
       const b = ev.target.closest('button');
       if (!b) return;
-      if (b.dataset.series) { chart.series = b.dataset.series; chart.band = null; saveChart(); }
       if (b.dataset.range) { chart.range = b.dataset.range; chart.band = null; saveChart(); }
       if (b.dataset.expand) { sel = { kind: 'chart', key: 'pnl' }; wallKey = ''; }
       redraw();
@@ -1255,7 +1273,9 @@
   // book takes the rest -- which is the only reason five positions fit where three did.
   let wallWide = false;
   function wallHome(M) {
-    const net = (M.equity ?? M.initial ?? 0) - (M.initial ?? 0);
+    const makerNet = r2((M.equity ?? M.initial ?? 0) - (M.initial ?? 0));
+    const pairNet = r2((S.equity ?? S.initial ?? 0) - (S.initial ?? 0));
+    const net = r2(makerNet + pairNet);
     const held = (M.markets || []).filter((m) => m.inv)
       .map((m) => ({ m, pl: m.mark - m.cost }))
       .sort((a, b) => Math.abs(b.pl) - Math.abs(a.pl) || Math.abs(b.m.inv) - Math.abs(a.m.inv));
@@ -1263,19 +1283,19 @@
     // A number, what it means, and the two standing facts as labelled figures. They used to run
     // together in one dim sentence, which is the slowest way to read two numbers.
     const num = `<div class="wbig ${net >= 0 ? 'pos' : 'neg'}">${signed(net)}</div>` +
-      `<div class="wsub">if everything closed now</div>` +
-      `<dl class="wstats"><div><dt>Banked</dt><dd class="${(M.realized || 0) >= 0 ? 'pos' : 'neg'}">${signed(M.realized || 0)}</dd></div>` +
-      `<div><dt>Holding</dt><dd>${M.inv || 0}</dd></div></dl>`;
-    let h = `<div class="wh"><span>Maker desk</span><span>${M.fills || 0} fills</span></div>`;
+      `<div class="wsub">all paper trades, marked now</div>` +
+      `<dl class="wstats"><div><dt>Maker</dt><dd class="${makerNet >= 0 ? 'pos' : 'neg'}">${signed(makerNet)}</dd></div>` +
+      `<div><dt>Cross-venue</dt><dd class="${pairNet >= 0 ? 'pos' : 'neg'}">${signed(pairNet)}</dd></div></dl>`;
+    let h = `<div class="wh"><span>Paper account</span><span>${M.quoting || 0} markets quoted</span></div>`;
     if (!held.length) {
-      h += num + `<p class="wempty">Nothing held. Quoting ${M.quoting || 0} markets and waiting to be traded against.</p>`;
+      h += num + `<p class="wempty">No maker inventory. Quoting ${M.quoting || 0} markets; cross-venue positions are included in the total above.</p>`;
       return h;
     }
     const list = `<div class="wlist${wallAll ? ' all' : ''}">${rows.map(({ m, pl }) => `<button class="wr ${m.inv > 0 ? 'long' : 'short'}" data-m="${esc(m.ticker)}" title="${esc(m.title || '')}">` +
       `<span class="nm">${esc(OUTCOME(m) || QUESTION(m))}${OUTCOME(m) && QUESTION(m) ? `<i> · ${esc(QUESTION(m))}</i>` : ''}</span>${sideTag(m.inv)}<span class="pl ${pl >= 0 ? 'pos' : 'neg'}">${signed(pl)}</span></button>`).join('')}</div>`;
     const foot = held.length > WALL_ROWS || wallAll
       ? `<button class="wmore" data-all="1">${wallAll ? 'Show fewer' : `Biggest ${WALL_ROWS} of ${held.length} positions · show all`}</button>`
-      : `<div class="wfoot">${held.length} position${held.length === 1 ? '' : 's'} · click one for details</div>`;
+      : `<div class="wfoot">${held.length} maker position${held.length === 1 ? '' : 's'} · click one for details</div>`;
     h += `<div class="wbody">${`<div class="wnum">${num}</div>`}<div class="wbook">${list}${foot}</div></div>`;
     return h;
   }
@@ -1371,15 +1391,15 @@
       if (`${frameSeq}|${sel && sel.at}` !== tapeKey) {
         tapeKey = `${frameSeq}|${sel && sel.at}`;
         const groups = [];
-        for (const f of M.recent || []) {            // newest first; a run of the same trade is one line
+        for (const f of recentFills(M)) {            // newest first; a run of the same maker trade is one line
           const g = groups[groups.length - 1];
-          if (g && g.ticker === f.ticker && g.side === f.side) { g.qty += f.qty; g.val += f.qty * f.px; }
-          else groups.push({ ticker: f.ticker, side: f.side, qty: f.qty, val: f.qty * f.px, at: f.at });
+          if (f.source === 'maker' && g && g.source === 'maker' && g.ticker === f.ticker && g.side === f.side) { g.qty += f.qty; g.val += f.qty * f.px; }
+          else groups.push({ ...f, val: f.qty * f.px });
         }
-        el.innerHTML = `<div class="th"><span>Fills</span><span>${M.fills || 0} total</span></div>` +
+        el.innerHTML = `<div class="th"><span>Recent fills</span><span>all strategies</span></div>` +
           (groups.length
-            ? `<ol>${groups.map((g) => `<li class="${g.side}${sel && sel.at === g.at ? ' on' : ''}" data-t="${esc(g.ticker)}" data-at="${g.at}"><span class="act"><b>${g.side === 'buy' ? 'Bought' : 'Sold'}</b> ${g.qty}</span><span class="px">${cc(g.val / g.qty)}</span>` +
-              `<span class="nm">${esc(marketName(g.ticker))}</span><span class="ago">${ago(g.at).replace(' ago', '')}</span></li>`).join('')}</ol>`
+            ? `<ol>${groups.map((g) => `<li class="${g.side}${sel && sel.at === g.at ? ' on' : ''}"${g.source === 'maker' ? ` data-t="${esc(g.ticker)}" data-at="${g.at}"` : ''}><span class="act"><b>${esc(g.action)}</b> ${g.qty}</span><span class="px">${cc(g.val / g.qty)}</span>` +
+              `<span class="nm">${esc(fillName(g))}${g.source === 'taker' ? ` · ${esc(g.venue)}` : ''}</span><span class="ago">${ago(g.at).replace(' ago', '')}</span></li>`).join('')}</ol>`
             : `<p class="none">${M.fills ? `${M.fills} fills before the last restart` : 'No fills yet'}</p>`);
         const ol = el.querySelector('ol');
         el.classList.toggle('more', !!ol && ol.scrollHeight > ol.clientHeight + 2);
