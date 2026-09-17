@@ -27,6 +27,7 @@ const SUITES = [
   ['disk', 'the box disk: pull copies and verifies before any delete, the brake only trims old tapes'],
   ['ask', 'the Ask panel: the tool loop, append-only chats, limits and budget, route locks, no secrets'],
   ['askui', "the Ask drawer's page code: the answer escaped before it is formatted, and when a chat is over"],
+  ['chart', 'the dashboard chart: combined ledgers, exact time windows and honest dollar axes'],
 ];
 
 let failed = 0, totalPassed = 0;
