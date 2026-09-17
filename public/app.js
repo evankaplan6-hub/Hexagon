@@ -1051,7 +1051,7 @@
       `</dl>` +
       `<p class="dim">${live ? 'Real money' : 'No real money'} · up ${dur(S.now - S.startedAt)} · ${feed.mode === 'stream' && feed.connected ? 'live trade feed' : 'polling for trades'}</p>`;
     const key = `${html}|${Math.round(statusBox.w * k)}x${Math.round(statusBox.h * k)}`;
-    if (key !== statusHtml) { el.innerHTML = html; statusHtml = key; fitText(el, Math.max(10, Math.min(17, k * 5.6)), 8); }
+    if (key !== statusHtml) { el.innerHTML = html; statusHtml = key; fitText(el, Math.max(12, Math.min(21, k * 7.2)), 9); }
   }
 
   // Shrink a board's text until everything on it fits. Nothing on the floor is cut off with an
@@ -1409,12 +1409,17 @@
 
     if (wallBox) {
       const el = $('wall');
-      const wallFs = Math.max(10, Math.min(17, k * 5.6));
+      const wallFs = Math.max(12, Math.min(21, k * 7.2));
       fit(el, wallBox, null);             // type size is set on rebuild, where fitText may shrink it
       // two columns need real width, not just a wide ratio: beside the Ask drawer the screen keeps
       // its shape but loses a third of its pixels, and 26% of a narrow screen is not a column.
       wallWide = wallBox.w > wallBox.h * 2.3 && wallBox.w * k > 560;
       el.classList.toggle('wide', wallWide);
+      // Stacked (not wide), the number sits above the book instead of beside it, so a bigger font
+      // now costs the book its own height. Below a real box the number and its breakdown collapse
+      // to one line -- the list of positions is why this board exists, and a hero digit that leaves
+      // it zero rows visible is a worse tradeoff than a smaller digit.
+      el.classList.toggle('compact', !wallWide && wallBox.h * k < 200);
       const selPart = sel ? sel.kind + sel.key + (sel.at || '') : '', sortPart = `${wallSortCol}:${wallSortDir}`;
       const key = `${frameSeq}|${selPart}|${sortPart}|${wallAll}|${wallWide}|${Math.round(wallBox.w * k)}`;
       if (key !== wallKey) {
@@ -1432,7 +1437,7 @@
           const list2 = el.querySelector('.wlist, .wlog');
           if (list2) list2.scrollTop = top;
           el.classList.toggle('more', !!list2 && list2.scrollHeight > list2.clientHeight + 2);
-          if (m) fitText(el, wallFs, 8);
+          if (m) fitText(el, wallFs, 9);
         }
       }
     }
@@ -1445,7 +1450,7 @@
 
     if (tapeBox) {
       const el = $('tape');
-      fit(el, { x: tapeBox.x + 1, y: tapeBox.y + 1, w: tapeBox.w - 2, h: tapeBox.h - 2 }, Math.max(9.5, Math.min(15, k * 4.8)));
+      fit(el, { x: tapeBox.x + 1, y: tapeBox.y + 1, w: tapeBox.w - 2, h: tapeBox.h - 2 }, Math.max(11.5, Math.min(18, k * 6.2)));
       if (`${frameSeq}|${sel && sel.at}` !== tapeKey) {
         tapeKey = `${frameSeq}|${sel && sel.at}`;
         const groups = [];
