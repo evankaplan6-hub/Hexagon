@@ -115,7 +115,9 @@
       `<button type="button" data-mobile-info="quoting" aria-expanded="${mobileInfo === 'quoting'}" aria-controls="mobile-detail" class="${mobileInfo === 'quoting' ? 'on' : ''}"><span>Quoting</span><b>${M.quoting || 0}</b><small>markets</small><i>›</i></button>` +
       `<button type="button" data-mobile-info="holding" aria-expanded="${mobileInfo === 'holding'}" aria-controls="mobile-detail" class="${mobileInfo === 'holding' ? 'on' : ''}"><span>Holding</span><b>${(+M.inv || 0).toLocaleString()}</b><small>in ${held}</small><i>›</i></button>` +
       `<button type="button" data-mobile-info="fills" aria-expanded="${mobileInfo === 'fills'}" aria-controls="mobile-detail" class="${mobileInfo === 'fills' ? 'on' : ''}"><span>Fills</span><b>${(+M.fills || 0).toLocaleString()}</b><small>total</small><i>›</i></button></div>` +
-      mobileInfoPanel(M) + latest + `<div class="m-agents"><span class="m-label">Desks</span><div>${agents}</div></div>`;
+      mobileInfoPanel(M) + `<div id="mobile-chart" class="pnl m-chart" aria-label="Mobile P&amp;L chart"></div>` + latest + `<div class="m-agents"><span class="m-label">Desks</span><div>${agents}</div></div>`;
+    const chartEl = $('mobile-chart');
+    if (chartEl) { delete chartEl.dataset.built; drawChart(chartEl, false); wireChart(chartEl, false); }
   }
   $('mobile-summary').addEventListener('click', (ev) => {
     const tab = ev.target.closest('[data-mobile-info]');

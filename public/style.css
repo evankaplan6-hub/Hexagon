@@ -619,6 +619,11 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
   .m-detail li > span.neg { color: #fca5a5; }
   .m-detail p { margin: 0; padding: 18px 10px; color: #737d90; font-size: 11px; text-align: center; }
 
+  .m-chart { height: 150px; margin-top: 9px; padding: 10px; border: 1px solid #1c2535; border-radius: 8px; background: rgba(255,255,255,.015); box-sizing: border-box; }
+  .m-chart .ct { gap: 6px; }
+  .m-chart .seg button { min-height: 24px; }
+  .m-chart .cplot { min-height: 58px; }
+
   .m-fill { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; align-items: center; margin-top: 10px; padding: 10px; border: 1px solid #1c2535; border-radius: 8px; background: rgba(255,255,255,.015); }
   .m-fill b { color: #eef1f6; font-size: 13px; }
   .m-fill p { min-width: 0; margin: 0; color: #aeb6c4; font-size: 11px; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
@@ -672,6 +677,8 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
   .m-stats > button { padding: 7px 16px 6px 8px; }
   .m-stats b { font-size: 14px; }
   .m-detail ol { max-height: 170px; }
+  .m-chart { height: 128px; margin-top: 8px; padding: 8px; }
+  .m-chart .cplot { min-height: 42px; }
   .m-fill { margin-top: 8px; padding: 8px; }
   .m-agents { margin-top: 8px; }
   #feed { width: 100%; height: 100%; min-height: 0; border-left: 0; border-radius: 0 0 7px; }
