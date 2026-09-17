@@ -1309,15 +1309,19 @@
   // own view here, and clicking it again (or Back, or Escape) returns. It used to show three
   // numbers, every open position with a subtitle, and every quoted market, all in 5-unit text.
   const WALL_ROWS = 5;
-  // 'movers' is the long-standing default (biggest swing either way); 'gainers'/'losers' let the
-  // desk be read as a leaderboard instead of always mixing winners and losers into one list.
-  const WALL_SORTS = [['movers', 'Biggest'], ['gainers', 'Gainers'], ['losers', 'Losers']];
-  let wallKey = '', tapeKey = '', clockTxt = '', wallAll = false, wallSort = 'movers';
+  // A watchlist, not a fixed leaderboard: click a column to sort by it, click it again to flip
+  // direction -- the same convention as a Finder list view or a TradingView watchlist, instead of
+  // a fixed Biggest/Gainers/Losers choice.
+  const WALL_COLS = [['name', 'Name'], ['pl', 'P&amp;L']];
+  let wallKey = '', tapeKey = '', clockTxt = '', wallAll = false, wallSortCol = 'pl', wallSortDir = 'desc';
   const sideTag = (inv) => `<span class="sd ${inv > 0 ? 'long' : 'short'}">${inv > 0 ? 'LONG' : 'SHORT'} ${Math.abs(inv)}</span>`;
-  const sortHeld = (held) => held.slice().sort(
-    wallSort === 'gainers' ? (a, b) => b.pl - a.pl
-      : wallSort === 'losers' ? (a, b) => a.pl - b.pl
-        : (a, b) => Math.abs(b.pl) - Math.abs(a.pl) || Math.abs(b.m.inv) - Math.abs(a.m.inv));
+  const nameOf = (m) => String(OUTCOME(m) || QUESTION(m) || m.ticker);
+  const sortHeld = (held) => {
+    const dir = wallSortDir === 'asc' ? 1 : -1;
+    return held.slice().sort(wallSortCol === 'name'
+      ? (a, b) => dir * nameOf(a.m).localeCompare(nameOf(b.m))
+      : (a, b) => dir * (a.pl - b.pl));
+  };
 
   // The screen used to be a tall-ish rectangle and the home view was a column: number, then a list
   // under it. It is a wide, shallow band now, so on a wide room the number takes a side and the
@@ -1342,17 +1346,18 @@
       h += num + `<p class="wempty">No maker inventory. Quoting ${M.quoting || 0} markets; cross-venue positions are included in the total above.</p>`;
       return h;
     }
-    const sortBar = held.length > 1
-      ? `<div class="wsort" role="toolbar" aria-label="Sort positions">${WALL_SORTS.map(([k, l]) =>
-          `<button type="button" data-wsort="${k}" class="${wallSort === k ? `on ${k}` : ''}">${l}</button>`).join('')}</div>`
-      : '';
+    // The header row is the sort control -- click a column, click it again to flip the arrow.
+    // Side isn't a sortable field, just a label, so it keeps the row's middle column aligned.
+    const arrow = (dir) => dir === 'asc' ? '▲' : '▼';
+    const head = `<div class="wcols" role="row"><button type="button" role="columnheader" aria-sort="${wallSortCol === 'name' ? (wallSortDir === 'asc' ? 'ascending' : 'descending') : 'none'}" data-wcol="name" class="${wallSortCol === 'name' ? 'on' : ''}">Name${wallSortCol === 'name' ? `<i>${arrow(wallSortDir)}</i>` : ''}</button>` +
+      `<span class="wcolside">Side</span>` +
+      `<button type="button" role="columnheader" aria-sort="${wallSortCol === 'pl' ? (wallSortDir === 'asc' ? 'ascending' : 'descending') : 'none'}" data-wcol="pl" class="${wallSortCol === 'pl' ? 'on' : ''}">P&amp;L${wallSortCol === 'pl' ? `<i>${arrow(wallSortDir)}</i>` : ''}</button></div>`;
     const list = `<div class="wlist${wallAll ? ' all' : ''}">${rows.map(({ m, pl }) => `<button class="wr ${m.inv > 0 ? 'long' : 'short'}" data-m="${esc(m.ticker)}" title="${esc(m.title || '')}">` +
       `<span class="nm">${esc(OUTCOME(m) || QUESTION(m))}${OUTCOME(m) && QUESTION(m) ? `<i> · ${esc(QUESTION(m))}</i>` : ''}</span>${sideTag(m.inv)}<span class="pl ${pl >= 0 ? 'pos' : 'neg'}">${signed(pl)}</span></button>`).join('')}</div>`;
-    const topLabel = wallSort === 'gainers' ? `Top ${WALL_ROWS} gainers` : wallSort === 'losers' ? `Top ${WALL_ROWS} losers` : `Biggest ${WALL_ROWS}`;
     const foot = held.length > WALL_ROWS || wallAll
-      ? `<button class="wmore" data-all="1">${wallAll ? 'Show fewer' : `${topLabel} of ${held.length} positions · show all`}</button>`
+      ? `<button class="wmore" data-all="1">${wallAll ? 'Show fewer' : `${WALL_ROWS} of ${held.length} positions · show all`}</button>`
       : `<div class="wfoot">${held.length} maker position${held.length === 1 ? '' : 's'} · click one for details</div>`;
-    h += `<div class="wbody">${`<div class="wnum">${num}</div>`}<div class="wbook">${sortBar}${list}${foot}</div></div>`;
+    h += `<div class="wbody">${`<div class="wnum">${num}</div>`}<div class="wbook">${head}${list}${foot}</div></div>`;
     return h;
   }
 
@@ -1410,9 +1415,14 @@
       // its shape but loses a third of its pixels, and 26% of a narrow screen is not a column.
       wallWide = wallBox.w > wallBox.h * 2.3 && wallBox.w * k > 560;
       el.classList.toggle('wide', wallWide);
-      const key = `${frameSeq}|${sel ? sel.kind + sel.key + (sel.at || '') : ''}|${wallAll}|${wallSort}|${wallWide}|${Math.round(wallBox.w * k)}`;
+      const selPart = sel ? sel.kind + sel.key + (sel.at || '') : '', sortPart = `${wallSortCol}:${wallSortDir}`;
+      const key = `${frameSeq}|${selPart}|${sortPart}|${wallAll}|${wallWide}|${Math.round(wallBox.w * k)}`;
       if (key !== wallKey) {
-        const list = el.querySelector('.wlist, .wlog'), top = list && key.split('|')[1] === wallKey.split('|')[1] ? list.scrollTop : 0;
+        const list = el.querySelector('.wlist, .wlog');
+        const prevParts = wallKey.split('|');
+        // Re-sorting (like clicking a column header anywhere else) jumps back to the top instead
+        // of holding a scroll offset that now points at a different row.
+        const top = list && prevParts[1] === selPart && prevParts[2] === sortPart ? list.scrollTop : 0;
         wallKey = key;
         const m = sel && sel.kind === 'market';
         const a = sel && sel.kind === 'agent' ? S.agents.find((x) => x.key === sel.key) : null;
@@ -1490,7 +1500,10 @@
     if (!b) return;
     if (b.dataset.back) sel = null;
     else if (b.dataset.all) wallAll = !wallAll;
-    else if (b.dataset.wsort) wallSort = b.dataset.wsort;
+    else if (b.dataset.wcol) {
+      if (wallSortCol === b.dataset.wcol) wallSortDir = wallSortDir === 'asc' ? 'desc' : 'asc';
+      else { wallSortCol = b.dataset.wcol; wallSortDir = b.dataset.wcol === 'name' ? 'asc' : 'desc'; }
+    }
     else if (b.dataset.m) sel = sel && sel.kind === 'market' && sel.key === b.dataset.m ? null : { kind: 'market', key: b.dataset.m };
     wallKey = '';
   });
