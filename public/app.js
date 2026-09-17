@@ -75,6 +75,7 @@
       let markets = (M.markets || []).filter((m) => m.inv);
       if (mobileSort === 'name') markets.sort((a, b) => String(OUTCOME(a) || QUESTION(a) || a.ticker).localeCompare(String(OUTCOME(b) || QUESTION(b) || b.ticker)));
       else if (mobileSort === 'pnl') markets.sort((a, b) => ((b.mark || 0) - (b.cost || 0)) - ((a.mark || 0) - (a.cost || 0)));
+      else if (mobileSort === 'loss') markets.sort((a, b) => ((a.mark || 0) - (a.cost || 0)) - ((b.mark || 0) - (b.cost || 0)));
       else markets.sort((a, b) => Math.abs(b.inv) - Math.abs(a.inv));
       title = `Holding ${markets.length} market${markets.length === 1 ? '' : 's'}`;
       note = `${(+M.inv || 0).toLocaleString()} contracts in the book right now.`;
@@ -93,7 +94,7 @@
       rows = fills.map((f) => `<li><div><b>${esc(fillName(f))}</b><small>${ago(f.at)} · ${f.source === 'maker' ? 'maker' : f.venue}</small></div>` +
         `<span class="${f.side === 'buy' ? 'pos' : 'neg'}">${esc(f.action)} ${(+f.qty || 0).toLocaleString()}<small>at ${cc(f.px)}${f.pnl == null ? '' : ` · ${signed(f.pnl)}`}</small></span></li>`);
     }
-    const sorts = mobileInfo === 'holding' ? [['size', 'Largest'], ['pnl', 'P&amp;L'], ['name', 'Name']] : [['size', mobileInfo === 'quoting' ? 'Flow' : 'Size'], ['name', 'Name']];
+    const sorts = mobileInfo === 'holding' ? [['size', 'Largest'], ['pnl', 'Gainers'], ['loss', 'Losers'], ['name', 'Name']] : [['size', mobileInfo === 'quoting' ? 'Flow' : 'Size'], ['name', 'Name']];
     return `<section class="m-detail" id="mobile-detail"><div class="m-detail-head"><div><b>${title}</b><small>${note}</small></div>` +
       `<button type="button" data-mobile-close="1" aria-label="Close ${mobileInfo} details">✕</button></div>` +
       `<div class="m-sort" role="toolbar" aria-label="Sort ${mobileInfo} list">${sorts.map(([k, l]) => `<button type="button" data-mobile-sort="${k}" class="${mobileSort === k ? 'on' : ''}">${l}</button>`).join('')}</div>` +
@@ -1308,8 +1309,15 @@
   // own view here, and clicking it again (or Back, or Escape) returns. It used to show three
   // numbers, every open position with a subtitle, and every quoted market, all in 5-unit text.
   const WALL_ROWS = 5;
-  let wallKey = '', tapeKey = '', clockTxt = '', wallAll = false;
+  // 'movers' is the long-standing default (biggest swing either way); 'gainers'/'losers' let the
+  // desk be read as a leaderboard instead of always mixing winners and losers into one list.
+  const WALL_SORTS = [['movers', 'Biggest'], ['gainers', 'Gainers'], ['losers', 'Losers']];
+  let wallKey = '', tapeKey = '', clockTxt = '', wallAll = false, wallSort = 'movers';
   const sideTag = (inv) => `<span class="sd ${inv > 0 ? 'long' : 'short'}">${inv > 0 ? 'LONG' : 'SHORT'} ${Math.abs(inv)}</span>`;
+  const sortHeld = (held) => held.slice().sort(
+    wallSort === 'gainers' ? (a, b) => b.pl - a.pl
+      : wallSort === 'losers' ? (a, b) => a.pl - b.pl
+        : (a, b) => Math.abs(b.pl) - Math.abs(a.pl) || Math.abs(b.m.inv) - Math.abs(a.m.inv));
 
   // The screen used to be a tall-ish rectangle and the home view was a column: number, then a list
   // under it. It is a wide, shallow band now, so on a wide room the number takes a side and the
@@ -1319,9 +1327,8 @@
     const makerNet = r2((M.equity ?? M.initial ?? 0) - (M.initial ?? 0));
     const pairNet = r2((S.equity ?? S.initial ?? 0) - (S.initial ?? 0));
     const net = r2(makerNet + pairNet);
-    const held = (M.markets || []).filter((m) => m.inv)
-      .map((m) => ({ m, pl: m.mark - m.cost }))
-      .sort((a, b) => Math.abs(b.pl) - Math.abs(a.pl) || Math.abs(b.m.inv) - Math.abs(a.m.inv));
+    const held = sortHeld((M.markets || []).filter((m) => m.inv).map((m) => ({ m, pl: m.mark - m.cost })));
+    const up = held.filter((x) => x.pl > 0).length, down = held.filter((x) => x.pl < 0).length;
     const rows = wallAll ? held : held.slice(0, WALL_ROWS);
     // A number, what it means, and the two standing facts as labelled figures. They used to run
     // together in one dim sentence, which is the slowest way to read two numbers.
@@ -1329,17 +1336,23 @@
       `<div class="wsub">all paper trades, marked now</div>` +
       `<dl class="wstats"><div><dt>Maker</dt><dd class="${makerNet >= 0 ? 'pos' : 'neg'}">${signed(makerNet)}</dd></div>` +
       `<div><dt>Cross-venue</dt><dd class="${pairNet >= 0 ? 'pos' : 'neg'}">${signed(pairNet)}</dd></div></dl>`;
-    let h = `<div class="wh"><span>Paper account</span><span>${M.quoting || 0} markets quoted</span></div>`;
+    const tally = held.length ? `${up ? `<b class="pos">▲${up}</b>` : ''}${down ? `<b class="neg">▼${down}</b>` : ''}` : '';
+    let h = `<div class="wh"><span>Paper account</span><span>${tally}${M.quoting || 0} markets quoted</span></div>`;
     if (!held.length) {
       h += num + `<p class="wempty">No maker inventory. Quoting ${M.quoting || 0} markets; cross-venue positions are included in the total above.</p>`;
       return h;
     }
+    const sortBar = held.length > 1
+      ? `<div class="wsort" role="toolbar" aria-label="Sort positions">${WALL_SORTS.map(([k, l]) =>
+          `<button type="button" data-wsort="${k}" class="${wallSort === k ? `on ${k}` : ''}">${l}</button>`).join('')}</div>`
+      : '';
     const list = `<div class="wlist${wallAll ? ' all' : ''}">${rows.map(({ m, pl }) => `<button class="wr ${m.inv > 0 ? 'long' : 'short'}" data-m="${esc(m.ticker)}" title="${esc(m.title || '')}">` +
       `<span class="nm">${esc(OUTCOME(m) || QUESTION(m))}${OUTCOME(m) && QUESTION(m) ? `<i> · ${esc(QUESTION(m))}</i>` : ''}</span>${sideTag(m.inv)}<span class="pl ${pl >= 0 ? 'pos' : 'neg'}">${signed(pl)}</span></button>`).join('')}</div>`;
+    const topLabel = wallSort === 'gainers' ? `Top ${WALL_ROWS} gainers` : wallSort === 'losers' ? `Top ${WALL_ROWS} losers` : `Biggest ${WALL_ROWS}`;
     const foot = held.length > WALL_ROWS || wallAll
-      ? `<button class="wmore" data-all="1">${wallAll ? 'Show fewer' : `Biggest ${WALL_ROWS} of ${held.length} positions · show all`}</button>`
+      ? `<button class="wmore" data-all="1">${wallAll ? 'Show fewer' : `${topLabel} of ${held.length} positions · show all`}</button>`
       : `<div class="wfoot">${held.length} maker position${held.length === 1 ? '' : 's'} · click one for details</div>`;
-    h += `<div class="wbody">${`<div class="wnum">${num}</div>`}<div class="wbook">${list}${foot}</div></div>`;
+    h += `<div class="wbody">${`<div class="wnum">${num}</div>`}<div class="wbook">${sortBar}${list}${foot}</div></div>`;
     return h;
   }
 
@@ -1397,7 +1410,7 @@
       // its shape but loses a third of its pixels, and 26% of a narrow screen is not a column.
       wallWide = wallBox.w > wallBox.h * 2.3 && wallBox.w * k > 560;
       el.classList.toggle('wide', wallWide);
-      const key = `${frameSeq}|${sel ? sel.kind + sel.key + (sel.at || '') : ''}|${wallAll}|${wallWide}|${Math.round(wallBox.w * k)}`;
+      const key = `${frameSeq}|${sel ? sel.kind + sel.key + (sel.at || '') : ''}|${wallAll}|${wallSort}|${wallWide}|${Math.round(wallBox.w * k)}`;
       if (key !== wallKey) {
         const list = el.querySelector('.wlist, .wlog'), top = list && key.split('|')[1] === wallKey.split('|')[1] ? list.scrollTop : 0;
         wallKey = key;
@@ -1477,6 +1490,7 @@
     if (!b) return;
     if (b.dataset.back) sel = null;
     else if (b.dataset.all) wallAll = !wallAll;
+    else if (b.dataset.wsort) wallSort = b.dataset.wsort;
     else if (b.dataset.m) sel = sel && sel.kind === 'market' && sel.key === b.dataset.m ? null : { kind: 'market', key: b.dataset.m };
     wallKey = '';
   });
