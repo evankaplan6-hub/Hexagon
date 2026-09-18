@@ -127,7 +127,12 @@ class Brain {
   overBudget() { this._rollDay(); return this.daySpend >= Math.min(this.cfg.brainDailyUsd, this.allowance()); }
   budgetLeft() { this._rollDay(); return Math.max(0, r4(Math.min(this.cfg.brainDailyUsd, this.allowance()) - this.daySpend)); }
 
-  enabled() { return !!this.key && this.cfg.brainEnabled; }
+  // `agent` is optional so callers that mean "is the layer live at all" still work; a desk asks with
+  // its own name and is refused unless BRAIN_AGENTS lists it.
+  enabled(agent) {
+    if (!this.key || !this.cfg.brainEnabled) return false;
+    return !agent || (this.cfg.brainAgents || []).includes(agent);
+  }
 
   // Why the desks are not thinking, in words a dashboard can show.
   status() {
@@ -162,7 +167,7 @@ class Brain {
   // out. It returns null when the desk has nothing worth asking about, or a spec carrying a
   // `signature` -- see the header. Every gate below is ordered cheapest-first.
   refresh(agent, build) {
-    if (!this.enabled()) return;
+    if (!this.enabled(agent)) return;
     if (this.inflight.has(agent)) return;
     if (Date.now() < this.cooldownUntil) return;
     if (this.overBudget()) { this.stats.skipped++; return; }

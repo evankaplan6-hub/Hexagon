@@ -491,6 +491,7 @@ const SETTINGS = [
   ['makerMaxDrawdownPct', 'MAKER_MAX_DRAWDOWN_PCT', 'maker drawdown from its peak that halts it'],
   ['kalshiGapMs', 'KALSHI_GAP_MS', 'milliseconds between Kalshi API calls'],
   ['brainEnabled', 'BRAIN', "desks' Claude minds on or off"],
+  ['brainAgents', 'BRAIN_AGENTS', 'which desks may use Claude (RIGO: exits only; ILSA: can propose trades)'],
   ['brainModelDeep', 'BRAIN_MODEL_DEEP', 'model for BRAM and KETT'],
   ['brainModelFast', 'BRAIN_MODEL_FAST', 'model for the other desks'],
   ['brainEffort', 'BRAIN_EFFORT', "desks' thinking effort"],

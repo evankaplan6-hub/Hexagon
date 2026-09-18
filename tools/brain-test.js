@@ -379,6 +379,89 @@ group('deep and fast models are routed by desk');
   ok('an unknown model bills at the dearest known rate', b3.stats.usd === 5, b3.stats.usd);
 }
 
+group('RIGO: a mind that can only close a convergence position early');
+{
+  const now = Date.now();
+  const pos = (over = {}) => ({ id: 'a1', pairId: 'p1', label: 'Fixture', venue: 'PM', side: 'yes', qty: 100, entry: 0.40, mark: 0.38,
+    strategy: 'converge', openedAt: now - 90 * 60000, closesAt: null, entryGap: 0.05, cost: 40, ...over });
+  const R = (positions) => ({ cfg, pairs: [mkPair()], state: { positions } });
+  const say = (decisions) => ({ note: 'n', commentary: 'c', decisions });
+  const exit = (id, conviction = 0.8) => ({ positionId: id, action: 'exit', conviction, reason: 'thesis dead' });
+
+  ok('no open positions: no view, so no call and no cost', minds.RIGO.view(R([])) === null);
+  ok('an arb or a stuck leg is not shown to the mind', minds.RIGO.view(R([pos({ strategy: 'arb' }), pos({ id: 'o', orphan: true })])) === null);
+  ok('a position with no mark cannot be judged', minds.RIGO.view(R([pos({ mark: undefined })])) === null);
+
+  const v = minds.RIGO.view(R([pos()]));
+  ok('a view carries a signature, a persona, a schema and the position', v && v.signature && v.system && v.schema && /id a1/.test(v.user), v && v.user);
+  ok('...including the gap it was opened on and the hold clock', /was 5\.0c at entry/.test(v.user) && /held 90m of 240m/.test(v.user), v.user);
+  ok('the signature ignores a tenth of a cent of wobble', minds.RIGO.view(R([pos({ mark: 0.3804 })])).signature === minds.RIGO.view(R([pos({ mark: 0.3811 })])).signature);
+  ok('...and moves on a whole-cent slide', minds.RIGO.view(R([pos({ mark: 0.35 })])).signature !== v.signature);
+
+  const E = R([pos(), pos({ id: 'a2' })]);
+  const out = minds.RIGO.apply(E, say([exit('a1'), { positionId: 'a2', action: 'hold', conviction: 0.9, reason: 'fine' }]));
+  ok('an exit becomes an exit at the position mark, and a hold becomes nothing', out.size === 1 && out.get('a1').px === 0.38 && /^mind: /.test(out.get('a1').reason), [...out]);
+  ok('an exit on a position that is not open is dropped', minds.RIGO.apply(E, say([exit('ghost')])).size === 0);
+  ok('a weakly held exit is dropped', minds.RIGO.apply(E, say([exit('a1', 0.59)])).size === 0);
+  ok('a non-finite conviction is dropped, not read as sure', minds.RIGO.apply(E, say([exit('a1', NaN)])).size === 0);
+  ok('an arb leg named by the mind is dropped', minds.RIGO.apply(R([pos({ id: 'x', strategy: 'arb' })]), say([exit('x')])).size === 0);
+  ok('an orphaned leg named by the mind is left to the retry loop', minds.RIGO.apply(R([pos({ id: 'x', orphan: true })]), say([exit('x')])).size === 0);
+  ok('garbage in gives an empty map, never a throw', minds.RIGO.apply(E, null).size === 0 && minds.RIGO.apply(E, { decisions: 'exit everything' }).size === 0);
+  ok('an answer cannot open or resize: nothing but an exit map comes out', [...minds.RIGO.apply(E, say([exit('a1')])).values()].every((x) => Object.keys(x).sort().join() === 'px,reason'));
+  ok('a stale answer is not trusted by the desk', minds.RIGO_MAX_AGE_MS === 120000);
+}
+
+group('per-desk switch: BRAIN turns the layer on, BRAIN_AGENTS picks the desks');
+{
+  const on = new Brain({ ...cfg, brainEnabled: true, brainAgents: ['RIGO'] });
+  on.key = 'sk-ant-fake';
+  ok('a listed desk may think', on.enabled('RIGO') === true);
+  ok('an unlisted desk may not, whatever BRAIN says', on.enabled('ILSA') === false && on.enabled('BRAM') === false);
+  ok('the layer as a whole reads as live', on.enabled() === true);
+  let built = false;
+  on.refresh('ILSA', () => { built = true; return null; });
+  ok('an unlisted desk does not even build its view', built === false);
+  const noKey = new Brain({ ...cfg, brainEnabled: true, brainAgents: ['RIGO'] });
+  noKey.key = '';
+  ok('no key: no desk thinks', noKey.enabled('RIGO') === false);
+  ok('the default list is ILSA, the behaviour BRAIN=1 always meant', cfg.brainAgents.join() === 'ILSA', cfg.brainAgents);
+}
+
+group('RIGO end to end: the deterministic exits run first, the mind only ever shortens');
+pending.push(async () => {
+  const now = Date.now();
+  const mk = (id, over = {}) => ({ id, pairId: 'p1', label: 'Fixture ' + id, venue: 'PM', side: 'yes', qty: 10, entry: 0.40, mark: 0.40,
+    strategy: 'converge', openedAt: now - 60 * 60000, closesAt: null, entryGap: 0.05, cost: 4, ...over });
+  const closes = [];
+  const run = async ({ positions, advice, enabled = true }) => {
+    closes.length = 0;
+    const E = {
+      cfg, pairs: [mkPair()], state: { positions, stats: { realized: 0 } }, log() {}, touch() {}, due: () => false,
+      resolution: async () => null, markPrice: (p) => p.mark, close: async (p, px, reason) => { closes.push({ id: p.id, px, reason }); },
+      brain: { enabled: (a) => enabled && a === 'RIGO', refresh() {}, advice: () => advice },
+    };
+    await agents.RIGO(E);
+    return closes.slice();
+  };
+  const say = (...d) => ({ note: 'n', commentary: 'c', decisions: d });
+  const ex = (id) => ({ positionId: id, action: 'exit', conviction: 0.9, reason: 'gap gone' });
+
+  let c = await run({ positions: [mk('a')], advice: say(ex('a')) });
+  ok('a mind exit closes the position it named', c.length === 1 && c[0].id === 'a' && /^mind: gap gone/.test(c[0].reason), c);
+  c = await run({ positions: [mk('a'), mk('b')], advice: say(ex('a')) });
+  ok('...and only that one', c.length === 1 && c[0].id === 'a', c);
+  c = await run({ positions: [mk('a')], advice: say({ positionId: 'a', action: 'hold', conviction: 1, reason: 'x' }) });
+  ok('a hold changes nothing', c.length === 0, c);
+  c = await run({ positions: [mk('a')], advice: say(ex('a')), enabled: false });
+  ok('with the desk switched off the answer is ignored', c.length === 0, c);
+  c = await run({ positions: [mk('a')], advice: null });
+  ok('no answer yet: the desk behaves as it always did', c.length === 0, c);
+  c = await run({ positions: [mk('a', { openedAt: now - 300 * 60000 })], advice: say({ positionId: 'a', action: 'hold', conviction: 1, reason: 'wait' }) });
+  ok('a mind cannot keep a position past max hold: the rule exits it regardless', c.length === 1 && /max hold/.test(c[0].reason), c);
+  c = await run({ positions: [mk('a', { strategy: 'arb', group: 'g' })], advice: say(ex('a')) });
+  ok('an arb leg is never closed on a mind\'s word', c.length === 0, c);
+});
+
 // Everything above is synchronous except the handful of assertions that have to wait for a
 // fire-and-forget turn to settle. Drain those, then report.
 (async () => {

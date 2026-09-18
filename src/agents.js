@@ -105,7 +105,7 @@ function ILSA(E) {
     if (!top || move > top.move) top = { p, bias, move };
   }
 
-  if (E.brain && E.brain.enabled()) {
+  if (E.brain && E.brain.enabled('ILSA')) {
     // No cadence check here on purpose. Whether a turn is worth buying is a question about the
     // BOARD, not about the clock, and it is answered by the view -- which returns null on a quiet
     // floor and a signature otherwise. src/brain.js owns the budget and the minimum gap.
@@ -176,7 +176,21 @@ function TESS(E) {
 }
 
 // ---------------------------------------------------------------- RIGO
+// RIGO's mind. Fired, not awaited, like ILSA's: the answer that comes back is the last completed
+// one, and minds.RIGO.apply refuses anything stale, unknown, or not an exit.
+function mindExit(E, pos) {
+  if (!E.brain || !E.brain.enabled('RIGO')) return null;
+  if (pos.strategy !== 'converge' || pos.orphan) return null;
+  const answer = E.brain.advice('RIGO', minds.RIGO_MAX_AGE_MS);
+  return answer ? minds.RIGO.apply(E, answer).get(pos.id) || null : null;
+}
+
 async function RIGO(E) {
+  if (E.brain && E.brain.enabled('RIGO')) {
+    E.brain.refresh('RIGO', () => minds.RIGO.view(E));
+    const a = E.brain.advice('RIGO', minds.RIGO_MAX_AGE_MS);
+    if (a && a.commentary && E.due('rigo-mind', 120)) E.log('RIGO', 'RESEARCH', null, String(a.commentary).slice(0, 300));
+  }
   let marked = 0;
   for (const pos of [...E.state.positions]) {
     // resolution first (market vanished from the open listing)
@@ -209,6 +223,10 @@ async function RIGO(E) {
     }
     const intent = decide.exitIntent(pos, pair, E.cfg, Date.now());
     if (intent) { await E.close(pos, intent.px, intent.reason); continue; }
+    // The mind is consulted only AFTER every deterministic exit has said hold, so it can shorten a
+    // position's life and never lengthen it.
+    const early = mindExit(E, pos);
+    if (early) { await E.close(pos, early.px, early.reason); continue; }
     // no intent and no quote means we are holding blind: the clock-driven exits inside
     // exitIntent stay armed, but say so rather than going quiet
     if (pos.strategy === 'converge' && !q && E.due(`rigo-blind-${pos.id}`, 300)) {
