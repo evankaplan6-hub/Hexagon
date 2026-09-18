@@ -407,6 +407,12 @@ group('the wide universe: which crawled markets this desk may quote');
   ok('a market under the volume bar is refused', only([mk({ vol24: 4999 })]).length === 0);
   ok('a market settling inside the guard is refused', only([mk({ closeTime: day(3) })]).length === 0);
   ok('...and one with no close time at all', only([mk({ closeTime: null })]).length === 0);
+  // the Trump-mention failure: close_time weeks away, the event tomorrow
+  ok('an event-day ticker inside the guard is refused whatever its close time says', only([mk({ ticker: 'KXTRUMPMENTION-26SEP16-AI', closeTime: day(14) })]).length === 0);
+  ok('...even on the day itself', only([mk({ ticker: 'KXTRUMPMENTION-26SEP16-AI', closeTime: day(14) })], NOW).length === 0);
+  ok('an event-day ticker beyond the guard still quotes', only([mk({ ticker: 'KXSOMETHING-26OCT30-X', closeTime: day(60) })]).length === 1);
+  ok('year-end and month-only tickers are not read as event days', only([mk({ ticker: 'KXBTC50VS100-BTC-26DEC31' })]).length === 1 && only([mk({ ticker: 'KXBALANCEPOWERCOMBO-27FEB-RR' })]).length === 1);
+  ok('tickerEventDays reads the date, or says there is none', Math.round(maker.tickerEventDays('KXTRUMPMENTION-26SEP16-AI', NOW)) === 1 && maker.tickerEventDays('SENATETX-26-D', NOW) === null && maker.tickerEventDays(null, NOW) === null);
   ok('a market missing a quote is refused', only([mk({ yesAsk: null })]).length === 0);
   ok('an empty crawl gives an empty list, not a throw', only([]).length === 0 && maker.candidatesFrom(null, free, c, NOW).length === 0);
 

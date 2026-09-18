@@ -171,7 +171,7 @@ function makeMakerDesk(cfg) {
           if (v < cfg.makerMinVol24) continue;
           // Do not be carrying inventory when the market settles: that is a 0-or-1 coin flip, not
           // a spread. Cheap to check here -- close_time is already in the listing we just fetched.
-          const days = m.close_time ? (Date.parse(m.close_time) - Date.now()) / 86400000 : 0;
+          const days = maker.daysToEnd(m.ticker, m.close_time);
           if (!(days >= cfg.makerMinDaysToClose)) continue;
           // top-of-book depth, free with this listing -- see marketStats
           const depth = ((parseFloat(m.yes_bid_size_fp) || 0) + (parseFloat(m.yes_ask_size_fp) || 0)) / 2;
