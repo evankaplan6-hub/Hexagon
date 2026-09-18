@@ -93,7 +93,7 @@
       title = 'Recent fills';
       note = 'Maker and cross-venue entries and closes, newest first.';
       rows = fills.map((f) => `<li><div><b>${esc(fillName(f))}</b><small>${ago(f.at)} · ${f.source === 'maker' ? 'maker' : f.venue}</small></div>` +
-        `<span class="${f.side === 'buy' ? 'pos' : 'neg'}">${esc(f.action)} ${(+f.qty || 0).toLocaleString()}<small>at ${cc(f.px)}${f.pnl == null ? '' : ` · ${signed(f.pnl)}`}</small></span></li>`);
+        `<span class="${f.side === 'buy' ? 'pos' : 'neg'}">${esc(f.action)} ${(+f.qty || 0).toLocaleString()}<small>at ${cc(f.px)} · ${money(f.qty * f.px)}${f.pnl == null ? '' : ` · ${signed(f.pnl)}`}</small></span></li>`);
     }
     const sorts = mobileInfo === 'holding' ? [['size', 'Largest'], ['pnl', 'Gainers'], ['loss', 'Losers'], ['value', 'Value'], ['name', 'Name']] : [['size', mobileInfo === 'quoting' ? 'Flow' : 'Size'], ['name', 'Name']];
     return `<section class="m-detail" id="mobile-detail"><div class="m-detail-head"><div><b>${title}</b><small>${note}</small></div>` +
@@ -117,7 +117,7 @@
       return `<span class="m-agent${on ? ' on' : ''}" style="--agent:${a.color || '#6b7384'}"><i></i>${esc(a.key)}</span>`;
     }).join('');
     const latest = lf
-      ? `<div class="m-fill"><div><span class="m-label">Latest fill</span><b>${esc(lf.action)} ${lf.qty} at ${cc(lf.px)}</b></div>` +
+      ? `<div class="m-fill"><div><span class="m-label">Latest fill</span><b>${esc(lf.action)} ${lf.qty} at ${cc(lf.px)} · ${money(lf.qty * lf.px)}</b></div>` +
         `<p>${esc(fillName(lf))}<small>${ago(lf.at)} · ${lf.source === 'maker' ? 'maker' : lf.venue}</small></p></div>`
       : `<div class="m-fill empty"><div><span class="m-label">Latest fill</span><b>${M.fills ? `${M.fills} before restart` : 'No fills yet'}</b></div></div>`;
     el.innerHTML = `<div class="m-hero"><div><span class="m-label">All paper trades</span>` +
@@ -1043,7 +1043,7 @@
       row('Maker quotes', working ? `${M.quoting} markets` : '<span class="off">not quoting</span>') +
       row('Maker held', nHeld ? `${M.inv.toLocaleString()} <span class="in">in ${nHeld}</span>` : '<span class="off">nothing</span>') +
       row('Last fill', lf
-        ? `${esc(lf.action)} ${lf.qty} at ${cc(lf.px)} <span class="in">· ${ago(lf.at)} · ${lf.source === 'maker' ? 'maker' : lf.venue}</span><small>${esc(fillName(lf))}</small>`
+        ? `${esc(lf.action)} ${lf.qty} at ${cc(lf.px)} <span class="in">· ${money(lf.qty * lf.px)} · ${ago(lf.at)} · ${lf.source === 'maker' ? 'maker' : lf.venue}</span><small>${esc(fillName(lf))}</small>`
         : `<span class="off">${M.fills ? `${M.fills} before the restart` : 'none yet'}</span>`) +
       // the taker's reach: markets matched on both venues, across every category
       (S.anyMarket && S.anyMarket.enabled
@@ -1385,7 +1385,7 @@
     h += `<ul class="wrecap">`;
     if (fill) {
       const made = fill.pnl ? ` That trade ${fill.pnl > 0 ? 'made' : 'lost'} <b class="${fill.pnl > 0 ? 'pos' : 'neg'}">${money(fill.pnl)}</b>.` : '';
-      h += `<li>${fill.side === 'buy' ? 'Bought' : 'Sold'} ${fill.qty} at ${cc(fill.px)}, ${minsAgo(fill.at)}.${made}</li>`;
+      h += `<li>${fill.side === 'buy' ? 'Bought' : 'Sold'} ${fill.qty} at ${cc(fill.px)} (${money(fill.qty * fill.px)}), ${minsAgo(fill.at)}.${made}</li>`;
     }
     if (m) {
       h += m.inv
@@ -1471,7 +1471,7 @@
         el.innerHTML = `<div class="th"><span>Recent fills</span><span>all strategies</span></div>` +
           (groups.length
             ? `<ol>${groups.map((g) => `<li class="${g.side}${sel && sel.at === g.at ? ' on' : ''}"${g.source === 'maker' ? ` data-t="${esc(g.ticker)}" data-at="${g.at}"` : ''}><span class="act"><b>${esc(g.action)}</b> ${g.qty}</span><span class="px">${cc(g.val / g.qty)}</span>` +
-              `<span class="nm">${esc(fillName(g))}${g.source === 'taker' ? ` · ${esc(g.venue)}` : ''}</span><span class="ago">${ago(g.at).replace(' ago', '')}</span></li>`).join('')}</ol>`
+              `<span class="nm">${esc(fillName(g))}${g.source === 'taker' ? ` · ${esc(g.venue)}` : ''}</span><span class="ago"><b>${money(g.val)}</b> · ${ago(g.at).replace(' ago', '')}</span></li>`).join('')}</ol>`
             : `<p class="none">${M.fills ? `${M.fills} fills before the last restart` : 'No fills yet'}</p>`);
         const ol = el.querySelector('ol');
         el.classList.toggle('more', !!ol && ol.scrollHeight > ol.clientHeight + 2);
