@@ -249,7 +249,7 @@ module.exports = {
   // puts fair value only part of the way from the cheap venue, so the realisable edge is
   // always well under G. Testing edge against minGap (the old behaviour) demanded 6-10c
   // gaps to clear a nominal "3c" threshold and made the convergence book unreachable.
-  minEdge: num('MIN_EDGE', 0.005),
+  minEdge: num('MIN_EDGE', 0.02),
   // A convergence trade is a bet that the THIN venue is the wrong one, and fair value only sits
   // near the thick venue when there is a thick venue. The desk's single largest taker loss was a
   // convergence trade on a Fed pair whose two venues carried near-equal volume: fair sat in the
@@ -303,7 +303,7 @@ module.exports = {
   // How long a pair is untouchable after an exit. Was hardcoded in KETT; it is a real knob now
   // because src/minds.js has to honour the same bar -- a mind that could re-enter a pair the
   // moment RIGO closed it would churn the book and pay the fee twice for one idea.
-  reentryCooldownMs: num('REENTRY_COOLDOWN_MIN', 10) * 60000,
+  reentryCooldownMs: num('REENTRY_COOLDOWN_MIN', 240) * 60000,
 
   // ---- the minds (src/brain.js, src/minds.js) ----
   // The seven desks reason with Claude. Off without a key: every desk falls back to the
