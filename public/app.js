@@ -203,7 +203,7 @@
   function layout(RW) {
     if (L && L.RW === RW) return L;
     // the desks live between the P&L stand on the left and the server rack on the right
-    const bandL = 132, bandR = RW - 46, band = bandR - bandL, gap = 12;
+    const bandL = 132, bandR = RW - 46, band = bandR - bandL, gap = 18;
     // How big a desk MAY be is a question about HEIGHT, not width. The back row, the front row and
     // the front row's nametag all have to fit in the 150 units under the wall, and 1.45 is where the
     // nametag reaches the floor line -- so past a certain width the desks stop growing no matter how
@@ -1061,6 +1061,18 @@
     el.style.fontSize = `${fs}px`;
     while (el.scrollHeight > el.clientHeight + 1 && fs > minFs) { fs -= 0.5; el.style.fontSize = `${fs}px`; }
   }
+  // fitText only catches a board that runs too tall. The wall's hero number is one line that can
+  // run too WIDE instead -- a bigger account swing is more digits, and the number sits beside the
+  // book rather than above it in wide mode, so at a large enough font a big balance quietly grew
+  // wider than its own 15em column and drew straight over the header next to it. Shrink just this
+  // element to its own container's width, independent of whatever size the rest of the board is at.
+  function fitWidth(el, minFs) {
+    if (!el) return;
+    el.style.fontSize = '';
+    const maxW = el.parentElement.clientWidth;
+    let fs = parseFloat(getComputedStyle(el).fontSize);
+    while (el.scrollWidth > maxW && fs > minFs) { fs -= 1; el.style.fontSize = `${fs}px`; }
+  }
 
   // ------------------------------------------------------------ the P&L chart
   // A chart you can ask things of. The headline is one number: every paper trade, across the maker
@@ -1437,6 +1449,7 @@
           const list2 = el.querySelector('.wlist, .wlog');
           if (list2) list2.scrollTop = top;
           el.classList.toggle('more', !!list2 && list2.scrollHeight > list2.clientHeight + 2);
+          fitWidth(el.querySelector('.wbig'), 14);
           if (m) fitText(el, wallFs, 9);
         }
       }
