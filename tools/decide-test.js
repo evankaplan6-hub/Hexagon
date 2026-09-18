@@ -11,7 +11,9 @@
 const d = require('../src/decide');
 const ks = require('../src/venues/kalshi');
 const pmv = require('../src/venues/polymarket');
-const cfg = require('../src/config');
+// The fixtures below are built around a 0.5c edge bar. The shipped default is higher (2c, see
+// config.js), so pin the bar here: these tests are about the mechanics, not the default.
+const cfg = { ...require('../src/config'), minEdge: 0.005 };
 
 let pass = 0, fail = 0;
 const ok = (name, cond, got) => {
