@@ -198,7 +198,7 @@
   // The wall used to take 150 of 262 units and the seven desks shared the 112 below it, which is the
   // whole reason the cast was drawn so small. The wall is 118 now: the boards on it are HTML text and
   // lose nothing by being shorter, and every unit the floor gains goes into the size of the bots.
-  const ROOM_H = 282, WALL_H = 132, SIDE_W = 112;
+  const ROOM_H = 302, WALL_H = 152, SIDE_W = 112;
   let L = null;
   function layout(RW) {
     if (L && L.RW === RW) return L;
@@ -1427,7 +1427,7 @@
       // now costs the book its own height. Below a real box the number and its breakdown collapse
       // to one line -- the list of positions is why this board exists, and a hero digit that leaves
       // it zero rows visible is a worse tradeoff than a smaller digit.
-      el.classList.toggle('compact', !wallWide && wallBox.h * k < 200);
+      el.classList.toggle('compact', !wallWide && wallBox.h * k < 235);
       const selPart = sel ? sel.kind + sel.key + (sel.at || '') : '', sortPart = `${wallSortCol}:${wallSortDir}`;
       const key = `${frameSeq}|${selPart}|${sortPart}|${wallWide}|${Math.round(wallBox.w * k)}`;
       if (key !== wallKey) {
