@@ -75,6 +75,7 @@
       let markets = (M.markets || []).filter((m) => m.inv);
       if (mobileSort === 'name') markets.sort((a, b) => String(OUTCOME(a) || QUESTION(a) || a.ticker).localeCompare(String(OUTCOME(b) || QUESTION(b) || b.ticker)));
       else if (mobileSort === 'pnl') markets.sort((a, b) => ((b.mark || 0) - (b.cost || 0)) - ((a.mark || 0) - (a.cost || 0)));
+      else if (mobileSort === 'value') markets.sort((a, b) => Math.abs(b.mark || 0) - Math.abs(a.mark || 0));
       else if (mobileSort === 'loss') markets.sort((a, b) => ((a.mark || 0) - (a.cost || 0)) - ((b.mark || 0) - (b.cost || 0)));
       else markets.sort((a, b) => Math.abs(b.inv) - Math.abs(a.inv));
       title = `Holding ${markets.length} market${markets.length === 1 ? '' : 's'}`;
@@ -83,7 +84,7 @@
         const pl = r2((m.mark || 0) - (m.cost || 0));
         return `<li><div><b>${esc(OUTCOME(m) || QUESTION(m) || m.ticker)}</b>` +
           `${OUTCOME(m) && QUESTION(m) ? `<small>${esc(QUESTION(m))}</small>` : ''}</div>` +
-          `<span class="${pl >= 0 ? 'pos' : 'neg'}">${m.inv > 0 ? 'Long' : 'Short'} ${Math.abs(m.inv).toLocaleString()}<small>${signed(pl)} marked</small></span></li>`;
+          `<span class="${pl >= 0 ? 'pos' : 'neg'}">${m.inv > 0 ? 'Long' : 'Short'} ${Math.abs(m.inv).toLocaleString()}<small>${money(Math.abs(m.mark || 0))} worth · ${signed(pl)}</small></span></li>`;
       });
     } else {
       let fills = recentFills(M);
@@ -94,7 +95,7 @@
       rows = fills.map((f) => `<li><div><b>${esc(fillName(f))}</b><small>${ago(f.at)} · ${f.source === 'maker' ? 'maker' : f.venue}</small></div>` +
         `<span class="${f.side === 'buy' ? 'pos' : 'neg'}">${esc(f.action)} ${(+f.qty || 0).toLocaleString()}<small>at ${cc(f.px)}${f.pnl == null ? '' : ` · ${signed(f.pnl)}`}</small></span></li>`);
     }
-    const sorts = mobileInfo === 'holding' ? [['size', 'Largest'], ['pnl', 'Gainers'], ['loss', 'Losers'], ['name', 'Name']] : [['size', mobileInfo === 'quoting' ? 'Flow' : 'Size'], ['name', 'Name']];
+    const sorts = mobileInfo === 'holding' ? [['size', 'Largest'], ['pnl', 'Gainers'], ['loss', 'Losers'], ['value', 'Value'], ['name', 'Name']] : [['size', mobileInfo === 'quoting' ? 'Flow' : 'Size'], ['name', 'Name']];
     return `<section class="m-detail" id="mobile-detail"><div class="m-detail-head"><div><b>${title}</b><small>${note}</small></div>` +
       `<button type="button" data-mobile-close="1" aria-label="Close ${mobileInfo} details">✕</button></div>` +
       `<div class="m-sort" role="toolbar" aria-label="Sort ${mobileInfo} list">${sorts.map(([k, l]) => `<button type="button" data-mobile-sort="${k}" class="${mobileSort === k ? 'on' : ''}">${l}</button>`).join('')}</div>` +
@@ -1323,15 +1324,15 @@
   // A watchlist, not a fixed leaderboard: click a column to sort by it, click it again to flip
   // direction -- the same convention as a Finder list view or a TradingView watchlist, instead of
   // a fixed Biggest/Gainers/Losers choice.
-  const WALL_COLS = [['name', 'Name'], ['pl', 'P&amp;L']];
   let wallKey = '', tapeKey = '', clockTxt = '', wallSortCol = 'pl', wallSortDir = 'desc';
   const sideTag = (inv) => `<span class="sd ${inv > 0 ? 'long' : 'short'}">${inv > 0 ? 'LONG' : 'SHORT'} ${Math.abs(inv)}</span>`;
   const nameOf = (m) => String(OUTCOME(m) || QUESTION(m) || m.ticker);
   const sortHeld = (held) => {
     const dir = wallSortDir === 'asc' ? 1 : -1;
-    return held.slice().sort(wallSortCol === 'name'
-      ? (a, b) => dir * nameOf(a.m).localeCompare(nameOf(b.m))
-      : (a, b) => dir * (a.pl - b.pl));
+    const by = wallSortCol === 'name' ? (a, b) => dir * nameOf(a.m).localeCompare(nameOf(b.m))
+      : wallSortCol === 'value' ? (a, b) => dir * (Math.abs(a.m.mark) - Math.abs(b.m.mark))
+        : (a, b) => dir * (a.pl - b.pl);
+    return held.slice().sort(by);
   };
 
   // The screen used to be a tall-ish rectangle and the home view was a column: number, then a list
@@ -1360,11 +1361,10 @@
     // The header row is the sort control -- click a column, click it again to flip the arrow.
     // Side isn't a sortable field, just a label, so it keeps the row's middle column aligned.
     const arrow = (dir) => dir === 'asc' ? '▲' : '▼';
-    const head = `<div class="wcols" role="row"><button type="button" role="columnheader" aria-sort="${wallSortCol === 'name' ? (wallSortDir === 'asc' ? 'ascending' : 'descending') : 'none'}" data-wcol="name" class="${wallSortCol === 'name' ? 'on' : ''}">Name${wallSortCol === 'name' ? `<i>${arrow(wallSortDir)}</i>` : ''}</button>` +
-      `<span class="wcolside">Side</span>` +
-      `<button type="button" role="columnheader" aria-sort="${wallSortCol === 'pl' ? (wallSortDir === 'asc' ? 'ascending' : 'descending') : 'none'}" data-wcol="pl" class="${wallSortCol === 'pl' ? 'on' : ''}">P&amp;L${wallSortCol === 'pl' ? `<i>${arrow(wallSortDir)}</i>` : ''}</button></div>`;
+    const colBtn = (k, label) => `<button type="button" role="columnheader" aria-sort="${wallSortCol === k ? (wallSortDir === 'asc' ? 'ascending' : 'descending') : 'none'}" data-wcol="${k}" class="${wallSortCol === k ? 'on' : ''}">${label}${wallSortCol === k ? `<i>${arrow(wallSortDir)}</i>` : ''}</button>`;
+    const head = `<div class="wcols" role="row">${colBtn('name', 'Name')}<span class="wcolside">Side</span>${colBtn('value', 'Value')}${colBtn('pl', 'P&amp;L')}</div>`;
     const list = `<div class="wlist">${rows.map(({ m, pl }) => `<button class="wr ${m.inv > 0 ? 'long' : 'short'}" data-m="${esc(m.ticker)}" title="${esc(m.title || '')}">` +
-      `<span class="nm">${esc(OUTCOME(m) || QUESTION(m))}${OUTCOME(m) && QUESTION(m) ? `<i> · ${esc(QUESTION(m))}</i>` : ''}</span>${sideTag(m.inv)}<span class="pl ${pl >= 0 ? 'pos' : 'neg'}">${signed(pl)}</span></button>`).join('')}</div>`;
+      `<span class="nm">${esc(OUTCOME(m) || QUESTION(m))}${OUTCOME(m) && QUESTION(m) ? `<i> · ${esc(QUESTION(m))}</i>` : ''}</span>${sideTag(m.inv)}<span class="val">${money(Math.abs(m.mark))}</span><span class="pl ${pl >= 0 ? 'pos' : 'neg'}">${signed(pl)}</span></button>`).join('')}</div>`;
     h += `<div class="wbody">${`<div class="wnum">${num}</div>`}<div class="wbook">${head}${list}</div></div>`;
     return h;
   }
