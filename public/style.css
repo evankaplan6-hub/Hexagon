@@ -404,6 +404,7 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #tape .px { font: 600 .88em var(--mono); color: #d5dae3; text-align: right; }
 #tape .nm { font-size: .78em; color: #79839a; }
 #tape .ago { font: .7em var(--mono); color: #5a6478; text-align: right; }
+#tape .ago b { font-weight: 600; color: #aeb6c4; }
 /* A scrolling board that ends mid-row looks broken rather than long. When there is more below,
    the last strip fades -- set by placeBoards, which is the only place that knows it overflows. */
 #tape.more ol, #wall.more .wlist { -webkit-mask-image: linear-gradient(#000 calc(100% - 1.5em), transparent);
