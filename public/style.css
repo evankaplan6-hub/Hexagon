@@ -166,13 +166,13 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 /* Portrait: the room has hit that cap and there is height left over, so the feed takes it rather
    than leaving a hole under the floor. Landscape keeps the feed a fixed band and gives the room
    everything else. */
-@media (max-aspect-ratio: 1/1) { #feed { flex: 1 1 auto; height: auto; min-height: clamp(140px, 20vh, 200px); } }
+@media (max-aspect-ratio: 1/1) { #feed { flex: 1 1 auto; height: auto; min-height: clamp(112px, 16vh, 170px); } }
 /* The feed's band is the room's size dial, and it was set too generously. The room is drawn at a
    fixed height in drawing units, so its scale is simply the pixel height it is handed -- every pixel
    the feed gives back makes the whole cast bigger. Coming down from 250 to 200 on a laptop makes the
    bots 8% larger and, because a taller box is a less extreme shape, closes most of the empty floor
    that was left beside the desks. The feed scrolls and loses nothing but two rows at rest. */
-#feed { flex: 0 0 auto; height: clamp(140px, 20vh, 200px); display: flex; flex-direction: column; font-size: 14px; font-family: var(--sans);
+#feed { flex: 0 0 auto; height: clamp(112px, 16vh, 170px); display: flex; flex-direction: column; font-size: 14px; font-family: var(--sans);
   background: #070a10; border-top: 1px solid #1a2233; border-radius: 0 0 7px 7px; overflow: hidden; }
 #feed .fh { flex: none; padding: .7em 1em .4em; font: 700 .72em/1.2 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: #6b7384; }
 #feedlist { flex: 1 1 auto; min-height: 0; list-style: none; margin: 0; padding: 0 .6em .5em; overflow-y: auto; overscroll-behavior: contain;
