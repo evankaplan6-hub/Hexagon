@@ -185,6 +185,29 @@ function settlePosition(pos, yesPx) {
 // Pure, so the filter is assertable without a network: `feeTypeOf` is series ticker -> fee_type
 // string (ks.seriesInfo), and a market whose series is unknown is not tradeable rather than assumed
 // free. Rows come back in the same shape refreshUniverse builds by hand, busiest first.
+// Kalshi's event-day markets (KXTRUMPMENTION-26SEP16-AI, KXWORLDNEWSMENTION-26SEP15-EMMY) carry the
+// day the event happens in the ticker, but their close_time and expected expiration sit weeks later
+// and the market closes early when the event does. A close-time guard therefore lets them straight
+// through. On the cloud box fourteen Trump-mention markets ended a day after their date holding
+// +/-100 contracts each and lost $314 of the maker's $396. The date in the ticker is the honest
+// clock; null when the ticker has none (year-end and month-only tickers like -26DEC31 or -27JAN-28
+// are fine: far away, or no day).
+const MONTHS = { JAN: 0, FEB: 1, MAR: 2, APR: 3, MAY: 4, JUN: 5, JUL: 6, AUG: 7, SEP: 8, OCT: 9, NOV: 10, DEC: 11 };
+function tickerEventDays(ticker, now = Date.now()) {
+  const m = /-(\d{2})([A-Z]{3})(\d{2})(?:-|$)/.exec(String(ticker || ''));
+  if (!m || !(m[2] in MONTHS)) return null;
+  const end = Date.UTC(2000 + Number(m[1]), MONTHS[m[2]], Number(m[3]), 23, 59, 59);
+  return (end - now) / 86400000;
+}
+
+// Days until this market can no longer be safely quoted: the earlier of its close time and the event
+// date its ticker names. NaN when neither is known, which every caller treats as "refuse".
+function daysToEnd(ticker, closeTime, now = Date.now()) {
+  const c = closeTime ? (Date.parse(closeTime) - now) / 86400000 : NaN;
+  const t = tickerEventDays(ticker, now);
+  return t == null ? (Number.isFinite(c) ? c : 0) : Math.min(Number.isFinite(c) ? c : Infinity, t);
+}
+
 function candidatesFrom(markets, feeTypeOf, cfg, now = Date.now()) {
   const rows = [];
   for (const m of markets || []) {
@@ -197,7 +220,7 @@ function candidatesFrom(markets, feeTypeOf, cfg, now = Date.now()) {
     if (a - b < cfg.makerMinSpread - 1e-9) continue;
     if ((m.vol24 || 0) < cfg.makerMinVol24) continue;
     // Do not be holding inventory when the market settles: that is a 0-or-1 coin flip, not a spread.
-    const days = m.closeTime ? (Date.parse(m.closeTime) - now) / 86400000 : 0;
+    const days = daysToEnd(m.ticker, m.closeTime, now);
     if (!(days >= cfg.makerMinDaysToClose)) continue;
     rows.push({
       ticker: m.ticker, series, vol: m.vol24 || 0, spread: a - b, days,
@@ -280,4 +303,4 @@ async function eligibleSeries(candidates) {
   return ok;
 }
 
-module.exports = { desiredQuotes, fillsFrom, applyFill, settlePosition, toxWindow, toxicGate, drawdownFrom, eligibleSeries, candidatesFrom };
+module.exports = { tickerEventDays, daysToEnd, desiredQuotes, fillsFrom, applyFill, settlePosition, toxWindow, toxicGate, drawdownFrom, eligibleSeries, candidatesFrom };
