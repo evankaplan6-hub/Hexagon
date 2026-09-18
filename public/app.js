@@ -198,7 +198,7 @@
   // The wall used to take 150 of 262 units and the seven desks shared the 112 below it, which is the
   // whole reason the cast was drawn so small. The wall is 118 now: the boards on it are HTML text and
   // lose nothing by being shorter, and every unit the floor gains goes into the size of the bots.
-  const ROOM_H = 268, WALL_H = 118, SIDE_W = 112;
+  const ROOM_H = 282, WALL_H = 132, SIDE_W = 112;
   let L = null;
   function layout(RW) {
     if (L && L.RW === RW) return L;
@@ -1320,12 +1320,11 @@
   // few positions worth watching. Everything else is one click away: a position or a bot opens its
   // own view here, and clicking it again (or Back, or Escape) returns. It used to show three
   // numbers, every open position with a subtitle, and every quoted market, all in 5-unit text.
-  const WALL_ROWS = 5;
   // A watchlist, not a fixed leaderboard: click a column to sort by it, click it again to flip
   // direction -- the same convention as a Finder list view or a TradingView watchlist, instead of
   // a fixed Biggest/Gainers/Losers choice.
   const WALL_COLS = [['name', 'Name'], ['pl', 'P&amp;L']];
-  let wallKey = '', tapeKey = '', clockTxt = '', wallAll = false, wallSortCol = 'pl', wallSortDir = 'desc';
+  let wallKey = '', tapeKey = '', clockTxt = '', wallSortCol = 'pl', wallSortDir = 'desc';
   const sideTag = (inv) => `<span class="sd ${inv > 0 ? 'long' : 'short'}">${inv > 0 ? 'LONG' : 'SHORT'} ${Math.abs(inv)}</span>`;
   const nameOf = (m) => String(OUTCOME(m) || QUESTION(m) || m.ticker);
   const sortHeld = (held) => {
@@ -1345,7 +1344,7 @@
     const net = r2(makerNet + pairNet);
     const held = sortHeld((M.markets || []).filter((m) => m.inv).map((m) => ({ m, pl: m.mark - m.cost })));
     const up = held.filter((x) => x.pl > 0).length, down = held.filter((x) => x.pl < 0).length;
-    const rows = wallAll ? held : held.slice(0, WALL_ROWS);
+    const rows = held;
     // A number, what it means, and the two standing facts as labelled figures. They used to run
     // together in one dim sentence, which is the slowest way to read two numbers.
     const num = `<div class="wbig ${net >= 0 ? 'pos' : 'neg'}">${signed(net)}</div>` +
@@ -1353,7 +1352,7 @@
       `<dl class="wstats"><div><dt>Maker</dt><dd class="${makerNet >= 0 ? 'pos' : 'neg'}">${signed(makerNet)}</dd></div>` +
       `<div><dt>Cross-venue</dt><dd class="${pairNet >= 0 ? 'pos' : 'neg'}">${signed(pairNet)}</dd></div></dl>`;
     const tally = held.length ? `${up ? `<b class="pos">▲${up}</b>` : ''}${down ? `<b class="neg">▼${down}</b>` : ''}` : '';
-    let h = `<div class="wh"><span>Paper account</span><span>${tally}${M.quoting || 0} markets quoted</span></div>`;
+    let h = `<div class="wh"><span>Paper account</span><span>${tally}${held.length ? `${held.length} held · ` : ''}${M.quoting || 0} quoted</span></div>`;
     if (!held.length) {
       h += num + `<p class="wempty">No maker inventory. Quoting ${M.quoting || 0} markets; cross-venue positions are included in the total above.</p>`;
       return h;
@@ -1364,12 +1363,9 @@
     const head = `<div class="wcols" role="row"><button type="button" role="columnheader" aria-sort="${wallSortCol === 'name' ? (wallSortDir === 'asc' ? 'ascending' : 'descending') : 'none'}" data-wcol="name" class="${wallSortCol === 'name' ? 'on' : ''}">Name${wallSortCol === 'name' ? `<i>${arrow(wallSortDir)}</i>` : ''}</button>` +
       `<span class="wcolside">Side</span>` +
       `<button type="button" role="columnheader" aria-sort="${wallSortCol === 'pl' ? (wallSortDir === 'asc' ? 'ascending' : 'descending') : 'none'}" data-wcol="pl" class="${wallSortCol === 'pl' ? 'on' : ''}">P&amp;L${wallSortCol === 'pl' ? `<i>${arrow(wallSortDir)}</i>` : ''}</button></div>`;
-    const list = `<div class="wlist${wallAll ? ' all' : ''}">${rows.map(({ m, pl }) => `<button class="wr ${m.inv > 0 ? 'long' : 'short'}" data-m="${esc(m.ticker)}" title="${esc(m.title || '')}">` +
+    const list = `<div class="wlist">${rows.map(({ m, pl }) => `<button class="wr ${m.inv > 0 ? 'long' : 'short'}" data-m="${esc(m.ticker)}" title="${esc(m.title || '')}">` +
       `<span class="nm">${esc(OUTCOME(m) || QUESTION(m))}${OUTCOME(m) && QUESTION(m) ? `<i> · ${esc(QUESTION(m))}</i>` : ''}</span>${sideTag(m.inv)}<span class="pl ${pl >= 0 ? 'pos' : 'neg'}">${signed(pl)}</span></button>`).join('')}</div>`;
-    const foot = held.length > WALL_ROWS || wallAll
-      ? `<button class="wmore" data-all="1">${wallAll ? 'Show fewer' : `${WALL_ROWS} of ${held.length} positions · show all`}</button>`
-      : `<div class="wfoot">${held.length} maker position${held.length === 1 ? '' : 's'} · click one for details</div>`;
-    h += `<div class="wbody">${`<div class="wnum">${num}</div>`}<div class="wbook">${head}${list}${foot}</div></div>`;
+    h += `<div class="wbody">${`<div class="wnum">${num}</div>`}<div class="wbook">${head}${list}</div></div>`;
     return h;
   }
 
@@ -1433,7 +1429,7 @@
       // it zero rows visible is a worse tradeoff than a smaller digit.
       el.classList.toggle('compact', !wallWide && wallBox.h * k < 200);
       const selPart = sel ? sel.kind + sel.key + (sel.at || '') : '', sortPart = `${wallSortCol}:${wallSortDir}`;
-      const key = `${frameSeq}|${selPart}|${sortPart}|${wallAll}|${wallWide}|${Math.round(wallBox.w * k)}`;
+      const key = `${frameSeq}|${selPart}|${sortPart}|${wallWide}|${Math.round(wallBox.w * k)}`;
       if (key !== wallKey) {
         const list = el.querySelector('.wlist, .wlog');
         const prevParts = wallKey.split('|');
@@ -1517,7 +1513,6 @@
     const b = ev.target.closest('button');
     if (!b) return;
     if (b.dataset.back) sel = null;
-    else if (b.dataset.all) wallAll = !wallAll;
     else if (b.dataset.wcol) {
       if (wallSortCol === b.dataset.wcol) wallSortDir = wallSortDir === 'asc' ? 'desc' : 'asc';
       else { wallSortCol = b.dataset.wcol; wallSortDir = b.dataset.wcol === 'name' ? 'asc' : 'desc'; }
