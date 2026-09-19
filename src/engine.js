@@ -8,6 +8,7 @@ const { makeBroker } = require('./broker');
 const { makeRecorder } = require('./recorder');
 const { makeProbe } = require('./probe');
 const { makeJournal } = require('./journal');
+const { makeVolume } = require('./volume');
 const { makeMakerDesk } = require('./makerdesk');
 const { makeWhaleWatch } = require('./whales');
 const { makeAnyMarket } = require('./anymarket');
@@ -65,7 +66,12 @@ class Engine {
     this.broker = makeBroker(cfg, this);
     this.recordTick = makeRecorder(cfg);
     this.probe = makeProbe(cfg);
-    this.journal = makeJournal(cfg);
+    // The chart's volume bars: what the desk traded, by the minute. Every fill passes through the
+    // journal, so the counter listens there, and a restart rebuilds it from the journal files.
+    this.volume = makeVolume();
+    this.volume.load(cfg.dataDir);
+    const write = makeJournal(cfg);
+    this.journal = (E, kind, payload) => { this.volume.note(kind, payload); write(E, kind, payload); };
     this.beat = { taker: Date.now(), maker: Date.now() };   // when each loop last finished a round
     this.maker = makeMakerDesk(cfg);
     this.whales = cfg.whaleWatch ? makeWhaleWatch(cfg) : null;   // advisory: never trades

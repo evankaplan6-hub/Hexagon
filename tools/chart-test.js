@@ -24,9 +24,9 @@ const fn = (name) => {
   if (i < 0) throw new Error(`app.js no longer has function ${name}`);
   return src.slice(i + 1, src.indexOf('\n  }\n', i) + 4);
 };
-const lifted = [line('const r2 = '), fn('combinePnlHistory'), fn('windowPnlPoints'), fn('pnlPriceRange'), line('const SLOT_STEPS = '), line('const slotStep = '), fn('evenPnlPoints'), fn('pnlCandles')].join('\n');
-const { combinePnlHistory, windowPnlPoints, pnlPriceRange, evenPnlPoints, pnlCandles } = new Function(
-  `${lifted}\nreturn { combinePnlHistory, windowPnlPoints, pnlPriceRange, evenPnlPoints, pnlCandles };`)();
+const lifted = [line('const r2 = '), fn('combinePnlHistory'), fn('windowPnlPoints'), fn('pnlPriceRange'), line('const SLOT_STEPS = '), line('const slotStep = '), fn('evenPnlPoints'), fn('pnlCandles'), fn('pnlVolume')].join('\n');
+const { combinePnlHistory, windowPnlPoints, pnlPriceRange, evenPnlPoints, pnlCandles, pnlVolume } = new Function(
+  `${lifted}\nreturn { combinePnlHistory, windowPnlPoints, pnlPriceRange, evenPnlPoints, pnlCandles, pnlVolume };`)();
 
 {
   const combined = combinePnlHistory(
@@ -121,6 +121,15 @@ const { combinePnlHistory, windowPnlPoints, pnlPriceRange, evenPnlPoints, pnlCan
   }
   eq('a fixed interval longer than the history is one whole history, not clipped', pnlCandles([{ t: T(10), v: 1 }, { t: T(200), v: 2 }], 48, 0, 2700).length, 1);
   eq('a fixed line interval on a short history keeps the first point', evenPnlPoints([{ t: T(10), v: 1 }, { t: T(200), v: 2 }], 120, 0, 60)[0].t, T(10));
+
+  // volume: what the desk traded inside each slot
+  const sl = [{ t: T(0) }, { t: T(300) }, { t: T(600) }];
+  const bk = [[T(60), 3, 30], [T(240), 1, 10], [T(300), 2, 20], [T(590), 1, 5], [T(900), 4, 40]];
+  eq('a slot owns from its start to the next one; the last owns everything after', JSON.stringify(pnlVolume(sl, bk)), JSON.stringify([40, 25, 40]));
+  eq('the total is conserved: nothing dropped, nothing counted twice', pnlVolume(sl, bk).reduce((a, b) => a + b, 0), 105);
+  eq('minutes before the first slot are not counted', JSON.stringify(pnlVolume(sl, [[T(-60), 1, 99], [T(0), 1, 1]])), JSON.stringify([1, 0, 0]));
+  eq('no trades is zero bars, not NaN', JSON.stringify(pnlVolume(sl, [])), JSON.stringify([0, 0, 0]));
+  eq('a single slot takes it all', JSON.stringify(pnlVolume([{ t: T(0) }], bk)), JSON.stringify([105]));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
