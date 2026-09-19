@@ -242,6 +242,13 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #status .tiles span { font: 500 .74em/1.2 var(--sans); color: #8892a3; }
 #status .tiles .off b { color: #5d6678; }
 #status .pairs { display: flex; flex-direction: column; gap: .22em; margin: .8em 0 0; min-width: 0; }
+/* where the money is: a label and its figure on one line, on hairlines, like a statement */
+#status .mny { display: flex; flex-direction: column; margin: .7em 0 0; }
+#status .mny div { display: flex; justify-content: space-between; align-items: baseline; gap: .6em;
+  padding: .34em 0; border-top: 1px solid var(--brd-rule); }
+#status .mny div:last-child { border-bottom: 1px solid var(--brd-rule); }
+#status .mny dt { font: 500 .8em/1 var(--sans); color: #8892a3; white-space: nowrap; }
+#status .mny dd { margin: 0; font: 600 .95em/1 var(--mono); color: var(--brd-bright); white-space: nowrap; }
 #status .lh { font: 600 .64em/1.2 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--brd-label); }
 #status .pairs > span:last-child { font-size: .86em; color: #8892a3; }
 #status .pairs b { font-weight: 700; color: var(--brd-bright); }

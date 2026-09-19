@@ -1081,9 +1081,11 @@
       `<div class="tiles">` +
       tile(working ? M.quoting : 0, 'quoting', !working) +
       tile(nHeld ? (M.inv || 0).toLocaleString() : 0, nHeld ? `held in ${nHeld}` : 'held', !nHeld) +
-      tile(money(atWork, 0), 'at work', !atWork) +
-      tile(money(freeCash, 0), 'cash free') +
       `</div>` +
+      // the two money figures are four or five digits wide: a statement line each, not a tile that
+      // a $16,968 would burst
+      `<dl class="mny"><div><dt>At work</dt><dd>${money(atWork, 0)}</dd></div>` +
+      `<div><dt>Cash free</dt><dd>${money(freeCash, 0)}</dd></div></dl>` +
       // the taker's reach: markets matched on both venues, across every category
       (am ? `<div class="pairs extra"><span class="lh">Both venues</span><span><b>${S.pairCount || 0}</b> matched · <b>${am.rulesVerified || 0}</b> tradeable</span></div>` : '') +
       `<p class="dim">Up ${dur(S.now - S.startedAt)} · ${feed.mode === 'stream' && feed.connected ? 'live feed' : 'polling'}</p>`;
