@@ -311,7 +311,135 @@ function ilsaApply(E, answer) {
   return out;
 }
 
+// ---------------------------------------------------------------------------------------- RIGO
+// The settlement desk. Its mind has the narrowest authority on the floor: it can CLOSE a
+// convergence position early, and that is all. It cannot open, add to, resize, or hold anything
+// past the deterministic exits -- src/agents.js consults it only after decide.exitIntent has said
+// hold, so the worst a bad turn can do is pay one round trip earlier than the rules would have.
+//
+// Why exits: on the cloud box the any-market convergence book closed 62 trades for -$555, and the
+// damage was in how they ended -- 35 rode to max hold with the gap never closing, and "gap closed"
+// exits still lost after the spread and both fees. Entries are already gated to death; the exit is
+// where judgement about a position that has stopped behaving like its thesis is worth something.
+const RIGO_MAX_AGE_MS = 120000;          // an exit call older than this describes a different market
+const RIGO_MIN_CONVICTION = 0.6;
+
+const RIGO_PERSONA = `${HOUSE}
+
+You are RIGO, the settlement desk. Desk 03. You manage OPEN convergence positions.
+
+Your only power is to say EXIT on a position. You cannot open anything, add to anything, or keep a
+position past the desk's own rules: the hard exits (stop loss, max hold, market close, event going
+live) run regardless of what you say. So the default is HOLD, and you should be able to say why you
+are overriding it.
+
+Every exit costs money: you sell at the bid after buying at the ask, and pay a taker fee on the way
+out. Exiting a position that is merely down a little because you are nervous is a guaranteed loss to
+avoid a possible one. Exit when the THESIS is dead, not when the price is unpleasant:
+
+  - the gap that justified the trade has closed or flipped, and what is left is fees and spread
+  - the position has been held long, the price has not moved toward fair, and nothing suggests it
+    will: time is the enemy and max hold will only bring the same exit later
+  - the mark is falling away from entry in a way that looks like the OTHER venue being right, so
+    the "cheap" side was cheap for a reason
+  - the market is about to close or the event is close to live, and the deterministic guard has not
+    fired yet but is about to, so leaving early saves nothing to lose
+
+You cannot see the news and must not pretend to. You see prices, books, times and the size of the
+move. Say what the price path shows and no more. A quiet turn that holds everything is a good turn.
+
+For each position you list, give a decision. Your commentary is one sentence for the activity log,
+specific enough that someone reading it a week later knows what you meant. Your note is at most 30
+characters for the floor screen, no punctuation at the end.`;
+
+const RIGO_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['note', 'commentary', 'decisions'],
+  properties: {
+    note: { type: 'string', description: 'At most 30 characters, for the floor screen.' },
+    commentary: { type: 'string', description: 'One sentence for the activity log.' },
+    decisions: {
+      type: 'array',
+      description: 'One entry per position shown, or only the ones worth a call.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['positionId', 'action', 'conviction', 'reason'],
+        properties: {
+          positionId: { type: 'string' },
+          action: { type: 'string', enum: ['hold', 'exit'] },
+          conviction: { type: 'number', description: '0 = a guess, 1 = as sure as this desk gets.' },
+          reason: { type: 'string', description: 'Why, in one clause.' },
+        },
+      },
+    },
+  },
+};
+
+// Open convergence positions this mind may be asked about. Orphans (a stuck leg being force-flattened
+// every cycle) and arbs (hedged, held as one payout) are not its business.
+function rigoRows(E) {
+  const rows = [];
+  const now = Date.now();
+  for (const pos of E.state.positions) {
+    if (pos.strategy !== 'converge' || pos.orphan) continue;
+    const mark = Number.isFinite(pos.mark) ? pos.mark : null;
+    if (mark == null) continue;                    // nothing to judge without a mark
+    const pair = E.pairs.find((p) => p.id === pos.pairId);
+    const q = pair && pair.q && !decide.quoteFault(pair.q) ? pair.q : null;
+    rows.push({ pos, mark, q, heldMin: Math.max(0, (now - pos.openedAt) / 60000) });
+  }
+  return rows;
+}
+
+function rigoView(E) {
+  const rows = rigoRows(E);
+  if (!rows.length) return null;                   // no positions, no call, no cost
+  const cfg = E.cfg;
+  // Whole cents and quarter-hours: a mark wobbling by a tenth of a cent is the same situation, a
+  // three-cent slide or another fifteen minutes of holding is not.
+  const signature = rows.map((r) => `${r.pos.id}:${Math.round(r.mark * 100)}:${Math.floor(r.heldMin / 15)}`).sort().join('|');
+  const lines = rows.map((r) => {
+    const { pos, mark, q } = r;
+    const gap = q ? Math.abs(q.ksMid - q.pmMid) : null;
+    const book = q ? (pos.venue === 'PM' ? `bid ${q.pmBid} ask ${q.pmAsk}` : `bid ${q.ksBid} ask ${q.ksAsk}`) : 'no live quote';
+    const mins = Number.isFinite(pos.closesAt) ? Math.max(0, Math.round((pos.closesAt - Date.now()) / 60000)) : null;
+    return `- id ${pos.id} · ${pos.label} · own ${pos.side.toUpperCase()} @ ${pos.venue === 'PM' ? 'Polymarket' : 'Kalshi'} x${pos.qty}\n`
+      + `  entry ${pos.entry} mark ${r3(mark)} (${mark >= pos.entry ? '+' : ''}${c(mark - pos.entry)} per contract, ${money((mark - pos.entry) * pos.qty)} total)\n`
+      + `  held ${Math.round(r.heldMin)}m of ${cfg.maxHoldMin}m max · venue gap now ${gap == null ? 'unknown' : c(gap)}${Number.isFinite(pos.entryGap) ? ` (was ${c(pos.entryGap)} at entry)` : ''} · this venue's YES book: ${book}`
+      + `${mins != null ? ` · market closes in ${mins}m` : ''}`;
+  });
+  return {
+    signature,
+    system: RIGO_PERSONA,
+    schema: RIGO_SCHEMA,
+    maxTokens: 1500,
+    user: `Open convergence positions (${rows.length}). Stop loss ${c(cfg.stopLoss)} or ${(cfg.paperStopLossPct * 100).toFixed(0)}% from entry, max hold ${cfg.maxHoldMin}m; those fire without you.\n\n${lines.join('\n')}\n\nFor each, hold or exit.`,
+  };
+}
+
+// What a mind's answer is allowed to become: a Map of position id -> { px, reason } for exits, and
+// nothing else. Unknown ids, positions no longer open, holds, and weakly held exits are dropped
+// here, so the caller never has to decide whether an answer is trustworthy.
+function rigoApply(E, answer) {
+  const out = new Map();
+  if (!answer || !Array.isArray(answer.decisions)) return out;
+  const open = new Map(rigoRows(E).map((r) => [r.pos.id, r]));
+  for (const d of answer.decisions) {
+    if (!d || d.action !== 'exit') continue;
+    const r = open.get(String(d.positionId));
+    if (!r) continue;
+    if (num01(d.conviction) < RIGO_MIN_CONVICTION) continue;
+    out.set(r.pos.id, { px: r.mark, reason: `mind: ${String(d.reason || 'thesis no longer holds').slice(0, 120)}` });
+  }
+  return out;
+}
+
 module.exports = {
   HOUSE,
+  RIGO_MAX_AGE_MS,
+  RIGO_MIN_CONVICTION,
+  RIGO: { persona: RIGO_PERSONA, schema: RIGO_SCHEMA, view: rigoView, apply: rigoApply },
   ILSA: { persona: ILSA_PERSONA, schema: ILSA_SCHEMA, view: ilsaView, apply: ilsaApply },
 };

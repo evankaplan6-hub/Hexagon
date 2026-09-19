@@ -306,9 +306,13 @@ module.exports = {
   reentryCooldownMs: num('REENTRY_COOLDOWN_MIN', 240) * 60000,
 
   // ---- the minds (src/brain.js, src/minds.js) ----
-  // The seven desks reason with Claude. Off without a key: every desk falls back to the
+  // Desks with a mind: ILSA (reads flow, may propose trades) and RIGO (may close a position early). Off without a key: every desk falls back to the
   // deterministic path it had before, which is a complete trading system on its own.
   brainEnabled: env('BRAIN', '1') !== '0',
+  // Which desks may think. BRAIN turns the whole layer on; this picks the desks, because they are not
+  // equally safe to hand to a model: RIGO's mind can only close a position early, ILSA's can
+  // originate trades. Default ILSA, which is what BRAIN=1 meant before RIGO had a mind.
+  brainAgents: env('BRAIN_AGENTS', 'ILSA').split(',').map((s) => s.trim()).filter(Boolean),
   // Two models, because the desks do two different jobs. BRAM prices and KETT executes -- those
   // turns decide whether money moves, and are worth the better model. Scanning, sentiment, ops,
   // settlement and making are summarising and noticing, which the cheaper model does well.

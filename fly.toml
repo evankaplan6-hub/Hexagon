@@ -23,11 +23,14 @@ primary_region = "iad"          # Ashburn, Virginia — close to the exchange, a
   MAKER_TOX_BY_CONTRACTS = "1"
   MAKER_TOX_COOLDOWN_MIN = "240"
   MAKER_SOFT_CAP = "1"
-  # The desks' Claude minds stay off here. The box has no ANTHROPIC_API_KEY today, so they are
-  # already off; pinning it keeps them off if the key is added for the Ask panel, so the key only
-  # pays for questions someone asks (ASK_DAILY_USD caps it). Research is click-only with its own
-  # cap (RESEARCH_DAILY_USD).
-  BRAIN = "0"
+  # Only RIGO's mind is on here (2026-09-18). It can close a convergence position early and nothing
+  # else, and the hard exits run before it is asked. ILSA's mind can originate trades and stays off:
+  # BRAIN_AGENTS is what keeps it off, so do not widen it without a reason. With no
+  # ANTHROPIC_API_KEY on the box none of this does anything; with one, RIGO spends at most
+  # BRAIN_DAILY_USD a day, and Ask and Research keep their own caps (ASK_DAILY_USD, RESEARCH_DAILY_USD).
+  BRAIN = "1"
+  BRAIN_AGENTS = "RIGO"
+  BRAIN_DAILY_USD = "1"
   # Raised back to src/config.js's own default on 2026-09-17: the half-size cap set on 2026-09-13
   # was meant to hold until "a day of tape and memory says it can take more," and four days in the
   # box was dropping 223 already-matched, already-rules-verified pairs a cycle for it -- more pairs
