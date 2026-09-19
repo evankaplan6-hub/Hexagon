@@ -128,9 +128,9 @@ BRAM RESEARCH  gate ledger over 19 pairs · 8 gap under minGap · 6 mid outside 
 - **The maker's market data shares the file** (`src/makertape.js`, `RECORD_MAKER=0` turns it off).
   Lines with an `mk` field and no `pair`: `b` is the top of the book with both sizes, written on
   change and once a minute otherwise (`hb:1`); `p` is a print with the exchange's own timestamp;
-  `q` is our resting quote and inventory; `g` marks a hole (`halt`, `data-failure`, `tape-gap`,
-  `write-failed`, then `resume`), because a halt withdraws every quote and a replay that read only
-  `b`/`p`/`q` would see the last quote rest straight through it. Nothing new is fetched: the maker already reads these
+  `q` is our resting quote and inventory; `g` marks a hole in what was observed (a stop, a failed
+  data round, a skipped poll, a lost write, and the return after one), because a stop withdraws
+  every quote and a replay that read only `b`/`p`/`q` would see the last quote rest straight through it. Nothing new is fetched: the maker already reads these
   every two seconds and used to discard them. They exist so `tools/maker-replay.js` can replace
   its reconstructed touch and guessed queue with the real ones. About 20 MB a day; the disk brake
   and the daily pull already cover the file. `tools/replay.js` and `tools/history-scan.js` skip
