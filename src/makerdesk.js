@@ -514,7 +514,11 @@ function makeMakerDesk(cfg) {
     }).sort((a, b) => (b.quoting - a.quoting) || (b.fills - a.fills) || Math.abs(b.inv) - Math.abs(a.inv));
     return {
       cash: S.cash, equity: S.equity, realized: S.realized || 0, fills: S.fills || 0, halted: S.halted || null,
-      lastFill: S.lastFill || null, recent: (S.recent || []).slice(0, 12), lastScanAt: lastUniverseAt || null,
+      lastFill: S.lastFill || null,
+      // a fill from before titles rode on fills is named from the ledger, which keeps every market's words
+      recent: (S.recent || []).slice(0, 12).map((f) => (f.title || !(S.markets[f.ticker] || {}).title ? f
+        : { ...f, title: S.markets[f.ticker].title, sub: S.markets[f.ticker].sub || '' })),
+      lastScanAt: lastUniverseAt || null,
       hist: S.hist || [], historyValidFrom: S.historyValidFrom || 0,
       // where the tape is coming from, so "no fills" can be told apart from "not listening"
       feed: stream ? { mode: 'stream', ...stream.health(), ...tape.stats() } : { mode: 'poll', ...tape.stats() },
