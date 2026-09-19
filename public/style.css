@@ -355,6 +355,9 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #wall .wr::before { content: ''; position: absolute; left: 0; top: .4em; bottom: .4em; width: 2px; border-radius: 2px; background: var(--brd-rule2); }
 #wall .wr.long::before { background: rgba(34,197,94,.65); }
 #wall .wr.short::before { background: rgba(239,68,68,.65); }
+#wall .wr.arb::before { background: rgba(125,170,255,.65); }
+#wall div.wr { cursor: default; }
+#wall .wr .nm .legs { display: block; font-size: .8em; color: var(--brd-label); }
 #wall .wr:hover { background: rgba(120,160,230,.07); }
 /* One row, one line. A 60-character market name used to wrap every row onto two and the book
    turned into a ragged paragraph; the overflow fades rather than ending in an ellipsis. */
@@ -364,6 +367,7 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #wall .sd { font: 600 .66em/1 var(--mono); letter-spacing: .1em; padding: .35em .55em; border-radius: 999px; white-space: nowrap; }
 #wall .sd.long { color: #6ee7a0; background: rgba(34,197,94,.10); }
 #wall .sd.short { color: #fca5a5; background: rgba(239,68,68,.10); }
+#wall .sd.arb { color: #a9c6ff; background: rgba(125,170,255,.12); }
 #wall .pl { font: 600 .92em var(--mono); text-align: right; }
 /* the rule gives the list a bottom edge: without it the footer sits in the fade of the row above
    it and the two read as one smudge */

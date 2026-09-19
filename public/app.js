@@ -1492,12 +1492,30 @@
   let wallKey = '', tapeKey = '', clockTxt = '', wallSortCol = 'pl', wallSortDir = 'desc';
   const sideTag = (inv) => `<span class="sd ${inv > 0 ? 'long' : 'short'}">${inv > 0 ? 'LONG' : 'SHORT'} ${Math.abs(inv)}</span>`;
   const nameOf = (m) => String(OUTCOME(m) || QUESTION(m) || m.ticker);
+  // Every row is { name, value, pl }: a maker market, or one cross-venue position.
   const sortHeld = (held) => {
     const dir = wallSortDir === 'asc' ? 1 : -1;
-    const by = wallSortCol === 'name' ? (a, b) => dir * nameOf(a.m).localeCompare(nameOf(b.m))
-      : wallSortCol === 'value' ? (a, b) => dir * (Math.abs(a.m.mark) - Math.abs(b.m.mark))
+    const by = wallSortCol === 'name' ? (a, b) => dir * a.name.localeCompare(b.name)
+      : wallSortCol === 'value' ? (a, b) => dir * (a.value - b.value)
         : (a, b) => dir * (a.pl - b.pl);
     return held.slice().sort(by);
+  };
+  // A locked arb is two contracts on the same question, one per venue. Listed leg by leg it read as
+  // two unrelated bets; it is one position, so it gets one row: the question, what each side is
+  // worth now, and the total.
+  const takerRows = () => {
+    const groups = new Map();
+    for (const p of S.positions || []) {
+      const k = p.group || p.id;
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(p);
+    }
+    return [...groups.values()].map((legs) => {
+      legs.sort((a, b) => (a.venue === 'PM' ? -1 : 1) - (b.venue === 'PM' ? -1 : 1));
+      const worth = (p) => p.qty * (p.mark ?? p.entry);
+      return { arb: legs, name: String(legs[0].label || ''), value: r2(legs.reduce((a, p) => a + worth(p), 0)), pl: r2(legs.reduce((a, p) => a + (p.pnl || 0), 0)),
+        sides: legs.map((p) => `${venueName(p.venue)} ${p.side.toUpperCase()} ${money(worth(p))}`).join(' + ') };
+    });
   };
 
   // The screen used to be a tall-ish rectangle and the home view was a column: number, then a list
@@ -1508,7 +1526,7 @@
     const makerNet = r2((M.equity ?? M.initial ?? 0) - (M.initial ?? 0));
     const pairNet = r2((S.equity ?? S.initial ?? 0) - (S.initial ?? 0));
     const net = r2(makerNet + pairNet);
-    const held = sortHeld((M.markets || []).filter((m) => m.inv).map((m) => ({ m, pl: m.mark - m.cost })));
+    const held = sortHeld((M.markets || []).filter((m) => m.inv).map((m) => ({ m, name: nameOf(m), value: Math.abs(m.mark), pl: m.mark - m.cost })).concat(takerRows()));
     const up = held.filter((x) => x.pl > 0).length, down = held.filter((x) => x.pl < 0).length;
     const rows = held;
     // A number, what it means, and the two standing facts as labelled figures. They used to run
@@ -1520,7 +1538,7 @@
     const tally = held.length ? `${up ? `<b class="pos">▲${up}</b>` : ''}${down ? `<b class="neg">▼${down}</b>` : ''}` : '';
     let h = `<div class="wh"><span>Paper account</span><span>${tally}${held.length ? `${held.length} held · ` : ''}${M.quoting || 0} quoted</span></div>`;
     if (!held.length) {
-      h += num + `<p class="wempty">No maker inventory. Quoting ${M.quoting || 0} markets; cross-venue positions are included in the total above.</p>`;
+      h += num + `<p class="wempty">Nothing held. Quoting ${M.quoting || 0} markets.</p>`;
       return h;
     }
     // The header row is the sort control -- click a column, click it again to flip the arrow.
@@ -1528,8 +1546,12 @@
     const arrow = (dir) => dir === 'asc' ? '▲' : '▼';
     const colBtn = (k, label) => `<button type="button" role="columnheader" aria-sort="${wallSortCol === k ? (wallSortDir === 'asc' ? 'ascending' : 'descending') : 'none'}" data-wcol="${k}" class="${wallSortCol === k ? 'on' : ''}">${label}${wallSortCol === k ? `<i>${arrow(wallSortDir)}</i>` : ''}</button>`;
     const head = `<div class="wcols" role="row">${colBtn('name', 'Name')}<span class="wcolside">Side</span>${colBtn('value', 'Value')}${colBtn('pl', 'P&amp;L')}</div>`;
-    const list = `<div class="wlist">${rows.map(({ m, pl }) => `<button class="wr ${m.inv > 0 ? 'long' : 'short'}" data-m="${esc(m.ticker)}" title="${esc(m.title || '')}">` +
-      `<span class="nm">${esc(OUTCOME(m) || QUESTION(m))}${OUTCOME(m) && QUESTION(m) ? `<i> · ${esc(QUESTION(m))}</i>` : ''}</span>${sideTag(m.inv)}<span class="val">${money(Math.abs(m.mark))}</span><span class="pl ${pl >= 0 ? 'pos' : 'neg'}">${signed(pl)}</span></button>`).join('')}</div>`;
+    const row = (x) => x.arb
+      ? `<div class="wr arb" title="${esc(x.name)}"><span class="nm">${esc(x.name)}<small class="legs">${esc(x.sides)}</small></span>` +
+        `<span class="sd ${x.arb.length > 1 ? 'arb' : 'long'}">${x.arb.length > 1 ? 'ARB' : x.arb[0].side.toUpperCase()} ${x.arb[0].qty}</span><span class="val">${money(x.value)}</span><span class="pl ${x.pl >= 0 ? 'pos' : 'neg'}">${signed(x.pl)}</span></div>`
+      : `<button class="wr ${x.m.inv > 0 ? 'long' : 'short'}" data-m="${esc(x.m.ticker)}" title="${esc(x.m.title || '')}">` +
+        `<span class="nm">${esc(OUTCOME(x.m) || QUESTION(x.m))}${OUTCOME(x.m) && QUESTION(x.m) ? `<i> · ${esc(QUESTION(x.m))}</i>` : ''}</span>${sideTag(x.m.inv)}<span class="val">${money(Math.abs(x.m.mark))}</span><span class="pl ${x.pl >= 0 ? 'pos' : 'neg'}">${signed(x.pl)}</span></button>`;
+    const list = `<div class="wlist">${rows.map(row).join('')}</div>`;
     h += `<div class="wbody">${`<div class="wnum">${num}</div>`}<div class="wbook">${head}${list}</div></div>`;
     return h;
   }
