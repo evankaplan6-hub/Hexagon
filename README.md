@@ -125,6 +125,16 @@ BRAM RESEARCH  gate ledger over 19 pairs · 8 gap under minGap · 6 mid outside 
   pair's last good quote when it fails to reprice, so **a line whose `qt` lags `t` by more than the
   cycle's own few hundred milliseconds is a carried-over quote, not a fresh observation** — without
   `qt` a stale price and a flat market look identical.
+- **The maker's market data shares the file** (`src/makertape.js`, `RECORD_MAKER=0` turns it off).
+  Lines with an `mk` field and no `pair`: `b` is the top of the book with both sizes, written on
+  change and once a minute otherwise (`hb:1`); `p` is a print with the exchange's own timestamp;
+  `q` is our resting quote and inventory; `g` marks a hole in what was observed (a stop, a failed
+  data round, a skipped poll, a lost write, and the return after one), because a stop withdraws
+  every quote and a replay that read only `b`/`p`/`q` would see the last quote rest straight through it. Nothing new is fetched: the maker already reads these
+  every two seconds and used to discard them. They exist so `tools/maker-replay.js` can replace
+  its reconstructed touch and guessed queue with the real ones. About 20 MB a day; the disk brake
+  and the daily pull already cover the file. `tools/replay.js` and `tools/history-scan.js` skip
+  lines without a `pair`.
 - Append-only, never rewritten, rotating by filename at Eastern midnight. A failed write logs once
   (rate-limited) and the cycle continues; the tape can never halt the desk.
 - Roughly 60–80 MB per day at 19–45 pairs. **Nothing prunes these files.** `data/` is gitignored, so

@@ -10,6 +10,9 @@ module.exports = {
   initialBalance: num('INITIAL_BALANCE', 10000),
   dataDir: env('DATA_DIR', path.join(__dirname, '..', 'data')),
   record: env('RECORD', '1') !== '0', // append a tick line per priced pair per cycle under dataDir
+  // The maker's book and prints go into the same tape (src/makertape.js). RECORD=0 turns both off; this
+  // turns off only the maker's share, about 20 MB a day.
+  makerRecord: env('RECORD_MAKER', '1') !== '0',
   // Any-market pairs are recorded on change plus this heartbeat (src/recorder.js says why).
   recordHeartbeatMin: num('RECORD_HEARTBEAT_MIN', 15),
   // The tape's emergency brake (src/recorder.js). When free space under dataDir falls below this,

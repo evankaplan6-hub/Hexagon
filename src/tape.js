@@ -151,7 +151,7 @@ function makeTape({ maxPages = 5, stream = null } = {}) {
         });
       }
     }
-    return { books: out, markets, failed };
+    return { books: out, markets, failed, at: Date.now() };
   }
 
   return { since, books, setStream, stats: () => ({ gaps, pages, streamed, polled }) };
