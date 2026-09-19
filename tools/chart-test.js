@@ -24,10 +24,10 @@ const fn = (name) => {
   if (i < 0) throw new Error(`app.js no longer has function ${name}`);
   return src.slice(i + 1, src.indexOf('\n  }\n', i) + 4);
 };
-const lifted = [line('const r2 = '), fn('combinePnlHistory'), fn('windowPnlPoints'), fn('pnlPriceRange'), line('const SLOT_STEPS = '), line('const slotStep = '), fn('evenPnlPoints'), fn('pnlCandles'), fn('pnlVolume'),
+const lifted = [line('const r2 = '), fn('combinePnlHistory'), fn('windowPnlPoints'), fn('pnlPriceRange'), line('const SLOT_STEPS = '), line('const slotStep = '), fn('evenPnlPoints'), fn('pnlCandles'), fn('pnlVolume'), fn('barTime'), fn('timeBar'), fn('pnlView'),
   line('const MOMENTUM = '), fn('pnlMacd'), fn('pnlMomentum'), fn('paperSwing'), fn('paperSkew')].join('\n');
-const { combinePnlHistory, windowPnlPoints, pnlPriceRange, evenPnlPoints, pnlCandles, pnlVolume, MOMENTUM, pnlMacd, pnlMomentum, paperSwing, paperSkew } = new Function(
-  `${lifted}\nreturn { combinePnlHistory, windowPnlPoints, pnlPriceRange, evenPnlPoints, pnlCandles, pnlVolume, MOMENTUM, pnlMacd, pnlMomentum, paperSwing, paperSkew };`)();
+const { combinePnlHistory, windowPnlPoints, pnlPriceRange, evenPnlPoints, pnlCandles, pnlVolume, barTime, timeBar, pnlView, MOMENTUM, pnlMacd, pnlMomentum, paperSwing, paperSkew } = new Function(
+  `${lifted}\nreturn { combinePnlHistory, windowPnlPoints, pnlPriceRange, evenPnlPoints, pnlCandles, pnlVolume, barTime, timeBar, pnlView, MOMENTUM, pnlMacd, pnlMomentum, paperSwing, paperSkew };`)();
 
 {
   const combined = combinePnlHistory(
@@ -240,6 +240,46 @@ const { combinePnlHistory, windowPnlPoints, pnlPriceRange, evenPnlPoints, pnlCan
       ok(`${mins}m line (offset ${off / 3600}h): the off-clock first slot shows what the clock had reached`, ls[1].t - ls[0].t >= st * 1000 || (lm[0] && lm[0].s != null), lm[0]);
     }
   }
+
+  // trackpad gestures: what the view becomes
+  const R = { from: 40, to: 80 }, LO = -0.5, HI = 199.5, W = 800;   // 40 bars across 800px: 20px a bar
+  const near = (a, b) => Math.abs(a - b) < 1e-9;
+  const pan = pnlView(R, LO, HI, W, 'pan', 100, 0);
+  ok('a pan moves the view by the distance in bars, span unchanged', near(pan.from, 45) && near(pan.to, 85), pan);
+  const back = pnlView(R, LO, HI, W, 'pan', -100, 0);
+  ok('the other way moves it back', near(back.from, 35) && near(back.to, 75), back);
+  const edgeL = pnlView({ from: 2, to: 42 }, LO, HI, W, 'pan', -5000, 0);
+  ok('a pan stops at the start of the data and keeps its width', near(edgeL.from, LO) && near(edgeL.to - edgeL.from, 40), edgeL);
+  const edgeR = pnlView({ from: 150, to: 190 }, LO, HI, W, 'pan', 5000, 0);
+  ok('and at the end', near(edgeR.to, HI) && near(edgeR.to - edgeR.from, 40), edgeR);
+  const zin = pnlView(R, LO, HI, W, 'zoom', -100, 200);
+  ok('scrolling up zooms in', zin.to - zin.from < 40, zin);
+  ok('the bar under the pointer stays put while zooming', near(zin.from + (200 / W) * (zin.to - zin.from), 40 + (200 / W) * 40), zin);
+  const zout = pnlView(R, LO, HI, W, 'zoom', 100, 200);
+  ok('scrolling down zooms out', zout.to - zout.from > 40, zout);
+  const zin2 = pnlView(zin, LO, HI, W, 'zoom', -50, 200), zin3 = pnlView(R, LO, HI, W, 'zoom', -150, 200);
+  ok('zoom compounds: two steps of 100 and 50 equal one of 150', near(zin2.to - zin2.from, zin3.to - zin3.from), [zin2, zin3]);
+  const all = pnlView(R, LO, HI, W, 'zoom', 100000, 400);
+  ok('zooming right out shows exactly the whole of the data', near(all.from, LO) && near(all.to, HI), all);
+  const tiny = pnlView(R, LO, HI, W, 'zoom', -100000, 400);
+  ok('zooming in stops at five bars', near(tiny.to - tiny.from, 5), tiny);
+  const pinch = pnlView(R, LO, HI, W, 'pinch', -10, 400), wheel = pnlView(R, LO, HI, W, 'zoom', -10, 400);
+  ok('a pinch zooms harder than a wheel for the same delta', pinch.to - pinch.from < wheel.to - wheel.from, [pinch, wheel]);
+  const few = pnlView({ from: -0.5, to: 2.5 }, -0.5, 2.5, W, 'zoom', -500, 100);
+  ok('three bars of data are never zoomed below themselves', near(few.from, -0.5) && near(few.to, 2.5), few);
+  ok('nothing is ever NaN', [pan, back, zin, zout, all, tiny, pinch, few].every((v) => Number.isFinite(v.from) && Number.isFinite(v.to)));
+
+  // a zoom kept as moments, so new data does not make the view jump
+  const slotsX = [{ t: 0 }, { t: 60000 }, { t: 120000 }, { t: 180000 }, { t: 200000 }];   // the last slot is a short one
+  eq('a whole bar is its slot time', barTime(slotsX, 2), 120000);
+  eq('half a bar is half way to the next slot', barTime(slotsX, 2.5), 150000);
+  eq('the short last slot interpolates on its own length', barTime(slotsX, 3.5), 190000);
+  ok('time and bar are inverses, fractions included', [0, 0.25, 1.5, 2.9, 3.5, 4].every((i) => Math.abs(timeBar(slotsX, barTime(slotsX, i)) - i) < 1e-9), 0);
+  ok('beyond the ends it extrapolates, not clamps', timeBar(slotsX, -60000) === -1 && timeBar(slotsX, 260000) === 7, [timeBar(slotsX, -60000), timeBar(slotsX, 260000)]);
+  // the same moment, in the next frame's slots (one slot later on the clock), is one bar earlier
+  const nextX = [{ t: 60000 }, { t: 120000 }, { t: 180000 }, { t: 240000 }, { t: 260000 }];
+  const tX = barTime(slotsX, 1.75);
+  ok('a zoom keeps its place in time when the slots move under it', Math.abs(timeBar(nextX, tX) - 0.75) < 1e-9, timeBar(nextX, tX));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
