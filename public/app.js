@@ -1110,14 +1110,16 @@
   const RANGES = [['1h', 36e5], ['6h', 216e5], ['24h', 864e5], ['All', Infinity]];
   // interval: how long one candle (or one point of the line) is, in minutes; 'auto' picks it from the range
   const INTERVALS = ['auto', 1, 5, 15, 45];
-  const chart = { range: 'All', type: 'candles', interval: 'auto', hoverT: null, band: null, dragFrom: null };
+  // ind: the indicator panes under the large chart's price (momentum, and the maker's paper P&L)
+  const chart = { range: 'All', type: 'candles', interval: 'auto', ind: true, hoverT: null, band: null, dragFrom: null };
   try {
     const c = JSON.parse(localStorage.getItem('hex-chart') || '{}');
     if (RANGES.some(([r]) => r === c.range)) chart.range = c.range;
     if (c.type === 'line' || c.type === 'candles') chart.type = c.type;
     if (INTERVALS.includes(c.interval)) chart.interval = c.interval;
+    if (typeof c.ind === 'boolean') chart.ind = c.ind;
   } catch { /* private window: defaults */ }
-  const saveChart = () => { try { localStorage.setItem('hex-chart', JSON.stringify({ range: chart.range, type: chart.type, interval: chart.interval })); } catch { /* ignore */ } };
+  const saveChart = () => { try { localStorage.setItem('hex-chart', JSON.stringify({ range: chart.range, type: chart.type, interval: chart.interval, ind: chart.ind })); } catch { /* ignore */ } };
 
   function combinePnlHistory(balanceHistory, makerHistory, initial, validFrom = 0) {
     // Only the maker ledger had the bad 50c marks, so only its history is cut at the repair. The
@@ -1241,6 +1243,88 @@
     return out;
   }
 
+  // ---- the indicator panes (large chart only). They describe the desk; nothing trades off them.
+  // Momentum is MACD on the P&L: the gap between a fast and a slow average of the slot values, a
+  // slower average of that gap (the signal), and the difference of the two as bars. Periods are in
+  // slots, so they follow the candle size. Plain rate of change was the other choice, but per candle
+  // it is only close minus open -- the candle body again, drawn a second time. MACD says what the
+  // candles cannot: whether the last hour is running ahead of the last few hours. On a step ledger
+  // it reads well: a flat stretch decays to zero, a jump shows as a spike that fades.
+  const MOMENTUM = { fast: 12, slow: 26, signal: 9 };
+  // An average needs history to mean anything: no value until `slow` slots have been seen, no signal
+  // until `signal` more. Each average starts on its first input rather than on a zero.
+  function pnlMacd(values, fast = 12, slow = 26, signal = 9) {
+    const a = (n) => 2 / (n + 1), out = [];
+    let ef = null, es = null, sg = null;
+    for (let i = 0; i < values.length; i++) {
+      const x = values[i];
+      ef = ef == null ? x : ef + a(fast) * (x - ef);
+      es = es == null ? x : es + a(slow) * (x - es);
+      if (i < slow - 1) { out.push(null); continue; }
+      const m = ef - es;
+      sg = sg == null ? m : sg + a(signal) * (m - sg);
+      out.push(i < slow + signal - 2 ? { m, s: null, h: null } : { m, s: sg, h: m - sg });
+    }
+    return out;
+  }
+
+  // Momentum for the slots on show. The averages are warmed on the history before the first slot,
+  // at the same step and on the same clock, so a range does not open on a dead stretch of blanks:
+  // only the very start of the whole history has none. `step` is the slot length in ms. A candle's
+  // value is its close (the last point before its slot ends); a line's is the value live at its moment.
+  // A line's first slot is the range's own start, off the round clock and often seconds before the
+  // next slot: counted as a whole slot it would skew the averages. So a line is warmed on the clock
+  // of its second slot, and its first shows what that clock had reached just before it.
+  function pnlMomentum(allPts, slots, step, candles, P = MOMENTUM) {
+    if (slots.length < 2 || !allPts.length || !(step > 0)) return slots.map(() => null);
+    const skip = !candles && slots.length > 2 && slots[1].t - slots[0].t < step ? 1 : 0;
+    const lead = [];
+    let i = 0, v = null;
+    for (let k = P.slow * 6; k >= 1; k--) {
+      const x = slots[skip].t - k * step + (candles ? step : 1000);
+      while (i < allPts.length && allPts[i].t < x) v = allPts[i++].v;
+      if (v != null) lead.push(v);
+    }
+    const out = pnlMacd([...lead, ...slots.slice(skip).map((p) => p.v)], P.fast, P.slow, P.signal);
+    return [...(skip ? [lead.length ? out[lead.length - 1] : null] : []), ...out.slice(lead.length)];
+  }
+
+  // How much of the maker's P&L is only on paper. The maker's history samples, once a minute:
+  //   c  realised P&L -- banked when a fill closes part of a position, or at settlement
+  //   m  the marked VALUE of the inventory (contracts x mid, short negative) -- not a profit
+  //   e  the maker's whole P&L: cash plus that mark, less the opening balance
+  // Cash moves by the fill price and realised profit by the fill price less the cost basis, so
+  // e = c + (mark - cost basis) + skew: e - c - skew is the gain or loss on contracts still held,
+  // which is gone if the marks move before the desk gets out. `m` is not that: a desk long $400 of
+  // contracts bought for $400 has m = 400 and nothing on paper. The taker's positions are not in
+  // this history, so this is the maker's paper P&L, not the whole headline's.
+  // `skew` is a ledger's fixed error between cash and realised profit. It is zero on a clean ledger,
+  // but the Fly box's maker booked its realised profit wrongly on partial closes until the fix of
+  // 2026-09-12, and its running total still carries that (about $7): e - c alone would show that
+  // much "on paper" with nothing held. The current code moves cash and realised profit together, so
+  // the error has stayed fixed since, and the caller measures it from the live book (paperSkew).
+  // Each slot takes the sample live at its moment (a candle: its close), like the P&L itself.
+  // Before the accounting repair the marks were wrong, so that stretch is left out.
+  function paperSwing(hist, slots, candles, validFrom = 0, skew = 0) {
+    const h = (hist || []).filter((p) => p.t >= validFrom && Number.isFinite(p.e) && Number.isFinite(p.c)).sort((a, b) => a.t - b.t);
+    let i = 0, cur = null;
+    return slots.map((s, k) => {
+      const x = candles ? (k + 1 < slots.length ? slots[k + 1].t : Infinity) : s.t + 1000;
+      while (i < h.length && h[i].t < x) cur = h[i++];
+      return cur && { p: r2(cur.e - cur.c - skew) };
+    });
+  }
+
+  // The skew, from the live book: the maker's P&L less its realised profit, less what is really on
+  // paper now (each market's mark less its cost basis). Zero when the book cannot say.
+  function paperSkew(M) {
+    const mk = M && Array.isArray(M.markets) ? M.markets : null;
+    if (!mk || ![M.equity, M.initial, M.realized].every(Number.isFinite)) return 0;
+    let held = 0;
+    for (const m of mk) { const a = +m.mark || 0, b = +m.cost || 0; held += a - b; }
+    return r2(M.equity - M.initial - M.realized - held);
+  }
+
   function chartPoints() {
     const M = S.maker || {};
     const pts = combinePnlHistory(S.balanceHistory, M.hist, S.initial, M.historyValidFrom || 0);
@@ -1271,16 +1355,25 @@
       ? `<span class="seg">${rangeBtns}</span><span class="seg cint-seg" title="Candle size">${intBtns}</span>`
       : `<span class="cmenu-wrap"><button type="button" class="cmenu-btn" data-menu="1" aria-haspopup="true" aria-expanded="false"></button>` +
         `<span class="cmenu" hidden><span class="cmh">Range</span><span class="seg">${rangeBtns}</span><span class="cmh">Candle size</span><span class="seg cint-seg">${intBtns}</span></span></span>`;
-    return `<div class="ct"><span class="ctitle">All paper trades</span><button class="cx crz" data-zoomreset="1" title="Back to the whole range" hidden>↺</button><button class="cx ctype" data-type="1"></button>` +
+    // the large chart has room for the indicator panes: a switch for them, and a name on each
+    return `<div class="ct"><span class="ctitle">All paper trades</span><button class="cx crz" data-zoomreset="1" title="Back to the whole range" hidden>↺</button>` +
+      `${big ? '<button class="cx cind" data-ind="1" aria-pressed="false">Indicators</button>' : ''}<button class="cx ctype" data-type="1"></button>` +
       `${big ? '' : '<button class="cx" data-expand="1" title="Open large">⤢</button>'}</div>` +
       `<div class="chead"><span class="cv"></span><span class="cd"></span></div>` +
-      `<div class="cplot"><i class="cband" hidden></i><div class="ctip" hidden></div></div>` +
+      `<div class="cplot"><i class="cband" hidden></i><div class="ctip" hidden></div>` +
+      `${big ? PANES.map((p, i) => `<span class="cpane" data-pane="${i + 1}" hidden>${p.name}</span>`).join('') : ''}</div>` +
       `<div class="cb">${controls}<span class="cr"></span></div>`;
   }
 
   const UP = '#22c55e', DOWN = '#ef4444', FLAT = '#64748b';
   // volume bars: the candle's own colours, softened; a line has no direction to colour by
   const VOL = { up: 'rgba(34,197,94,.42)', down: 'rgba(239,68,68,.42)', flat: 'rgba(100,116,139,.42)', line: 'rgba(140,168,210,.32)' };
+  // the indicator panes: their names (on the pane) and colours. Momentum's line is the chart's cyan,
+  // its signal amber; its bars and the paper swing use the candles' green and red, softened.
+  const PANES = [{ name: `Momentum · MACD ${MOMENTUM.fast} ${MOMENTUM.slow} ${MOMENTUM.signal}` }, { name: 'Maker P&L not yet banked' }];
+  const MOM = { line: '#5ec8e0', signal: '#f59e0b', up: 'rgba(34,197,94,.5)', down: 'rgba(239,68,68,.5)' };
+  // a pane's numbers are dollars, like the price's, but can be cents: two decimals until they are big
+  const paneTxt = (v) => (Math.abs(v) < 1e-9 ? '$0' : signed(v, Math.abs(v) >= 100 ? 0 : 2));
   const volTxt = (d) => (d >= 1e6 ? `$${(d / 1e6).toFixed(1)}M` : d >= 1e3 ? `$${(d / 1e3).toFixed(1)}k` : `$${Math.round(d)}`);
   // The desk's own trading by the minute, from the server. Not in the 2-second stream: it is a long
   // series that changes slowly, so it is fetched on its own, now and then.
@@ -1343,16 +1436,18 @@
   // a click anywhere outside the active chart lets it go
   document.addEventListener('pointerdown', (ev) => { if (activeChart && !activeChart.contains(ev.target)) setActive(null); });
 
-  function makePlot(el, big, candles) {
+  function makePlot(el, big, candles, ind) {
     const LW = window.LightweightCharts;
     if (!LW) return null;   // the script did not load: the headline and the ranges still work
-    const plot = { c: null, s: null, v: null, vols: [], zoomed: false, ro: null, zero: null, open: null, candles, pts: [], start: null, end: 0, step: 0, off: 0, last: 0, digits: 2, fs: 0, read: '' };
+    const plot = { c: null, s: null, v: null, vols: [], ind, mom: [], swing: [], zoomed: false, ro: null, zero: null, open: null, candles, pts: [], start: null, end: 0, step: 0, off: 0, last: 0, digits: 2, fs: 0, read: '' };
     const c = plot.c = LW.createChart(el.querySelector('.cplot'), {
       autoSize: true,
       // a plot is not dragged (a drag is the measure) and is zoomed only once it has been clicked
       ...hands(el === activeChart),
       layout: { background: { type: LW.ColorType.Solid, color: 'transparent' }, textColor: '#657086',
         fontFamily: "'JetBrains Mono', ui-monospace, Menlo, monospace", fontSize: 9,
+        // indicator panes, when shown, are split by a hairline that is not dragged: a drag is the measure
+        panes: { enableResize: false, separatorColor: 'rgba(140,168,210,.14)', separatorHoverColor: 'rgba(140,168,210,.14)' },
         // TradingView's terms for the library: their logo, linked, where the chart is (the page's
         // footer is hidden, so it cannot carry the credit)
         attributionLogo: true },
@@ -1393,6 +1488,31 @@
     const ref = { color: '#44526b', lineWidth: 1, lineStyle: LW.LineStyle.Dashed, axisLabelVisible: false };
     plot.zero = plot.s.createPriceLine({ ...ref, price: 0 });
     plot.open = plot.s.createPriceLine({ ...ref, price: 0, lineVisible: false });
+    // The indicator panes, under the price on the same time axis, so a zoom or a pan moves all three.
+    // Pane 1 is momentum (bars first, so the lines sit over them), pane 2 the maker's paper P&L,
+    // green where the marks are ahead of what was paid and red where behind. Each has its own scale
+    // and a dashed zero. The price keeps three fifths of the height.
+    if (ind) {
+      // Both panes read against zero (momentum turning, paper gains turning to losses), so zero is
+      // always on their scale, with at least 50c either side of it: as with the price, a flat day's
+      // cents must look like cents, not fill the pane.
+      const withZero = (original) => {
+        const r = original();
+        return r && r.priceRange ? { ...r, priceRange: { minValue: Math.min(-0.5, r.priceRange.minValue), maxValue: Math.max(0.5, r.priceRange.maxValue) } } : r;
+      };
+      const pane = { priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: withZero,
+        priceFormat: { type: 'custom', minMove: 0.01, formatter: paneTxt } };
+      plot.mh = c.addSeries(LW.HistogramSeries, pane, 1);
+      plot.ml = c.addSeries(LW.LineSeries, { ...pane, color: MOM.line, lineWidth: 2, crosshairMarkerRadius: 3 }, 1);
+      plot.ms = c.addSeries(LW.LineSeries, { ...pane, color: MOM.signal, lineWidth: 1, crosshairMarkerVisible: false }, 1);
+      plot.pp = c.addSeries(LW.BaselineSeries, { ...pane, baseValue: { type: 'price', price: 0 }, lineWidth: 2, crosshairMarkerRadius: 3,
+        topLineColor: UP, topFillColor1: 'rgba(34,197,94,.3)', topFillColor2: 'rgba(34,197,94,.04)',
+        bottomLineColor: DOWN, bottomFillColor1: 'rgba(239,68,68,.04)', bottomFillColor2: 'rgba(239,68,68,.3)' }, 2);
+      plot.ml.createPriceLine({ ...ref, price: 0 });
+      plot.pp.createPriceLine({ ...ref, price: 0 });
+      for (const i of [1, 2]) c.priceScale('right', i).applyOptions({ borderVisible: false, scaleMargins: { top: 0.14, bottom: 0.08 } });
+      c.panes()[0].setStretchFactor(3);
+    }
     // A chart that is shut (the large one, once closed) still gets one last crosshair event as it is
     // resized away, and that would leave its hover on the floor chart. Only a chart on show hovers.
     c.subscribeCrosshairMove((p) => {
@@ -1415,6 +1535,13 @@
   // band, and the bottom line, which is the time span until a drag asks it a question.
   function paintOverlay(el) {
     const plot = plots.get(el), tip = el.querySelector('.ctip'), band = el.querySelector('.cband');
+    // each indicator pane's name sits in its top-left corner, wherever the library has put the pane
+    const labels = el.querySelectorAll('.cpane'), on = !!(plot && plot.ind && plot.pts.length >= 2);
+    labels.forEach((lab) => {
+      const pane = on && plot.c.panes()[+lab.dataset.pane], box = pane && pane.getHTMLElement();
+      lab.hidden = !box;
+      if (box) lab.style.top = `${box.getBoundingClientRect().top - el.querySelector('.cplot').getBoundingClientRect().top + 3}px`;
+    });
     if (!plot || plot.pts.length < 2) { tip.hidden = true; band.hidden = true; return; }
     const { pts, c, start, off } = plot, w = el.querySelector('.cplot').clientWidth, ts = c.timeScale();
     let read = plot.read;
@@ -1434,9 +1561,12 @@
     const p = chart.hoverT == null ? null : nearest(pts, chart.hoverT), x = p && ts.timeToCoordinate(p.t / 1000 + off);
     if (!p || x == null) { tip.hidden = true; return; }
     tip.hidden = false;
+    const i = pts.indexOf(p), mo = plot.ind && plot.mom[i], sw = plot.ind && plot.swing[i];
     tip.innerHTML = `<b>${hhmm(p.t)}</b> <span class="${p.v >= 0 ? 'pos' : 'neg'}">${signed(p.v)}</span><br>` +
       (plot.candles && w >= 300 ? `<small>O ${signed(p.o)} · H ${signed(p.h)} · L ${signed(p.l)}</small><br>` : '') +
-      (plot.vols[pts.indexOf(p)] > 0 ? `<small>Vol ${volTxt(plot.vols[pts.indexOf(p)])}</small><br>` : '') +
+      (plot.vols[i] > 0 ? `<small>Vol ${volTxt(plot.vols[i])}</small><br>` : '') +
+      (mo ? `<small>Momentum ${paneTxt(mo.m)}${mo.s != null ? ` · signal ${paneTxt(mo.s)}` : ''}</small><br>` : '') +
+      (sw ? `<small>Maker not yet banked ${paneTxt(sw.p)}</small><br>` : '') +
       `<small>${signed(r2(p.v - start.v))} since ${hhmm(start.t)}</small>`;
     // beside the crosshair, on the roomier side, and never past either edge of the plot
     const tw = tip.offsetWidth, at = x > w * 0.55 ? x - tw - 10 : x + 10;
@@ -1464,16 +1594,29 @@
     const off = zoneSec(), iv = chart.interval === 'auto' ? 0 : chart.interval * 60;
     const slots = candles ? pnlCandles(pts, big ? 120 : 48, off, iv) : evenPnlPoints(pts, iv ? (big ? 300 : 120) : 900, off, iv);
     let plot = plots.get(el);
-    // a different kind of chart is a different plot: build it again rather than swap its series
-    if (plot && plot.candles !== candles) { dropPlot(el); plot = null; }
-    plot = plot || makePlot(el, big, candles);
+    // a different kind of chart is a different plot: build it again rather than swap its series. So
+    // is one with the indicator panes switched on or off (the small chart has no room for them).
+    // Switching the panes is the same picture with more under it, so a zoom carries over.
+    const ind = big && chart.ind;
+    const carry = plot && plot.candles === candles && plot.ind !== ind && plot.zoomed ? plot.c.timeScale().getVisibleRange() : null;
+    if (plot && (plot.candles !== candles || plot.ind !== ind)) { dropPlot(el); plot = null; }
+    plot = plot || makePlot(el, big, candles, ind);
+    if (plot && carry) plot.zoomed = true;
+    const ib = el.querySelector('.cind');
+    if (ib) {
+      ib.classList.toggle('on', chart.ind); ib.setAttribute('aria-pressed', String(chart.ind));
+      ib.title = chart.ind ? 'Hide the momentum and paper P&L panes' : 'Show momentum and the maker\'s paper P&L under the price';
+    }
     const ty = el.querySelector('.ctype');
     ty.innerHTML = TYPE_ICON[chart.type]; ty.title = candles ? 'Candles. Click for a line' : 'Line. Click for candles';
     el.querySelectorAll('.cint-seg [data-int]').forEach((b) => b.classList.toggle('on', b.dataset.int === String(chart.interval)));
     const mb = el.querySelector('.cmenu-btn');
     if (mb) mb.innerHTML = `${chart.range} · ${intervalTxt(chart.interval)}<i>▾</i>`;
     if (pts.length < 2 || slots.length < 2) {
-      if (plot) { plot.s.setData([]); plot.v.setData([]); plot.pts = []; plot.vols = []; }
+      if (plot) {
+        plot.s.setData([]); plot.v.setData([]); plot.pts = []; plot.vols = []; plot.mom = []; plot.swing = [];
+        if (plot.ind) for (const x of [plot.mh, plot.ml, plot.ms, plot.pp]) x.setData([]);
+      }
       paintOverlay(el);
       el.querySelector('.cv').textContent = signed(pts.length ? pts[0].v : 0);
       el.querySelector('.cd').innerHTML = '';
@@ -1518,7 +1661,7 @@
     plot.open.applyOptions({ price: opened, lineVisible: !zeroIn });
     plot.zero.applyOptions({ lineVisible: zeroIn });
     // what the user has zoomed to, by time, so the desk's next frame does not undo it
-    const view = plot.zoomed ? plot.c.timeScale().getVisibleRange() : null;
+    const view = carry || (plot.zoomed ? plot.c.timeScale().getVisibleRange() : null);
     // Zero is zero even as float noise (the library's ticks are sums). The finest tick the library will
     // draw is the last decimal shown, but it steps by 2.5 as readily as by 2, so an axis whose ticks
     // are not all whole at that many decimals gets one more for every tick, rather than a "-$3" at -$2.50.
@@ -1543,6 +1686,22 @@
       color: !candles ? VOL.line : p.c > p.o ? VOL.up : p.c < p.o ? VOL.down : VOL.flat })));
     // room for the bars only when there are some: a desk that has not traded keeps the whole plot
     plot.c.priceScale('right').applyOptions({ scaleMargins: { top: 0.1, bottom: most > 0 ? 0.24 : 0.1 } });
+    if (plot.ind) {
+      // the slot length the plot is on: a candle's, or the line's even clock (as evenPnlPoints picks it)
+      const step = candles ? plot.step : (iv || slotStep(Math.floor(pts[0].t / 1000), Math.floor(last.t / 1000), 900)) * 1000;
+      const mom = plot.mom = pnlMomentum(allPts, slots, step, candles);
+      // the maker's history ends on its live numbers, as the P&L does
+      const M = S.maker || {};
+      const live = Number.isFinite(M.equity) && Number.isFinite(M.initial) && Number.isFinite(M.realized)
+        ? [{ t: S.now, c: M.realized, e: r2(M.equity - M.initial) }] : [];
+      const swing = plot.swing = paperSwing([...(M.hist || []), ...live], slots, candles, M.historyValidFrom || 0, paperSkew(M));
+      // a slot with nothing to say yet is left blank (a time with no value), not drawn at zero
+      const at = (i) => slots[i].t / 1000 + off;
+      plot.mh.setData(slots.map((p, i) => (mom[i] && mom[i].h != null ? { time: at(i), value: mom[i].h, color: mom[i].h >= 0 ? MOM.up : MOM.down } : { time: at(i) })));
+      plot.ml.setData(slots.map((p, i) => (mom[i] ? { time: at(i), value: mom[i].m } : { time: at(i) })));
+      plot.ms.setData(slots.map((p, i) => (mom[i] && mom[i].s != null ? { time: at(i), value: mom[i].s } : { time: at(i) })));
+      plot.pp.setData(slots.map((p, i) => (swing[i] ? { time: at(i), value: swing[i].p } : { time: at(i) })));
+    }
     const ts = plot.c.timeScale(), lo = slots[0].t / 1000 + off, hi = slots[slots.length - 1].t / 1000 + off;
     // a zoom survives the next frame if what it was looking at is still in the data; otherwise the
     // range or the candle size has changed under it, and the chart starts over
@@ -1593,6 +1752,8 @@
         chart.band = null; saveChart();
       }
       if (b.dataset.type) { chart.type = chart.type === 'candles' ? 'line' : 'candles'; chart.band = null; saveChart(); }
+      // the panes on or off: the plot is rebuilt, and a zoom and a measurement (stretches of time) carry over
+      if (b.dataset.ind) { chart.ind = !chart.ind; saveChart(); }
       if (b.dataset.expand) { openBigChart(); return; }
       drawChart(root, big);
     });
