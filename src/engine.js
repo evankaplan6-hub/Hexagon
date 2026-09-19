@@ -179,8 +179,12 @@ class Engine {
     if (n.length > 30) n = n.slice(0, 30).replace(/\s+\S*$/, '').trim();
     a.note = n;
   }
-  log(agent, kind, pnl, text) {
+  // `refs`: the open positions an entry is about, [{ id, g, label }], so the dashboard can name them
+  // and open them on a click. A note that names no market ("the gap is unchanged") is unreadable
+  // without it.
+  log(agent, kind, pnl, text, refs) {
     const entry = { t: Date.now(), agent, kind, pnl: pnl == null ? null : r2(pnl), text };
+    if (Array.isArray(refs) && refs.length) entry.refs = refs;
     this.state.log.unshift(entry);
     if (this.state.log.length > 500) this.state.log.length = 500;
     this.touch(agent, text);

@@ -409,6 +409,20 @@ group('RIGO: a mind that can only close a convergence position early');
   ok('garbage in gives an empty map, never a throw', minds.RIGO.apply(E, null).size === 0 && minds.RIGO.apply(E, { decisions: 'exit everything' }).size === 0);
   ok('an answer cannot open or resize: nothing but an exit map comes out', [...minds.RIGO.apply(E, say([exit('a1')])).values()].every((x) => Object.keys(x).sort().join() === 'px,reason'));
   ok('a stale answer is not trusted by the desk', minds.RIGO_MAX_AGE_MS === 120000);
+
+  // the log names what a note is about, so the dashboard can say which market and open it
+  const G = R([pos({ label: 'Fed OCT 26 · Cut 25bps' }), pos({ id: 'a2', group: 'g2', label: 'Other' })]);
+  const about = (ids) => minds.RIGO.about(G, { ...say([]), about: ids });
+  ok('the schema asks the mind which positions its note is about', minds.RIGO.schema.required.includes('about') && minds.RIGO.schema.properties.about.type === 'array');
+  ok('a named open position is referenced by id, group and label',
+    JSON.stringify(about(['a2'])) === JSON.stringify([{ id: 'a2', g: 'g2', label: 'Other' }]), about(['a2']));
+  ok('a position without a group is its own group', about(['a1'])[0].g === 'a1');
+  ok('an id that is not open, or not a convergence position, is dropped', about(['ghost']).length === 0 && minds.RIGO.about(R([pos({ id: 'x', strategy: 'arb' })]), { about: ['x'] }).length === 0);
+  ok('the same id twice is named once', about(['a1', 'a1']).length === 1);
+  ok('no more than four', minds.RIGO.about(R(['a', 'b', 'c', 'd', 'e', 'f'].map((id) => pos({ id }))), { about: ['a', 'b', 'c', 'd', 'e', 'f'] }).length === 4);
+  ok('naming nothing with one position open means that one', minds.RIGO.about(R([pos()]), say([]))[0].id === 'a1');
+  ok('naming nothing with several open names none, rather than guess', minds.RIGO.about(G, say([])).length === 0);
+  ok('garbage in gives no references, never a throw', minds.RIGO.about(G, null).length === 0 && minds.RIGO.about(G, { about: 'a1' }).length === 0);
 }
 
 group('per-desk switch: BRAIN turns the layer on, BRAIN_AGENTS picks the desks');
@@ -473,6 +487,13 @@ pending.push(async () => {
   const E3 = { ...E2, brain: { ...E2.brain, failures: new Map() } }; logs.length = 0;
   await agents.RIGO(E3);
   ok('a healthy mind logs nothing about failures', !logs.some((l) => /mind failing/.test(l[3])), logs);
+  // the mind's note goes to the log with the positions it is about, so the page can name them
+  logs.length = 0;
+  const E4 = { ...E2, state: { positions: [mk('a'), mk('b', { group: 'gb' })], stats: { realized: 0 } },
+    brain: { enabled: (x) => x === 'RIGO', refresh() {}, advice: () => ({ ...say(), commentary: 'the gap has not moved', about: ['b', 'ghost'] }), failures: new Map() } };
+  await agents.RIGO(E4);
+  const note = logs.find((l) => l[1] === 'RESEARCH' && /gap has not moved/.test(l[3]));
+  ok('the note is logged with the open position it names, and nothing else', note && JSON.stringify(note[4]) === JSON.stringify([{ id: 'b', g: 'gb', label: 'Fixture b' }]), note);
 });
 
 // Everything above is synchronous except the handful of assertions that have to wait for a

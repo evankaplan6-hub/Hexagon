@@ -381,6 +381,12 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #wall .wr.short::before { background: rgba(239,68,68,.65); }
 #wall .wr.arb::before { background: rgba(125,170,255,.65); }
 #wall .wr .nm .legs { display: block; font-size: .8em; color: var(--brd-label); }
+/* a bot's line about a position names it underneath, as a link to that position */
+#wall .wlog .wrefs { display: flex; flex-wrap: wrap; gap: .3em .5em; margin-top: .3em; }
+#wall .wlog .wref { font: 600 .82em/1.3 var(--sans); color: #9cc3f0; background: rgba(156,195,240,.08); border: 1px solid rgba(156,195,240,.22);
+  border-radius: 999px; padding: .15em .6em; cursor: pointer; text-align: left; }
+#wall .wlog .wref:hover { background: rgba(156,195,240,.16); color: var(--brd-bright); }
+#wall .wlog .wref.gone { color: var(--brd-label); background: none; border-style: dashed; cursor: default; }
 #wall .wr:hover { background: rgba(120,160,230,.07); }
 /* One row, one line. A 60-character market name used to wrap every row onto two and the book
    turned into a ragged paragraph; the overflow fades rather than ending in an ellipsis. */

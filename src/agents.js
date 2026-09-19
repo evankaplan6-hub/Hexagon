@@ -189,7 +189,7 @@ async function RIGO(E) {
   if (E.brain && E.brain.enabled('RIGO')) {
     E.brain.refresh('RIGO', () => minds.RIGO.view(E));
     const a = E.brain.advice('RIGO', minds.RIGO_MAX_AGE_MS);
-    if (a && a.commentary && E.due('rigo-mind', 120)) E.log('RIGO', 'RESEARCH', null, String(a.commentary).slice(0, 300));
+    if (a && a.commentary && E.due('rigo-mind', 120)) E.log('RIGO', 'RESEARCH', null, String(a.commentary).slice(0, 300), minds.RIGO.about(E, a));
     // A dead key or a wall of 429s otherwise shows only on the dashboard's status line, and a desk
     // that is quietly on the rules alone looks exactly like a desk whose mind chose to hold.
     const failing = E.brain.failures && E.brain.failures.get('RIGO');
@@ -236,7 +236,8 @@ async function RIGO(E) {
     // no intent and no quote means we are holding blind: the clock-driven exits inside
     // exitIntent stay armed, but say so rather than going quiet
     if (pos.strategy === 'converge' && !q && E.due(`rigo-blind-${pos.id}`, 300)) {
-      E.log('RIGO', 'OPS', null, `${pos.label}: no live quote, holding at last mark ${(pos.mark ?? pos.entry).toFixed(3)} \u00b7 time exits still armed`);
+      E.log('RIGO', 'OPS', null, `${pos.label}: no live quote, holding at last mark ${(pos.mark ?? pos.entry).toFixed(3)} \u00b7 time exits still armed`,
+        [{ id: pos.id, g: pos.group || pos.id, label: String(pos.label || '') }]);
     }
   }
   // locked arbs: if both legs' bids sum past $1 by more than the exit fee, take the early exit
