@@ -190,6 +190,12 @@ async function RIGO(E) {
     E.brain.refresh('RIGO', () => minds.RIGO.view(E));
     const a = E.brain.advice('RIGO', minds.RIGO_MAX_AGE_MS);
     if (a && a.commentary && E.due('rigo-mind', 120)) E.log('RIGO', 'RESEARCH', null, String(a.commentary).slice(0, 300));
+    // A dead key or a wall of 429s otherwise shows only on the dashboard's status line, and a desk
+    // that is quietly on the rules alone looks exactly like a desk whose mind chose to hold.
+    const failing = E.brain.failures && E.brain.failures.get('RIGO');
+    if (failing && E.due('rigo-mind-err', 600)) {
+      E.log('RIGO', 'OPS', null, `mind failing (${failing} in a row) · exits are on the rules alone · ${String(E.brain.lastError || 'no detail').slice(0, 140)}`);
+    }
   }
   let marked = 0;
   for (const pos of [...E.state.positions]) {
