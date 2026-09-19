@@ -376,7 +376,8 @@ function makeMakerDesk(cfg) {
         // minutes ago" look identical unless the page can say which.
         // `pnl` is what THIS fill realised (zero when it opened or added to a position), so a
         // clicked trade on the dashboard can say whether it made or lost money on its own.
-        S.lastFill = { ticker: u.ticker, side: f.side, qty: f.qty, px: f.px, pnl: res.pnl, at: Date.now() };
+        // title/sub ride along so the page can name a market it no longer quotes, rather than print its ticker
+        S.lastFill = { ticker: u.ticker, title: m.title || u.title || '', sub: m.sub || u.sub || '', side: f.side, qty: f.qty, px: f.px, pnl: res.pnl, at: Date.now() };
         (S.recent = S.recent || []).unshift(S.lastFill);
         if (S.recent.length > 14) S.recent.length = 14;   // the floor shows ten; the journal keeps them all
         seen.add(f.id);
