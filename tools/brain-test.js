@@ -460,6 +460,19 @@ pending.push(async () => {
   ok('a mind cannot keep a position past max hold: the rule exits it regardless', c.length === 1 && /max hold/.test(c[0].reason), c);
   c = await run({ positions: [mk('a', { strategy: 'arb', group: 'g' })], advice: say(ex('a')) });
   ok('an arb leg is never closed on a mind\'s word', c.length === 0, c);
+
+  // a failing mind must say so in the log, once per window, and say why
+  const logs = [];
+  const E2 = { cfg, pairs: [mkPair()], state: { positions: [mk('a')], stats: { realized: 0 } }, log: (...a) => logs.push(a), touch() {}, due: (() => { const seen = new Set(); return (k) => (seen.has(k) ? false : (seen.add(k), true)); })(),
+    resolution: async () => null, markPrice: (p) => p.mark, close: async () => {},
+    brain: { enabled: (a) => a === 'RIGO', refresh() {}, advice: () => null, failures: new Map([['RIGO', 3]]), lastError: 'RIGO: HTTP 401 invalid x-api-key' } };
+  await agents.RIGO(E2); await agents.RIGO(E2);
+  const bad = logs.filter((l) => /mind failing/.test(l[3]));
+  ok('a failing mind is logged with its count and its reason', bad.length === 1 && /3 in a row/.test(bad[0][3]) && /401/.test(bad[0][3]), logs);
+  ok('...as an OPS line, and only once per window', bad[0][1] === 'OPS' && bad.length === 1);
+  const E3 = { ...E2, brain: { ...E2.brain, failures: new Map() } }; logs.length = 0;
+  await agents.RIGO(E3);
+  ok('a healthy mind logs nothing about failures', !logs.some((l) => /mind failing/.test(l[3])), logs);
 });
 
 // Everything above is synchronous except the handful of assertions that have to wait for a
