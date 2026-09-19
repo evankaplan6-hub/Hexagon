@@ -456,8 +456,8 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #wall .wrecap { flex: none; list-style: none; margin: .7em 0 0; padding: .55em 0 0; border-top: 1px solid var(--brd-rule); font-size: .92em; color: #c9cfd9; }
 #wall .wrecap li { padding: .24em 0; }
 #wall .wrecap b { font-family: var(--mono); font-weight: 600; }
-#tape li[data-t] { cursor: pointer; border-radius: 5px; }
-#tape li[data-t]:hover, #tape li.on { background: rgba(80,200,120,.10); }
+#tape li[data-t], #tape li[data-f] { cursor: pointer; border-radius: 5px; }
+#tape li[data-t]:hover, #tape li[data-f]:hover, #tape li.on { background: rgba(80,200,120,.10); }
 
 /* ---- P&L chart (small on the floor, large on the wall) -------------------
    Four rows, each with one job: which series, the number, the plot, the range.
