@@ -2079,7 +2079,7 @@
     h += `<ul class="wrecap">`;
     if (fill) {
       const made = fill.pnl ? ` That trade ${fill.pnl > 0 ? 'made' : 'lost'} <b class="${fill.pnl > 0 ? 'pos' : 'neg'}">${money(fill.pnl)}</b>.` : '';
-      h += `<li>${fill.side === 'buy' ? 'Bought' : 'Sold'} ${fill.qty} at ${cc(fill.px)} (${money(fill.qty * fill.px)}), ${minsAgo(fill.at)}.${made}</li>`;
+      h += `<li>${fill.side === 'buy' ? 'Bought' : 'Sold'} ${fill.qty} at ${cc(fill.px)} each (${money(fill.qty * fill.px)}), ${minsAgo(fill.at)}.${made}</li>`;
     }
     if (m) {
       h += m.inv
@@ -2108,7 +2108,7 @@
     h += `<ul class="wrecap">`;
     for (const p of legs) {
       const w = r2(p.qty * (p.mark ?? p.entry)), d = r2(w - p.cost);
-      h += `<li>${venueName(p.venue)}: ${p.side.toUpperCase()} ${p.qty} at ${cc(p.entry)}. Paid ${money(p.cost)}, worth ${money(w)} now (<b class="${d >= 0 ? 'pos' : 'neg'}">${signed(d)}</b>).</li>`;
+      h += `<li>${venueName(p.venue)}: ${p.side.toUpperCase()} ${p.qty} at ${cc(p.entry)} each. Paid ${money(p.cost)}, worth ${money(w)} now (<b class="${d >= 0 ? 'pos' : 'neg'}">${signed(d)}</b>).</li>`;
     }
     if (legs.length > 1) h += `<li>Both sides together: paid ${money(cost)}, worth ${money(worth)} now.</li>`;
     if (g && g.settlementValue != null) h += `<li>When it settles it pays ${money(g.settlementValue)}, locking in <b class="${g.lockedPnl >= 0 ? 'pos' : 'neg'}">${signed(g.lockedPnl)}</b>.</li>`;
@@ -2127,10 +2127,13 @@
     if (f.pnl != null) h += `<div class="wbig ${f.pnl >= 0 ? 'pos' : 'neg'}">${signed(f.pnl)}</div>` +
       `<div class="wsub">${f.action === 'Settled' ? 'made when it settled' : 'made on the way out'}</div>`;
     h += `<ul class="wrecap">`;
-    h += `<li>${esc(f.action)} ${f.qty} ${esc(String(f.contractSide || '').toUpperCase())} at ${cc(f.px)} on ${esc(venueName(f.venue))} (${money(f.qty * f.px)}), ${minsAgo(f.at)}.</li>`;
+    // "at 100¢" on its own has been read as $100: every price here is per contract, and a contract
+    // settles at 100¢ -- so say each, and say what a full payout is when that is what happened.
+    h += `<li>${esc(f.action)} ${f.qty} ${esc(String(f.contractSide || '').toUpperCase())} at ${cc(f.px)} each` +
+      `${f.px >= 0.995 ? ' (a full $1.00 payout)' : f.px <= 0.005 ? ' (worthless)' : ''} on ${esc(venueName(f.venue))} (${money(f.qty * f.px)}), ${minsAgo(f.at)}.</li>`;
     // the other leg of the same pair, if the desk traded it in the same breath
     const mate = (S.takerFills || []).find((x) => x.id !== f.id && x.label === f.label && Math.abs(x.at - f.at) < 120000);
-    if (mate) h += `<li>The other side: ${esc(mate.action.toLowerCase())} ${mate.qty} ${esc(String(mate.contractSide || '').toUpperCase())} at ${cc(mate.px)} on ${esc(venueName(mate.venue))}.</li>`;
+    if (mate) h += `<li>The other side: ${esc(mate.action.toLowerCase())} ${mate.qty} ${esc(String(mate.contractSide || '').toUpperCase())} at ${cc(mate.px)} each on ${esc(venueName(mate.venue))}.</li>`;
     if (f.pnl == null) h += `<li>This position has since been closed or settled; its profit is in the banked total.</li>`;
     return h + `</ul>`;
   }
