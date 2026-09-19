@@ -93,7 +93,7 @@
       title = 'Recent fills';
       note = 'Maker and cross-venue entries and closes, newest first.';
       rows = fills.map((f) => `<li><div><b>${esc(fillName(f))}</b><small>${ago(f.at)} · ${f.source === 'maker' ? 'maker' : f.venue}</small></div>` +
-        `<span class="${f.side === 'buy' ? 'pos' : 'neg'}">${esc(f.action)} ${(+f.qty || 0).toLocaleString()}<small>at ${cc(f.px)} · ${fillMoney(f, f.qty * f.px)}</small></span></li>`);
+        `<span class="${f.side === 'buy' ? 'pos' : 'neg'}">${esc(f.action)} ${(+f.qty || 0).toLocaleString()} ${sideWord(f)}<small>at ${cc(f.px)} · ${fillMoney(f, f.qty * f.px)}</small></span></li>`);
     }
     const sorts = mobileInfo === 'holding' ? [['size', 'Largest'], ['pnl', 'Gainers'], ['loss', 'Losers'], ['value', 'Value'], ['name', 'Name']] : [['size', mobileInfo === 'quoting' ? 'Flow' : 'Size'], ['name', 'Name']];
     return `<section class="m-detail" id="mobile-detail"><div class="m-detail-head"><div><b>${title}</b><small>${note}</small></div>` +
@@ -118,7 +118,7 @@
       return `<span class="m-agent${on ? ' on' : ''}" style="--agent:${a.color || '#6b7384'}"><i></i>${esc(a.key)}</span>`;
     }).join('');
     const latest = lf
-      ? `<div class="m-fill"><div><span class="m-label">Latest fill</span><b>${esc(lf.action)} ${lf.qty} at ${cc(lf.px)} · ${money(lf.qty * lf.px)}</b></div>` +
+      ? `<div class="m-fill"><div><span class="m-label">Latest fill</span><b>${esc(lf.action)} ${lf.qty} ${sideWord(lf)} at ${cc(lf.px)} · ${money(lf.qty * lf.px)}</b></div>` +
         `<p>${esc(fillName(lf))}<small>${ago(lf.at)} · ${lf.source === 'maker' ? 'maker' : lf.venue}</small></p></div>`
       : `<div class="m-fill empty"><div><span class="m-label">Latest fill</span><b>${M.fills ? `${M.fills} before restart` : 'No fills yet'}</b></div></div>`;
     el.innerHTML = `<div class="m-hero"><div><span class="m-label">All paper trades</span>` +
@@ -630,7 +630,9 @@
   const logKey = (e) => `${e.t}|${e.agent}|${e.text}`;
   const shape = (s) => String(s).replace(/[−+-]?\$?\d[\d,.]*%?/g, '#');
   const cap = (s) => { const t = String(s || '').trim(); return t.charAt(0).toUpperCase() + t.slice(1); };
-  const cc = (p) => `${+(p * 100).toFixed(1)}¢`;
+  // A contract pays $1 when it wins, so its price runs from 0 to 100c -- and nobody says a hundred
+  // cents. The two ends of the range are read in dollars; everything between them in cents.
+  const cc = (p) => (Math.abs(p) >= 0.9995 ? `$${(+p).toFixed(2)}` : `${+(p * 100).toFixed(1)}¢`);
   const move = (s) => `${s.replace('-', '−').replace(/\.0$/, '')}¢`;
 
   // Categories as glyphs. The desk counts its board by category -- "42 sports, 6 elections, 2 crypto,
@@ -655,6 +657,11 @@
   const cats = (html) => String(html).replace(CAT_RE, (m, pre, w) =>
     `${pre}<span class="cat" role="img" aria-label="${w}" title="${w}">${CAT_EMOJI[w]}</span>`);
   const marketName = (tk, f) => { const m = byTicker(S.maker || {}, tk) || (f && f.title ? f : null); return (m && (OUTCOME(m) || QUESTION(m))) || tk.replace(/^KX/, ''); };
+  // Yes and No are what these contracts are called, so a fill says which one it was: the maker
+  // quotes the Yes side, a cross-venue leg carries its own. Direction stays -- sold Yes and bought
+  // No are different trades on the desk's book, even where they are the same bet.
+  const sideWord = (f) => (f.source === 'maker' || !f.contractSide ? 'Yes'
+    : String(f.contractSide).toLowerCase() === 'no' ? 'No' : 'Yes');
   const fillName = (f) => f.label || (f.ticker ? marketName(f.ticker, f) : 'Unknown market');
   // the same name in two parts -- what, then which event -- so a short line drops the event first
   const fillParts = (f) => {
@@ -693,7 +700,7 @@
         }
         // the outcome alone ("J.D. Vance") does not say which market; the question goes underneath
         const m = byTicker(S.maker || {}, g[0].ticker);
-        return { text: cap(g.map((x) => `${x.side === 'buy' ? 'bought' : 'sold'} ${x.qty} ${marketName(x.ticker)} at ${cc(x.val / x.qty)}`).join(', ')),
+        return { text: cap(g.map((x) => `${x.side === 'buy' ? 'bought' : 'sold'} ${x.qty} Yes on ${marketName(x.ticker)} at ${cc(x.val / x.qty)}`).join(', ')),
           sub: m && OUTCOME(m) ? QUESTION(m) : '', level: 'trade' };
       }
       case 'RIGO SETTLE': {
@@ -1080,7 +1087,10 @@
       `</div>` +
       `<div class="lf"><span class="lh">Last fill${lf ? ` · ${ago(lf.at)}` : ''}</span>` +
       (lf
-        ? `<span class="lx ${lf.side === 'sell' || lf.action === 'Sold' ? 'sell' : 'buy'}"><b>${esc(lf.action)} ${lf.qty}</b><span>at ${cc(lf.px)}</span><em>${fillMoney(lf, lf.qty * lf.px)}</em></span><span class="ln fitw">${fillHtml(lf)}</span>`
+        // what happened and what it came to on one line; the market, and the price that got it,
+        // on the next -- the price gives way first when the board is narrow
+        ? `<span class="lx ${lf.side === 'sell' || lf.action === 'Sold' ? 'sell' : 'buy'}"><b>${esc(lf.action)} ${lf.qty} ${sideWord(lf)}</b><em>${fillMoney(lf, lf.qty * lf.px)}</em></span>` +
+          `<span class="ln fitw">${fillHtml(lf, `<i> · at ${cc(lf.px)}</i>`)}</span>`
         : `<span class="ln">${M.fills ? `${M.fills} before the restart` : 'None yet'}</span>`) +
       `</div>` +
       // the taker's reach: markets matched on both venues, across every category
@@ -2079,7 +2089,7 @@
     h += `<ul class="wrecap">`;
     if (fill) {
       const made = fill.pnl ? ` That trade ${fill.pnl > 0 ? 'made' : 'lost'} <b class="${fill.pnl > 0 ? 'pos' : 'neg'}">${money(fill.pnl)}</b>.` : '';
-      h += `<li>${fill.side === 'buy' ? 'Bought' : 'Sold'} ${fill.qty} at ${cc(fill.px)} each (${money(fill.qty * fill.px)}), ${minsAgo(fill.at)}.${made}</li>`;
+      h += `<li>${fill.side === 'buy' ? 'Bought' : 'Sold'} ${fill.qty} Yes at ${cc(fill.px)} each (${money(fill.qty * fill.px)}), ${minsAgo(fill.at)}.${made}</li>`;
     }
     if (m) {
       h += m.inv
@@ -2108,7 +2118,7 @@
     h += `<ul class="wrecap">`;
     for (const p of legs) {
       const w = r2(p.qty * (p.mark ?? p.entry)), d = r2(w - p.cost);
-      h += `<li>${venueName(p.venue)}: ${p.side.toUpperCase()} ${p.qty} at ${cc(p.entry)} each. Paid ${money(p.cost)}, worth ${money(w)} now (<b class="${d >= 0 ? 'pos' : 'neg'}">${signed(d)}</b>).</li>`;
+      h += `<li>${venueName(p.venue)}: ${p.qty} ${cap(p.side)} at ${cc(p.entry)} each. Paid ${money(p.cost)}, worth ${money(w)} now (<b class="${d >= 0 ? 'pos' : 'neg'}">${signed(d)}</b>).</li>`;
     }
     if (legs.length > 1) h += `<li>Both sides together: paid ${money(cost)}, worth ${money(worth)} now.</li>`;
     if (g && g.settlementValue != null) h += `<li>When it settles it pays ${money(g.settlementValue)}, locking in <b class="${g.lockedPnl >= 0 ? 'pos' : 'neg'}">${signed(g.lockedPnl)}</b>.</li>`;
@@ -2127,13 +2137,12 @@
     if (f.pnl != null) h += `<div class="wbig ${f.pnl >= 0 ? 'pos' : 'neg'}">${signed(f.pnl)}</div>` +
       `<div class="wsub">${f.action === 'Settled' ? 'made when it settled' : 'made on the way out'}</div>`;
     h += `<ul class="wrecap">`;
-    // "at 100¢" on its own has been read as $100: every price here is per contract, and a contract
-    // settles at 100¢ -- so say each, and say what a full payout is when that is what happened.
-    h += `<li>${esc(f.action)} ${f.qty} ${esc(String(f.contractSide || '').toUpperCase())} at ${cc(f.px)} each` +
-      `${f.px >= 0.995 ? ' (a full $1.00 payout)' : f.px <= 0.005 ? ' (worthless)' : ''} on ${esc(venueName(f.venue))} (${money(f.qty * f.px)}), ${minsAgo(f.at)}.</li>`;
+    // "at 100¢" on its own has been read as $100: every price here is for ONE contract, so say each
+    h += `<li>${esc(f.action)} ${f.qty} ${sideWord(f)} at ${cc(f.px)} each` +
+      `${f.px >= 0.9995 ? ' (paid out in full)' : f.px <= 0.0005 ? ' (worthless)' : ''} on ${esc(venueName(f.venue))} (${money(f.qty * f.px)}), ${minsAgo(f.at)}.</li>`;
     // the other leg of the same pair, if the desk traded it in the same breath
     const mate = (S.takerFills || []).find((x) => x.id !== f.id && x.label === f.label && Math.abs(x.at - f.at) < 120000);
-    if (mate) h += `<li>The other side: ${esc(mate.action.toLowerCase())} ${mate.qty} ${esc(String(mate.contractSide || '').toUpperCase())} at ${cc(mate.px)} each on ${esc(venueName(mate.venue))}.</li>`;
+    if (mate) h += `<li>The other side: ${esc(mate.action.toLowerCase())} ${mate.qty} ${sideWord(mate)} at ${cc(mate.px)} each on ${esc(venueName(mate.venue))}.</li>`;
     if (f.pnl == null) h += `<li>This position has since been closed or settled; its profit is in the banked total.</li>`;
     return h + `</ul>`;
   }
@@ -2238,7 +2247,7 @@
         const wasTop = ol.scrollTop, wasHeight = ol.scrollHeight;
         const html = groups.length
           ? `${groups.map((g) => `<li class="${g.side}${sel && (sel.at === g.at || (sel.kind === 'fill' && sel.key === g.id)) ? ' on' : ''}"${g.source === 'maker' ? ` data-t="${esc(g.ticker)}" data-at="${g.at}"` : ` data-f="${esc(g.id || '')}"`}>` +
-              `<span class="act"><b>${esc(g.action)}</b> ${g.qty}</span><span class="px">${fillMoney(g, g.val)}</span>` +
+              `<span class="act"><b>${esc(g.action)}</b> ${g.qty} <i>${sideWord(g)}</i></span><span class="px">${fillMoney(g, g.val)}</span>` +
               `<span class="nm fitw" title="${esc(fillName(g))}">${fillHtml(g)}</span><span class="ago">${cc(g.val / g.qty)} · ${ago(g.at).replace(' ago', '').split(' ')[0]}</span></li>`).join('')}`
           : '';
         if (html !== tapeHtml) {

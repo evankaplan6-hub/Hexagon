@@ -434,6 +434,7 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #tape li.sell::before { background: rgba(239,68,68,.6); }
 #tape .act { font-size: .9em; color: var(--brd-bright); font-weight: 600; white-space: nowrap; }
 #tape .act b { font-weight: 700; }
+#tape .act i { font-style: normal; font-weight: 500; color: #8892a3; }
 
 #tape li.buy .act b { color: #6ee7a0; } #tape li.sell .act b { color: #fca5a5; }
 #tape .px { font: 600 .86em var(--mono); color: #d5dae3; text-align: right; }
