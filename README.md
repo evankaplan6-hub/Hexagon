@@ -2,7 +2,7 @@
 
 [![test](https://github.com/evankaplan6-hub/Hexagon/actions/workflows/test.yml/badge.svg)](https://github.com/evankaplan6-hub/Hexagon/actions/workflows/test.yml)
 
-A six-agent prediction-market trading desk that prices the same events across **Polymarket** and **Kalshi**, trades the disagreements, and streams everything to a live dashboard. Zero npm dependencies; Node 20+.
+A six-agent prediction-market trading desk that prices the same events across **Polymarket** and **Kalshi**, trades the disagreements, and streams everything to a live dashboard. Zero npm dependencies (the dashboard's chart is one vendored file, TradingView Lightweight Charts); Node 20+.
 
 ```bash
 cd hexagon
@@ -826,7 +826,7 @@ src/kalshi-ws.js       Kalshi's trade channel over WebSocket, dependency-free an
 src/whales.js          whale watch: top wallets' big bets on Polymarket's leaderboards, called out on the floor (never trades)
 src/ask.js             the Ask panel: a read-only Claude tool loop over the desk, with its own daily ceiling
 src/ask-tools.js       the Ask panel's ten read-only tools (whitelisted fields, bounded output, secrets scrubbed)
-public/                dashboard (index.html, style.css, app.js)
+public/                dashboard (index.html, style.css, app.js; vendor/ holds TradingView Lightweight Charts, which draws the P&L chart)
 data/state.json        persisted account (created on first run)
 data/ticks-*.jsonl     tick tape, one line per priced pair per cycle (RECORD=1)
 tools/maker-replay.js  the maker desk against Kalshi's own trade history, same pure functions as live
