@@ -2116,6 +2116,25 @@
     return h + `</ul>`;
   }
 
+  // A cross-venue trade whose position is no longer open: what it was, and what it did.
+  function wallFill(id) {
+    const f = (S.takerFills || []).find((x) => x.id === id);
+    let h = `<div class="wh"><button class="wback" data-back="1">‹ Back</button><span>${f ? `${esc(venueName(f.venue))} · ${minsAgo(f.at)}` : ''}</span></div>`;
+    if (!f) return h + `<p class="wempty">That trade is no longer on the desk's board.</p>`;
+    const { outcome, question } = splitLabel(f.label || ''), t = lead(outcome, question);
+    h += `<div class="wtitle">${esc(unellipsis(t.head))}</div>`;
+    if (t.tail) h += `<div class="wq">${esc(unellipsis(t.tail))}</div>`;
+    if (f.pnl != null) h += `<div class="wbig ${f.pnl >= 0 ? 'pos' : 'neg'}">${signed(f.pnl)}</div>` +
+      `<div class="wsub">${f.action === 'Settled' ? 'made when it settled' : 'made on the way out'}</div>`;
+    h += `<ul class="wrecap">`;
+    h += `<li>${esc(f.action)} ${f.qty} ${esc(String(f.contractSide || '').toUpperCase())} at ${cc(f.px)} on ${esc(venueName(f.venue))} (${money(f.qty * f.px)}), ${minsAgo(f.at)}.</li>`;
+    // the other leg of the same pair, if the desk traded it in the same breath
+    const mate = (S.takerFills || []).find((x) => x.id !== f.id && x.label === f.label && Math.abs(x.at - f.at) < 120000);
+    if (mate) h += `<li>The other side: ${esc(mate.action.toLowerCase())} ${mate.qty} ${esc(String(mate.contractSide || '').toUpperCase())} at ${cc(mate.px)} on ${esc(venueName(mate.venue))}.</li>`;
+    if (f.pnl == null) h += `<li>This position has since been closed or settled; its profit is in the banked total.</li>`;
+    return h + `</ul>`;
+  }
+
   function wallAgent(a) {
     const mine = (S.log || []).filter((e) => e.agent === a.key);
     const seen = new Set(), lines = [];
@@ -2170,7 +2189,10 @@
         const a = sel && sel.kind === 'agent' ? S.agents.find((x) => x.key === sel.key) : null;
         el.style.fontSize = `${wallFs}px`;
         {
-          el.innerHTML = sel && sel.kind === 'market' ? wallRecap(sel.key, sel.at, M) : sel && sel.kind === 'arb' ? wallArb(sel.key) : a ? wallAgent(a) : wallHome(M);
+          el.innerHTML = sel && sel.kind === 'market' ? wallRecap(sel.key, sel.at, M)
+            : sel && sel.kind === 'arb' ? wallArb(sel.key)
+            : sel && sel.kind === 'fill' ? wallFill(sel.key)
+            : a ? wallAgent(a) : wallHome(M);
           const list2 = el.querySelector('.wlist, .wlog');
           if (list2) list2.scrollTop = top;
           el.classList.toggle('more', !!list2 && list2.scrollHeight > list2.clientHeight + 2);
@@ -2197,8 +2219,8 @@
       // is thrown away mid-flick stops dead under the finger, and its offset goes with it.
       if (!el.firstChild) el.innerHTML = '<div class="th"><span>Recent fills</span><span class="tclock"></span></div>' +
         '<div class="tbody"><ol></ol><p class="none" hidden></p></div>';
-      if (`${frameSeq}|${sel && sel.at}` !== tapeKey) {
-        tapeKey = `${frameSeq}|${sel && sel.at}`;
+      if (`${frameSeq}|${sel && sel.kind}|${sel && (sel.at || sel.key)}` !== tapeKey) {
+        tapeKey = `${frameSeq}|${sel && sel.kind}|${sel && (sel.at || sel.key)}`;
         const groups = [];
         for (const f of recentFills(M)) {            // newest first; a run of the same maker trade is one line
           const g = groups[groups.length - 1];
@@ -2212,7 +2234,7 @@
         // taller the list got, so the rows under the pointer stay where they were.
         const wasTop = ol.scrollTop, wasHeight = ol.scrollHeight;
         const html = groups.length
-          ? `${groups.map((g) => `<li class="${g.side}${sel && sel.at === g.at ? ' on' : ''}"${g.source === 'maker' ? ` data-t="${esc(g.ticker)}" data-at="${g.at}"` : ''}>` +
+          ? `${groups.map((g) => `<li class="${g.side}${sel && (sel.at === g.at || (sel.kind === 'fill' && sel.key === g.id)) ? ' on' : ''}"${g.source === 'maker' ? ` data-t="${esc(g.ticker)}" data-at="${g.at}"` : ` data-f="${esc(g.id || '')}"`}>` +
               `<span class="act"><b>${esc(g.action)}</b> ${g.qty}</span><span class="px">${fillMoney(g, g.val)}</span>` +
               `<span class="nm fitw" title="${esc(fillName(g))}">${fillHtml(g)}</span><span class="ago">${cc(g.val / g.qty)} · ${ago(g.at).replace(' ago', '').split(' ')[0]}</span></li>`).join('')}`
           : '';
@@ -2237,10 +2259,18 @@
 
   // A run of identical fills shows as one line; clicking it recaps the newest of them.
   $('tape').addEventListener('click', (ev) => {
-    const li = ev.target.closest('li[data-t]');
+    const li = ev.target.closest('li[data-t], li[data-f]');
     if (!li) return;
-    const at = +li.dataset.at;
-    sel = sel && sel.at === at ? null : { kind: 'market', key: li.dataset.t, at };
+    if (li.dataset.t) {
+      const at = +li.dataset.at;
+      sel = sel && sel.at === at ? null : { kind: 'market', key: li.dataset.t, at };
+    } else {
+      // a cross-venue trade: its position if that is still open (both legs, and what settlement
+      // pays), otherwise the trade itself
+      const id = li.dataset.f, p = (S.positions || []).find((x) => id.startsWith(`${x.id}:`));
+      const next = p ? { kind: 'arb', key: p.group || p.id } : { kind: 'fill', key: id };
+      sel = sel && sel.kind === next.kind && sel.key === next.key ? null : next;
+    }
     wallKey = ''; tapeKey = '';
   });
 
