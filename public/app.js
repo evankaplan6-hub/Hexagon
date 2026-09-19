@@ -570,7 +570,7 @@
         wires.push({ kind: 'packet', color: a.color, fx: x + 32 * Z, fy: y - 6 * Z, tx: L.tape.x + L.tape.w / 2, ty: L.tape.y + 30, down: latest.pnl != null && latest.pnl < 0 });
       }
       // where this agent's name and speech bubble go; placeFx lays them over the room as HTML
-      labels.push({ key: a.key, bx: x + 32 * Z, by: y + (22 + bob) * Z, top: y - 18 * Z, foot: y + 31 * Z,
+      labels.push({ key: a.key, bx: x + 32 * Z, by: y + (22 + bob) * Z, top: y - 18 * Z, foot: y + 31 * Z, plate: y + 15.5 * Z, px: x + 52 * Z,
         back: i < 3, color: a.color, act, lit: hot || picked, note: a.note, w: 64 * Z });
     });
     for (const w of wires) {
@@ -656,6 +656,13 @@
     `${pre}<span class="cat" role="img" aria-label="${w}" title="${w}">${CAT_EMOJI[w]}</span>`);
   const marketName = (tk, f) => { const m = byTicker(S.maker || {}, tk) || (f && f.title ? f : null); return (m && (OUTCOME(m) || QUESTION(m))) || tk.replace(/^KX/, ''); };
   const fillName = (f) => f.label || (f.ticker ? marketName(f.ticker, f) : 'Unknown market');
+  // the same name in two parts -- what, then which event -- so a short line drops the event first
+  const fillParts = (f) => {
+    if (f.label) { const { outcome, question } = splitLabel(f.label); return lead(outcome, question); }
+    const m = (f.ticker && byTicker(S.maker || {}, f.ticker)) || (f.title ? f : null);
+    return m ? lead(OUTCOME(m), QUESTION(m)) : { head: fillName(f), tail: '' };
+  };
+  const fillHtml = (f, extra = '') => { const p = fillParts(f); return `<span>${esc(unellipsis(p.head))}</span>${p.tail ? `<i> · ${esc(unellipsis(p.tail))}</i>` : ''}${extra}`; };
   function recentFills(M) {
     const making = (M.recent || []).map((f) => ({ ...f, source: 'maker', action: f.side === 'buy' ? 'Bought' : 'Sold', label: marketName(f.ticker, f) }));
     const crossing = (S.takerFills || []).map((f) => ({ ...f, source: 'taker', side: f.pnl == null || f.pnl >= 0 ? 'buy' : 'sell' }));
@@ -973,9 +980,11 @@
       const b = speaking && speaking.key === st.key ? lines[st.key] : null;
       // name: on the wall above the back row's monitors, on the floor under the front row's bots.
       // A bubble carries its own name badge, so the tag steps aside rather than fighting it.
-      Object.assign(n.name.style, { left: `${X(st.bx)}px`, top: `${Y(st.back ? st.top - 11 : st.foot)}px`, color: st.lit || st.act ? st.color : '' });
+      // 2026-09-19: a nameplate on the desk's front, to the right of the bot sitting at it
+      Object.assign(n.name.style, { left: `${X(st.px)}px`, top: `${Y(st.plate)}px`, color: st.lit || st.act ? st.color : '' });
+      n.name.style.setProperty('--c', st.color);
       n.name.classList.toggle('on', st.act || st.lit);
-      n.name.hidden = !!(b && st.back);
+      n.name.hidden = false;
 
       if (!b) { n.bub.hidden = true; continue; }
       // One line. A sentence that needs two is a sentence for the feed, which has every word of it.
@@ -1058,14 +1067,14 @@
       `</div>` +
       `<div class="lf"><span class="lh">Last fill${lf ? ` · ${ago(lf.at)}` : ''}</span>` +
       (lf
-        ? `<span class="lx ${lf.side === 'sell' || lf.action === 'Sold' ? 'sell' : 'buy'}"><b>${esc(lf.action)} ${lf.qty}</b><span>at ${cc(lf.px)}</span><em>${money(lf.qty * lf.px)}</em></span><span class="ln">${esc(fillName(lf))}</span>`
+        ? `<span class="lx ${lf.side === 'sell' || lf.action === 'Sold' ? 'sell' : 'buy'}"><b>${esc(lf.action)} ${lf.qty}</b><span>at ${cc(lf.px)}</span><em>${money(lf.qty * lf.px)}</em></span><span class="ln fitw">${fillHtml(lf)}</span>`
         : `<span class="ln">${M.fills ? `${M.fills} before the restart` : 'None yet'}</span>`) +
       `</div>` +
       // the taker's reach: markets matched on both venues, across every category
       (am ? `<div class="pairs extra"><span class="lh">Both venues</span><span><b>${S.pairCount || 0}</b> matched · <b>${am.rulesVerified || 0}</b> tradeable</span></div>` : '') +
       `<p class="dim">Up ${dur(S.now - S.startedAt)} · ${feed.mode === 'stream' && feed.connected ? 'live feed' : 'polling'}</p>`;
     const key = `${html}|${Math.round(statusBox.w * k)}x${Math.round(statusBox.h * k)}`;
-    if (key !== statusHtml) { el.innerHTML = html; statusHtml = key; fitText(el, Math.max(12, Math.min(21, k * 7.2)), 9); }
+    if (key !== statusHtml) { el.innerHTML = html; statusHtml = key; fitText(el, Math.max(12, Math.min(21, k * 7.2)), 9); fitAll(el); }
   }
 
   // Shrink a board's text until everything on it fits. Nothing on the floor is cut off with an
@@ -1083,7 +1092,8 @@
   function fitWidth(el, minFs) {
     if (!el) return;
     el.style.fontSize = '';
-    const maxW = el.parentElement.clientWidth;
+    // the number's own box is its column's width less the padding, so the digits stop short of the rule
+    const maxW = el.clientWidth + 1;
     let fs = parseFloat(getComputedStyle(el).fontSize);
     while (el.scrollWidth > maxW && fs > minFs) { fs -= 1; el.style.fontSize = `${fs}px`; }
   }
@@ -1237,16 +1247,19 @@
   const intervalTxt = (i) => (i === 'auto' ? 'Auto' : `${i}m`);
   function chartSkeleton(big) {
     // how far back, then how long each candle is: the two time controls sit together along the bottom
-    // The small stand has no width for a second row of five buttons, and a second row cost the plot a
-    // third of its height; there it is a menu sitting right after the ranges.
-    const every = big
-      ? `<span class="seg cint-seg" title="Candle size">${INTERVALS.map((i) => `<button data-int="${i}">${intervalTxt(i)}</button>`).join('')}</span>`
-      : `<select class="cint-sel" aria-label="Candle size" title="Candle size">${INTERVALS.map((i) => `<option value="${i}">${intervalTxt(i)}</option>`).join('')}</select>`;
+    const rangeBtns = RANGES.map(([r]) => `<button data-range="${r}">${r}</button>`).join('');
+    const intBtns = INTERVALS.map((i) => `<button data-int="${i}">${intervalTxt(i)}</button>`).join('');
+    // The small stand has room for one control, not nine buttons: one dropdown holds both the range
+    // and the candle size. The large chart keeps the two button rows.
+    const controls = big
+      ? `<span class="seg">${rangeBtns}</span><span class="seg cint-seg" title="Candle size">${intBtns}</span>`
+      : `<span class="cmenu-wrap"><button type="button" class="cmenu-btn" data-menu="1" aria-haspopup="true" aria-expanded="false"></button>` +
+        `<span class="cmenu" hidden><span class="cmh">Range</span><span class="seg">${rangeBtns}</span><span class="cmh">Candle size</span><span class="seg cint-seg">${intBtns}</span></span></span>`;
     return `<div class="ct"><span class="ctitle">All paper trades</span><button class="cx ctype" data-type="1"></button>` +
       `${big ? '' : '<button class="cx" data-expand="1" title="Open large">⤢</button>'}</div>` +
       `<div class="chead"><span class="cv"></span><span class="cd"></span></div>` +
       `<div class="cplot"><i class="cband" hidden></i><div class="ctip" hidden></div></div>` +
-      `<div class="cb"><span class="seg">${RANGES.map(([r]) => `<button data-range="${r}">${r}</button>`).join('')}</span>${every}<span class="cr"></span></div>`;
+      `<div class="cb">${controls}<span class="cr"></span></div>`;
   }
 
   const UP = '#22c55e', DOWN = '#ef4444', FLAT = '#64748b';
@@ -1389,8 +1402,8 @@
     const ty = el.querySelector('.ctype');
     ty.innerHTML = TYPE_ICON[chart.type]; ty.title = candles ? 'Candles. Click for a line' : 'Line. Click for candles';
     el.querySelectorAll('.cint-seg [data-int]').forEach((b) => b.classList.toggle('on', b.dataset.int === String(chart.interval)));
-    const sel = el.querySelector('.cint-sel');
-    if (sel && document.activeElement !== sel) sel.value = String(chart.interval);
+    const mb = el.querySelector('.cmenu-btn');
+    if (mb) mb.innerHTML = `${chart.range} · ${intervalTxt(chart.interval)}<i>▾</i>`;
     if (pts.length < 2 || slots.length < 2) {
       if (plot) { plot.s.setData([]); plot.pts = []; }
       paintOverlay(el);
@@ -1477,15 +1490,18 @@
       dragging = false; chart.dragFrom = null; chart.band = null;
       paintOverlay(root);
     };
-    root.addEventListener('change', (ev) => {
-      if (!ev.target.matches('.cint-sel')) return;
-      const v = ev.target.value;
-      chart.interval = v === 'auto' ? 'auto' : +v; chart.band = null; saveChart();
-      drawChart(root, big); ev.target.blur();
-    });
+    const menu = root.querySelector.bind(root);
+    const setMenu = (open) => {
+      const m = menu('.cmenu'), b = menu('.cmenu-btn');
+      if (!m) return;
+      m.hidden = !open; b.setAttribute('aria-expanded', String(open));
+    };
+    document.addEventListener('pointerdown', (ev) => { if (!ev.target.closest('.cmenu-wrap')) setMenu(false); });
+    window.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') setMenu(false); });
     root.addEventListener('click', (ev) => {
       const b = ev.target.closest('button');
       if (!b) return;
+      if (b.dataset.menu) { const m = menu('.cmenu'); setMenu(m && m.hidden); return; }
       if (b.dataset.range) { chart.range = b.dataset.range; chart.band = null; saveChart(); }
       if (b.dataset.int) {
         chart.interval = b.dataset.int === 'auto' ? 'auto' : +b.dataset.int;
@@ -1554,9 +1570,46 @@
   // Texas Senate - James Talarico (D)). Split at the last separator so a pair reads like a maker
   // row: the outcome first, the question after it in the dimmer type.
   const splitLabel = (label) => {
-    const t = String(label || ''), i = Math.max(t.lastIndexOf(' · '), t.lastIndexOf(' - '));
+    const t = unellipsis(label), i = Math.max(t.lastIndexOf(' · '), t.lastIndexOf(' - '));
     return i > 0 ? { outcome: t.slice(i + 3).trim(), question: t.slice(0, i).trim() } : { outcome: t, question: '' };
   };
+  // "Trump bans more news outlets from..." -- the venue cut its own title short. The cut is kept (a
+  // shorter name is still a name) but the dots go: the board never shows an ellipsis.
+  const unellipsis = (s) => String(s || '').replace(/\s*(\.{3}|…)(?=\s|$)/g, '\u0000').split('\u0000')
+    .map((t, i, a) => (i < a.length - 1 ? tidyEnd(t) : t)).join('').replace(/\s+/g, ' ').trim();
+  // Too long for its line: drop whole words from the end, the dim part first, then the name itself
+  // (never below one word), and never end on a connecting word. The result is remembered per text
+  // and width, since the board is rebuilt every couple of seconds with the same rows.
+  const fitMemo = new Map();
+  const TRAIL = /(\s+(of|the|a|an|in|on|at|by|for|from|to|and|or|with|v|vs\.?|will|be|is|-|–|·))+$/i;
+  const tidyEnd = (t) => t.replace(/[\s,;:·\-–(\[]+$/, '').replace(TRAIL, '').replace(/[\s,;:·\-–(\[]+$/, '');
+  function fitWords(line) {
+    const w = line.clientWidth;
+    if (!w || line.scrollWidth <= w + 1) return;
+    const parts = [...line.children].filter((c) => c.tagName === 'SPAN' || c.tagName === 'I');
+    const els = parts.length ? parts : [line];
+    const full = els.map((e) => e.textContent);
+    const key = `${full.join('\u0001')}|${w}|${getComputedStyle(line).fontSize}`;
+    const put = (texts) => els.forEach((e, i) => { e.textContent = texts[i]; e.hidden = !texts[i]; });
+    if (fitMemo.has(key)) { put(fitMemo.get(key)); return; }
+    const texts = full.slice();
+    for (let guard = 0; guard < 80 && line.scrollWidth > w + 1; guard++) {
+      let i = -1;   // the last part that can still give up a word
+      for (let k = texts.length - 1; k >= 0 && i < 0; k--) {
+        if (k > 0 ? texts[k].replace(/^\s*·\s*/, '').trim() : texts[k].trim().split(/\s+/).length > 1) i = k;
+      }
+      if (i < 0) break;
+      const prefix = i > 0 && /^\s*·\s*/.test(texts[i]) ? ' · ' : '';
+      const body = texts[i].replace(/^\s*·\s*/, '').trim().split(/\s+/);
+      body.pop();
+      const next = tidyEnd(body.join(' '));
+      texts[i] = next ? prefix + next : '';
+      put(texts);
+    }
+    if (fitMemo.size > 800) fitMemo.clear();
+    fitMemo.set(key, texts);
+  }
+  const fitAll = (root) => root.querySelectorAll('.fitw').forEach(fitWords);
   // The outcome is the headline when it names something (Tom Cruise, Republican Party). When it is
   // only a date, a threshold or a number -- "Before Oct 1, 2026", "Above $82,500", "3.4%" -- it says
   // nothing on its own, so the event leads and the outcome follows it in the dimmer type.
@@ -1577,7 +1630,7 @@
       const { head, tail } = (({ outcome, question }) => lead(outcome, question))(splitLabel(legs[0].label));
       return { arb: legs, key: legs[0].group || legs[0].id, name: head, question: tail, label: String(legs[0].label || ''), type: cap(String(legs[0].strategy || 'taker')),
         side: legs.length > 1 ? 'both' : legs[0].side, qty: legs[0].qty, value: r2(legs.reduce((a, p) => a + worth(p), 0)), pl: r2(legs.reduce((a, p) => a + (p.pnl || 0), 0)),
-        sides: legs.map((p) => `${venueName(p.venue)} ${p.side.toUpperCase()} ${money(worth(p))}`).join(' + ') };
+        sides: legs.map((p) => `${venueName(p.venue)} ${p.side.toUpperCase()} ${money(worth(p), 0)}`).join(' + ') };
     });
   };
 
@@ -1589,6 +1642,8 @@
     const makerNet = r2((M.equity ?? M.initial ?? 0) - (M.initial ?? 0));
     const pairNet = r2((S.equity ?? S.initial ?? 0) - (S.initial ?? 0));
     const net = r2(makerNet + pairNet);
+    const P = S.pnl || {}, banked = r2((S.realized || 0) + (M.realized || 0));
+    const stat = (label, v, cls) => `<div class="${cls || ''}"><dt>${label}</dt><dd class="${v >= 0 ? 'pos' : 'neg'}">${signed(v)}</dd></div>`;
     const held = sortHeld((M.markets || []).filter((m) => m.inv).map((m) => ({ m, name: nameOf(m), tail: lead(OUTCOME(m), QUESTION(m)).tail, type: 'Maker', side: m.inv > 0 ? 'long' : 'short', qty: Math.abs(m.inv), value: Math.abs(m.mark), pl: m.mark - m.cost })).concat(takerRows()));
     const up = held.filter((x) => x.pl > 0).length, down = held.filter((x) => x.pl < 0).length;
     const rows = held;
@@ -1596,8 +1651,12 @@
     // together in one dim sentence, which is the slowest way to read two numbers.
     const num = `<div class="wbig ${net >= 0 ? 'pos' : 'neg'}">${signed(net)}</div>` +
       `<div class="wsub">all paper trades, marked now</div>` +
-      `<dl class="wstats"><div><dt>Maker</dt><dd class="${makerNet >= 0 ? 'pos' : 'neg'}">${signed(makerNet)}</dd></div>` +
-      `<div><dt>Cross-venue</dt><dd class="${pairNet >= 0 ? 'pos' : 'neg'}">${signed(pairNet)}</dd></div></dl>`;
+      `<dl class="wstats">${stat('Maker', makerNet)}${stat('Cross-venue', pairNet)}` +
+      // the rest of the column: how much of that is money already, how much is still a mark,
+      // what the arbs are sure to pay, and what the venues have taken
+      `${stat('Banked', banked, 'x sep')}${stat('Open', r2(net - banked), 'x')}` +
+      `${Number.isFinite(P.arbLocked) ? stat('Locked in', P.arbLocked, 'x') : ''}` +
+      `${S.fees ? `<div class="x"><dt>Fees paid</dt><dd>${money(S.fees)}</dd></div>` : ''}</dl>`;
     const tally = held.length ? `${up ? `<b class="pos">▲${up}</b>` : ''}${down ? `<b class="neg">▼${down}</b>` : ''}` : '';
     let h = `<div class="wh"><span>Paper account</span><span>${tally}${held.length ? `${held.length} held · ` : ''}${M.quoting || 0} quoted</span></div>`;
     if (!held.length) {
@@ -1609,10 +1668,10 @@
     const colBtn = (k, label) => `<button type="button" role="columnheader" aria-sort="${wallSortCol === k ? (wallSortDir === 'asc' ? 'ascending' : 'descending') : 'none'}" data-wcol="${k}" class="${wallSortCol === k ? 'on' : ''}">${label}${wallSortCol === k ? `<i>${arrow(wallSortDir)}</i>` : ''}</button>`;
     const head = `<div class="wcols" role="row">${colBtn('name', 'Name')}${colBtn('type', 'Type')}${colBtn('side', 'Side')}${colBtn('value', 'Value')}${colBtn('pl', 'P&amp;L')}</div>`;
     const row = (x) => x.arb
-      ? `<button class="wr arb" data-g="${esc(x.key)}" title="${esc(x.label)}"><span class="nm">${esc(x.name)}${x.question ? `<i> · ${esc(x.question)}</i>` : ''}<small class="legs">${esc(x.sides)}</small></span><span class="ty">${esc(x.type)}</span>` +
+      ? `<button class="wr arb" data-g="${esc(x.key)}" title="${esc(x.label)}"><span class="nm"><span class="l1 fitw"><span>${esc(x.name)}</span>${x.question ? `<i> · ${esc(x.question)}</i>` : ''}</span><small class="legs">${esc(x.sides)}</small></span><span class="ty">${esc(x.type)}</span>` +
         `<span class="sd ${x.arb.length > 1 ? 'arb' : 'long'}">${x.arb.length > 1 ? 'BOTH' : x.arb[0].side.toUpperCase()} ${x.arb[0].qty}</span><span class="val">${money(x.value)}</span><span class="pl ${x.pl >= 0 ? 'pos' : 'neg'}">${signed(x.pl)}</span></button>`
       : `<button class="wr ${x.m.inv > 0 ? 'long' : 'short'}" data-m="${esc(x.m.ticker)}" title="${esc(x.m.title || '')}">` +
-        `<span class="nm">${esc(x.name)}${x.tail ? `<i> · ${esc(x.tail)}</i>` : ''}</span><span class="ty">Maker</span>${sideTag(x.m.inv)}<span class="val">${money(Math.abs(x.m.mark))}</span><span class="pl ${x.pl >= 0 ? 'pos' : 'neg'}">${signed(x.pl)}</span></button>`;
+        `<span class="nm"><span class="l1 fitw"><span>${esc(x.name)}</span>${x.tail ? `<i> · ${esc(x.tail)}</i>` : ''}</span></span><span class="ty">Maker</span>${sideTag(x.m.inv)}<span class="val">${money(Math.abs(x.m.mark))}</span><span class="pl ${x.pl >= 0 ? 'pos' : 'neg'}">${signed(x.pl)}</span></button>`;
     const list = `<div class="wlist">${rows.map(row).join('')}</div>`;
     h += `<div class="wbody">${`<div class="wnum">${num}</div>`}<div class="wbook">${head}${list}</div></div>`;
     return h;
@@ -1722,6 +1781,7 @@
           const list2 = el.querySelector('.wlist, .wlog');
           if (list2) list2.scrollTop = top;
           el.classList.toggle('more', !!list2 && list2.scrollHeight > list2.clientHeight + 2);
+          fitAll(el);
           fitWidth(el.querySelector('.wbig'), 14);
           if (m) fitText(el, wallFs, 9);
         }
@@ -1753,8 +1813,9 @@
         el.querySelector('.tbody').innerHTML = groups.length
           ? `<ol>${groups.map((g) => `<li class="${g.side}${sel && sel.at === g.at ? ' on' : ''}"${g.source === 'maker' ? ` data-t="${esc(g.ticker)}" data-at="${g.at}"` : ''}>` +
               `<span class="act"><b>${esc(g.action)}</b> ${g.qty}</span><span class="px">${money(g.val)}</span>` +
-              `<span class="nm" title="${esc(fillName(g))}">${esc(fillName(g))}${g.source === 'taker' ? ` · ${esc(g.venue)}` : ''}</span><span class="ago">${cc(g.val / g.qty)} · ${ago(g.at).replace(' ago', '').split(' ')[0]}</span></li>`).join('')}</ol>`
+              `<span class="nm fitw" title="${esc(fillName(g))}">${fillHtml(g)}</span><span class="ago">${cc(g.val / g.qty)} · ${ago(g.at).replace(' ago', '').split(' ')[0]}</span></li>`).join('')}</ol>`
           : `<p class="none">${M.fills ? `${M.fills} fills before the last restart` : 'No fills yet'}</p>`;
+        fitAll(el);
         const ol = el.querySelector('ol');
         el.classList.toggle('more', !!ol && ol.scrollHeight > ol.clientHeight + 2);
       }

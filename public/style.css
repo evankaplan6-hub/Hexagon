@@ -124,9 +124,16 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #fx { position: absolute; inset: 0; pointer-events: none; overflow: hidden; font-family: var(--sans); transition: opacity .4s; }
 #fx.stale { opacity: .3; }
 
-.nametag { position: absolute; transform: translateX(-50%); font: 700 0.78em/1 var(--mono); letter-spacing: .08em;
-  color: #6b7384; text-shadow: 0 1px 2px #000, 0 0 6px #000; white-space: nowrap; }
-.nametag.on { color: var(--text); }
+.nametag { position: absolute; transform: translate(-50%, -50%); font: 700 0.6em/1 var(--mono); letter-spacing: .1em;
+  color: #8a7a62; padding: .2em .38em .18em; border-radius: 3px; white-space: nowrap;
+  background: #1c1610; border: 1px solid #4a3d2c; box-shadow: inset 0 1px 0 rgba(255,255,255,.05), 0 1px 2px rgba(0,0,0,.6); }
+.nametag.on { color: var(--c, var(--text)); border-color: color-mix(in srgb, var(--c, #888) 55%, #4a3d2c);
+  text-shadow: 0 0 6px color-mix(in srgb, var(--c, #888) 60%, transparent); }
+/* the desk's light: a glow that breathes while the desk is working */
+@media (prefers-reduced-motion: no-preference) {
+  #status .st.good i { animation: breathe 1.8s ease-in-out infinite; }
+  @keyframes breathe { 0%, 100% { box-shadow: 0 0 4px 1px currentColor; opacity: .75; } 50% { box-shadow: 0 0 12px 4px currentColor; opacity: 1; } }
+}
 
 .bub { position: absolute; z-index: 2; width: max-content; padding: .45em .7em .5em; border-radius: 8px;
   background: rgba(10, 13, 20, .94); border: 1px solid #262e3d; border-top: 2px solid var(--c);
@@ -242,7 +249,7 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #status .lx b { font-weight: 700; color: var(--brd-bright); }
 #status .lx.buy b { color: #6ee7a0; } #status .lx.sell b { color: #fca5a5; }
 #status .lx em { margin-left: auto; font: 600 .92em var(--mono); font-style: normal; color: #d5dae3; }
-#status .ln { font-size: .82em; color: #8892a3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#status .ln { font-size: .82em; color: #8892a3; }
 #status .pairs > span:last-child { font-size: .86em; color: #8892a3; }
 #status .pairs b { font-weight: 700; color: var(--brd-bright); }
 #status .dim { margin-top: auto; padding-top: .5em; border-top: 1px solid var(--brd-rule);
@@ -315,11 +322,13 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #wall .wh span:first-child { color: #9aa4ba; }
 #wall .wh b.pos, #wall .wh b.neg { margin-right: .55em; font-weight: 700; }
 #wall .wback { font: 600 1em var(--mono) !important; letter-spacing: .08em; color: #9cc3f0 !important; }
-#wall .wbig { flex: none; margin-top: .1em; font: 800 2.3em/1.05 var(--sans); letter-spacing: -.03em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+#wall .wbig { flex: none; margin-top: .1em; font: 800 2.1em/1.05 var(--sans); letter-spacing: -.03em; font-variant-numeric: tabular-nums; white-space: nowrap; }
 #wall .wsub { flex: none; margin: .3em 0 0; font-size: .74em; color: var(--brd-label); }
 /* the split under the number: a two-line statement, label left and figure right, on hairlines */
 #wall .wstats { flex: none; display: flex; flex-direction: column; margin: .8em 0 .4em; font-size: .92em; }
-#wall .wstats div { display: flex; justify-content: space-between; align-items: baseline; gap: .8em; padding: .42em 0; border-top: 1px solid var(--brd-rule); }
+#wall .wstats div { display: flex; justify-content: space-between; align-items: baseline; gap: .8em; padding: .34em 0; border-top: 1px solid var(--brd-rule); }
+#wall .wstats div.sep { margin-top: .5em; }
+#wall:not(.wide) .wstats .x { display: none; }
 #wall .wstats div:last-child { border-bottom: 1px solid var(--brd-rule); }
 /* stacked above the list there is no height for a statement: the two figures sit on one line */
 #wall:not(.wide) .wstats { flex-direction: row; gap: 1.4em; margin: .45em 0 .3em; }
@@ -337,7 +346,9 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #wall .wbody { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; margin-top: .5em; }
 #wall.wide .wbody { flex-direction: row; gap: 1.2em; align-items: stretch; }
 #wall .wnum { flex: none; }
-#wall.wide .wnum { width: 22%; max-width: 13em; min-width: 8em; padding-right: 1.2em; border-right: 1px solid var(--brd-rule); }
+#wall.wide .wnum { min-height: 0; overflow: hidden; }
+#wall .wstats dt, #wall .wstats dd { white-space: nowrap; }
+#wall.wide .wnum { width: 27%; max-width: 15em; min-width: 11em; padding-right: 1.2em; border-right: 1px solid var(--brd-rule); }
 /* min-height:0 matters here specifically: in the tall (not .wide) layout #wall.wbody is a column
    flex container, so wbook's height is its main axis and a flex item's default min-height is its
    content size. Without this it never shrank to the space actually left for it, so it overflowed
@@ -373,9 +384,10 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #wall .wr:hover { background: rgba(120,160,230,.07); }
 /* One row, one line. A 60-character market name used to wrap every row onto two and the book
    turned into a ragged paragraph; the overflow fades rather than ending in an ellipsis. */
-#wall .wr .nm { color: #e2e6ee; min-width: 0; white-space: nowrap; overflow: hidden;
-  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 2em), transparent);
-  mask-image: linear-gradient(90deg, #000 calc(100% - 2em), transparent); }
+#wall .wr .nm { color: #e2e6ee; min-width: 0; white-space: nowrap; overflow: hidden; }
+/* one line, cut at whole words by fitWords in app.js -- never an ellipsis, never a fade */
+.fitw { display: block; min-width: 0; white-space: nowrap; overflow: hidden; }
+.fitw [hidden] { display: none; }
 #wall .sd { justify-self: start; font: 600 .66em/1 var(--mono); letter-spacing: .1em; padding: .35em .55em; border-radius: 999px; white-space: nowrap; }
 #wall .sd.long { color: #6ee7a0; background: rgba(34,197,94,.10); }
 #wall .sd.short { color: #fca5a5; background: rgba(239,68,68,.10); }
@@ -419,7 +431,8 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 
 #tape li.buy .act b { color: #6ee7a0; } #tape li.sell .act b { color: #fca5a5; }
 #tape .px { font: 600 .86em var(--mono); color: #d5dae3; text-align: right; }
-#tape .nm { font-size: .78em; color: #79839a; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#tape .nm { font-size: .78em; color: #79839a; min-width: 0; }
+#tape .nm i { font-style: normal; }
 #tape .ago { font: .7em var(--mono); color: #5a6478; text-align: right; white-space: nowrap; }
 /* the clock in the header: minutes are the fact, seconds the pulse */
 #tape .tclock { display: flex; align-items: baseline; gap: .35em; letter-spacing: 0; text-transform: none; }
@@ -479,10 +492,17 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 /* the candle size: a button that cycles on the small chart, a row of buttons on the large one */
 /* ranges and candle size share the bottom row */
 .pnl .cb { flex-wrap: wrap; row-gap: .35em; }
-.pnl .cint-sel { font: 600 .82em/1 var(--sans); color: var(--brd-bright); background: rgba(255,255,255,.035);
-  border: 1px solid var(--brd-rule2); border-radius: 999px; padding: .3em .5em; cursor: pointer; }
-.pnl .cint-sel option { background: #0b0f17; color: #d5dae3; }
-.pnl .cint-sel:hover { border-color: #3a4560; }
+/* the small chart's one control: "6h · 15m ▾", opening a menu with both choices in it */
+.pnl .cmenu-wrap { position: relative; }
+.pnl .cmenu-btn, #wall .pnl .cmenu-btn { display: inline-flex; align-items: center; gap: .45em; font: 600 .82em/1 var(--sans); color: var(--brd-bright);
+  background: rgba(255,255,255,.035); border: 1px solid var(--brd-rule2); border-radius: 999px; padding: .38em .7em; white-space: nowrap; }
+.pnl .cmenu-btn i { font-style: normal; font-size: .8em; color: var(--brd-label); }
+.pnl .cmenu-btn:hover, .pnl .cmenu-btn[aria-expanded="true"] { border-color: #3a4560; background: rgba(255,255,255,.06); }
+.pnl .cmenu { position: absolute; left: 0; bottom: calc(100% + .4em); z-index: 6; display: flex; flex-direction: column; gap: .35em;
+  padding: .6em .65em .65em; border-radius: 9px; background: rgba(9,12,18,.98); border: 1px solid var(--brd-rule2);
+  box-shadow: 0 10px 28px rgba(0,0,0,.6); }
+.pnl .cmenu[hidden] { display: none; }
+.pnl .cmh { font: 600 .62em/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--brd-label); margin-top: .2em; }
 .pnl .seg button, #wall .pnl .seg button { white-space: nowrap; }
 /* the headline: what it is worth now, and how far that has moved over the range */
 .pnl .chead { flex: none; display: flex; align-items: baseline; gap: .6em; margin: .4em 0 .05em; min-width: 0; overflow: hidden; }
