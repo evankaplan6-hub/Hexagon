@@ -2338,6 +2338,60 @@
     wallKey = '';
   });
 
+  // ---------------------------------------------------------- the floor's own size
+  // How much of the panel is room and how much is feed is a matter of taste -- a wide window wants
+  // more feed, a demo wants more floor -- so it is a handle rather than a constant. The room is
+  // drawn to whatever box it is handed (floorCtx re-reads it every frame), so nothing else has to
+  // know this happened. Dragging sets the FEED's height; the room takes the rest.
+  const SPLIT_KEY = 'hex-feedh';
+  const stage = document.querySelector('.stage'), splitter = $('split');
+  const feedRange = () => {
+    const h = stage.clientHeight;
+    return { min: 96, max: Math.max(120, Math.round(h * 0.7)) };
+  };
+  function setFeedH(px, save = true) {
+    const { min, max } = feedRange();
+    const v = Math.round(Math.min(max, Math.max(min, px)));
+    stage.style.setProperty('--feedh', `${v}px`);
+    if (save) { try { localStorage.setItem(SPLIT_KEY, String(v)); } catch { /* private window */ } }
+  }
+  function clearFeedH() {
+    stage.style.removeProperty('--feedh');
+    try { localStorage.removeItem(SPLIT_KEY); } catch { /* ignore */ }
+  }
+  try {
+    const saved = +localStorage.getItem(SPLIT_KEY);
+    if (saved > 0) setFeedH(saved, false);
+  } catch { /* ignore */ }
+  if (splitter) {
+    let dragging = false;
+    splitter.addEventListener('pointerdown', (ev) => {
+      if (ev.button !== 0) return;
+      dragging = true; stage.classList.add('sizing');
+      splitter.setPointerCapture(ev.pointerId);
+      ev.preventDefault();
+    });
+    splitter.addEventListener('pointermove', (ev) => {
+      if (!dragging) return;
+      // the feed is everything below the pointer, inside the stage
+      setFeedH(stage.getBoundingClientRect().bottom - ev.clientY);
+    });
+    const stop = () => { dragging = false; stage.classList.remove('sizing'); };
+    splitter.addEventListener('pointerup', stop);
+    splitter.addEventListener('pointercancel', stop);
+    // back to the size the stylesheet picks for this window
+    splitter.addEventListener('dblclick', clearFeedH);
+    splitter.addEventListener('keydown', (ev) => {
+      const step = ev.shiftKey ? 48 : 12;
+      const now = $('feed').getBoundingClientRect().height;
+      if (ev.key === 'ArrowUp') setFeedH(now + step);
+      else if (ev.key === 'ArrowDown') setFeedH(now - step);
+      else if (ev.key === 'Home' || ev.key === 'Escape') clearFeedH();
+      else return;
+      ev.preventDefault();
+    });
+  }
+
   function loop(ts) { drawFloor(ts / 1000); placeFx(); requestAnimationFrame(loop); }
   requestAnimationFrame(loop);
 
