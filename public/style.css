@@ -241,7 +241,13 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #status .tiles b { font: 700 1.45em/1 var(--sans); letter-spacing: -.02em; color: var(--brd-bright); }
 #status .tiles span { font: 500 .74em/1.2 var(--sans); color: #8892a3; }
 #status .tiles .off b { color: #5d6678; }
-#status .pairs { display: flex; flex-direction: column; gap: .22em; margin: .8em 0 0; min-width: 0; }
+#status .pairs, #status .near { display: flex; flex-direction: column; gap: .22em; margin: .8em 0 0; min-width: 0; }
+/* why the desk is not trading: the gap it can see, and the gap it needs */
+#status .nx { font-size: .92em; color: #aeb6c4; }
+#status .nx b { font-weight: 700; color: var(--brd-bright); }
+#status .nx.good b { color: #6ee7a0; }
+#status .nn { font-size: .82em; color: #8892a3; }
+#status .nn i { font-style: normal; color: #6f7788; }
 /* where the money is: a label and its figure on one line, on hairlines, like a statement */
 #status .mny { display: flex; flex-direction: column; margin: .7em 0 0; }
 #status .mny div { display: flex; justify-content: space-between; align-items: baseline; gap: .6em;

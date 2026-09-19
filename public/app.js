@@ -43,9 +43,11 @@
       `<span class="mode${S.mode === 'live' ? ' real' : ''}">${S.mode === 'live' ? 'LIVE · real money' : 'Paper'}</span>` +
       (S.demo ? `<span class="mode demo">Demo quotes</span>` : '');
     const fact = (k, v, c) => `<span>${k}<b class="${c || ''}">${v}</b></span>`;
+    // `pairs` and `locked` were the status board's and the account column's own figures, printed a
+    // second time up here. What is left is what no board says: which day this desk is on, and how
+    // many positions are open across both books.
     $('meta').innerHTML =
-      fact('day', day) + fact('pairs', S.pairCount) + fact('open', S.positions.length) +
-      fact('locked', Number.isFinite(P.arbLocked) ? signed(P.arbLocked) : '—', P.arbLocked >= 0 ? 'pos' : 'neg') +
+      fact('day', day) + fact('open', S.positions.length) +
       (P.integrityAlerts ? `<span class="alertfact">alerts<b>${P.integrityAlerts}</b></span>` : '');
   }
 
@@ -1076,6 +1078,26 @@
     const freeCash = r2((S.cash || 0) + (M.cash || 0));
     const tile = (v, label, off) => `<div class="${off ? 'off' : ''}"><b>${v}</b><span>${label}</span></div>`;
     const am = S.anyMarket && S.anyMarket.enabled ? S.anyMarket : null;
+    // A desk that trades nothing all day looks broken, and the page never said why. It is nearly
+    // always the same answer: the widest gap on the board is under the bar. Say which market is
+    // closest and by how much -- and when something HAS cleared the bar, say that instead.
+    const cfg = S.cfg || {}, bar = cfg.minGap || 0.03;
+    const ready = (S.signals || []).length;
+    // watch-only pairs cannot trade however wide they sit: their resolution rules are unchecked
+    const closest = (S.pairs || []).filter((p) => !p.watchOnly && Number.isFinite(p.gap))
+      .reduce((b, p) => (!b || Math.abs(p.gap) > Math.abs(b.gap) ? p : b), null);
+    const cl = closest ? splitLabel(closest.label) : null;
+    // A wide gap is not the same as a trade: the gap has to survive both venues' fees, the book
+    // has to be deep enough, and an in-play game is skipped whatever it shows. So a board where
+    // the widest gap already clears the bar says the checks are what is holding it, rather than
+    // implying the desk is ignoring free money.
+    const wide = closest ? Math.abs(closest.gap) : 0;
+    const near = ready
+      ? `<span class="nx good"><b>${ready}</b> over the bar, waiting on room to trade</span>`
+      : cl
+        ? `<span class="nx"><b>${cc(wide)}</b> widest gap · ${wide >= bar ? `none clear the fee and liquidity checks` : `needs ${cc(bar)}`}</span>` +
+          `<span class="nn fitw"><span>${esc(unellipsis(cl.outcome || closest.label))}</span>${cl.question ? `<i> · ${esc(unellipsis(cl.question))}</i>` : ''}</span>`
+        : `<span class="nx">nothing priced on both venues yet</span>`;
     const html = `<div class="st ${cls}"><i></i>${state}<em class="${live ? 'real' : ''}">${live ? 'LIVE' : 'PAPER'}</em></div>` +
       (gone || halted ? `<p class="alarm">${esc(gone ? 'The desk stopped answering' : `Trading stopped: ${halted}`)}</p>` : '') +
       `<div class="tiles">` +
@@ -1086,6 +1108,7 @@
       // a $16,968 would burst
       `<dl class="mny"><div><dt>At work</dt><dd>${money(atWork, 0)}</dd></div>` +
       `<div><dt>Cash free</dt><dd>${money(freeCash, 0)}</dd></div></dl>` +
+      `<div class="near"><span class="lh">${ready ? 'Ready to trade' : 'Why no trade'}</span>${near}</div>` +
       // the taker's reach: markets matched on both venues, across every category
       (am ? `<div class="pairs extra"><span class="lh">Both venues</span><span><b>${S.pairCount || 0}</b> matched · <b>${am.rulesVerified || 0}</b> tradeable</span></div>` : '') +
       `<p class="dim">Up ${dur(S.now - S.startedAt)} · ${feed.mode === 'stream' && feed.connected ? 'live feed' : 'polling'}</p>`;
@@ -2043,9 +2066,13 @@
       `<dl class="wstats">${stat('Maker', makerNet)}${stat('Cross-venue', pairNet)}` +
       // the rest of the column: how much of that is money already, how much is still a mark,
       // what the arbs are sure to pay, and what the venues have taken
-      `${stat('Banked', banked, 'x sep')}${stat('Open', r2(net - banked), 'x')}` +
-      `${Number.isFinite(P.arbLocked) ? stat('Locked in', P.arbLocked, 'x') : ''}` +
-      `${S.fees ? `<div class="x"><dt>Fees paid</dt><dd>${money(S.fees)}</dd></div>` : ''}</dl>`;
+      `${stat('Banked', banked, 'x sep')}` +
+      // Fees are the story on this strategy: a gap of a cent or two is only worth trading if the
+      // venues leave any of it behind. What the closed trades made before the venues took their
+      // cut, and what that cut was, sit directly under the banked figure they explain.
+      `${S.fees ? `${stat('Before fees', r2(banked + S.fees), 'x')}<div class="x"><dt>Fees paid</dt><dd class="neg">−${money(S.fees)}</dd></div>` : ''}` +
+      `${stat('Open', r2(net - banked), 'x')}` +
+      `${Number.isFinite(P.arbLocked) ? stat('Locked in', P.arbLocked, 'x') : ''}</dl>`;
     const tally = held.length ? `${up ? `<b class="pos">▲${up}</b>` : ''}${down ? `<b class="neg">▼${down}</b>` : ''}` : '';
     let h = `<div class="wh"><span>Paper account</span><span>${tally}${held.length ? `${held.length} held · ` : ''}${M.quoting || 0} quoted</span></div>`;
     if (!held.length) {
