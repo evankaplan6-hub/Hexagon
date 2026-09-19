@@ -337,7 +337,7 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
    clipped by #wall's own overflow:hidden, unreachable by any scroll. */
 #wall .wbook { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 /* The header row is the sort control, Finder- or TradingView-style: click a column to sort by it,
-   click the active one again to flip the arrow. Type sorts maker rows apart from arbs. Side isn't sortable, just a label. */
+   click the active one again to flip the arrow. Type sorts maker rows apart from arbs; Side groups long, short and both. */
 /* Same font-size as a row (.88em), so the em-sized columns, gap and padding come out the same width
    and each heading sits over its column; the labels are made smaller one level down. */
 #wall .wcols { flex: none; display: grid; grid-template-columns: 1fr 4.6em 6em 5.2em 5.4em; gap: .9em; align-items: center;
@@ -349,7 +349,6 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #wall .wcols button.on { color: #dceaff; }
 #wall .wcols button[data-wcol="pl"], #wall .wcols button[data-wcol="value"] { justify-content: flex-end; text-align: right; }
 #wall .wcols i { font-style: normal; font-size: .9em; }
-#wall .wcolside { text-align: center; }
 #wall .ty { font: 500 .78em var(--mono); color: var(--brd-label); white-space: nowrap; }
 #wall .val { font: 500 .92em var(--mono); text-align: right; color: #aeb6c4; }
 #wall .wlist { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #243047 transparent; }
@@ -367,7 +366,7 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #wall .wr .nm { color: #e2e6ee; min-width: 0; white-space: nowrap; overflow: hidden;
   -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 2em), transparent);
   mask-image: linear-gradient(90deg, #000 calc(100% - 2em), transparent); }
-#wall .sd { justify-self: center; font: 600 .66em/1 var(--mono); letter-spacing: .1em; padding: .35em .55em; border-radius: 999px; white-space: nowrap; }
+#wall .sd { justify-self: start; font: 600 .66em/1 var(--mono); letter-spacing: .1em; padding: .35em .55em; border-radius: 999px; white-space: nowrap; }
 #wall .sd.long { color: #6ee7a0; background: rgba(34,197,94,.10); }
 #wall .sd.short { color: #fca5a5; background: rgba(239,68,68,.10); }
 #wall .sd.arb { color: #a9c6ff; background: rgba(125,170,255,.12); }

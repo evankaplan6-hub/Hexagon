@@ -1529,6 +1529,7 @@
   const sortHeld = (held) => {
     const dir = wallSortDir === 'asc' ? 1 : -1;
     const by = wallSortCol === 'name' ? (a, b) => dir * a.name.localeCompare(b.name)
+      : wallSortCol === 'side' ? (a, b) => dir * a.side.localeCompare(b.side) || b.qty - a.qty
       : wallSortCol === 'type' ? (a, b) => dir * a.type.localeCompare(b.type) || b.pl - a.pl
       : wallSortCol === 'value' ? (a, b) => dir * (a.value - b.value)
         : (a, b) => dir * (a.pl - b.pl);
@@ -1547,7 +1548,8 @@
     return [...groups.values()].map((legs) => {
       legs.sort((a, b) => (a.venue === 'PM' ? -1 : 1) - (b.venue === 'PM' ? -1 : 1));
       const worth = (p) => p.qty * (p.mark ?? p.entry);
-      return { arb: legs, key: legs[0].group || legs[0].id, name: String(legs[0].label || ''), type: cap(String(legs[0].strategy || 'taker')), value: r2(legs.reduce((a, p) => a + worth(p), 0)), pl: r2(legs.reduce((a, p) => a + (p.pnl || 0), 0)),
+      return { arb: legs, key: legs[0].group || legs[0].id, name: String(legs[0].label || ''), type: cap(String(legs[0].strategy || 'taker')),
+        side: legs.length > 1 ? 'both' : legs[0].side, qty: legs[0].qty, value: r2(legs.reduce((a, p) => a + worth(p), 0)), pl: r2(legs.reduce((a, p) => a + (p.pnl || 0), 0)),
         sides: legs.map((p) => `${venueName(p.venue)} ${p.side.toUpperCase()} ${money(worth(p))}`).join(' + ') };
     });
   };
@@ -1560,7 +1562,7 @@
     const makerNet = r2((M.equity ?? M.initial ?? 0) - (M.initial ?? 0));
     const pairNet = r2((S.equity ?? S.initial ?? 0) - (S.initial ?? 0));
     const net = r2(makerNet + pairNet);
-    const held = sortHeld((M.markets || []).filter((m) => m.inv).map((m) => ({ m, name: nameOf(m), type: 'Maker', value: Math.abs(m.mark), pl: m.mark - m.cost })).concat(takerRows()));
+    const held = sortHeld((M.markets || []).filter((m) => m.inv).map((m) => ({ m, name: nameOf(m), type: 'Maker', side: m.inv > 0 ? 'long' : 'short', qty: Math.abs(m.inv), value: Math.abs(m.mark), pl: m.mark - m.cost })).concat(takerRows()));
     const up = held.filter((x) => x.pl > 0).length, down = held.filter((x) => x.pl < 0).length;
     const rows = held;
     // A number, what it means, and the two standing facts as labelled figures. They used to run
@@ -1576,10 +1578,9 @@
       return h;
     }
     // The header row is the sort control -- click a column, click it again to flip the arrow.
-    // Side isn't a sortable field, just a label, so it keeps the row's middle column aligned.
     const arrow = (dir) => dir === 'asc' ? '▲' : '▼';
     const colBtn = (k, label) => `<button type="button" role="columnheader" aria-sort="${wallSortCol === k ? (wallSortDir === 'asc' ? 'ascending' : 'descending') : 'none'}" data-wcol="${k}" class="${wallSortCol === k ? 'on' : ''}">${label}${wallSortCol === k ? `<i>${arrow(wallSortDir)}</i>` : ''}</button>`;
-    const head = `<div class="wcols" role="row">${colBtn('name', 'Name')}${colBtn('type', 'Type')}<span class="wcolside">Side</span>${colBtn('value', 'Value')}${colBtn('pl', 'P&amp;L')}</div>`;
+    const head = `<div class="wcols" role="row">${colBtn('name', 'Name')}${colBtn('type', 'Type')}${colBtn('side', 'Side')}${colBtn('value', 'Value')}${colBtn('pl', 'P&amp;L')}</div>`;
     const row = (x) => x.arb
       ? `<button class="wr arb" data-g="${esc(x.key)}" title="${esc(x.name)}"><span class="nm">${esc(x.name)}<small class="legs">${esc(x.sides)}</small></span><span class="ty">${esc(x.type)}</span>` +
         `<span class="sd ${x.arb.length > 1 ? 'arb' : 'long'}">${x.arb.length > 1 ? 'BOTH' : x.arb[0].side.toUpperCase()} ${x.arb[0].qty}</span><span class="val">${money(x.value)}</span><span class="pl ${x.pl >= 0 ? 'pos' : 'neg'}">${signed(x.pl)}</span></button>`
@@ -1767,7 +1768,7 @@
     if (b.dataset.back) sel = null;
     else if (b.dataset.wcol) {
       if (wallSortCol === b.dataset.wcol) wallSortDir = wallSortDir === 'asc' ? 'desc' : 'asc';
-      else { wallSortCol = b.dataset.wcol; wallSortDir = b.dataset.wcol === 'name' || b.dataset.wcol === 'type' ? 'asc' : 'desc'; }
+      else { wallSortCol = b.dataset.wcol; wallSortDir = ['name', 'type', 'side'].includes(b.dataset.wcol) ? 'asc' : 'desc'; }
     }
     else if (b.dataset.g) sel = sel && sel.kind === 'arb' && sel.key === b.dataset.g ? null : { kind: 'arb', key: b.dataset.g };
     else if (b.dataset.m) sel = sel && sel.kind === 'market' && sel.key === b.dataset.m ? null : { kind: 'market', key: b.dataset.m };
