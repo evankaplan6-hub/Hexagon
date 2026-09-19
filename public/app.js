@@ -217,7 +217,14 @@
   function layout(RW) {
     if (L && L.RW === RW) return L;
     // the desks live between the P&L stand on the left and the server rack on the right
-    const bandL = 176, bandR = RW - 40, band = bandR - bandL, gap = 16;
+    // The P&L stand takes the left of the floor and the desks take what is left. 2026-09-19: the
+    // stand was a fixed 166 units -- a plot barely wider than its own headline -- while a wide room
+    // spread the desks across a floor they did not need. It takes a share of the room now, up to a
+    // limit, and never so much that the four front desks cannot stand in what remains.
+    const bandR = RW - 40;
+    const DESK_BAND = 320;                       // four desks at their smallest, with gaps
+    const stand = Math.round(Math.min(Math.max(170, RW * 0.33), 300, Math.max(150, bandR - DESK_BAND)));
+    const bandL = stand + 16, band = bandR - bandL, gap = 16;
     // How big a desk MAY be is a question about HEIGHT, not width. The back row, the front row and
     // the front row's nametag all have to fit in the 150 units under the wall, and 1.45 is where the
     // nametag reaches the floor line -- so past a certain width the desks stop growing no matter how
@@ -255,7 +262,9 @@
       screen: { x: SIDE_W + 18, y: 2, w: RW - 2 * SIDE_W - 36, h: WALL_H - 26 },
       // the stand starts just under the wall: the 24 units above it were empty floor that no
       // desk can use (the desks start at bandL), and the plot is the one board that wants height
-      chart:  { x: 4, y: WALL_H + 6, w: bandL - 10, h: ROOM_H - WALL_H - 10 },
+      // The stand rises past the floor line: the strip of wall above it, left of the big screen and
+      // under the status board, is empty, and a plot wants height more than the wall wants space.
+      chart:  { x: 4, y: WALL_H - 16, w: stand, h: ROOM_H - WALL_H - 8 + 16 },
       rack:   { x: RW - 34, y: WALL_H + 18, w: 26, h: 60 },
     };
     return L;
