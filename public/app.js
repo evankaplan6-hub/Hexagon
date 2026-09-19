@@ -1065,18 +1065,15 @@
     const halted = S.halt || M.halted, working = !halted && M.quoting > 0, gone = stale();
     const [state, cls] = gone ? ['No signal', 'bad'] : halted ? ['Stopped', 'bad'] : working ? ['Working', 'good'] : ['Idle', 'warn'];
     const nHeld = (M.markets || []).filter((m) => m.inv).length;
-    // the ledger survives a restart but the last-fill detail does not; the Last fill row says which
-    const lf = recentFills(M)[0] || null, feed = M.feed || {};
+    const feed = M.feed || {};
     // Whose money it is belongs on the state line, where the eye already is, not buried in the
     // footer sentence: those two facts are the whole first glance.
     const live = S.mode === 'live';
-    // These were five sentences that wrapped. On a real book -- 3261 contracts in 36 markets, a
-    // market name of its own on the fill line -- they wrapped to nine lines and the board answered
-    // by shrinking its own type to 11px. A label and its figure wrap far less than a sentence
-    // saying the same thing, and the labels give the eye somewhere to land.
-    // 2026-09-19: the label-and-sentence grid wrapped every figure onto two or three lines. Now two
-    // figures set large with a word under each, the last fill as one line plus its market, and the
-    // standing facts as a footer.
+    // 2026-09-19: the last fill lived here, one board away from the fills board that lists every
+    // fill including that one. What nothing else on the page says is where the money is: what the
+    // desk has put out on positions, and what is still sitting as cash waiting for a gap.
+    const atWork = r2((S.deployed || 0) + Math.abs(M.mark || 0));
+    const freeCash = r2((S.cash || 0) + (M.cash || 0));
     const tile = (v, label, off) => `<div class="${off ? 'off' : ''}"><b>${v}</b><span>${label}</span></div>`;
     const am = S.anyMarket && S.anyMarket.enabled ? S.anyMarket : null;
     const html = `<div class="st ${cls}"><i></i>${state}<em class="${live ? 'real' : ''}">${live ? 'LIVE' : 'PAPER'}</em></div>` +
@@ -1084,14 +1081,8 @@
       `<div class="tiles">` +
       tile(working ? M.quoting : 0, 'quoting', !working) +
       tile(nHeld ? (M.inv || 0).toLocaleString() : 0, nHeld ? `held in ${nHeld}` : 'held', !nHeld) +
-      `</div>` +
-      `<div class="lf"><span class="lh">Last fill${lf ? ` · ${ago(lf.at)}` : ''}</span>` +
-      (lf
-        // what happened and what it came to on one line; the market, and the price that got it,
-        // on the next -- the price gives way first when the board is narrow
-        ? `<span class="lx ${lf.side === 'sell' || lf.action === 'Sold' ? 'sell' : 'buy'}"><b>${esc(lf.action)} ${lf.qty} ${sideWord(lf)}</b><em>${fillMoney(lf, lf.qty * lf.px)}</em></span>` +
-          `<span class="ln fitw">${fillHtml(lf, `<i> · at ${cc(lf.px)}</i>`)}</span>`
-        : `<span class="ln">${M.fills ? `${M.fills} before the restart` : 'None yet'}</span>`) +
+      tile(money(atWork, 0), 'at work', !atWork) +
+      tile(money(freeCash, 0), 'cash free') +
       `</div>` +
       // the taker's reach: markets matched on both venues, across every category
       (am ? `<div class="pairs extra"><span class="lh">Both venues</span><span><b>${S.pairCount || 0}</b> matched · <b>${am.rulesVerified || 0}</b> tradeable</span></div>` : '') +
