@@ -102,6 +102,7 @@
       (rows.length ? `<ol>${rows.join('')}</ol>` : `<p>Nothing to show yet.</p>`) + `</section>`;
   }
 
+  let mobileChart = null;
   function renderMobileSummary() {
     const el = $('mobile-summary'), M = S.maker || {};
     if (!el) return;
@@ -129,8 +130,13 @@
       `<button type="button" data-mobile-info="holding" aria-expanded="${mobileInfo === 'holding'}" aria-controls="mobile-detail" class="${mobileInfo === 'holding' ? 'on' : ''}"><span>Maker held</span><b>${(+M.inv || 0).toLocaleString()}</b><small>in ${held}</small><i>›</i></button>` +
       `<button type="button" data-mobile-info="fills" aria-expanded="${mobileInfo === 'fills'}" aria-controls="mobile-detail" class="${mobileInfo === 'fills' ? 'on' : ''}"><span>Recent fills</span><b>${recentFills(M).length.toLocaleString()}</b><small>shown</small><i>›</i></button></div>` +
       mobileInfoPanel(M) + `<div id="mobile-chart" class="pnl m-chart" aria-label="Mobile P&amp;L chart"></div>` + latest + `<div class="m-agents"><span class="m-label">Desks</span><div>${agents}</div></div>`;
-    const chartEl = $('mobile-chart');
-    if (chartEl) { delete chartEl.dataset.built; drawChart(chartEl, false); wireChart(chartEl, false); }
+    // This card is rebuilt on every frame, but a chart is not: the first one built stays, and each
+    // new card gets it moved in, so the plot is not torn down and redrawn every two seconds.
+    const slot = $('mobile-chart');
+    if (slot) {
+      if (!mobileChart) { mobileChart = slot; wireChart(slot, false); } else slot.replaceWith(mobileChart);
+      drawChart(mobileChart, false);
+    }
   }
   $('mobile-summary').addEventListener('click', (ev) => {
     const sort = ev.target.closest('[data-mobile-sort]');
@@ -1078,17 +1084,20 @@
   // ------------------------------------------------------------ the P&L chart
   // A chart you can ask things of. The headline is one number: every paper trade, across the maker
   // and cross-venue ledgers. Four ranges, a hover readout that says how far a moment is from the
-  // start of the range, and a drag
-  // that measures the gain or loss between any two moments. The same chart opens large on the wall
-  // screen. It is HTML and SVG over the canvas board, so its text is sharp and it takes a mouse.
+  // start of the range, and a drag that measures the gain or loss between any two moments. The
+  // same chart opens large over the page. The plot itself -- line, price scale, crosshair, time
+  // axis -- is TradingView's Lightweight Charts (vendored in public/vendor/). The words around it
+  // (the headline, the ranges, the tip, the measuring band) are HTML laid over it, so they stay
+  // sharp and take a mouse.
   //
   const RANGES = [['1h', 36e5], ['6h', 216e5], ['24h', 864e5], ['All', Infinity]];
-  const chart = { range: 'All', hoverT: null, band: null, dragFrom: null };
+  const chart = { range: 'All', type: 'candles', hoverT: null, band: null, dragFrom: null };
   try {
     const c = JSON.parse(localStorage.getItem('hex-chart') || '{}');
     if (RANGES.some(([r]) => r === c.range)) chart.range = c.range;
+    if (c.type === 'line' || c.type === 'candles') chart.type = c.type;
   } catch { /* private window: defaults */ }
-  const saveChart = () => { try { localStorage.setItem('hex-chart', JSON.stringify({ range: chart.range })); } catch { /* ignore */ } };
+  const saveChart = () => { try { localStorage.setItem('hex-chart', JSON.stringify({ range: chart.range, type: chart.type })); } catch { /* ignore */ } };
 
   function combinePnlHistory(balanceHistory, makerHistory, initial, validFrom = 0) {
     // Only the maker ledger had the bad 50c marks, so only its history is cut at the repair. The
@@ -1127,22 +1136,64 @@
     return after.length >= 2 ? after : pts.slice(-2);
   }
 
-  function niceAxis(pts) {
-    let lo = Math.min(...pts.map((p) => p.v)), hi = Math.max(...pts.map((p) => p.v));
+  // The scale has two ways to lie. Pinned to zero -- as it was -- a desk parked at -$84
+  // with 22c of movement in it spends the whole plot on the empty distance back to zero: the line
+  // lies flat on the floor of the box and the fill floods the panel. Pinned to the data instead,
+  // that same 22c of drift is stretched over the full height and a flat day reads as a
+  // rollercoaster. So: follow the data, keep zero when the line is near enough to it to be worth
+  // the room, and hold the window open to a floor -- a dollar, or 2% of the level, whichever is
+  // larger -- so that small really does look small. The chart library picks its own tick marks and
+  // adds its own padding; this only says what range the data should be given room for.
+  function pnlPriceRange(lo, hi, last) {
     const seen = Math.max(hi - lo, 0.02);
     if (lo > 0 && lo <= seen * 0.35) lo = 0;
     if (hi < 0 && -hi <= seen * 0.35) hi = 0;
-    const floor = Math.max(1, Math.abs(pts[pts.length - 1].v) * 0.02);
+    const floor = Math.max(1, Math.abs(last) * 0.02);
     if (hi - lo < floor) { const mid = (hi + lo) / 2; lo = mid - floor / 2; hi = mid + floor / 2; }
-    const padded = (hi - lo) * 0.04, rough = ((hi - lo) + 2 * padded) / 4;
-    const mag = 10 ** Math.floor(Math.log10(Math.max(rough, 0.0001))), f = rough / mag;
-    const step = (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * mag;
-    lo = Math.floor((lo - padded) / step) * step;
-    hi = Math.ceil((hi + padded) / step) * step;
-    if (hi <= lo) hi = lo + step;
-    const ticks = [];
-    for (let v = lo, i = 0; v <= hi + step / 100 && i < 12; v += step, i++) ticks.push(r2(v));
-    return { lo: r2(lo), hi: r2(hi), step: r2(step), ticks };
+    return { min: lo, max: hi };
+  }
+
+  // Lightweight Charts gives every point one slot, whatever its timestamp. These ledgers are not
+  // sampled evenly -- the server thins old history, and a restart leaves a gap -- so drawn as they
+  // come, a day-old stretch would be squeezed into a few minutes. Step the history onto an even
+  // clock instead: each slot holds the value that was live at that moment, which is what a step
+  // ledger means. The clock ticks in round steps (a minute, five, an hour) so the time axis lands on
+  // 08:00 rather than 08:02; `off` is the zone's offset from UTC in seconds, so those steps fall on
+  // the local clock. The first slot is the first point and the last is exactly the newest one. Times
+  // come out in whole seconds, strictly increasing, which is what the library requires.
+  const SLOT_STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 14400, 43200, 86400];
+  const slotStep = (t0, t1, maxSlots) => SLOT_STEPS.find((n) => n >= (t1 - t0) / maxSlots) || 86400;
+  function evenPnlPoints(pts, maxSlots = 900, off = 0) {
+    if (pts.length < 2) return pts.slice();
+    const t0 = Math.floor(pts[0].t / 1000), t1 = Math.floor(pts[pts.length - 1].t / 1000);
+    const step = slotStep(t0, t1, maxSlots);
+    const at = [t0];
+    for (let s = (Math.floor((t0 + off) / step) + 1) * step - off; s < t1; s += step) at.push(s);
+    if (t1 > t0) at.push(t1);
+    let i = 0;
+    return at.map((sec) => {
+      while (i + 1 < pts.length && Math.floor(pts[i + 1].t / 1000) <= sec) i++;
+      return { t: sec * 1000, v: pts[i].v };
+    });
+  }
+
+  // The same clock, as candles: what the desk's P&L did inside each slot. A candle opens at the value
+  // the last one closed on, closes on the last value seen inside its slot, and its wicks reach the
+  // highest and lowest value the step ledger held in between. A slot with no news is flat, which is
+  // true: the ledger did not move. (`v` is the close, so a candle can be found and measured like a
+  // line's point.)
+  function pnlCandles(pts, maxCandles = 60, off = 0) {
+    if (pts.length < 2) return [];
+    const t0 = Math.floor(pts[0].t / 1000), t1 = Math.floor(pts[pts.length - 1].t / 1000);
+    const step = slotStep(t0, t1, maxCandles), out = [];
+    let i = 0, carry = pts[0].v;
+    for (let b = Math.floor((t0 + off) / step) * step - off; b <= t1; b += step) {
+      let h = carry, l = carry, c = carry;
+      while (i < pts.length && Math.floor(pts[i].t / 1000) < b + step) { c = pts[i].v; h = Math.max(h, c); l = Math.min(l, c); i++; }
+      out.push({ t: b * 1000, o: carry, h, l, c, v: c });
+      carry = c;
+    }
+    return out;
   }
 
   function chartPoints() {
@@ -1163,18 +1214,136 @@
   // Four rows, each with one job: which series, the number, the plot, the range. The number used
   // to share the top row with the series buttons and the change over the range sat at the bottom
   // beside the range buttons, where it read as a caption on them rather than as the headline fact.
+  // The plot row is left empty here: the library builds its canvas inside it.
   function chartSkeleton(big) {
-    return `<div class="ct"><span class="ctitle">All paper trades</span>` +
+    return `<div class="ct"><span class="ctitle">All paper trades</span><button class="cx ctype" data-type="1"></button>` +
       `${big ? '' : '<button class="cx" data-expand="1" title="Open large">⤢</button>'}</div>` +
       `<div class="chead"><span class="cv"></span><span class="cd"></span></div>` +
-      `<div class="cplot"><svg viewBox="0 0 1000 400" preserveAspectRatio="none"></svg><div class="cyaxis"></div>` +
-      `<i class="cdot" hidden></i><div class="ctip" hidden></div></div>` +
+      `<div class="cplot"><i class="cband" hidden></i><div class="ctip" hidden></div></div>` +
       `<div class="cb"><span class="seg">${RANGES.map(([r]) => `<button data-range="${r}">${r}</button>`).join('')}</span><span class="cr"></span></div>`;
+  }
+
+  const UP = '#22c55e', DOWN = '#ef4444', FLAT = '#64748b';
+  // the button shows the chart you have; the tip says what a click turns it into
+  const TYPE_ICON = {
+    candles: '<svg viewBox="0 0 16 16" width="1.1em" height="1.1em" aria-hidden="true"><path d="M4.5 1.5v13M11.5 3v10" stroke="currentColor" stroke-width="1.3"/><rect x="2.5" y="4.5" width="4" height="6" fill="currentColor"/><rect x="9.5" y="5.5" width="4" height="5" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>',
+    line: '<svg viewBox="0 0 16 16" width="1.1em" height="1.1em" aria-hidden="true"><path d="M1.5 12l4-5 3 2.5 6-7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/></svg>',
+  };
+  const plots = new WeakMap();   // chart container -> the Lightweight Chart drawn in it, and what it shows
+  // The library reads every time as UTC and puts its tick marks -- the midnights above all -- on
+  // UTC's clock, so a date would land at 8pm in New York. It is handed local wall-clock time dressed
+  // as UTC instead: each time shifted by this zone's offset, and read back with the same shift. One
+  // offset for the whole plot keeps the times in order through a clock change, which a per-point
+  // offset would not. So these read the shifted seconds with the UTC getters, and everything else on
+  // the page keeps real times.
+  const zoneSec = () => -new Date(S.now).getTimezoneOffset() * 60;
+  const wall = (sec) => new Date(sec * 1000);
+  const wallHm = (sec) => `${String(wall(sec).getUTCHours()).padStart(2, '0')}:${String(wall(sec).getUTCMinutes()).padStart(2, '0')}`;
+  const wallDay = (sec) => wall(sec).toLocaleDateString([], { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  // Its kinds of tick mark are numbered: 0 year, 1 month, 2 day of the month, 3 and 4 a time of day.
+  const tickTxt = (sec, kind) => kind >= 3 ? wallHm(sec) : kind === 2 ? wallDay(sec)
+    : kind === 1 ? wall(sec).toLocaleDateString([], { month: 'short', timeZone: 'UTC' }) : String(wall(sec).getUTCFullYear());
+  function dropPlot(el) {
+    const old = plots.get(el);
+    if (!old) return;
+    old.ro.disconnect(); old.c.remove(); plots.delete(el);
+  }
+
+  function makePlot(el, big, candles) {
+    const LW = window.LightweightCharts;
+    if (!LW) return null;   // the script did not load: the headline and the ranges still work
+    const plot = { c: null, s: null, ro: null, zero: null, open: null, candles, pts: [], start: null, end: 0, step: 0, off: 0, last: 0, digits: 2, fs: 0, read: '' };
+    const c = plot.c = LW.createChart(el.querySelector('.cplot'), {
+      autoSize: true,
+      // a plot cannot be dragged or zoomed: the range buttons are the zoom, and a drag is the measure
+      handleScroll: false, handleScale: false,
+      layout: { background: { type: LW.ColorType.Solid, color: 'transparent' }, textColor: '#657086',
+        fontFamily: "'JetBrains Mono', ui-monospace, Menlo, monospace", fontSize: 9,
+        // TradingView's terms for the library: their logo, linked, where the chart is (the page's
+        // footer is hidden, so it cannot carry the credit)
+        attributionLogo: true },
+      grid: { vertLines: { visible: false }, horzLines: { color: 'rgba(140,168,210,.07)' } },
+      rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.1, bottom: 0.1 } },
+      // the small chart has no room for a time axis: its bottom line says the span instead
+      timeScale: { visible: big, borderVisible: false, timeVisible: true, secondsVisible: false,
+        fixLeftEdge: true, fixRightEdge: true, rightOffset: 0, tickMarkFormatter: tickTxt },
+      localization: { timeFormatter: (sec) => `${wallDay(sec)} ${wallHm(sec)}` },
+      crosshair: { mode: LW.CrosshairMode.Magnet,
+        vertLine: { color: 'rgba(148,163,184,.6)', labelVisible: big, labelBackgroundColor: '#212b3c' },
+        horzLine: { visible: big, labelVisible: big, labelBackgroundColor: '#212b3c' } },
+    });
+    const scale = {
+      autoscaleInfoProvider: (original) => {
+        const r = original();
+        if (!r || !r.priceRange) return r;
+        const w = pnlPriceRange(r.priceRange.minValue, r.priceRange.maxValue, plot.last);
+        return { ...r, priceRange: { minValue: w.min, maxValue: w.max } };
+      },
+    };
+    // A candle is green if the desk made money inside it and red if it lost some; one where nothing
+    // happened is grey (see drawChart). The line's colour is about the range on show, not the sign
+    // of the level: a desk down $84 that has made 22c back today draws green over the last hour,
+    // red over the week, and the headline number stays red throughout. Its colours are set on every
+    // draw. Its fill hangs off the foot of the plot: it is there to give the line a body, and it says
+    // nothing about zero -- hanging it off the zero line is what painted the whole board red.
+    plot.s = candles
+      ? c.addSeries(LW.CandlestickSeries, { ...scale, upColor: UP, downColor: DOWN, wickUpColor: UP, wickDownColor: DOWN, borderVisible: false, priceLineVisible: false })
+      : c.addSeries(LW.AreaSeries, { ...scale, lineWidth: big ? 3 : 2, relativeGradient: true, priceLineVisible: false, crosshairMarkerRadius: 4 });
+    // The reference the eye reads against: zero when zero is on the plot, otherwise where this range
+    // opened -- which is the line the change beside the number is measured from anyway.
+    const ref = { color: '#44526b', lineWidth: 1, lineStyle: LW.LineStyle.Dashed, axisLabelVisible: false };
+    plot.zero = plot.s.createPriceLine({ ...ref, price: 0 });
+    plot.open = plot.s.createPriceLine({ ...ref, price: 0, lineVisible: false });
+    c.subscribeCrosshairMove((p) => { chart.hoverT = p.time == null ? null : (p.time - plot.off) * 1000; paintOverlay(el); });
+    // A panel that was hidden (the large chart, the phone card) gets its size a moment after it shows,
+    // and a window can be resized: refit, once the library has taken the new size (its own observer
+    // was made first, so it runs first). The library's own size-change event does not fire when its
+    // time axis is hidden, which is the small chart and the phone card.
+    plot.ro = new ResizeObserver(() => { c.timeScale().fitContent(); paintOverlay(el); });
+    plot.ro.observe(el.querySelector('.cplot'));
+    plots.set(el, plot);
+    return plot;
+  }
+
+  // What sits over the plot and changes without the data changing: the hover tip, the measuring
+  // band, and the bottom line, which is the time span until a drag asks it a question.
+  function paintOverlay(el) {
+    const plot = plots.get(el), tip = el.querySelector('.ctip'), band = el.querySelector('.cband');
+    if (!plot || plot.pts.length < 2) { tip.hidden = true; band.hidden = true; return; }
+    const { pts, c, start, off } = plot, w = el.querySelector('.cplot').clientWidth, ts = c.timeScale();
+    let read = plot.read;
+    band.hidden = true;
+    if (chart.band) {
+      const a = nearest(pts, Math.min(...chart.band)), b = nearest(pts, Math.max(...chart.band));
+      // A candle covers its whole slot, so a drag over candles runs from the open of the first one to
+      // the close of the last: dragging across everything reads the headline change. A line's point
+      // is one moment, and it is measured from that moment.
+      const d = r2(b.v - (plot.candles ? a.o : a.v));
+      const from = Math.max(a.t, start.t), to = plot.candles ? Math.min(b.t + plot.step, plot.end) : b.t;
+      read = `${hhmm(from)}→${hhmm(to)} <b class="${d >= 0 ? 'pos' : 'neg'}">${signed(d)}</b>`;
+      const xa = ts.timeToCoordinate(a.t / 1000 + off), xb = ts.timeToCoordinate(b.t / 1000 + off);
+      if (xa != null && xb != null) { band.hidden = false; Object.assign(band.style, { left: `${xa}px`, width: `${Math.max(2, xb - xa)}px` }); }
+    }
+    el.querySelector('.cr').innerHTML = read;
+    const p = chart.hoverT == null ? null : nearest(pts, chart.hoverT), x = p && ts.timeToCoordinate(p.t / 1000 + off);
+    if (!p || x == null) { tip.hidden = true; return; }
+    tip.hidden = false;
+    tip.innerHTML = `<b>${hhmm(p.t)}</b> <span class="${p.v >= 0 ? 'pos' : 'neg'}">${signed(p.v)}</span><br>` +
+      (plot.candles && w >= 300 ? `<small>O ${signed(p.o)} · H ${signed(p.h)} · L ${signed(p.l)}</small><br>` : '') +
+      `<small>${signed(r2(p.v - start.v))} since ${hhmm(start.t)}</small>`;
+    // beside the crosshair, on the roomier side, and never past either edge of the plot
+    const tw = tip.offsetWidth, at = x > w * 0.55 ? x - tw - 10 : x + 10;
+    Object.assign(tip.style, { right: '', left: `${Math.max(0, Math.min(at, w - tw))}px` });
   }
 
   function drawChart(el, big) {
     if (!S) return;
-    if (el.dataset.built !== (big ? 'big' : 'small')) { el.innerHTML = chartSkeleton(big); el.dataset.built = big ? 'big' : 'small'; }
+    if (el.dataset.built !== (big ? 'big' : 'small')) {
+      dropPlot(el);
+      el.innerHTML = chartSkeleton(big); el.dataset.built = big ? 'big' : 'small';
+    }
+    // shut or off-screen (the large chart, the phone card on a desktop): nothing to size a plot to
+    if (!el.offsetWidth) return;
     // Every range stays clickable. Greying out ranges longer than the history (and forcing 'All')
     // left a freshly reset ledger with one live button, which read as a chart that ignored clicks.
     // A range longer than the history simply shows all of it, and the time axis says so.
@@ -1183,11 +1352,17 @@
     const selectedSpan = RANGES.find(([r]) => r === chart.range)[1];
     const short = Number.isFinite(selectedSpan) && available < selectedSpan;
     el.querySelectorAll('[data-range]').forEach((b) => b.classList.toggle('on', b.dataset.range === chart.range));
-    const pts = chartPoints(), svg = el.querySelector('svg'), tip = el.querySelector('.ctip'), dot = el.querySelector('.cdot');
-    if (pts.length < 2) {
-      svg.innerHTML = '';
-      el.querySelector('.cyaxis').innerHTML = '';
-      dot.hidden = true; tip.hidden = true;
+    const candles = chart.type === 'candles', pts = chartPoints();
+    const off = zoneSec(), slots = candles ? pnlCandles(pts, big ? 120 : 48, off) : evenPnlPoints(pts, 900, off);
+    let plot = plots.get(el);
+    // a different kind of chart is a different plot: build it again rather than swap its series
+    if (plot && plot.candles !== candles) { dropPlot(el); plot = null; }
+    plot = plot || makePlot(el, big, candles);
+    const ty = el.querySelector('.ctype');
+    ty.innerHTML = TYPE_ICON[chart.type]; ty.title = candles ? 'Candles. Click for a line' : 'Line. Click for candles';
+    if (pts.length < 2 || slots.length < 2) {
+      if (plot) { plot.s.setData([]); plot.pts = []; }
+      paintOverlay(el);
       el.querySelector('.cv').textContent = signed(pts.length ? pts[0].v : 0);
       el.querySelector('.cd').innerHTML = '';
       el.querySelector('.cr').textContent = 'collecting, one point a minute';
@@ -1195,45 +1370,7 @@
     }
 
     const t0 = pts[0].t, t1 = Math.max(pts[pts.length - 1].t, t0 + 1);
-    // The scale has two ways to lie. Pinned to zero -- as it was -- a desk parked at -$84
-    // with 22c of movement in it spends the whole plot on the empty distance back to zero: the line
-    // lies flat on the floor of the box and the fill floods the panel. Pinned to the data instead,
-    // that same 22c of drift is stretched over the full height and a flat day reads as a
-    // rollercoaster. So: follow the data, keep zero when the line is near enough to it to be worth
-    // the room, and hold the window open to a floor -- a dollar, or 2% of the level, whichever is
-    // larger -- so that small really does look small.
-    const axis = niceAxis(pts), { lo, hi } = axis;
-    const X = (t) => ((t - t0) / (t1 - t0)) * 1000, Y = (v) => 400 - ((v - lo) / (hi - lo)) * 400;
     const last = pts[pts.length - 1], first = pts[0], up = last.v >= 0;
-    const zeroIn = lo < 0 && hi > 0;   // only draw the zero line when it is actually on the plot
-    // The line's colour is about the range on show, not the sign of the level: a desk down $84 that
-    // has made 22c back today draws green over the last hour, red over the week, and the headline
-    // number stays red throughout. That is what the range buttons are for.
-    const col = last.v >= first.v ? '#22c55e' : '#ef4444';
-    const line = pts.map((p, i) => `${i ? 'L' : 'M'}${X(p.t).toFixed(1)},${Y(p.v).toFixed(1)}`).join('');
-    const zy = Y(0).toFixed(1);
-    let g = `<defs><linearGradient id="cg-${big ? 'b' : 's'}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${col}" stop-opacity=".16"/><stop offset="1" stop-color="${col}" stop-opacity="0"/></linearGradient></defs>`;
-    // Gridlines and their labels use clean dollar increments. The old labels were merely the
-    // padded pixel bounds (for example -$252.61 and -$997.53), which looked precise but were not
-    // observations and made the scale needlessly hard to read.
-    for (const v of axis.ticks) g += `<line x1="0" x2="1000" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" stroke="#8ca8d2" stroke-opacity=".07" vector-effect="non-scaling-stroke"/>`;
-    if (chart.band) {
-      const a = Math.min(chart.band[0], chart.band[1]), b = Math.max(chart.band[0], chart.band[1]);
-      g += `<rect x="${X(a).toFixed(1)}" y="0" width="${Math.max(2, X(b) - X(a)).toFixed(1)}" height="400" fill="#5ec8e0" fill-opacity=".12"/>`;
-    }
-    // The reference the eye reads against: zero when zero is on the plot, otherwise where this
-    // range opened -- which is the line the change beside the number is measured from anyway.
-    const ry = zeroIn ? zy : Y(first.v).toFixed(1);
-    g += `<line x1="0" x2="1000" y1="${ry}" y2="${ry}" stroke="#44526b" stroke-dasharray="5 5" vector-effect="non-scaling-stroke"/>`;
-    // the area hangs off the foot of the plot: it is there to give the line a body, and it says
-    // nothing about zero -- hanging it off the zero line is what painted the whole board red
-    g += `<path d="${line}L${X(last.t).toFixed(1)},400L${X(first.t).toFixed(1)},400Z" fill="url(#cg-${big ? 'b' : 's'})"/>`;
-    g += `<path d="${line}" fill="none" stroke="${col}" stroke-width="${big ? 2.5 : 2}" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>`;
-    if (chart.hoverT != null) g += `<line x1="${X(chart.hoverT).toFixed(1)}" x2="${X(chart.hoverT).toFixed(1)}" y1="0" y2="400" stroke="#94a3b8" stroke-opacity=".6" vector-effect="non-scaling-stroke"/>`;
-    svg.innerHTML = g;
-    const digits = axis.step < 0.1 ? 2 : axis.step < 1 ? 1 : 0;
-    el.querySelector('.cyaxis').innerHTML = axis.ticks.map((v) => `<span style="top:${(Y(v) / 4).toFixed(2)}%">${v === 0 ? '$0' : signed(v, digits)}</span>`).join('');
-
     const cv = el.querySelector('.cv');
     cv.textContent = signed(last.v); cv.className = `cv ${up ? 'pos' : 'neg'}`;
     // The headline number is a level; on its own it does not say whether the desk is having a good
@@ -1245,75 +1382,103 @@
     const room = el.clientWidth;
     el.querySelector('.cd').innerHTML = room < 130 ? ''
       : `<b class="${chg >= 0 ? 'pos' : 'neg'}">${chg >= 0 ? '▲' : '▼'} ${signed(chg)}</b>${room < 185 ? '' : ` in ${spanTxt(t1 - t0)}`}`;
-    // the bottom line is the time axis, until a drag asks it a question
-    // a range longer than the history says how much there is instead of the start and end times
-    let read = short ? `only ${spanTxt(available)} of history` : `${hhmm(t0)} → ${hhmm(t1)}`;
-    if (chart.band) {
-      const a = nearest(pts, Math.min(...chart.band)), b = nearest(pts, Math.max(...chart.band)), d = r2(b.v - a.v);
-      read = `${hhmm(a.t)}→${hhmm(b.t)} <b class="${d >= 0 ? 'pos' : 'neg'}">${signed(d)}</b>`;
-    }
-    el.querySelector('.cr').innerHTML = read;
+    if (!plot) { el.querySelector('.cr').textContent = 'chart library did not load'; return; }
 
-    if (chart.hoverT != null) {
-      const p = nearest(pts, chart.hoverT), since = r2(p.v - first.v);
-      dot.hidden = false;
-      Object.assign(dot.style, { left: `${X(p.t) / 10}%`, top: `${Y(p.v) / 4}%`, background: p.v >= 0 ? '#4ade80' : '#f87171' });
-      tip.hidden = false;
-      tip.innerHTML = `<b>${hhmm(p.t)}</b> <span class="${p.v >= 0 ? 'pos' : 'neg'}">${signed(p.v)}</span><br><small>${signed(since)} since ${hhmm(first.t)}</small>`;
-      const leftPct = X(p.t) / 10;
-      Object.assign(tip.style, leftPct > 55 ? { left: '', right: `${100 - leftPct + 2}%` } : { right: '', left: `${leftPct + 2}%` });
+    // a range longer than the history says how much there is instead of the start and end times
+    plot.read = short ? `only ${spanTxt(available)} of history` : `${hhmm(t0)} → ${hhmm(t1)}`;
+    // more decimals only where the scale is tight enough to need them. The finest tick the library
+    // may draw is the last decimal shown (minMove, below), so two ticks never print the same label
+    const vs = candles ? slots.flatMap((p) => [p.h, p.l]) : slots.map((p) => p.v), r = pnlPriceRange(Math.min(...vs), Math.max(...vs), last.v), span = r.max - r.min;
+    plot.digits = span >= 8 ? 0 : span >= 0.8 ? 1 : 2;
+    plot.last = last.v;
+    plot.start = first;   // where the range opened: a candle starts on the round clock, before that
+    plot.end = t1;
+    plot.step = candles ? slots[1].t - slots[0].t : 0;
+    plot.off = off;
+    plot.pts = slots;
+    const fs = Math.max(8, Math.round(parseFloat(getComputedStyle(el).fontSize) * (big ? 0.72 : 0.62)));
+    if (fs !== plot.fs) { plot.fs = fs; plot.c.applyOptions({ layout: { fontSize: fs } }); }
+    const col = last.v >= first.v ? UP : DOWN, zeroIn = r.min <= 0 && r.max >= 0;
+    plot.open.applyOptions({ price: first.v, lineVisible: !zeroIn });
+    plot.zero.applyOptions({ lineVisible: zeroIn });
+    // Zero is zero even as float noise (the library's ticks are sums). The finest tick the library will
+    // draw is the last decimal shown, but it steps by 2.5 as readily as by 2, so an axis whose ticks
+    // are not all whole at that many decimals gets one more for every tick, rather than a "-$3" at -$2.50.
+    const zero = (v) => Math.abs(v) < 1e-9;
+    plot.s.applyOptions({ priceFormat: { type: 'custom', minMove: 10 ** -plot.digits,
+      formatter: (v) => (zero(v) ? '$0' : signed(v, plot.digits)),
+      tickmarksFormatter: (vs) => {
+        let d = plot.digits;
+        while (d < 2 && vs.some((v) => Math.abs(v * 10 ** d - Math.round(v * 10 ** d)) > 1e-6)) d++;
+        return vs.map((v) => (zero(v) ? '$0' : signed(v, d)));
+      } } });
+    if (candles) {
+      plot.s.setData(slots.map((p) => ({ time: p.t / 1000 + off, open: p.o, high: p.h, low: p.l, close: p.c,
+        ...(p.o === p.c ? { color: FLAT, wickColor: FLAT, borderColor: FLAT } : {}) })));
     } else {
-      // no hover: the dot rests on the newest point, so the end of the line is never ambiguous
-      dot.hidden = false;
-      Object.assign(dot.style, { left: `${X(last.t) / 10}%`, top: `${Y(last.v) / 4}%`, background: col });
-      tip.hidden = true;
+      plot.s.applyOptions({ lineColor: col, topColor: `${col}29`, bottomColor: `${col}00` });
+      plot.s.setData(slots.map((p) => ({ time: p.t / 1000 + off, value: p.v })));
     }
+    plot.c.timeScale().fitContent();
+    paintOverlay(el);
   }
 
-  // One set of handlers serves both charts: they find their own container and redraw it at once,
-  // without waiting for the next frame from the desk.
+  // One set of handlers serves every chart: they find their own container and repaint it at once,
+  // without waiting for the next frame from the desk. The hover is the library's crosshair; the
+  // drag is ours, because a plot that scrolls has no use for one.
   function wireChart(root, big) {
-    const redraw = () => drawChart(root, big);
-    const tAt = (ev) => {
-      const pts = chartPoints(), r = root.querySelector('svg').getBoundingClientRect();
-      if (pts.length < 2 || !r.width) return null;
-      const f = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width));
-      return nearest(pts, pts[0].t + f * (pts[pts.length - 1].t - pts[0].t)).t;
+    let dragging = false;
+    // the moment under the pointer, snapped to the plot's own slots; off either end (or over the
+    // price scale) it is the nearest end
+    const timeAt = (ev) => {
+      const plot = plots.get(root);
+      if (!plot || plot.pts.length < 2) return null;
+      const r = root.querySelector('.cplot').getBoundingClientRect(), x = ev.clientX - r.left;
+      const sec = plot.c.timeScale().coordinateToTime(x);
+      return sec == null ? plot.pts[x < r.width / 2 ? 0 : plot.pts.length - 1].t : nearest(plot.pts, (sec - plot.off) * 1000).t;
+    };
+    const cancel = () => {
+      if (!dragging) return;
+      dragging = false; chart.dragFrom = null; chart.band = null;
+      paintOverlay(root);
     };
     root.addEventListener('click', (ev) => {
       const b = ev.target.closest('button');
       if (!b) return;
       if (b.dataset.range) { chart.range = b.dataset.range; chart.band = null; saveChart(); }
+      if (b.dataset.type) { chart.type = chart.type === 'candles' ? 'line' : 'candles'; chart.band = null; saveChart(); }
       if (b.dataset.expand) { openBigChart(); return; }
-      redraw();
+      drawChart(root, big);
     });
-    root.addEventListener('pointermove', (ev) => {
-      if (ev.pointerType === 'touch') return;
-      if (!ev.target.closest('.cplot')) { if (chart.hoverT != null && chart.dragFrom == null) { chart.hoverT = null; redraw(); } return; }
-      const t = tAt(ev);
-      if (t == null) return;
-      chart.hoverT = t;
-      if (chart.dragFrom != null) chart.band = [chart.dragFrom, t];
-      redraw();
-    });
-    root.addEventListener('pointerleave', () => { chart.hoverT = null; chart.dragFrom = null; redraw(); });
     root.addEventListener('pointerdown', (ev) => {
-      if (ev.pointerType === 'touch') return;
-      if (!ev.target.closest('.cplot')) return;
-      const t = tAt(ev);
+      // the left button only: a right-click or a Ctrl-click opens a menu and may never send a release.
+      // No preventDefault here: it would stop the library hearing the mouse move, and freeze its
+      // crosshair and the tip mid-drag. Text is not selectable on a chart anyway.
+      if (ev.pointerType === 'touch' || ev.button !== 0 || ev.ctrlKey || !ev.target.closest('.cplot')) return;
+      const t = timeAt(ev);
       if (t == null) return;
-      chart.dragFrom = t; chart.band = null;
-      root.querySelector('.cplot').setPointerCapture(ev.pointerId);
-      ev.preventDefault();
+      chart.dragFrom = t; chart.band = null; dragging = true;
+      paintOverlay(root);
     });
-    root.addEventListener('pointerup', (ev) => {
+    // on the window, not the plot: the drag can wander off the plot and still end where it lands
+    window.addEventListener('pointermove', (ev) => {
+      if (!dragging) return;
+      if (chart.dragFrom == null) { dragging = false; return; }   // Escape or closing the panel ended it
+      const t = timeAt(ev);
+      if (t != null) { chart.band = [chart.dragFrom, t]; paintOverlay(root); }
+    });
+    window.addEventListener('pointerup', (ev) => {
+      if (!dragging) return;
+      dragging = false;
       if (chart.dragFrom == null) return;
-      const t = tAt(ev);
+      const t = timeAt(ev);
       // a click without a drag clears the measurement rather than leaving a zero-width band
-      chart.band = t != null && Math.abs(t - chart.dragFrom) > 0 ? [chart.dragFrom, t] : null;
+      chart.band = t != null && t !== chart.dragFrom ? [chart.dragFrom, t] : null;
       chart.dragFrom = null;
-      redraw();
+      paintOverlay(root);
     });
+    window.addEventListener('pointercancel', cancel);
+    window.addEventListener('blur', cancel);
   }
 
   // ------------------------------------------------------------ the wall screen, the fills board, the clock
@@ -1506,7 +1671,14 @@
   wireChart($('chartbig-pnl'), true);
   function openBigChart() { bigChart.hidden = false; chart.band = null; drawChart($('chartbig-pnl'), true); bigChart.querySelector('.cbback').focus(); }
   function closeBigChart() { if (bigChart.hidden) return; bigChart.hidden = true; chart.hoverT = null; chart.dragFrom = null; chart.band = null; }
-  bigChart.addEventListener('click', (ev) => { if (ev.target === bigChart || ev.target.closest('[data-close]')) closeBigChart(); });
+  // A click lands on the nearest ancestor of where the press began and where it ended, so a measuring
+  // drag let go over the dark backdrop clicks the backdrop. Only a press that began there closes it.
+  let pressedInBox = false;
+  bigChart.addEventListener('pointerdown', (ev) => { pressedInBox = ev.target !== bigChart; });
+  bigChart.addEventListener('click', (ev) => {
+    if ((ev.target === bigChart && !pressedInBox) || ev.target.closest('[data-close]')) closeBigChart();
+    pressedInBox = false;
+  });
   window.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') closeBigChart(); });
 
   $('wall').addEventListener('click', (ev) => {

@@ -6,7 +6,10 @@ checkout — if you find a reference to `~/claude/hexagon` anywhere, it is stale
 
 **The Hexagon** is a six-agent prediction-market trading desk that prices the same events on
 Polymarket and Kalshi, trades the disagreements, and streams to a live dashboard.
-Node 20+, **zero npm dependencies** — that is deliberate, do not add packages.
+Node 20+, **zero npm dependencies** — that is deliberate, do not add packages. (The one file of
+third-party code is the dashboard's chart library, TradingView Lightweight Charts, vendored as a single
+file in `public/vendor/` on 2026-09-19 at Evan's request; see `public/vendor/README.md`. It is not a
+package and nothing installs it. Do not add others without asking.)
 
 Read `README.md` before changing anything; it explains the strategy, the fee math, and why
 the venue gap is not the edge. `ops/DEPLOY.md` covers cloud deployment (Fly app `hexagon-desk`). Merging to `main` auto-deploys
@@ -15,7 +18,7 @@ to Fly once tests pass (paper only; see ops/DEPLOY.md → Auto-deploy).
 ## Running it
 
 ```bash
-npm test                                      # 1843 assertions, no network, no clock
+npm test                                      # 1873 assertions, no network, no clock
 node server.js                                # paper account, live market data → localhost:8787
 DEMO=1 DATA_DIR=./data-demo node server.js    # synthetic fills/settles, separate account
 npm run reset                                 # wipe the paper account
@@ -49,6 +52,7 @@ src/makerdesk.js  the maker's loop: universe from the any-market crawl (MAKER_WI
                   trade-rate probe, run-over gate; src/maker.js holds the pure decisions
 src/venues/       Polymarket (Gamma + CLOB) and Kalshi public data
 src/recorder.js   tick tape writer      public/          dashboard (lookout.html: the same desk as one painted room, read-only)
+                                         public/vendor/   TradingView Lightweight Charts, one vendored file: draws the P&L chart (candles or line)
 src/tape.js       maker market data     src/kalshi-ws.js Kalshi trade socket (read-only; needs the key, else the tape polls)
 src/makertape.js  records the maker's book, prints and quotes into the ticks-*.jsonl tape (RECORD_MAKER=0 off)
 src/whales.js     whale watch: top wallets' big bets on Polymarket's sports/politics/economics/crypto/culture/tech/finance boards (advisory, never trades; WHALE_WATCH=0 off)
