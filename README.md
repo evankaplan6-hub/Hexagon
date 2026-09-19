@@ -602,6 +602,16 @@ at every threshold (+1.6 to +2.0c dev, +2.0 to +5.3c test), with t under 2 in de
 favourite–longshot bias Bürgi, Deng and Whelan measured on Kalshi, and 239 events cannot confirm it.
 Kalshi's historical endpoints (markets settled before 2026-07-15) are where more of those events are.
 
+**That lead was tested on older markets and did not replicate (2026-09-19).** `tools/lab-fetch.js
+--historical` pulled 1,148 non-Sports markets that closed 2026-04-15 to 07-14, none of which took
+part in finding the lead. `tools/favorites-check.js` scored one rule that was written down before
+the older data was scored: 70-90c favourite, at most 48 hours to the scheduled end, hold to
+resolution. On the older markets it made **-3.88c a contract on 55 events (t -0.9)**, negative in
+both halves, and failed all four preset criteria (300+ events, +1.0c, |t| >= 2, both halves
+positive). The newer markets the lead came from give +5.1c on 61 events under the same rule, so the
+two samples disagree in sign and pooled they are about zero. 55 events cannot rule a small effect
+out, but there is no evidence of an edge and no reason to build on it.
+
 ### Whale watch: copying the best sports bettors does not pay
 
 Paid "insider trackers" (sharpai.us, for one) sell a feed of what Polymarket's top wallets just
