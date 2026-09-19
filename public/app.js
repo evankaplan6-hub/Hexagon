@@ -1547,7 +1547,7 @@
     return [...groups.values()].map((legs) => {
       legs.sort((a, b) => (a.venue === 'PM' ? -1 : 1) - (b.venue === 'PM' ? -1 : 1));
       const worth = (p) => p.qty * (p.mark ?? p.entry);
-      return { arb: legs, name: String(legs[0].label || ''), type: cap(String(legs[0].strategy || 'taker')), value: r2(legs.reduce((a, p) => a + worth(p), 0)), pl: r2(legs.reduce((a, p) => a + (p.pnl || 0), 0)),
+      return { arb: legs, key: legs[0].group || legs[0].id, name: String(legs[0].label || ''), type: cap(String(legs[0].strategy || 'taker')), value: r2(legs.reduce((a, p) => a + worth(p), 0)), pl: r2(legs.reduce((a, p) => a + (p.pnl || 0), 0)),
         sides: legs.map((p) => `${venueName(p.venue)} ${p.side.toUpperCase()} ${money(worth(p))}`).join(' + ') };
     });
   };
@@ -1581,8 +1581,8 @@
     const colBtn = (k, label) => `<button type="button" role="columnheader" aria-sort="${wallSortCol === k ? (wallSortDir === 'asc' ? 'ascending' : 'descending') : 'none'}" data-wcol="${k}" class="${wallSortCol === k ? 'on' : ''}">${label}${wallSortCol === k ? `<i>${arrow(wallSortDir)}</i>` : ''}</button>`;
     const head = `<div class="wcols" role="row">${colBtn('name', 'Name')}${colBtn('type', 'Type')}<span class="wcolside">Side</span>${colBtn('value', 'Value')}${colBtn('pl', 'P&amp;L')}</div>`;
     const row = (x) => x.arb
-      ? `<div class="wr arb" title="${esc(x.name)}"><span class="nm">${esc(x.name)}<small class="legs">${esc(x.sides)}</small></span><span class="ty">${esc(x.type)}</span>` +
-        `<span class="sd ${x.arb.length > 1 ? 'arb' : 'long'}">${x.arb.length > 1 ? 'BOTH' : x.arb[0].side.toUpperCase()} ${x.arb[0].qty}</span><span class="val">${money(x.value)}</span><span class="pl ${x.pl >= 0 ? 'pos' : 'neg'}">${signed(x.pl)}</span></div>`
+      ? `<button class="wr arb" data-g="${esc(x.key)}" title="${esc(x.name)}"><span class="nm">${esc(x.name)}<small class="legs">${esc(x.sides)}</small></span><span class="ty">${esc(x.type)}</span>` +
+        `<span class="sd ${x.arb.length > 1 ? 'arb' : 'long'}">${x.arb.length > 1 ? 'BOTH' : x.arb[0].side.toUpperCase()} ${x.arb[0].qty}</span><span class="val">${money(x.value)}</span><span class="pl ${x.pl >= 0 ? 'pos' : 'neg'}">${signed(x.pl)}</span></button>`
       : `<button class="wr ${x.m.inv > 0 ? 'long' : 'short'}" data-m="${esc(x.m.ticker)}" title="${esc(x.m.title || '')}">` +
         `<span class="nm">${esc(OUTCOME(x.m) || QUESTION(x.m))}${OUTCOME(x.m) && QUESTION(x.m) ? `<i> · ${esc(QUESTION(x.m))}</i>` : ''}</span><span class="ty">Maker</span>${sideTag(x.m.inv)}<span class="val">${money(Math.abs(x.m.mark))}</span><span class="pl ${x.pl >= 0 ? 'pos' : 'neg'}">${signed(x.pl)}</span></button>`;
     const list = `<div class="wlist">${rows.map(row).join('')}</div>`;
@@ -1614,6 +1614,30 @@
         : `<li>Nothing held here now.</li>`;
       if (m.realized) h += `<li>Already banked from closed trades: <b class="${m.realized >= 0 ? 'pos' : 'neg'}">${signed(m.realized)}</b>.</li>`;
     } else h += `<li>This market is no longer on the desk's board, so its running profit isn't shown.</li>`;
+    return h + `</ul>`;
+  }
+
+  // A clicked cross-venue position: each side, what it cost, what it is worth now, and what the
+  // pair pays when it settles. Read-only, like the maker recap; selling lives in the alert panel.
+  function wallArb(key) {
+    const legs = (S.positions || []).filter((p) => (p.group || p.id) === key)
+      .sort((a, b) => (a.venue === 'PM' ? -1 : 1) - (b.venue === 'PM' ? -1 : 1));
+    const g = (S.arbGroups || []).find((x) => x.id === key);
+    let h = `<div class="wh"><button class="wback" data-back="1">‹ Back</button><span>${legs.length ? `${cap(legs[0].strategy || 'taker')} · opened ${minsAgo(legs[0].openedAt)}` : ''}</span></div>`;
+    if (!legs.length) return h + `<p class="wempty">Nothing is open in this position any more.</p>`;
+    const cost = r2(legs.reduce((a, p) => a + p.cost, 0));
+    const worth = r2(legs.reduce((a, p) => a + p.qty * (p.mark ?? p.entry), 0));
+    const pl = r2(worth - cost);
+    h += `<div class="wtitle">${esc(legs[0].label || key)}</div>`;
+    h += `<div class="wbig ${pl >= 0 ? 'pos' : 'neg'}">${signed(pl)}</div><div class="wsub">profit if sold at today's marks</div>`;
+    h += `<ul class="wrecap">`;
+    for (const p of legs) {
+      const w = r2(p.qty * (p.mark ?? p.entry)), d = r2(w - p.cost);
+      h += `<li>${venueName(p.venue)}: ${p.side.toUpperCase()} ${p.qty} at ${cc(p.entry)}. Paid ${money(p.cost)}, worth ${money(w)} now (<b class="${d >= 0 ? 'pos' : 'neg'}">${signed(d)}</b>).</li>`;
+    }
+    h += `<li>Both sides together: paid ${money(cost)}, worth ${money(worth)} now.</li>`;
+    if (g && g.settlementValue != null) h += `<li>When it settles it pays ${money(g.settlementValue)}, locking in <b class="${g.lockedPnl >= 0 ? 'pos' : 'neg'}">${signed(g.lockedPnl)}</b>.</li>`;
+    else if (g) h += `<li>The two sides don't line up (${esc(String(g.integrity).replace(/_/g, ' '))}), so the settlement value isn't certain.</li>`;
     return h + `</ul>`;
   }
 
@@ -1658,11 +1682,11 @@
         // of holding a scroll offset that now points at a different row.
         const top = list && prevParts[1] === selPart && prevParts[2] === sortPart ? list.scrollTop : 0;
         wallKey = key;
-        const m = sel && sel.kind === 'market';
+        const m = sel && (sel.kind === 'market' || sel.kind === 'arb');
         const a = sel && sel.kind === 'agent' ? S.agents.find((x) => x.key === sel.key) : null;
         el.style.fontSize = `${wallFs}px`;
         {
-          el.innerHTML = sel && sel.kind === 'market' ? wallRecap(sel.key, sel.at, M) : a ? wallAgent(a) : wallHome(M);
+          el.innerHTML = sel && sel.kind === 'market' ? wallRecap(sel.key, sel.at, M) : sel && sel.kind === 'arb' ? wallArb(sel.key) : a ? wallAgent(a) : wallHome(M);
           const list2 = el.querySelector('.wlist, .wlog');
           if (list2) list2.scrollTop = top;
           el.classList.toggle('more', !!list2 && list2.scrollHeight > list2.clientHeight + 2);
@@ -1745,6 +1769,7 @@
       if (wallSortCol === b.dataset.wcol) wallSortDir = wallSortDir === 'asc' ? 'desc' : 'asc';
       else { wallSortCol = b.dataset.wcol; wallSortDir = b.dataset.wcol === 'name' || b.dataset.wcol === 'type' ? 'asc' : 'desc'; }
     }
+    else if (b.dataset.g) sel = sel && sel.kind === 'arb' && sel.key === b.dataset.g ? null : { kind: 'arb', key: b.dataset.g };
     else if (b.dataset.m) sel = sel && sel.kind === 'market' && sel.key === b.dataset.m ? null : { kind: 'market', key: b.dataset.m };
     wallKey = '';
   });

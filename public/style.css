@@ -338,9 +338,12 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #wall .wbook { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 /* The header row is the sort control, Finder- or TradingView-style: click a column to sort by it,
    click the active one again to flip the arrow. Type sorts maker rows apart from arbs. Side isn't sortable, just a label. */
-#wall .wcols { flex: none; display: grid; grid-template-columns: 1fr 4.6em auto 5.2em 5.4em; gap: .9em; align-items: center;
+/* Same font-size as a row (.88em), so the em-sized columns, gap and padding come out the same width
+   and each heading sits over its column; the labels are made smaller one level down. */
+#wall .wcols { flex: none; display: grid; grid-template-columns: 1fr 4.6em 6em 5.2em 5.4em; gap: .9em; align-items: center;
   padding: 0 .35em .5em .75em; margin-bottom: .2em; border-bottom: 1px solid var(--brd-rule);
-  font: 600 .8em/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--brd-label); }
+  font: 600 .88em/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--brd-label); }
+#wall .wcols > * { font-size: .91em; }
 #wall .wcols button { display: inline-flex; align-items: center; gap: .3em; padding: .3em 0; margin: -.3em 0; }
 #wall .wcols button:hover { color: #cdd6e6; }
 #wall .wcols button.on { color: #dceaff; }
@@ -351,13 +354,12 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #wall .val { font: 500 .92em var(--mono); text-align: right; color: #aeb6c4; }
 #wall .wlist { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #243047 transparent; }
 /* A position is a row with a side: the tint down its left edge says long or short before the words do. */
-#wall .wr { position: relative; display: grid; grid-template-columns: 1fr 4.6em auto 5.2em 5.4em; gap: .9em; align-items: first baseline; width: 100%;
+#wall .wr { position: relative; display: grid; grid-template-columns: 1fr 4.6em 6em 5.2em 5.4em; gap: .9em; align-items: first baseline; width: 100%;
   padding: .26em .35em .26em .75em; font-size: .88em; border-bottom: 1px solid var(--brd-rule); border-radius: 5px; }
 #wall .wr::before { content: ''; position: absolute; left: 0; top: .4em; bottom: .4em; width: 2px; border-radius: 2px; background: var(--brd-rule2); }
 #wall .wr.long::before { background: rgba(34,197,94,.65); }
 #wall .wr.short::before { background: rgba(239,68,68,.65); }
 #wall .wr.arb::before { background: rgba(125,170,255,.65); }
-#wall div.wr { cursor: default; }
 #wall .wr .nm .legs { display: block; font-size: .8em; color: var(--brd-label); }
 #wall .wr:hover { background: rgba(120,160,230,.07); }
 /* One row, one line. A 60-character market name used to wrap every row onto two and the book
@@ -365,7 +367,7 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #wall .wr .nm { color: #e2e6ee; min-width: 0; white-space: nowrap; overflow: hidden;
   -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 2em), transparent);
   mask-image: linear-gradient(90deg, #000 calc(100% - 2em), transparent); }
-#wall .sd { font: 600 .66em/1 var(--mono); letter-spacing: .1em; padding: .35em .55em; border-radius: 999px; white-space: nowrap; }
+#wall .sd { justify-self: center; font: 600 .66em/1 var(--mono); letter-spacing: .1em; padding: .35em .55em; border-radius: 999px; white-space: nowrap; }
 #wall .sd.long { color: #6ee7a0; background: rgba(34,197,94,.10); }
 #wall .sd.short { color: #fca5a5; background: rgba(239,68,68,.10); }
 #wall .sd.arb { color: #a9c6ff; background: rgba(125,170,255,.12); }
