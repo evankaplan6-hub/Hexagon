@@ -1338,6 +1338,51 @@
     return r2(M.equity - M.initial - M.realized - held);
   }
 
+  // Bars are slots on a clock, and a zoom or a pan lands BETWEEN bars. To keep it where it is in time
+  // when the desk sends new data (the slots move, and the first and last are not evenly spaced),
+  // it is turned into moments and back, interpolating between slots. Asking the library for the
+  // times of the bars in view instead loses the fraction, and the view snaps by up to a bar
+  // every time a frame arrives.
+  function barTime(pts, i) {
+    const a = Math.max(0, Math.min(pts.length - 2, Math.floor(i)));
+    return pts[a].t + (i - a) * (pts[a + 1].t - pts[a].t);
+  }
+  function timeBar(pts, t) {
+    let a = 0, b = pts.length - 1;
+    if (t <= pts[0].t) a = 0;
+    else if (t >= pts[b].t) a = b - 1;
+    else while (b - a > 1) { const m = (a + b) >> 1; if (pts[m].t <= t) a = m; else b = m; }
+    return a + (t - pts[a].t) / (pts[a + 1].t - pts[a].t);
+  }
+  // the moments a plot's view spans, or null
+  function viewTimes(plot) {
+    const r = plot.pts.length > 1 ? plot.c.timeScale().getVisibleLogicalRange() : null;
+    return r && { from: barTime(plot.pts, r.from), to: barTime(plot.pts, r.to) };
+  }
+
+  // A trackpad gesture on the plot, as the new visible stretch. `r` is what is showing now, in bars
+  // ({from, to}); [lo, hi] is the whole of the data; `w` is the plot's width in pixels. A pan by `d`
+  // pixels moves the view with the fingers. A zoom by `d` (the wheel's deltaY: up is negative) grows
+  // or shrinks the view by a factor that compounds smoothly, and keeps the bar under pixel `x` where
+  // it is, so the chart zooms toward the pointer. A pinch is the same, at a stronger rate. The view
+  // never shrinks below five bars, never grows past the data, and never leaves it.
+  function pnlView(r, lo, hi, w, mode, d, x) {
+    let from = r.from, to = r.to;
+    const span = to - from;
+    if (mode === 'pan') {
+      const shift = d / (w / span);
+      from += shift; to += shift;
+    } else {
+      const next = Math.min(hi - lo, Math.max(5, span * Math.exp(d * (mode === 'pinch' ? 0.012 : 0.002))));
+      const f = Math.min(1, Math.max(0, x / w));
+      from = from + f * span - f * next; to = from + next;
+    }
+    const s = to - from;
+    if (from < lo) { from = lo; to = lo + s; }
+    if (to > hi) { to = hi; from = hi - s; }
+    return { from, to };
+  }
+
   function chartPoints() {
     const M = S.maker || {};
     const pts = combinePnlHistory(S.balanceHistory, M.hist, S.initial, M.historyValidFrom || 0);
@@ -1422,11 +1467,14 @@
 
   // One chart at a time can be "active": clicked, outlined, and the only one that hears the trackpad.
   // The rest leave wheel and touch alone, so the page still scrolls under the pointer. Active: two
-  // fingers up or down (or a pinch) zooms, two fingers sideways pans. A drag stays the measure.
+  // fingers up or down (or a pinch) zooms, two fingers sideways pans. A drag stays the measure. The
+  // trackpad is read here (trackpad(), below), not by the library: it takes each wheel event alone,
+  // so a slightly diagonal swipe flips between zoom and pan and every event repaints. Touch is the
+  // library's.
   let activeChart = null;
   const hands = (on) => (on
-    ? { handleScroll: { mouseWheel: true, pressedMouseMove: false, horzTouchDrag: true, vertTouchDrag: false },
-        handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: false } }
+    ? { handleScroll: { mouseWheel: false, pressedMouseMove: false, horzTouchDrag: true, vertTouchDrag: false },
+        handleScale: { mouseWheel: false, pinch: true, axisPressedMouseMove: false } }
     : { handleScroll: false, handleScale: false });
   function setActive(el) {
     if (activeChart === el) return;
@@ -1443,16 +1491,68 @@
   function resetZoom(el) {
     const plot = plots.get(el);
     if (!plot) return;
-    plot.zoomed = false; plot.c.timeScale().fitContent();
+    plot.zoomed = false; fitPlot(plot);
     syncReset(el); paintOverlay(el);
   }
+  // Fit the data to the plot. With the edges fixed the library shows exactly bar 0 to the last bar,
+  // so [0, n - 1] is the whole of the data. (Do not measure that right after fitContent: the library
+  // reports the new range a moment later, and a read straight after still sees the old one.)
+  function fitPlot(plot) { plot.c.timeScale().fitContent(); }
+  // Repaint the overlay at most once a frame: a pan or a hover sends events faster than the screen
+  // draws, and each repaint reads layout.
+  function paintSoon(el) {
+    const plot = plots.get(el);
+    if (!plot || plot.paint) return;
+    plot.paint = requestAnimationFrame(() => { plot.paint = 0; paintOverlay(el); });
+  }
+  // The active chart's trackpad. One gesture is a run of wheel events with gaps under ~160ms
+  // (momentum included) and it keeps ONE meaning, chosen from its first moments: sideways pans,
+  // up/down zooms, a pinch (which the browser sends as a wheel with Ctrl) zooms harder. A mouse wheel
+  // is a zoom at once. Events are added up and applied once per frame.
+  function trackpad(root) {
+    let g = null, pend = null, raf = 0;
+    const flush = () => {
+      raf = 0;
+      const plot = plots.get(root);
+      if (!plot || !pend || !g || !g.mode) return;
+      const ts = plot.c.timeScale(), r = ts.getVisibleLogicalRange(), w = ts.width();
+      if (!r || !w) return;
+      const lo = 0, hi = plot.pts.length - 1;
+      // a hard flick sends big numbers: a pan follows the fingers exactly, a zoom takes at most one
+      // firm step a frame
+      const d = g.mode === 'pan' ? pend.dx : Math.max(-80, Math.min(80, pend.dy));
+      const v = pnlView(r, lo, hi, w, g.mode, d, pend.x);
+      pend.dx = 0; pend.dy = 0;
+      ts.setVisibleLogicalRange(v);
+      plot.zoomed = v.from > lo + 1e-3 || v.to < hi - 1e-3;
+      syncReset(root);
+    };
+    root.addEventListener('wheel', (ev) => {
+      const plot = plots.get(root);
+      if (!plot || activeChart !== root || plot.pts.length < 3 || !ev.target.closest('.cplot')) return;
+      ev.preventDefault();   // the page does not scroll, and a pinch does not zoom the page
+      const unit = ev.deltaMode === 1 ? 16 : ev.deltaMode === 2 ? 400 : 1;
+      const dx = ev.deltaX * unit, dy = ev.deltaY * unit;
+      if (!g || ev.timeStamp - g.at > 160) { g = { at: 0, ax: 0, ay: 0, n: 0, mode: ev.ctrlKey ? 'pinch' : null }; pend = { dx: 0, dy: 0, x: 0 }; }
+      g.at = ev.timeStamp;
+      pend.dx += dx; pend.dy += dy;
+      pend.x = ev.clientX - root.querySelector('.cplot').getBoundingClientRect().left;
+      if (!g.mode) {
+        g.ax += Math.abs(dx); g.ay += Math.abs(dy); g.n++;
+        if (dx === 0 && (ev.deltaMode !== 0 || Math.abs(dy) >= 50)) g.mode = 'zoom';          // a mouse wheel
+        else if (g.n >= 2 || g.ax + g.ay >= 8) g.mode = g.ax > g.ay ? 'pan' : 'zoom';
+      }
+      if (g.mode && !raf) raf = requestAnimationFrame(flush);
+    }, { passive: false });
+  }
+
   // a click anywhere outside the active chart lets it go
   document.addEventListener('pointerdown', (ev) => { if (activeChart && !activeChart.contains(ev.target)) setActive(null); });
 
   function makePlot(el, big, candles, ind) {
     const LW = window.LightweightCharts;
     if (!LW) return null;   // the script did not load: the headline and the ranges still work
-    const plot = { c: null, s: null, v: null, vols: [], ind, mom: [], swing: [], zoomed: false, ro: null, zero: null, open: null, candles, pts: [], start: null, end: 0, step: 0, off: 0, last: 0, digits: 2, fs: 0, read: '' };
+    const plot = { c: null, s: null, v: null, vols: [], ind, mom: [], swing: [], zoomed: false, paint: 0, ro: null, zero: null, open: null, candles, pts: [], start: null, end: 0, step: 0, off: 0, last: 0, digits: 2, fs: 0, read: '' };
     const c = plot.c = LW.createChart(el.querySelector('.cplot'), {
       autoSize: true,
       // a plot is not dragged (a drag is the measure) and is zoomed only once it has been clicked
@@ -1530,16 +1630,16 @@
     // resized away, and that would leave its hover on the floor chart. Only a chart on show hovers.
     c.subscribeCrosshairMove((p) => {
       if (!el.offsetWidth) return;
-      chart.hoverT = p.time == null ? null : (p.time - plot.off) * 1000; paintOverlay(el);
+      chart.hoverT = p.time == null ? null : (p.time - plot.off) * 1000; paintSoon(el);
     });
     // A panel that was hidden (the large chart, the phone card) gets its size a moment after it shows,
     // and a window can be resized: refit, once the library has taken the new size (its own observer
     // was made first, so it runs first). The library's own size-change event does not fire when its
     // time axis is hidden, which is the small chart and the phone card.
-    plot.ro = new ResizeObserver(() => { if (!plot.zoomed) c.timeScale().fitContent(); paintOverlay(el); });
+    plot.ro = new ResizeObserver(() => { if (!plot.zoomed) fitPlot(plot); paintOverlay(el); });
     plot.ro.observe(el.querySelector('.cplot'));
     // the band and the tip are pixels, so they follow a zoom or a pan
-    c.timeScale().subscribeVisibleTimeRangeChange(() => paintOverlay(el));
+    c.timeScale().subscribeVisibleTimeRangeChange(() => paintSoon(el));
     plots.set(el, plot);
     return plot;
   }
@@ -1611,7 +1711,7 @@
     // is one with the indicator panes switched on or off (the small chart has no room for them).
     // Switching the panes is the same picture with more under it, so a zoom carries over.
     const ind = big && chart.ind;
-    const carry = plot && plot.candles === candles && plot.ind !== ind && plot.zoomed ? plot.c.timeScale().getVisibleRange() : null;
+    const carry = plot && plot.candles === candles && plot.ind !== ind && plot.zoomed ? viewTimes(plot) : null;
     if (plot && (plot.candles !== candles || plot.ind !== ind)) { dropPlot(el); plot = null; }
     plot = plot || makePlot(el, big, candles, ind);
     if (plot && carry) plot.zoomed = true;
@@ -1666,6 +1766,8 @@
     plot.end = t1;
     plot.step = candles ? slots[1].t - slots[0].t : 0;
     plot.off = off;
+    // what the user has zoomed to, as moments, so the desk's next frame does not undo it
+    const view = carry || (plot.zoomed ? viewTimes(plot) : null);
     plot.pts = slots;
     const fs = Math.max(8, Math.round(parseFloat(getComputedStyle(el).fontSize) * (big ? 0.72 : 0.62)));
     if (fs !== plot.fs) { plot.fs = fs; plot.c.applyOptions({ layout: { fontSize: fs } }); }
@@ -1673,8 +1775,6 @@
     const opened = slots[0].o ?? slots[0].v, col = last.v >= opened ? UP : DOWN, zeroIn = r.min <= 0 && r.max >= 0;
     plot.open.applyOptions({ price: opened, lineVisible: !zeroIn });
     plot.zero.applyOptions({ lineVisible: zeroIn });
-    // what the user has zoomed to, by time, so the desk's next frame does not undo it
-    const view = carry || (plot.zoomed ? plot.c.timeScale().getVisibleRange() : null);
     // Zero is zero even as float noise (the library's ticks are sums). The finest tick the library will
     // draw is the last decimal shown, but it steps by 2.5 as readily as by 2, so an axis whose ticks
     // are not all whole at that many decimals gets one more for every tick, rather than a "-$3" at -$2.50.
@@ -1715,12 +1815,23 @@
       plot.ms.setData(slots.map((p, i) => (mom[i] && mom[i].s != null ? { time: at(i), value: mom[i].s } : { time: at(i) })));
       plot.pp.setData(slots.map((p, i) => (swing[i] ? { time: at(i), value: swing[i].p } : { time: at(i) })));
     }
-    const ts = plot.c.timeScale(), lo = slots[0].t / 1000 + off, hi = slots[slots.length - 1].t / 1000 + off;
-    // a zoom survives the next frame if what it was looking at is still in the data; otherwise the
-    // range or the candle size has changed under it, and the chart starts over
-    if (view && view.to > lo && view.from < hi) {
-      try { ts.setVisibleRange({ from: Math.max(view.from, lo), to: Math.min(view.to, hi) }); } catch { plot.zoomed = false; ts.fitContent(); }
-    } else { plot.zoomed = false; ts.fitContent(); }
+    // Fit first: it is the picture when nothing is zoomed. A zoom survives the next frame if what it was looking at is still in the
+    // data; otherwise the range or the candle size has changed under it, and the chart starts over.
+    fitPlot(plot);
+    plot.zoomed = false;
+    if (view) {
+      const lo = 0, hi = slots.length - 1;
+      let from = timeBar(slots, view.from), to = timeBar(slots, view.to);
+      if (to > lo && from < hi && to - from > 1e-6) {
+        const w = to - from;
+        if (from < lo) { from = lo; to = Math.min(hi, lo + w); }
+        if (to > hi) { to = hi; from = Math.max(lo, hi - w); }
+        try {
+          plot.c.timeScale().setVisibleLogicalRange({ from, to });
+          plot.zoomed = from > lo + 1e-3 || to < hi - 1e-3;
+        } catch { fitPlot(plot); }
+      }
+    }
     syncReset(el);
     paintOverlay(el);
   }
@@ -1774,10 +1885,14 @@
     // takes the whole range back; a wheel or pinch on the active one is a zoom, which is remembered
     root.addEventListener('pointerdown', (ev) => { if (ev.target.closest('.cplot')) setActive(root); });
     root.addEventListener('dblclick', (ev) => { if (ev.target.closest('.cplot')) resetZoom(root); });
-    root.addEventListener('wheel', () => {
-      const plot = plots.get(root);
-      if (plot && activeChart === root && !plot.zoomed) { plot.zoomed = true; syncReset(root); }
-    }, { passive: true });
+    trackpad(root);
+    // a touch pan or pinch is the library's; once the fingers lift, see whether it left the chart zoomed
+    root.addEventListener('touchend', () => setTimeout(() => {
+      const plot = plots.get(root), r = plot && plot.pts.length ? plot.c.timeScale().getVisibleLogicalRange() : null;
+      if (!r) return;
+      plot.zoomed = r.from > 1e-3 || r.to < plot.pts.length - 1 - 1e-3;
+      syncReset(root);
+    }, 0), { passive: true });
     root.addEventListener('pointerdown', (ev) => {
       // the left button only: a right-click or a Ctrl-click opens a menu and may never send a release.
       // No preventDefault here: it would stop the library hearing the mouse move, and freeze its
