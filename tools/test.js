@@ -28,6 +28,7 @@ const SUITES = [
   ['ask', 'the Ask panel: the tool loop, append-only chats, limits and budget, route locks, no secrets'],
   ['askui', "the Ask drawer's page code: the answer escaped before it is formatted, and when a chat is over"],
   ['chart', 'the dashboard chart: combined ledgers, exact time windows and honest dollar axes'],
+  ['weather-lab', 'the weather lab: whole-degree settlement maths, the per-city fit, the answer never shown to the strategy'],
   ['favorites-check', 'the favourites check: the rule fixed in advance, Sports excluded, a four-part verdict'],
   ['pnl-report', 'the P&L report: convergence, arbs and maker realised from the journals, the mind kept apart'],
   ['lookout', 'the lookout page: the painted room, read-only, fed by the same stream as the floor'],

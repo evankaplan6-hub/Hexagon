@@ -15,7 +15,7 @@ to Fly once tests pass (paper only; see ops/DEPLOY.md → Auto-deploy).
 ## Running it
 
 ```bash
-npm test                                      # 1799 assertions, no network, no clock
+npm test                                      # 1817 assertions, no network, no clock
 node server.js                                # paper account, live market data → localhost:8787
 DEMO=1 DATA_DIR=./data-demo node server.js    # synthetic fills/settles, separate account
 npm run reset                                 # wipe the paper account
@@ -57,6 +57,7 @@ tools/            edge-scan, replay, maker-replay, maker-rank, pm-maker-scan, ma
                   whale-fetch + whale-lab (does copying top sports wallets pay? no, out of sample),
                   stock-fetch + stock-lab (ETF strategy tournament on Yahoo daily bars, walk-forward vs SPY;
                   research only, no broker code -- nothing beat buy-and-hold),
+                  weather-fetch + weather-lab (Kalshi daily-high-temperature markets vs the public forecast; no edge, out of sample),
                   favorites-check (one preset rule on older settled markets from lab-fetch --historical; the non-Sports favourite lead did not replicate),
                   pnl-report (one-screen realised P&L per book from data/fly/archive journals; --marks prices held maker inventory),
                   fly-pull (copies the box's finished days to data/fly/archive, verifies, then trims old box tapes)
