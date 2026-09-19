@@ -451,6 +451,7 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #tape.more ol, #wall.more .wlist { -webkit-mask-image: linear-gradient(#000 calc(100% - 1.5em), transparent);
   mask-image: linear-gradient(#000 calc(100% - 1.5em), transparent); }
 #tape .none { color: #5a6478; text-align: center; margin: auto 0; font-size: .9em; }
+#tape .none[hidden], #tape ol[hidden] { display: none; }
 #wall .wr .nm i { font-style: normal; color: var(--brd-label); font-size: .85em; }
 #wall .wrecap { flex: none; list-style: none; margin: .7em 0 0; padding: .55em 0 0; border-top: 1px solid var(--brd-rule); font-size: .92em; color: #c9cfd9; }
 #wall .wrecap li { padding: .24em 0; }
