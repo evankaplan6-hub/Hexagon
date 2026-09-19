@@ -48,6 +48,12 @@ primary_region = "iad"          # Ashburn, Virginia — close to the exchange, a
   MAX_LONG_ARB_GROUPS = "6"
   MAX_ARB_GROUPS = "20"
 
+# The stall watchdog (src/watchdog.js, WATCHDOG_SEC) ends the process when the desk's loops stop
+# finishing rounds, and this is what brings it back. Fly's default is on-failure with ten retries,
+# which would leave the box dead after the tenth stall; "always" has no such count.
+[[restart]]
+  policy = "always"
+
 # The ledger, the journals and the tick tape. Without this a redeploy silently resets the evidence.
 [[mounts]]
   source = "hexagon_data"

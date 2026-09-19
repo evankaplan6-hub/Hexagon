@@ -79,10 +79,26 @@ async function takeTurn(url, priority = false) {
 // tried once more; only if that is refused too does it count. Timeouts and every other failure count
 // at once, as before: those are what the halt is for.
 const RETRY_MIN_MS = 500, RETRY_MAX_MS = 2000;
+
+// Calls that have started and not finished. Only for the stall watchdog's report: when the desk
+// freezes, the first question is whether a request is stuck (and for how long, against a 15s
+// timeout) or nothing is waiting on the network at all.
+const calls = new Set();
+function inflight(now = Date.now(), n = 5) {
+  return [...calls]
+    .map((c) => ({ url: c.url.slice(0, 110), phase: c.phase, ageSec: Math.round((now - c.since) / 1000) }))
+    .sort((a, b) => b.ageSec - a.ageSec)
+    .slice(0, n);
+}
+const queued = () => [...pacers.values()].reduce((n, p) => n + p.queued(), 0);
+
 async function getJSON(url, { timeout = 15000, priority = false, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
   for (let attempt = 0; ; attempt++) {
+    const call = { url, since: Date.now(), phase: 'queue' };
+    calls.add(call);
     // wait for our turn BEFORE the timeout starts, or a queued call would spend its timeout in line
     await takeTurn(url, priority);
+    call.phase = 'fetch';
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), timeout);
     let retryAfter = null;
@@ -108,9 +124,10 @@ async function getJSON(url, { timeout = 15000, priority = false, sleep = (ms) =>
       throw e;
     } finally {
       clearTimeout(timer);
+      calls.delete(call);
     }
     await sleep(retryAfter);
   }
 }
 
-module.exports = { getJSON, stats, noteError, recentErrors, makePacer, paceHost, takeTurn };
+module.exports = { getJSON, stats, noteError, recentErrors, makePacer, paceHost, takeTurn, inflight, queued };

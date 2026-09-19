@@ -19,6 +19,7 @@ const SUITES = [
   ['anymarket', 'the any-market scanner: discover off the cycle, reprice in it, and only verified pairs trade'],
   ['stream', 'the Kalshi trade socket: framing, trade shape, and the tape falling back to the poll'],
   ['engine', 'the ledger: the operator latch, partial exits, and one close per position'],
+  ['watchdog', 'the stall watchdog: a loop with no finished round is restarted, and a healthy desk, a sleep, or a live account never is'],
   ['brain', 'the minds: the proposal clamp, request shaping, cost metering and backoff'],
   ['lab', 'the strategy lab: fees, fills, settlement, and no strategy seeing the answer'],
   ['stock-lab', 'the ETF lab: next-open fills, costs per side, metric arithmetic, no peeking, no test data in the pick'],

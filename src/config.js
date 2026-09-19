@@ -302,6 +302,12 @@ module.exports = {
 
   // cadence (seconds)
   priceEvery: num('PRICE_EVERY_SEC', 15),
+  // The stall watchdog (src/watchdog.js). If the taker cycle or the maker's requote loop finishes
+  // no round for this many seconds, the desk logs what was in flight, journals it, saves and exits
+  // so the host restarts it (Fly's restart policy is "always"). A round is normally 15s and 2s and
+  // a slow one a few times that, so 300 is a loop that is stuck, not slow. 0 turns it off. In live
+  // mode it only reports: restarting under an order in flight is the operator's call.
+  watchdogSec: Math.max(0, num('WATCHDOG_SEC', 300)),
   sentimentEveryCycles: 4,
   // How long a pair is untouchable after an exit. Was hardcoded in KETT; it is a real knob now
   // because src/minds.js has to honour the same bar -- a mind that could re-enter a pair the

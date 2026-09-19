@@ -16,6 +16,9 @@ const { MAX_VENUE_DISAGREE } = require('./matcher');
 const { Brain } = require('./brain');
 const { Research } = require('./research');
 const { Ask } = require('./ask');
+const watchdog = require('./watchdog');
+
+const WATCHDOG_EVERY_MS = 15000;
 
 const AGENTS = [
   { key: 'BRAM', n: '01', role: 'PRICING', color: '#3b82f6' },
@@ -63,6 +66,7 @@ class Engine {
     this.recordTick = makeRecorder(cfg);
     this.probe = makeProbe(cfg);
     this.journal = makeJournal(cfg);
+    this.beat = { taker: Date.now(), maker: Date.now() };   // when each loop last finished a round
     this.maker = makeMakerDesk(cfg);
     this.whales = cfg.whaleWatch ? makeWhaleWatch(cfg) : null;   // advisory: never trades
     this.any = cfg.anyMarkets ? makeAnyMarket(cfg) : null;       // every category, not just games and the Fed
@@ -689,6 +693,12 @@ class Engine {
     // Kalshi's REST calls take turns from here on (src/http.js). Not in the constructor: tests
     // build engines, and nothing that never starts should be paced.
     http.paceHost(ks.BASE, this.cfg.kalshiGapMs);
+    // First of all, so that a startup which never finishes is caught too: the watchdog needs nothing
+    // the rest of start() builds.
+    if (this.cfg.watchdogSec > 0) {
+      this.beat.taker = this.beat.maker = this.wdLast = Date.now();
+      setInterval(() => this.watchdogCheck(), WATCHDOG_EVERY_MS);
+    }
     // per-series taker multipliers before anything prices: MLB bills at half, fourteen series at
     // zero, and a flat rate made the desk decline trades that were cheaper than it believed. One
     // call covers every series on the exchange; the per-series loop is the fallback if it fails.
@@ -707,27 +717,8 @@ class Engine {
     await this.step();
     setInterval(() => this.step().catch((e) => console.error(e)), this.cfg.priceEvery * 1000);
     // The maker gets its own loop. Riding the taker's 15s cycle every other tick meant a 30-second
-    // stale quote, which cost more than everything else on this desk combined. `running` is the
-    // guard: a slow round must never start a second one on top of itself.
-    let running = false;
-    setInterval(async () => {
-      if (running) return;
-      running = true;
-      const t0 = Date.now();
-      try { await this.maker.step(this); }
-      catch (e) { this.log('MAKR', 'OPS', null, `maker cycle error: ${String(e.message).slice(0, 110)}`); }
-      finally {
-        running = false;
-        this.lastMakerMs = Date.now() - t0;
-        // The first round after a start has to wait for the full universe scan (~20s) before
-        // there is anything to quote. That is expected, and warning about it made every deploy
-        // look like a latency problem.
-        const scanned = this.maker.blockedOnScan ? this.maker.blockedOnScan() : false;
-        if (!scanned && this.lastMakerMs > this.cfg.makerEverySec * 1000 && this.due('makr-slow', 300)) {
-          this.log('MAKR', 'OPS', null, `requote took ${(this.lastMakerMs / 1000).toFixed(1)}s, longer than the ${this.cfg.makerEverySec}s target · quotes are going stale`);
-        }
-      }
-    }, this.cfg.makerEverySec * 1000);
+    // stale quote, which cost more than everything else on this desk combined.
+    setInterval(() => this.makerRound(), this.cfg.makerEverySec * 1000);
     // Whale watch on its own timer too: a slow trade feed must never hold up pricing. step() guards
     // itself against overlapping and never throws.
     if (this.whales) setInterval(() => this.whales.step(this), this.cfg.whaleEverySec * 1000);
@@ -735,6 +726,53 @@ class Engine {
     if (this.any) this.any.start(this);
     setInterval(() => { if (this.dirty) this.save(); }, 10000);
   }
+  // One maker round. `makerRunning` is the guard: a slow round must never start a second one on
+  // top of itself -- which is also why one round that never returns silences the maker for good,
+  // and why the watchdog below watches the beat this leaves behind.
+  async makerRound() {
+    if (this.makerRunning) return;
+    this.makerRunning = true;
+    const t0 = Date.now();
+    try { await this.maker.step(this); }
+    catch (e) { this.log('MAKR', 'OPS', null, `maker cycle error: ${String(e.message).slice(0, 110)}`); }
+    finally {
+      this.makerRunning = false;
+      this.beat.maker = Date.now();
+      this.lastMakerMs = this.beat.maker - t0;
+      // The first round after a start has to wait for the full universe scan (~20s) before
+      // there is anything to quote. That is expected, and warning about it made every deploy
+      // look like a latency problem.
+      const scanned = this.maker.blockedOnScan ? this.maker.blockedOnScan() : false;
+      if (!scanned && this.lastMakerMs > this.cfg.makerEverySec * 1000 && this.due('makr-slow', 300)) {
+        this.log('MAKR', 'OPS', null, `requote took ${(this.lastMakerMs / 1000).toFixed(1)}s, longer than the ${this.cfg.makerEverySec}s target · quotes are going stale`);
+      }
+    }
+  }
+  // The stall watchdog (src/watchdog.js, config.watchdogSec). Called every WATCHDOG_EVERY_MS.
+  // Returns the stalled loops, or null. On a stall it says what was waiting on the network -- that
+  // is the evidence for what froze -- then saves and asks the host for a restart. `now` is
+  // injectable for the tests.
+  watchdogCheck(now = Date.now()) {
+    const limitMs = this.cfg.watchdogSec * 1000;
+    if (!(limitMs > 0)) return null;
+    const asleep = watchdog.wasSuspended({ now, last: this.wdLast, everyMs: WATCHDOG_EVERY_MS });
+    this.wdLast = now;
+    if (asleep) { this.beat.taker = this.beat.maker = now; return null; }
+    const stalled = watchdog.stalledLoops({ now, limitMs, beats: this.beat });
+    if (!stalled.length) return null;
+    const live = this.cfg.mode === 'live';
+    if (live && !this.due('watchdog-live', 600)) return stalled;
+    const held = http.inflight(now);
+    const queued = http.queued();
+    const idle = stalled.map((s) => `${s.loop} ${Math.round(s.idleMs / 1000)}s`).join(', ');
+    this.log('TESS', 'OPS', null, `WATCHDOG: no finished round in ${idle} (limit ${this.cfg.watchdogSec}s) · ${held.length} calls in flight, ${queued} queued for Kalshi · ${live ? 'live mode, not restarting' : 'saving and restarting'}`);
+    this.journal(this, 'WATCHDOG', { stalled, taking: !!this.stepping, making: !!this.makerRunning, inflight: held, queued, restarting: !live });
+    if (!live) { this.save(); this.exit(1); }
+    return stalled;
+  }
+  // Exit code 1 so Fly's restart policy (fly.toml [[restart]] "always") brings the desk back. The
+  // delay lets the log line and the journal write reach the disk and the pipe first.
+  exit(code) { setTimeout(() => process.exit(code), 250); }
   async step() {
     if (this.stepping) return;
     this.stepping = true;
@@ -775,7 +813,8 @@ class Engine {
       http.noteError(e);
       this.log('TESS', 'OPS', null, `cycle error: ${String(e.message).slice(0, 140)}`);
     } finally {
-      this.lastCycleMs = Date.now() - t0;
+      this.beat.taker = Date.now();
+      this.lastCycleMs = this.beat.taker - t0;
       // A cycle that outruns its own interval means the next tick is silently dropped by the
       // `stepping` guard. That used to happen invisibly; say so.
       if (this.lastCycleMs > this.cfg.priceEvery * 1000 && this.due('slow-cycle', 300)) {

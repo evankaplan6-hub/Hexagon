@@ -94,6 +94,29 @@ fly ssh console -C "node tools/fillcheck.js 24"    # the one number that matters
 fly ssh console -C "node tools/maker-report.js"
 ```
 
+## When the desk freezes
+
+On 2026-09-19 the taker cycle and the maker's requote loop stopped in the same second (15:32Z) and
+stayed stopped for over an hour. The process was up at 0% CPU, the whale feed and the any-market
+crawl kept logging, and from outside it looked like a quiet market. Both loops refuse to start a
+round on top of an unfinished one, so a single round that never returns silences its loop for good.
+
+`src/watchdog.js` now watches for it. Each loop leaves a beat when a round finishes (or throws); if
+either has none for `WATCHDOG_SEC` (300; 0 is off), the desk logs `WATCHDOG: no finished round in ...`,
+writes a `WATCHDOG` line to the journal, saves and exits 1. `fly.toml` sets `[[restart]] policy =
+"always"` so Fly starts it again (the default, on-failure with ten retries, would have left the box
+dead after the tenth stall). In live mode it only reports: restarting under an order in flight is
+the operator's call. A process that was asleep (a Mac lid) is given a fresh start, not restarted.
+
+The journal line is the evidence for what froze: `inflight` lists Kalshi and Polymarket calls
+started and not finished, oldest first, with their age against a 15s timeout, and `queued` counts
+calls still waiting for their turn. Old calls in flight mean a request that never timed out; none
+in flight and none queued mean something else awaited forever, and the cause is still to be found.
+
+```bash
+fly ssh console -C "grep WATCHDOG /data/journal-*.jsonl"     # has it fired?
+```
+
 ## Keeping the disk from filling
 
 The box's `/data` volume is 1 GB. The tick tape (`ticks-<Eastern date>.jsonl`) grows 35–62 MB a
