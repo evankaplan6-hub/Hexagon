@@ -349,16 +349,18 @@ You cannot see the news and must not pretend to. You see prices, books, times an
 move. Say what the price path shows and no more. A quiet turn that holds everything is a good turn.
 
 For each position you list, give a decision. Your commentary is one sentence for the activity log,
-specific enough that someone reading it a week later knows what you meant. Your note is at most 30
+specific enough that someone reading it a week later knows what you meant. In "about", list the id of
+every position your commentary talks about (usually one), so the log can name the market. Your note is at most 30
 characters for the floor screen, no punctuation at the end.`;
 
 const RIGO_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['note', 'commentary', 'decisions'],
+  required: ['note', 'commentary', 'about', 'decisions'],
   properties: {
     note: { type: 'string', description: 'At most 30 characters, for the floor screen.' },
     commentary: { type: 'string', description: 'One sentence for the activity log.' },
+    about: { type: 'array', items: { type: 'string' }, description: 'The positionId of each position the commentary is about.' },
     decisions: {
       type: 'array',
       description: 'One entry per position shown, or only the ones worth a call.',
@@ -436,10 +438,20 @@ function rigoApply(E, answer) {
   return out;
 }
 
+// Which open positions a commentary is about, for the log: the ids the mind named that are still
+// open (at most four), or the only position there is when it named none. Anything else it says is
+// dropped, so the log can only ever point at a real open position.
+function rigoAbout(E, answer) {
+  const rows = rigoRows(E), open = new Map(rows.map((r) => [r.pos.id, r.pos]));
+  const named = answer && Array.isArray(answer.about) ? [...new Set(answer.about.map(String))].filter((id) => open.has(id)) : [];
+  const ids = named.length ? named.slice(0, 4) : rows.length === 1 ? [rows[0].pos.id] : [];
+  return ids.map((id) => { const p = open.get(id); return { id: p.id, g: p.group || p.id, label: String(p.label || '') }; });
+}
+
 module.exports = {
   HOUSE,
   RIGO_MAX_AGE_MS,
   RIGO_MIN_CONVICTION,
-  RIGO: { persona: RIGO_PERSONA, schema: RIGO_SCHEMA, view: rigoView, apply: rigoApply },
+  RIGO: { persona: RIGO_PERSONA, schema: RIGO_SCHEMA, view: rigoView, apply: rigoApply, about: rigoAbout },
   ILSA: { persona: ILSA_PERSONA, schema: ILSA_SCHEMA, view: ilsaView, apply: ilsaApply },
 };

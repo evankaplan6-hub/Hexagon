@@ -93,7 +93,7 @@
       title = 'Recent fills';
       note = 'Maker and cross-venue entries and closes, newest first.';
       rows = fills.map((f) => `<li><div><b>${esc(fillName(f))}</b><small>${ago(f.at)} · ${f.source === 'maker' ? 'maker' : f.venue}</small></div>` +
-        `<span class="${f.side === 'buy' ? 'pos' : 'neg'}">${esc(f.action)} ${(+f.qty || 0).toLocaleString()}<small>at ${cc(f.px)} · ${money(f.qty * f.px)}${f.pnl == null ? '' : ` · ${signed(f.pnl)}`}</small></span></li>`);
+        `<span class="${f.side === 'buy' ? 'pos' : 'neg'}">${esc(f.action)} ${(+f.qty || 0).toLocaleString()}<small>at ${cc(f.px)} · ${fillMoney(f, f.qty * f.px)}</small></span></li>`);
     }
     const sorts = mobileInfo === 'holding' ? [['size', 'Largest'], ['pnl', 'Gainers'], ['loss', 'Losers'], ['value', 'Value'], ['name', 'Name']] : [['size', mobileInfo === 'quoting' ? 'Flow' : 'Size'], ['name', 'Name']];
     return `<section class="m-detail" id="mobile-detail"><div class="m-detail-head"><div><b>${title}</b><small>${note}</small></div>` +
@@ -663,6 +663,14 @@
     return m ? lead(OUTCOME(m), QUESTION(m)) : { head: fillName(f), tail: '' };
   };
   const fillHtml = (f, extra = '') => { const p = fillParts(f); return `<span>${esc(unellipsis(p.head))}</span>${p.tail ? `<i> · ${esc(unellipsis(p.tail))}</i>` : ''}${extra}`; };
+  // A trade that closes something (a maker sale, a maker buy that covers a short, a cross-venue close
+  // or settlement) is told by what it made or lost, green or red: what it was worth says little once
+  // it is over. A maker sale that opened a short made nothing yet, so it reads $0.00, uncoloured. A
+  // fill from before the desk recorded its profit keeps its value. `val` is what the fill was worth.
+  const closes = (f) => f.action === 'Sold' || f.action === 'Closed' || f.action === 'Settled'
+    || (f.source === 'maker' && Number.isFinite(f.pnl) && Math.abs(f.pnl) >= 0.005);
+  const fillMoney = (f, val) => (!closes(f) || !Number.isFinite(f.pnl) ? money(val)
+    : Math.abs(f.pnl) < 0.005 ? money(0) : `<span class="${f.pnl > 0 ? 'pos' : 'neg'}">${signed(f.pnl)}</span>`);
   function recentFills(M) {
     const making = (M.recent || []).map((f) => ({ ...f, source: 'maker', action: f.side === 'buy' ? 'Bought' : 'Sold', label: marketName(f.ticker, f) }));
     const crossing = (S.takerFills || []).map((f) => ({ ...f, source: 'taker', side: f.pnl == null || f.pnl >= 0 ? 'buy' : 'sell' }));
@@ -911,6 +919,8 @@
     }
   });
 
+  // the name of a position a log line is about (a bot's note carries them as `refs`)
+  const refName = (r) => { const t = lead(splitLabel(r.label).outcome, splitLabel(r.label).question); return t.head + (t.tail ? ` · ${t.tail}` : ''); };
   function renderFeed(log) {
     const rows = [], last = {};
     for (const e of log) {
@@ -923,6 +933,8 @@
     const list = $('feedlist'), top = list.scrollTop;
     list.innerHTML = rows.map(({ e, s }) => {
       const pl = e.kind === 'SETTLE' && e.pnl != null ? `<span class="fp ${e.pnl >= 0 ? 'pos' : 'neg'}">${signed(e.pnl)}</span>` : '';
+      // a note about a position that does not name it gets the name underneath
+      if (!s.sub && Array.isArray(e.refs) && e.refs.length) s = { ...s, sub: e.refs.map((r) => unellipsis(refName(r))).join('; ') };
       return `<li class="lv-${s.level}" style="--a:${agentColor(e.agent)}"><span class="ft">${hhmm(e.t)}</span><span class="fa" style="color:${agentColor(e.agent)}">${e.agent}</span>` +
         `<span class="fs">${cats(esc(s.text))}${s.sub && s.level !== 'quiet' ? `<small>${cats(esc(s.sub))}</small>` : ''}</span>${pl}</li>`;
     }).join('') || '<li class="lv-quiet"><span class="fs">Waiting for the first desk cycle</span></li>';
@@ -1067,7 +1079,7 @@
       `</div>` +
       `<div class="lf"><span class="lh">Last fill${lf ? ` · ${ago(lf.at)}` : ''}</span>` +
       (lf
-        ? `<span class="lx ${lf.side === 'sell' || lf.action === 'Sold' ? 'sell' : 'buy'}"><b>${esc(lf.action)} ${lf.qty}</b><span>at ${cc(lf.px)}</span><em>${money(lf.qty * lf.px)}</em></span><span class="ln fitw">${fillHtml(lf)}</span>`
+        ? `<span class="lx ${lf.side === 'sell' || lf.action === 'Sold' ? 'sell' : 'buy'}"><b>${esc(lf.action)} ${lf.qty}</b><span>at ${cc(lf.px)}</span><em>${fillMoney(lf, lf.qty * lf.px)}</em></span><span class="ln fitw">${fillHtml(lf)}</span>`
         : `<span class="ln">${M.fills ? `${M.fills} before the restart` : 'None yet'}</span>`) +
       `</div>` +
       // the taker's reach: markets matched on both venues, across every category
@@ -1884,7 +1896,11 @@
       const { head, tail } = (({ outcome, question }) => lead(outcome, question))(splitLabel(legs[0].label));
       return { arb: legs, key: legs[0].group || legs[0].id, name: head, question: tail, label: String(legs[0].label || ''), type: cap(String(legs[0].strategy || 'taker')),
         side: legs.length > 1 ? 'both' : legs[0].side, qty: legs[0].qty, value: r2(legs.reduce((a, p) => a + worth(p), 0)), pl: r2(legs.reduce((a, p) => a + (p.pnl || 0), 0)),
-        sides: legs.map((p) => `${venueName(p.venue)} ${p.side.toUpperCase()} ${money(worth(p), 0)}`).join(' + ') };
+        // under the name, the profit: first what a hedged arb is sure to make at settlement (a narrow
+        // board cuts the end of the line, so the number that matters most goes first), then what each
+        // side has made or lost at today's marks -- not what each side is worth
+        sides: (() => { const g = legs.length > 1 && (S.arbGroups || []).find((x) => x.id === legs[0].group); return g && g.settlementValue != null && Number.isFinite(g.lockedPnl) ? `Locks in <b class="${g.lockedPnl >= 0 ? 'pos' : 'neg'}">${signed(g.lockedPnl)}</b> · ` : ''; })() +
+          legs.map((p) => { const d = r2(p.pnl || 0); return `${venueName(p.venue)} ${esc(String(p.side).toUpperCase())} <b class="${d >= 0 ? 'pos' : 'neg'}">${signed(d)}</b>`; }).join(' + ') };
     });
   };
 
@@ -1922,7 +1938,7 @@
     const colBtn = (k, label) => `<button type="button" role="columnheader" aria-sort="${wallSortCol === k ? (wallSortDir === 'asc' ? 'ascending' : 'descending') : 'none'}" data-wcol="${k}" class="${wallSortCol === k ? 'on' : ''}">${label}${wallSortCol === k ? `<i>${arrow(wallSortDir)}</i>` : ''}</button>`;
     const head = `<div class="wcols" role="row">${colBtn('name', 'Name')}${colBtn('type', 'Type')}${colBtn('side', 'Side')}${colBtn('value', 'Value')}${colBtn('pl', 'P&amp;L')}</div>`;
     const row = (x) => x.arb
-      ? `<button class="wr arb" data-g="${esc(x.key)}" title="${esc(x.label)}"><span class="nm"><span class="l1 fitw"><span>${esc(x.name)}</span>${x.question ? `<i> · ${esc(x.question)}</i>` : ''}</span><small class="legs">${esc(x.sides)}</small></span><span class="ty">${esc(x.type)}</span>` +
+      ? `<button class="wr arb" data-g="${esc(x.key)}" title="${esc(x.label)}"><span class="nm"><span class="l1 fitw"><span>${esc(x.name)}</span>${x.question ? `<i> · ${esc(x.question)}</i>` : ''}</span><small class="legs">${x.sides}</small></span><span class="ty">${esc(x.type)}</span>` +
         `<span class="sd ${x.arb.length > 1 ? 'arb' : 'long'}">${x.arb.length > 1 ? 'BOTH' : x.arb[0].side.toUpperCase()} ${x.arb[0].qty}</span><span class="val">${money(x.value)}</span><span class="pl ${x.pl >= 0 ? 'pos' : 'neg'}">${signed(x.pl)}</span></button>`
       : `<button class="wr ${x.m.inv > 0 ? 'long' : 'short'}" data-m="${esc(x.m.ticker)}" title="${esc(x.m.title || '')}">` +
         `<span class="nm"><span class="l1 fitw"><span>${esc(x.name)}</span>${x.tail ? `<i> · ${esc(x.tail)}</i>` : ''}</span></span><span class="ty">Maker</span>${sideTag(x.m.inv)}<span class="val">${money(Math.abs(x.m.mark))}</span><span class="pl ${x.pl >= 0 ? 'pos' : 'neg'}">${signed(x.pl)}</span></button>`;
@@ -1978,7 +1994,7 @@
       const w = r2(p.qty * (p.mark ?? p.entry)), d = r2(w - p.cost);
       h += `<li>${venueName(p.venue)}: ${p.side.toUpperCase()} ${p.qty} at ${cc(p.entry)}. Paid ${money(p.cost)}, worth ${money(w)} now (<b class="${d >= 0 ? 'pos' : 'neg'}">${signed(d)}</b>).</li>`;
     }
-    h += `<li>Both sides together: paid ${money(cost)}, worth ${money(worth)} now.</li>`;
+    if (legs.length > 1) h += `<li>Both sides together: paid ${money(cost)}, worth ${money(worth)} now.</li>`;
     if (g && g.settlementValue != null) h += `<li>When it settles it pays ${money(g.settlementValue)}, locking in <b class="${g.lockedPnl >= 0 ? 'pos' : 'neg'}">${signed(g.lockedPnl)}</b>.</li>`;
     else if (g) h += `<li>The two sides don't line up (${esc(String(g.integrity).replace(/_/g, ' '))}), so the settlement value isn't certain.</li>`;
     return h + `</ul>`;
@@ -1993,9 +2009,16 @@
       seen.add(k); lines.push({ e, sx });
       if (lines.length >= 6) break;
     }
+    // A line about a position names it underneath (RIGO's "the gap is unchanged" says nothing about
+    // which market): a click opens the position, and Back comes back here. One that has closed since
+    // is still named, but there is nothing left to open.
+    const open = new Set((S.positions || []).map((p) => p.group || p.id));
+    const refs = (e) => (Array.isArray(e.refs) && e.refs.length ? `<span class="wrefs">${e.refs.map((r) => (open.has(r.g)
+      ? `<button class="wref" data-g="${esc(r.g)}" data-from="${esc(a.key)}" title="Open this position">${esc(unellipsis(refName(r)))} ›</button>`
+      : `<span class="wref gone" title="Closed since">${esc(unellipsis(refName(r)))}</span>`)).join('')}</span>` : '');
     return `<div class="wh"><button class="wback" data-back="1">‹ Back</button><span style="color:${a.color}">${esc(a.key)} · ${esc(cap(String(a.role).toLowerCase()))}</span></div>` +
       `<div class="wq">${esc(cap(ROLE[a.key] || ''))}</div>` +
-      (lines.length ? `<ol class="wlog">${lines.map(({ e, sx }) => `<li class="lv-${sx.level}"><span class="t">${hhmm(e.t)}</span><span>${cats(esc(sx.text))}</span></li>`).join('')}</ol>`
+      (lines.length ? `<ol class="wlog">${lines.map(({ e, sx }) => `<li class="lv-${sx.level}"><span class="t">${hhmm(e.t)}</span><span>${cats(esc(sx.text))}${refs(e)}</span></li>`).join('')}</ol>`
         : `<p class="wempty">Nothing logged yet.</p>`);
   }
 
@@ -2060,13 +2083,13 @@
         const groups = [];
         for (const f of recentFills(M)) {            // newest first; a run of the same maker trade is one line
           const g = groups[groups.length - 1];
-          if (f.source === 'maker' && g && g.source === 'maker' && g.ticker === f.ticker && g.side === f.side) { g.qty += f.qty; g.val += f.qty * f.px; }
+          if (f.source === 'maker' && g && g.source === 'maker' && g.ticker === f.ticker && g.side === f.side) { g.qty += f.qty; g.val += f.qty * f.px; g.pnl = r2(g.pnl + f.pnl); }
           else groups.push({ ...f, val: f.qty * f.px });
         }
         // two lines a trade: what happened and what it cost, then which market and when
         el.querySelector('.tbody').innerHTML = groups.length
           ? `<ol>${groups.map((g) => `<li class="${g.side}${sel && sel.at === g.at ? ' on' : ''}"${g.source === 'maker' ? ` data-t="${esc(g.ticker)}" data-at="${g.at}"` : ''}>` +
-              `<span class="act"><b>${esc(g.action)}</b> ${g.qty}</span><span class="px">${money(g.val)}</span>` +
+              `<span class="act"><b>${esc(g.action)}</b> ${g.qty}</span><span class="px">${fillMoney(g, g.val)}</span>` +
               `<span class="nm fitw" title="${esc(fillName(g))}">${fillHtml(g)}</span><span class="ago">${cc(g.val / g.qty)} · ${ago(g.at).replace(' ago', '').split(' ')[0]}</span></li>`).join('')}</ol>`
           : `<p class="none">${M.fills ? `${M.fills} fills before the last restart` : 'No fills yet'}</p>`;
         fitAll(el);
@@ -2111,12 +2134,13 @@
   $('wall').addEventListener('click', (ev) => {
     const b = ev.target.closest('button');
     if (!b) return;
-    if (b.dataset.back) sel = null;
+    // a position opened from a bot's page goes back to that bot, not to the home view
+    if (b.dataset.back) sel = sel && sel.from ? { kind: 'agent', key: sel.from } : null;
     else if (b.dataset.wcol) {
       if (wallSortCol === b.dataset.wcol) wallSortDir = wallSortDir === 'asc' ? 'desc' : 'asc';
       else { wallSortCol = b.dataset.wcol; wallSortDir = ['name', 'type', 'side'].includes(b.dataset.wcol) ? 'asc' : 'desc'; }
     }
-    else if (b.dataset.g) sel = sel && sel.kind === 'arb' && sel.key === b.dataset.g ? null : { kind: 'arb', key: b.dataset.g };
+    else if (b.dataset.g) sel = sel && sel.kind === 'arb' && sel.key === b.dataset.g ? null : { kind: 'arb', key: b.dataset.g, ...(b.dataset.from ? { from: b.dataset.from } : {}) };
     else if (b.dataset.m) sel = sel && sel.kind === 'market' && sel.key === b.dataset.m ? null : { kind: 'market', key: b.dataset.m };
     wallKey = '';
   });

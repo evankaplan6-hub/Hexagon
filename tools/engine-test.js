@@ -43,6 +43,18 @@ const position = (over = {}) => ({
 });
 
 (async () => {
+  group('a log line can say which positions it is about');
+  {
+    const E = engine(), log = Engine.prototype.log;
+    const quiet = console.log; console.log = () => {};
+    log.call(E, 'RIGO', 'RESEARCH', null, 'the gap has not moved', [{ id: 'p1', g: 'g1', label: 'test pair' }]);
+    log.call(E, 'RIGO', 'RESEARCH', null, 'nothing named', []);
+    log.call(E, 'HOLT', 'SCAN', null, 'as before');
+    console.log = quiet;
+    ok('the positions ride on the entry', JSON.stringify(E.state.log[2].refs) === JSON.stringify([{ id: 'p1', g: 'g1', label: 'test pair' }]), E.state.log[2]);
+    ok('an empty or missing list adds nothing, so every other entry is unchanged', !('refs' in E.state.log[1]) && !('refs' in E.state.log[0]), E.state.log.slice(0, 2));
+  }
+
   group('locked arbs have a settlement scorecard separate from liquidation marks');
   {
     const E = engine();
