@@ -1932,7 +1932,7 @@
   // A watchlist, not a fixed leaderboard: click a column to sort by it, click it again to flip
   // direction -- the same convention as a Finder list view or a TradingView watchlist, instead of
   // a fixed Biggest/Gainers/Losers choice.
-  let wallKey = '', tapeKey = '', clockTxt = '', wallSortCol = 'pl', wallSortDir = 'desc';
+  let wallKey = '', tapeKey = '', tapeHtml = '', clockTxt = '', wallSortCol = 'pl', wallSortDir = 'desc';
   const sideTag = (inv) => `<span class="sd ${inv > 0 ? 'long' : 'short'}">${inv > 0 ? 'LONG' : 'SHORT'} ${Math.abs(inv)}</span>`;
   const nameOf = (m) => String(lead(OUTCOME(m), QUESTION(m)).head || m.ticker);
   // Every row is { name, type, value, pl }: a maker market, or one cross-venue position.
@@ -2193,7 +2193,10 @@
       // The clock used to hang in a case of its own above this board, a strip of glass with one
       // number in it. It is this board's header now; the header and the list are built once and
       // the list is refilled, so the clock ticking does not rebuild the trades under it.
-      if (!el.firstChild) el.innerHTML = '<div class="th"><span>Recent fills</span><span class="tclock"></span></div><div class="tbody"></div>';
+      // The list element itself is built once and only its rows are replaced: a scrolling list that
+      // is thrown away mid-flick stops dead under the finger, and its offset goes with it.
+      if (!el.firstChild) el.innerHTML = '<div class="th"><span>Recent fills</span><span class="tclock"></span></div>' +
+        '<div class="tbody"><ol></ol><p class="none" hidden></p></div>';
       if (`${frameSeq}|${sel && sel.at}` !== tapeKey) {
         tapeKey = `${frameSeq}|${sel && sel.at}`;
         const groups = [];
@@ -2203,14 +2206,26 @@
           else groups.push({ ...f, val: f.qty * f.px });
         }
         // two lines a trade: what happened and what it cost, then which market and when
-        el.querySelector('.tbody').innerHTML = groups.length
-          ? `<ol>${groups.map((g) => `<li class="${g.side}${sel && sel.at === g.at ? ' on' : ''}"${g.source === 'maker' ? ` data-t="${esc(g.ticker)}" data-at="${g.at}"` : ''}>` +
+        const ol = el.querySelector('ol'), none = el.querySelector('.none');
+        // Rows are replaced whenever a fill's wording changes -- "3m" becoming "4m" is enough. The
+        // offset is kept, and when a newer fill has been pushed in above it moves by however much
+        // taller the list got, so the rows under the pointer stay where they were.
+        const wasTop = ol.scrollTop, wasHeight = ol.scrollHeight;
+        const html = groups.length
+          ? `${groups.map((g) => `<li class="${g.side}${sel && sel.at === g.at ? ' on' : ''}"${g.source === 'maker' ? ` data-t="${esc(g.ticker)}" data-at="${g.at}"` : ''}>` +
               `<span class="act"><b>${esc(g.action)}</b> ${g.qty}</span><span class="px">${fillMoney(g, g.val)}</span>` +
-              `<span class="nm fitw" title="${esc(fillName(g))}">${fillHtml(g)}</span><span class="ago">${cc(g.val / g.qty)} · ${ago(g.at).replace(' ago', '').split(' ')[0]}</span></li>`).join('')}</ol>`
-          : `<p class="none">${M.fills ? `${M.fills} fills before the last restart` : 'No fills yet'}</p>`;
-        fitAll(el);
-        const ol = el.querySelector('ol');
-        el.classList.toggle('more', !!ol && ol.scrollHeight > ol.clientHeight + 2);
+              `<span class="nm fitw" title="${esc(fillName(g))}">${fillHtml(g)}</span><span class="ago">${cc(g.val / g.qty)} · ${ago(g.at).replace(' ago', '').split(' ')[0]}</span></li>`).join('')}`
+          : '';
+        if (html !== tapeHtml) {
+          tapeHtml = html;
+          ol.innerHTML = html;
+          ol.hidden = !groups.length;
+          none.hidden = !!groups.length;
+          if (!groups.length) none.textContent = M.fills ? `${M.fills} fills before the last restart` : 'No fills yet';
+          fitAll(el);
+          if (wasTop) ol.scrollTop = wasTop + Math.max(0, ol.scrollHeight - wasHeight);
+          el.classList.toggle('more', ol.scrollHeight > ol.clientHeight + 2);
+        }
       }
       const halted = S.halt || M.halted, on = !halted && M.quoting > 0;
       const t = new Date(S.now).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
