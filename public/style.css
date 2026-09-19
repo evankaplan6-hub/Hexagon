@@ -161,18 +161,19 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
   /* The drawing width has a floor (ROOM_W_MIN), so a box taller than the narrowest room shape
      letterboxes again -- top and bottom this time, which is what a phone was getting. Cap the box
      at that shape and give the height back to the feed, which can use it. */
-  max-height: calc((100vw - 28px) / 1.79); }
-@media (min-width: 900px) { body.ask-open .room { max-height: calc((100vw - var(--askw) - 28px) / 1.79); } }
+  max-height: calc((100vw - 28px) / 1.9); }
+@media (min-width: 900px) { body.ask-open .room { max-height: calc((100vw - var(--askw) - 28px) / 1.9); } }
 /* Portrait: the room has hit that cap and there is height left over, so the feed takes it rather
    than leaving a hole under the floor. Landscape keeps the feed a fixed band and gives the room
    everything else. */
-@media (max-aspect-ratio: 1/1) { #feed { flex: 1 1 auto; height: auto; min-height: clamp(112px, 16vh, 170px); } }
+@media (max-aspect-ratio: 1/1) { #feed { flex: 1 1 auto; height: auto; min-height: clamp(150px, 24vh, 280px); } }
 /* The feed's band is the room's size dial, and it was set too generously. The room is drawn at a
    fixed height in drawing units, so its scale is simply the pixel height it is handed -- every pixel
    the feed gives back makes the whole cast bigger. Coming down from 250 to 200 on a laptop makes the
    bots 8% larger and, because a taller box is a less extreme shape, closes most of the empty floor
    that was left beside the desks. The feed scrolls and loses nothing but two rows at rest. */
-#feed { flex: 0 0 auto; height: clamp(112px, 16vh, 170px); display: flex; flex-direction: column; font-size: 14px; font-family: var(--sans);
+/* 2026-09-19: the desks were shrunk (ROOM_H/WALL_H in app.js) and the feed took the height back. */
+#feed { flex: 0 0 auto; height: clamp(150px, 24vh, 280px); display: flex; flex-direction: column; font-size: 14px; font-family: var(--sans);
   background: #070a10; border-top: 1px solid #1a2233; border-radius: 0 0 7px 7px; overflow: hidden; }
 #feed .fh { flex: none; padding: .7em 1em .4em; font: 700 .72em/1.2 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: #6b7384; }
 #feedlist { flex: 1 1 auto; min-height: 0; list-style: none; margin: 0; padding: 0 .6em .5em; overflow-y: auto; overscroll-behavior: contain;
@@ -226,17 +227,26 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #status .st.good { color: var(--green); } #status .st.warn { color: var(--amber); } #status .st.bad { color: var(--red); }
 #status p { margin: .55em 0 0; }
 #status .alarm { color: var(--brd-bright); font-weight: 600; }
-/* A label and its figure, not a sentence. The label column is as wide as its widest word and no
-   wider, so the figures all start on the same line down the board. */
-#status .sf { display: grid; grid-template-columns: max-content 1fr; gap: .5em .8em; margin: .7em 0 0; }
-#status .sf > div { display: contents; }
-#status .sf dt { font: 600 .72em/1.5 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--brd-label); }
-#status .sf dd { margin: 0; color: var(--brd-bright); font-weight: 600; min-width: 0; }
-#status .sf dd .in { color: #8892a3; font-weight: 400; }
-#status .sf dd .off { color: #8892a3; font-weight: 400; }
-#status .sf dd small { display: block; font-size: .85em; font-weight: 400; color: #8892a3; }
+/* Two figures, each set large over a small word, side by side in hairline tiles. */
+#status .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: .45em; margin: .8em 0 0; }
+#status .tiles > div { display: flex; flex-direction: column; gap: .3em; min-width: 0; padding: .55em .6em .5em;
+  border: 1px solid var(--brd-rule); border-radius: 6px; background: rgba(140,168,210,.035); }
+#status .tiles b { font: 700 1.45em/1 var(--sans); letter-spacing: -.02em; color: var(--brd-bright); }
+#status .tiles span { font: 500 .74em/1.2 var(--sans); color: #8892a3; }
+#status .tiles .off b { color: #5d6678; }
+/* the last fill: a small heading, one line of what happened, one line of which market */
+#status .lf, #status .pairs { display: flex; flex-direction: column; gap: .22em; margin: .8em 0 0; min-width: 0; }
+#status .lh { font: 600 .64em/1.2 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--brd-label); }
+#status .lx { display: flex; align-items: baseline; gap: .4em; color: #aeb6c4; font-size: .92em; white-space: nowrap; min-width: 0; }
+#status .lx > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#status .lx b { font-weight: 700; color: var(--brd-bright); }
+#status .lx.buy b { color: #6ee7a0; } #status .lx.sell b { color: #fca5a5; }
+#status .lx em { margin-left: auto; font: 600 .92em var(--mono); font-style: normal; color: #d5dae3; }
+#status .ln { font-size: .82em; color: #8892a3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#status .pairs > span:last-child { font-size: .86em; color: #8892a3; }
+#status .pairs b { font-weight: 700; color: var(--brd-bright); }
 #status .dim { margin-top: auto; padding-top: .5em; border-top: 1px solid var(--brd-rule);
-  font: .68em/1.5 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--brd-label); }
+  font: .62em/1.5 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--brd-label); }
 #status.compact .extra, #status.compact .dim { display: none; }
 
 /* ---- alert: the pill in the floor's title bar opens the decision panel ---- */
@@ -305,31 +315,29 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #wall .wh span:first-child { color: #9aa4ba; }
 #wall .wh b.pos, #wall .wh b.neg { margin-right: .55em; font-weight: 700; }
 #wall .wback { font: 600 1em var(--mono) !important; letter-spacing: .08em; color: #9cc3f0 !important; }
-#wall .wbig { flex: none; margin-top: .25em; font: 800 2.5em/1.05 var(--sans); letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
-#wall .wsub { flex: none; margin: .2em 0 0; font-size: .75em; color: var(--brd-label);
-  letter-spacing: .08em; text-transform: uppercase; }
-/* the two facts under the number: banked, and what is still open. A label above its figure reads
-   faster than a sentence of them separated by dots. */
-#wall .wstats { flex: none; display: flex; flex-wrap: wrap; gap: .3em 1.6em; margin: .6em 0 .5em; }
-#wall .wstats div { display: flex; flex-direction: column; gap: .2em; }
-/* stacked under a tall narrow number there is room for a label over its figure; in the shallow
-   band there is not, and two lines of chrome are two positions that no longer fit */
-#wall:not(.wide) .wstats { gap: .25em 1.2em; margin: .45em 0 .3em; }
-#wall:not(.wide) .wstats div { flex-direction: row; align-items: baseline; gap: .45em; }
+#wall .wbig { flex: none; margin-top: .1em; font: 800 2.3em/1.05 var(--sans); letter-spacing: -.03em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+#wall .wsub { flex: none; margin: .3em 0 0; font-size: .74em; color: var(--brd-label); }
+/* the split under the number: a two-line statement, label left and figure right, on hairlines */
+#wall .wstats { flex: none; display: flex; flex-direction: column; margin: .8em 0 .4em; font-size: .92em; }
+#wall .wstats div { display: flex; justify-content: space-between; align-items: baseline; gap: .8em; padding: .42em 0; border-top: 1px solid var(--brd-rule); }
+#wall .wstats div:last-child { border-bottom: 1px solid var(--brd-rule); }
+/* stacked above the list there is no height for a statement: the two figures sit on one line */
+#wall:not(.wide) .wstats { flex-direction: row; gap: 1.4em; margin: .45em 0 .3em; }
+#wall:not(.wide) .wstats div { justify-content: flex-start; gap: .45em; padding: 0; border: 0; }
 /* Too short to stack a hero digit, its label and a breakdown above the list and still show any
    positions: drop to one line -- the number alone, no subtitle, no Maker/Cross-venue split (both
    are still one click away by opening a position or reading the header stats elsewhere). */
 #wall.compact .wnum { display: flex; align-items: baseline; gap: .5em; }
 #wall.compact .wbig { margin-top: 0; font-size: 1.3em; }
 #wall.compact .wsub, #wall.compact .wstats { display: none; }
-#wall .wstats dt { font: 600 .68em/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--brd-label); }
+#wall .wstats dt { font: 500 .8em/1 var(--sans); color: #8892a3; }
 #wall .wstats dd { margin: 0; font: 600 .95em/1 var(--mono); color: #d5dae3; }
 /* Wide and shallow: the number takes a column of its own and the book takes the rest, instead of
    the book being squeezed into whatever height is left under the number. */
 #wall .wbody { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; margin-top: .5em; }
-#wall.wide .wbody { flex-direction: row; gap: 1.6em; align-items: stretch; }
+#wall.wide .wbody { flex-direction: row; gap: 1.2em; align-items: stretch; }
 #wall .wnum { flex: none; }
-#wall.wide .wnum { width: 26%; max-width: 15em; min-width: 8em; padding-right: 1.4em; border-right: 1px solid var(--brd-rule); }
+#wall.wide .wnum { width: 22%; max-width: 13em; min-width: 8em; padding-right: 1.2em; border-right: 1px solid var(--brd-rule); }
 /* min-height:0 matters here specifically: in the tall (not .wide) layout #wall.wbody is a column
    flex container, so wbook's height is its main axis and a flex item's default min-height is its
    content size. Without this it never shrank to the space actually left for it, so it overflowed
@@ -340,7 +348,7 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
    click the active one again to flip the arrow. Type sorts maker rows apart from arbs; Side groups long, short and both. */
 /* Same font-size as a row (.88em), so the em-sized columns, gap and padding come out the same width
    and each heading sits over its column; the labels are made smaller one level down. */
-#wall .wcols { flex: none; display: grid; grid-template-columns: 1fr 4.6em 6em 5.2em 5.4em; gap: .9em; align-items: center;
+#wall .wcols { flex: none; display: grid; grid-template-columns: minmax(0, 1fr) 3.8em 5.4em 5em 5.2em; gap: .7em; align-items: center;
   padding: 0 .35em .5em .75em; margin-bottom: .2em; border-bottom: 1px solid var(--brd-rule);
   font: 600 .88em/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--brd-label); }
 #wall .wcols > * { font-size: .91em; }
@@ -349,11 +357,13 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #wall .wcols button.on { color: #dceaff; }
 #wall .wcols button[data-wcol="pl"], #wall .wcols button[data-wcol="value"] { justify-content: flex-end; text-align: right; }
 #wall .wcols i { font-style: normal; font-size: .9em; }
+#wall.narrow .ty, #wall.narrow .wcols [data-wcol="type"] { display: none; }
+#wall.narrow .wcols, #wall.narrow .wr { grid-template-columns: minmax(0, 1fr) 5.4em 5em 5.2em; }
 #wall .ty { font: 500 .78em var(--mono); color: var(--brd-label); white-space: nowrap; }
 #wall .val { font: 500 .92em var(--mono); text-align: right; color: #aeb6c4; }
 #wall .wlist { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #243047 transparent; }
 /* A position is a row with a side: the tint down its left edge says long or short before the words do. */
-#wall .wr { position: relative; display: grid; grid-template-columns: 1fr 4.6em 6em 5.2em 5.4em; gap: .9em; align-items: first baseline; width: 100%;
+#wall .wr { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 3.8em 5.4em 5em 5.2em; gap: .7em; align-items: first baseline; width: 100%;
   padding: .26em .35em .26em .75em; font-size: .88em; border-bottom: 1px solid var(--brd-rule); border-radius: 5px; }
 #wall .wr::before { content: ''; position: absolute; left: 0; top: .4em; bottom: .4em; width: 2px; border-radius: 2px; background: var(--brd-rule2); }
 #wall .wr.long::before { background: rgba(34,197,94,.65); }
@@ -394,42 +404,34 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
    rest of the row is the same body type as every other board. */
 #tape { position: absolute; z-index: 1; pointer-events: auto; box-sizing: border-box; padding: .55em .65em; display: flex; flex-direction: column;
   font-family: var(--sans); color: var(--brd-body); overflow: hidden; font-variant-numeric: tabular-nums; }
-#tape .th { flex: none; display: flex; justify-content: space-between; gap: .6em; padding-bottom: .45em;
+#tape .th { flex: none; display: flex; justify-content: space-between; align-items: center; gap: .6em; padding: .1em .1em .5em;
   border-bottom: 1px solid var(--brd-rule);
-  font: 600 .72em/1 var(--mono); letter-spacing: .16em; text-transform: uppercase; color: var(--brd-label); }
-#tape .th span:first-child { color: #86efac; }
+  font: 600 .66em/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: #86efac; }
+#tape .tbody { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 #tape ol { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; list-style: none; margin: 0; padding: 0; }
-#tape li { position: relative; display: grid; grid-template-columns: 1fr auto; column-gap: .5em; align-items: first baseline;
-  padding: .34em .3em .34em .6em; border-bottom: 1px solid var(--brd-rule); }
-#tape li::before { content: ''; position: absolute; left: 0; top: .32em; bottom: .32em; width: 2px; border-radius: 2px; }
+#tape li { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: .6em; row-gap: .12em; align-items: baseline;
+  padding: .42em .3em .42em .65em; border-bottom: 1px solid var(--brd-rule); }
+#tape li::before { content: ''; position: absolute; left: 0; top: .4em; bottom: .4em; width: 2px; border-radius: 2px; }
 #tape li.buy::before { background: rgba(34,197,94,.6); }
 #tape li.sell::before { background: rgba(239,68,68,.6); }
-#tape .act { font-size: .92em; color: var(--brd-bright); font-weight: 600; }
+#tape .act { font-size: .9em; color: var(--brd-bright); font-weight: 600; white-space: nowrap; }
 #tape .act b { font-weight: 700; }
+
 #tape li.buy .act b { color: #6ee7a0; } #tape li.sell .act b { color: #fca5a5; }
-#tape .px { font: 600 .88em var(--mono); color: #d5dae3; text-align: right; }
-#tape .nm { font-size: .78em; color: #79839a; }
-#tape .ago { font: .7em var(--mono); color: #5a6478; text-align: right; }
-#tape .ago b { font-weight: 600; color: #aeb6c4; }
+#tape .px { font: 600 .86em var(--mono); color: #d5dae3; text-align: right; }
+#tape .nm { font-size: .78em; color: #79839a; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#tape .ago { font: .7em var(--mono); color: #5a6478; text-align: right; white-space: nowrap; }
+/* the clock in the header: minutes are the fact, seconds the pulse */
+#tape .tclock { display: flex; align-items: baseline; gap: .35em; letter-spacing: 0; text-transform: none; }
+#tape .tclock b { font: 600 1.55em/1 var(--mono); color: #99a3b7; font-variant-numeric: tabular-nums; }
+#tape .tclock b .sec { color: #59627a; }
+#tape .tclock b.on { color: #34d399; } #tape .tclock b.on .sec { color: rgba(52,211,153,.55); }
+#tape .tclock small { font: 600 .8em/1 var(--mono); letter-spacing: .12em; color: #59627a; }
 /* A scrolling board that ends mid-row looks broken rather than long. When there is more below,
    the last strip fades -- set by placeBoards, which is the only place that knows it overflows. */
 #tape.more ol, #wall.more .wlist { -webkit-mask-image: linear-gradient(#000 calc(100% - 1.5em), transparent);
   mask-image: linear-gradient(#000 calc(100% - 1.5em), transparent); }
 #tape .none { color: #5a6478; text-align: center; margin: auto 0; font-size: .9em; }
-/* The clock: minutes are the fact, seconds are the pulse, so the seconds sit a shade back.
-   align-items must stay CENTRE. Aligning the row on its baseline instead lines the meridiem up
-   with the numerals nicely and stops centring the pair in the box at all -- the clock sits high
-   in its case, which is what it was doing. */
-#clock { position: absolute; z-index: 1; display: flex; align-items: center; justify-content: center; }
-#clock b { font: 600 1em/1 var(--mono); color: #99a3b7; font-variant-numeric: tabular-nums; letter-spacing: .01em; }
-#clock b .sec { color: #59627a; }
-#clock b.on { color: #34d399; } #clock b.on .sec { color: rgba(52,211,153,.55); }
-/* The meridiem sits beside the time but takes no width in the row, so what gets centred in the
-   case is the clock face itself. Laid out normally it pushed the numerals a tenth of the board
-   to the left: the pair was centred, the time was not. Keep align-self at centre -- ending it
-   at the foot of the box is what dropped it onto a line of its own. */
-#clock small { width: 0; transform: translateX(.4em); overflow: visible; white-space: nowrap; align-self: center;
-  font: 600 .42em/1 var(--mono); letter-spacing: .16em; color: #59627a; }
 #wall .wr .nm i { font-style: normal; color: var(--brd-label); font-size: .85em; }
 #wall .wrecap { flex: none; list-style: none; margin: .7em 0 0; padding: .55em 0 0; border-top: 1px solid var(--brd-rule); font-size: .92em; color: #c9cfd9; }
 #wall .wrecap li { padding: .24em 0; }
@@ -463,7 +465,7 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 .pnl .seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 999px;
   background: rgba(255,255,255,.035); border: 1px solid var(--brd-rule2); }
 /* #wall button resets every button on the wall screen, so these need the id to win there too */
-.pnl .seg button, #wall .pnl .seg button { font: 600 .68em/1 var(--sans); color: #7a8497; padding: .34em .55em; border-radius: 999px; }
+.pnl .seg button, #wall .pnl .seg button { font: 600 .82em/1 var(--sans); color: #7a8497; padding: .36em .5em; border-radius: 999px; }
 .pnl .seg button.on, #wall .pnl .seg button.on { background: #212b3c; color: var(--brd-bright);
   box-shadow: inset 0 1px 0 rgba(255,255,255,.05); }
 .pnl .seg button:hover:not(.on), #wall .pnl .seg button:hover:not(.on) { color: #c9cfd9; }
@@ -475,10 +477,13 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 .pnl .ctype svg { display: block; }
 .pnl .cx ~ .cx { margin-left: 0; }
 /* the candle size: a button that cycles on the small chart, a row of buttons on the large one */
-.pnl .cint { font: 600 .68em/1 var(--mono) !important; padding: .3em .4em !important; letter-spacing: 0; }
-.pnl .cint-seg { margin-left: auto; }
-.pnl .cint-seg ~ .cx { margin-left: .5em; }
-.pnl .cint-seg button { padding: .3em .55em; }
+/* ranges and candle size share the bottom row */
+.pnl .cb { flex-wrap: wrap; row-gap: .35em; }
+.pnl .cint-sel { font: 600 .82em/1 var(--sans); color: var(--brd-bright); background: rgba(255,255,255,.035);
+  border: 1px solid var(--brd-rule2); border-radius: 999px; padding: .3em .5em; cursor: pointer; }
+.pnl .cint-sel option { background: #0b0f17; color: #d5dae3; }
+.pnl .cint-sel:hover { border-color: #3a4560; }
+.pnl .seg button, #wall .pnl .seg button { white-space: nowrap; }
 /* the headline: what it is worth now, and how far that has moved over the range */
 .pnl .chead { flex: none; display: flex; align-items: baseline; gap: .6em; margin: .4em 0 .05em; min-width: 0; overflow: hidden; }
 .pnl .cv { font: 700 1.5em/1 var(--mono); letter-spacing: -.02em; }

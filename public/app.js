@@ -205,12 +205,17 @@
   // The wall used to take 150 of 262 units and the seven desks shared the 112 below it, which is the
   // whole reason the cast was drawn so small. The wall is 118 now: the boards on it are HTML text and
   // lose nothing by being shorter, and every unit the floor gains goes into the size of the bots.
-  const ROOM_H = 302, WALL_H = 152, SIDE_W = 112;
+  // 2026-09-19: the floor gave 40 units back to the wall. The desks were the biggest thing in the
+  // room and the boards -- the part with the words on it -- were squeezed around them; the bots are
+  // smaller now, the boards and the P&L stand are larger, and the feed under the room is taller.
+  const ROOM_H = 282, WALL_H = 172, SIDE_W = 120;
+  // the deepest the desks can be: back row, front row and the front nametag take 4 + 101 units per SEAT
+  const SEAT_MAX = (ROOM_H - WALL_H - 4) / 101;
   let L = null;
   function layout(RW) {
     if (L && L.RW === RW) return L;
     // the desks live between the P&L stand on the left and the server rack on the right
-    const bandL = 132, bandR = RW - 46, band = bandR - bandL, gap = 18;
+    const bandL = 176, bandR = RW - 40, band = bandR - bandL, gap = 16;
     // How big a desk MAY be is a question about HEIGHT, not width. The back row, the front row and
     // the front row's nametag all have to fit in the 150 units under the wall, and 1.45 is where the
     // nametag reaches the floor line -- so past a certain width the desks stop growing no matter how
@@ -219,7 +224,7 @@
     // huddle in the middle of an empty plain. The width the seats cannot use goes into the gap
     // between them instead, up to half a desk, and then stops -- seven desks scattered to the far
     // corners is the same mistake in the other direction.
-    const SEAT = Math.max(0.95, Math.min(1.45, (band - 3 * gap) / 256));
+    const SEAT = Math.max(0.8, Math.min(SEAT_MAX, (band - 3 * gap) / 256));
     const dw = 64 * SEAT, pitch = Math.min(dw * 1.5, Math.max(dw + gap, (band - dw) / 3));
     // The back row sits a little tighter than the front, for perspective -- but 0.94 of a pitch that
     // is already at its minimum is not perspective, it is two desks touching: the back row was down
@@ -241,15 +246,15 @@
       // than the row it is in.
       cell: [0, 1, 2].map(() => Math.min(72, backPitch / SEAT - 2)).concat([0, 1, 2, 3].map(() => Math.min(72, pitch / SEAT - 2))),
       status: { x: 8, y: 6, w: SIDE_W, h: WALL_H - 26 },
-      clock:  { x: RW - SIDE_W - 8, y: 6, w: SIDE_W, h: 22 },
-      tape:   { x: RW - SIDE_W - 8, y: 32, w: SIDE_W, h: WALL_H - 52 },
+      // the clock is the fill board's header now: one board, not a case with a clock in it
+      tape:   { x: RW - SIDE_W - 8, y: 6, w: SIDE_W, h: WALL_H - 26 },
       // the glass stops 20 units short of the floor line: that strip is where the back row's bubbles
       // go, and it is the only reason a bubble can no longer cover the number it is talking about
-      screen: { x: 134, y: 2, w: RW - 268, h: WALL_H - 26 },
+      screen: { x: SIDE_W + 18, y: 2, w: RW - 2 * SIDE_W - 36, h: WALL_H - 26 },
       // the stand starts just under the wall: the 24 units above it were empty floor that no
       // desk can use (the desks start at bandL), and the plot is the one board that wants height
-      chart:  { x: 4, y: WALL_H + 10, w: 124, h: ROOM_H - WALL_H - 14 },
-      rack:   { x: RW - 40, y: WALL_H + 38, w: 26, h: 60 },
+      chart:  { x: 4, y: WALL_H + 6, w: bandL - 10, h: ROOM_H - WALL_H - 10 },
+      rack:   { x: RW - 34, y: WALL_H + 18, w: 26, h: 60 },
     };
     return L;
   }
@@ -474,9 +479,7 @@
     glow(ctx, VPX, gy + 16, Math.max(120, gw * 0.4), '#1e4e8a', 0.18);              // the screen lighting itself
     px(ctx, VPX - 3, ws.y + ws.h, 6, 5, '#141b28'); px(ctx, VPX - 9, ws.y + ws.h + 3, 18, 2, '#0d1420');   // wall mount
 
-    // ---- clock + the fill tape (right): boards drawn here, words laid over them (placeBoards)
-    panel(ctx, L.clock.x, L.clock.y, L.clock.w, L.clock.h, '#080c14', '#243047');
-    clockBox = L.clock;
+    // ---- the fill tape, clock in its header (right): boards drawn here, words laid over them (placeBoards)
     panel(ctx, L.tape.x, L.tape.y, L.tape.w, L.tape.h, '#060f0a', '#1e4a2c');
     scanlines(ctx, L.tape.x + 1, L.tape.y + 1, L.tape.w - 2, L.tape.h - 2, 0.12);
     tapeBox = L.tape;
@@ -619,7 +622,7 @@
   // The bots move when their desk runs; these say WHY, in sentences a person can read from a chair.
   // Everything here is HTML laid over the canvas: bubbles above the bots, the feed on the ledge, and
   // the alert in the floor's title bar. Positions come from the same drawing coordinates as the art.
-  let seats = [], statusBox = null, wallBox = null, tapeBox = null, clockBox = null, chartBox = null;
+  let seats = [], statusBox = null, wallBox = null, tapeBox = null, chartBox = null;
   let frameSeq = 0;           // bumps on every SSE frame, so the boards rebuild only when data moves
   let seenKeys = null, feedHead = '';
   const said = {};        // agent -> { text, sub, level, until }   the bubble currently showing
@@ -651,10 +654,10 @@
   // land inside a tag or an entity, and the span it inserts is ours.
   const cats = (html) => String(html).replace(CAT_RE, (m, pre, w) =>
     `${pre}<span class="cat" role="img" aria-label="${w}" title="${w}">${CAT_EMOJI[w]}</span>`);
-  const marketName = (tk) => { const m = byTicker(S.maker || {}, tk); return (m && (OUTCOME(m) || QUESTION(m))) || tk.replace(/^KX/, ''); };
-  const fillName = (f) => f.label || (f.ticker ? marketName(f.ticker) : 'Unknown market');
+  const marketName = (tk, f) => { const m = byTicker(S.maker || {}, tk) || (f && f.title ? f : null); return (m && (OUTCOME(m) || QUESTION(m))) || tk.replace(/^KX/, ''); };
+  const fillName = (f) => f.label || (f.ticker ? marketName(f.ticker, f) : 'Unknown market');
   function recentFills(M) {
-    const making = (M.recent || []).map((f) => ({ ...f, source: 'maker', action: f.side === 'buy' ? 'Bought' : 'Sold', label: marketName(f.ticker) }));
+    const making = (M.recent || []).map((f) => ({ ...f, source: 'maker', action: f.side === 'buy' ? 'Bought' : 'Sold', label: marketName(f.ticker, f) }));
     const crossing = (S.takerFills || []).map((f) => ({ ...f, source: 'taker', side: f.pnl == null || f.pnl >= 0 ? 'buy' : 'sell' }));
     return [...making, ...crossing].sort((a, b) => b.at - a.at);
   }
@@ -1029,7 +1032,7 @@
     const el = $('status'), M = S.maker || {};
     Object.assign(el.style, { left: `${X(statusBox.x)}px`, top: `${Y(statusBox.y)}px`, width: `${statusBox.w * k}px`, height: `${statusBox.h * k}px` });
     // on a small window the board cannot hold every line; keep state, what it is doing, and the last fill
-    el.classList.toggle('compact', statusBox.h * k < 150);
+    el.classList.toggle('compact', statusBox.h * k < 230);
     const halted = S.halt || M.halted, working = !halted && M.quoting > 0, gone = stale();
     const [state, cls] = gone ? ['No signal', 'bad'] : halted ? ['Stopped', 'bad'] : working ? ['Working', 'good'] : ['Idle', 'warn'];
     const nHeld = (M.markets || []).filter((m) => m.inv).length;
@@ -1042,21 +1045,25 @@
     // market name of its own on the fill line -- they wrapped to nine lines and the board answered
     // by shrinking its own type to 11px. A label and its figure wrap far less than a sentence
     // saying the same thing, and the labels give the eye somewhere to land.
-    const row = (k, v, cls) => `<div class="${cls || ''}"><dt>${k}</dt><dd>${v}</dd></div>`;
+    // 2026-09-19: the label-and-sentence grid wrapped every figure onto two or three lines. Now two
+    // figures set large with a word under each, the last fill as one line plus its market, and the
+    // standing facts as a footer.
+    const tile = (v, label, off) => `<div class="${off ? 'off' : ''}"><b>${v}</b><span>${label}</span></div>`;
+    const am = S.anyMarket && S.anyMarket.enabled ? S.anyMarket : null;
     const html = `<div class="st ${cls}"><i></i>${state}<em class="${live ? 'real' : ''}">${live ? 'LIVE' : 'PAPER'}</em></div>` +
       (gone || halted ? `<p class="alarm">${esc(gone ? 'The desk stopped answering' : `Trading stopped: ${halted}`)}</p>` : '') +
-      `<dl class="sf">` +
-      row('Maker quotes', working ? `${M.quoting} markets` : '<span class="off">not quoting</span>') +
-      row('Maker held', nHeld ? `${M.inv.toLocaleString()} <span class="in">in ${nHeld}</span>` : '<span class="off">nothing</span>') +
-      row('Last fill', lf
-        ? `${esc(lf.action)} ${lf.qty} at ${cc(lf.px)} <span class="in">· ${money(lf.qty * lf.px)} · ${ago(lf.at)} · ${lf.source === 'maker' ? 'maker' : lf.venue}</span><small>${esc(fillName(lf))}</small>`
-        : `<span class="off">${M.fills ? `${M.fills} before the restart` : 'none yet'}</span>`) +
+      `<div class="tiles">` +
+      tile(working ? M.quoting : 0, 'quoting', !working) +
+      tile(nHeld ? (M.inv || 0).toLocaleString() : 0, nHeld ? `held in ${nHeld}` : 'held', !nHeld) +
+      `</div>` +
+      `<div class="lf"><span class="lh">Last fill${lf ? ` · ${ago(lf.at)}` : ''}</span>` +
+      (lf
+        ? `<span class="lx ${lf.side === 'sell' || lf.action === 'Sold' ? 'sell' : 'buy'}"><b>${esc(lf.action)} ${lf.qty}</b><span>at ${cc(lf.px)}</span><em>${money(lf.qty * lf.px)}</em></span><span class="ln">${esc(fillName(lf))}</span>`
+        : `<span class="ln">${M.fills ? `${M.fills} before the restart` : 'None yet'}</span>`) +
+      `</div>` +
       // the taker's reach: markets matched on both venues, across every category
-      (S.anyMarket && S.anyMarket.enabled
-        ? row('Both venues', `${S.pairCount || 0} matched <span class="in">· ${S.anyMarket.rulesVerified || 0} cleared to trade, ${S.anyMarket.watchOnly || 0} watched</span>`, 'extra')
-        : '') +
-      `</dl>` +
-      `<p class="dim">${live ? 'Real money' : 'No real money'} · up ${dur(S.now - S.startedAt)} · ${feed.mode === 'stream' && feed.connected ? 'live trade feed' : 'polling for trades'}</p>`;
+      (am ? `<div class="pairs extra"><span class="lh">Both venues</span><span><b>${S.pairCount || 0}</b> matched · <b>${am.rulesVerified || 0}</b> tradeable</span></div>` : '') +
+      `<p class="dim">Up ${dur(S.now - S.startedAt)} · ${feed.mode === 'stream' && feed.connected ? 'live feed' : 'polling'}</p>`;
     const key = `${html}|${Math.round(statusBox.w * k)}x${Math.round(statusBox.h * k)}`;
     if (key !== statusHtml) { el.innerHTML = html; statusHtml = key; fitText(el, Math.max(12, Math.min(21, k * 7.2)), 9); }
   }
@@ -1229,14 +1236,17 @@
   // The plot row is left empty here: the library builds its canvas inside it.
   const intervalTxt = (i) => (i === 'auto' ? 'Auto' : `${i}m`);
   function chartSkeleton(big) {
+    // how far back, then how long each candle is: the two time controls sit together along the bottom
+    // The small stand has no width for a second row of five buttons, and a second row cost the plot a
+    // third of its height; there it is a menu sitting right after the ranges.
     const every = big
-      ? `<span class="seg cint-seg">${INTERVALS.map((i) => `<button data-int="${i}">${intervalTxt(i)}</button>`).join('')}</span>`
-      : '<button class="cx cint" data-int="next"></button>';
-    return `<div class="ct"><span class="ctitle">All paper trades</span>${every}<button class="cx ctype" data-type="1"></button>` +
+      ? `<span class="seg cint-seg" title="Candle size">${INTERVALS.map((i) => `<button data-int="${i}">${intervalTxt(i)}</button>`).join('')}</span>`
+      : `<select class="cint-sel" aria-label="Candle size" title="Candle size">${INTERVALS.map((i) => `<option value="${i}">${intervalTxt(i)}</option>`).join('')}</select>`;
+    return `<div class="ct"><span class="ctitle">All paper trades</span><button class="cx ctype" data-type="1"></button>` +
       `${big ? '' : '<button class="cx" data-expand="1" title="Open large">⤢</button>'}</div>` +
       `<div class="chead"><span class="cv"></span><span class="cd"></span></div>` +
       `<div class="cplot"><i class="cband" hidden></i><div class="ctip" hidden></div></div>` +
-      `<div class="cb"><span class="seg">${RANGES.map(([r]) => `<button data-range="${r}">${r}</button>`).join('')}</span><span class="cr"></span></div>`;
+      `<div class="cb"><span class="seg">${RANGES.map(([r]) => `<button data-range="${r}">${r}</button>`).join('')}</span>${every}<span class="cr"></span></div>`;
   }
 
   const UP = '#22c55e', DOWN = '#ef4444', FLAT = '#64748b';
@@ -1379,11 +1389,8 @@
     const ty = el.querySelector('.ctype');
     ty.innerHTML = TYPE_ICON[chart.type]; ty.title = candles ? 'Candles. Click for a line' : 'Line. Click for candles';
     el.querySelectorAll('.cint-seg [data-int]').forEach((b) => b.classList.toggle('on', b.dataset.int === String(chart.interval)));
-    const cycle = el.querySelector('.cint');
-    if (cycle) {
-      cycle.textContent = intervalTxt(chart.interval);
-      cycle.title = `${candles ? 'Candle' : 'Point'} size: ${intervalTxt(chart.interval)}. Click for ${intervalTxt(INTERVALS[(INTERVALS.indexOf(chart.interval) + 1) % INTERVALS.length])}`;
-    }
+    const sel = el.querySelector('.cint-sel');
+    if (sel && document.activeElement !== sel) sel.value = String(chart.interval);
     if (pts.length < 2 || slots.length < 2) {
       if (plot) { plot.s.setData([]); plot.pts = []; }
       paintOverlay(el);
@@ -1470,13 +1477,18 @@
       dragging = false; chart.dragFrom = null; chart.band = null;
       paintOverlay(root);
     };
+    root.addEventListener('change', (ev) => {
+      if (!ev.target.matches('.cint-sel')) return;
+      const v = ev.target.value;
+      chart.interval = v === 'auto' ? 'auto' : +v; chart.band = null; saveChart();
+      drawChart(root, big); ev.target.blur();
+    });
     root.addEventListener('click', (ev) => {
       const b = ev.target.closest('button');
       if (!b) return;
       if (b.dataset.range) { chart.range = b.dataset.range; chart.band = null; saveChart(); }
       if (b.dataset.int) {
-        const now = INTERVALS.indexOf(chart.interval);
-        chart.interval = b.dataset.int === 'next' ? INTERVALS[(now + 1) % INTERVALS.length] : b.dataset.int === 'auto' ? 'auto' : +b.dataset.int;
+        chart.interval = b.dataset.int === 'auto' ? 'auto' : +b.dataset.int;
         chart.band = null; saveChart();
       }
       if (b.dataset.type) { chart.type = chart.type === 'candles' ? 'line' : 'candles'; chart.band = null; saveChart(); }
@@ -1524,7 +1536,7 @@
   // a fixed Biggest/Gainers/Losers choice.
   let wallKey = '', tapeKey = '', clockTxt = '', wallSortCol = 'pl', wallSortDir = 'desc';
   const sideTag = (inv) => `<span class="sd ${inv > 0 ? 'long' : 'short'}">${inv > 0 ? 'LONG' : 'SHORT'} ${Math.abs(inv)}</span>`;
-  const nameOf = (m) => String(OUTCOME(m) || QUESTION(m) || m.ticker);
+  const nameOf = (m) => String(lead(OUTCOME(m), QUESTION(m)).head || m.ticker);
   // Every row is { name, type, value, pl }: a maker market, or one cross-venue position.
   const sortHeld = (held) => {
     const dir = wallSortDir === 'asc' ? 1 : -1;
@@ -1545,6 +1557,13 @@
     const t = String(label || ''), i = Math.max(t.lastIndexOf(' · '), t.lastIndexOf(' - '));
     return i > 0 ? { outcome: t.slice(i + 3).trim(), question: t.slice(0, i).trim() } : { outcome: t, question: '' };
   };
+  // The outcome is the headline when it names something (Tom Cruise, Republican Party). When it is
+  // only a date, a threshold or a number -- "Before Oct 1, 2026", "Above $82,500", "3.4%" -- it says
+  // nothing on its own, so the event leads and the outcome follows it in the dimmer type.
+  const MONTH = '(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*';
+  const BARE = new RegExp(`^((before|by|after|above|below|over|under|between|less than|more than|at least|at most|yes|no)\\b|[<>≥≤$+−-]?\\d|${MONTH}\\s+\\d)`, 'i');
+  const lead = (outcome, question) => (question && (!outcome || BARE.test(outcome.trim()))
+    ? { head: question, tail: outcome } : { head: outcome || question, tail: outcome ? question : '' });
   const takerRows = () => {
     const groups = new Map();
     for (const p of S.positions || []) {
@@ -1555,8 +1574,8 @@
     return [...groups.values()].map((legs) => {
       legs.sort((a, b) => (a.venue === 'PM' ? -1 : 1) - (b.venue === 'PM' ? -1 : 1));
       const worth = (p) => p.qty * (p.mark ?? p.entry);
-      const { outcome, question } = splitLabel(legs[0].label);
-      return { arb: legs, key: legs[0].group || legs[0].id, name: outcome, question, label: String(legs[0].label || ''), type: cap(String(legs[0].strategy || 'taker')),
+      const { head, tail } = (({ outcome, question }) => lead(outcome, question))(splitLabel(legs[0].label));
+      return { arb: legs, key: legs[0].group || legs[0].id, name: head, question: tail, label: String(legs[0].label || ''), type: cap(String(legs[0].strategy || 'taker')),
         side: legs.length > 1 ? 'both' : legs[0].side, qty: legs[0].qty, value: r2(legs.reduce((a, p) => a + worth(p), 0)), pl: r2(legs.reduce((a, p) => a + (p.pnl || 0), 0)),
         sides: legs.map((p) => `${venueName(p.venue)} ${p.side.toUpperCase()} ${money(worth(p))}`).join(' + ') };
     });
@@ -1570,7 +1589,7 @@
     const makerNet = r2((M.equity ?? M.initial ?? 0) - (M.initial ?? 0));
     const pairNet = r2((S.equity ?? S.initial ?? 0) - (S.initial ?? 0));
     const net = r2(makerNet + pairNet);
-    const held = sortHeld((M.markets || []).filter((m) => m.inv).map((m) => ({ m, name: nameOf(m), type: 'Maker', side: m.inv > 0 ? 'long' : 'short', qty: Math.abs(m.inv), value: Math.abs(m.mark), pl: m.mark - m.cost })).concat(takerRows()));
+    const held = sortHeld((M.markets || []).filter((m) => m.inv).map((m) => ({ m, name: nameOf(m), tail: lead(OUTCOME(m), QUESTION(m)).tail, type: 'Maker', side: m.inv > 0 ? 'long' : 'short', qty: Math.abs(m.inv), value: Math.abs(m.mark), pl: m.mark - m.cost })).concat(takerRows()));
     const up = held.filter((x) => x.pl > 0).length, down = held.filter((x) => x.pl < 0).length;
     const rows = held;
     // A number, what it means, and the two standing facts as labelled figures. They used to run
@@ -1593,7 +1612,7 @@
       ? `<button class="wr arb" data-g="${esc(x.key)}" title="${esc(x.label)}"><span class="nm">${esc(x.name)}${x.question ? `<i> · ${esc(x.question)}</i>` : ''}<small class="legs">${esc(x.sides)}</small></span><span class="ty">${esc(x.type)}</span>` +
         `<span class="sd ${x.arb.length > 1 ? 'arb' : 'long'}">${x.arb.length > 1 ? 'BOTH' : x.arb[0].side.toUpperCase()} ${x.arb[0].qty}</span><span class="val">${money(x.value)}</span><span class="pl ${x.pl >= 0 ? 'pos' : 'neg'}">${signed(x.pl)}</span></button>`
       : `<button class="wr ${x.m.inv > 0 ? 'long' : 'short'}" data-m="${esc(x.m.ticker)}" title="${esc(x.m.title || '')}">` +
-        `<span class="nm">${esc(OUTCOME(x.m) || QUESTION(x.m))}${OUTCOME(x.m) && QUESTION(x.m) ? `<i> · ${esc(QUESTION(x.m))}</i>` : ''}</span><span class="ty">Maker</span>${sideTag(x.m.inv)}<span class="val">${money(Math.abs(x.m.mark))}</span><span class="pl ${x.pl >= 0 ? 'pos' : 'neg'}">${signed(x.pl)}</span></button>`;
+        `<span class="nm">${esc(x.name)}${x.tail ? `<i> · ${esc(x.tail)}</i>` : ''}</span><span class="ty">Maker</span>${sideTag(x.m.inv)}<span class="val">${money(Math.abs(x.m.mark))}</span><span class="pl ${x.pl >= 0 ? 'pos' : 'neg'}">${signed(x.pl)}</span></button>`;
     const list = `<div class="wlist">${rows.map(row).join('')}</div>`;
     h += `<div class="wbody">${`<div class="wnum">${num}</div>`}<div class="wbook">${head}${list}</div></div>`;
     return h;
@@ -1605,12 +1624,12 @@
   function wallRecap(ticker, at, M) {
     const m = byTicker(M, ticker);
     const fill = (M.recent || []).find((f) => f.ticker === ticker && (!at || f.at === at)) || null;
-    const name = m ? (OUTCOME(m) || QUESTION(m)) : marketName(ticker);
+    const t = m ? lead(OUTCOME(m), QUESTION(m)) : null, name = t ? t.head : marketName(ticker);
     const open = m && m.inv ? r2(m.mark - m.cost) : 0;
     const total = m ? r2((m.realized || 0) + open) : null;
     let h = `<div class="wh"><button class="wback" data-back="1">‹ Back</button><span>${m ? `${m.fills} trade${m.fills === 1 ? '' : 's'} here` : ''}</span></div>`;
     h += `<div class="wtitle">${esc(name)}</div>`;
-    if (m && QUESTION(m) && QUESTION(m) !== name) h += `<div class="wq">${esc(QUESTION(m))}</div>`;
+    if (t && t.tail && t.tail !== name) h += `<div class="wq">${esc(t.tail)}</div>`;
     if (total != null) h += `<div class="wbig ${total >= 0 ? 'pos' : 'neg'}">${signed(total)}</div><div class="wsub">profit on this market so far</div>`;
     h += `<ul class="wrecap">`;
     if (fill) {
@@ -1637,9 +1656,9 @@
     const cost = r2(legs.reduce((a, p) => a + p.cost, 0));
     const worth = r2(legs.reduce((a, p) => a + p.qty * (p.mark ?? p.entry), 0));
     const pl = r2(worth - cost);
-    const { outcome, question } = splitLabel(legs[0].label || key);
-    h += `<div class="wtitle">${esc(outcome)}</div>`;
-    if (question) h += `<div class="wq">${esc(question)}</div>`;
+    const { outcome, question } = splitLabel(legs[0].label || key), t = lead(outcome, question);
+    h += `<div class="wtitle">${esc(t.head)}</div>`;
+    if (t.tail) h += `<div class="wq">${esc(t.tail)}</div>`;
     h += `<div class="wbig ${pl >= 0 ? 'pos' : 'neg'}">${signed(pl)}</div><div class="wsub">profit if sold at today's marks</div>`;
     h += `<ul class="wrecap">`;
     for (const p of legs) {
@@ -1679,6 +1698,8 @@
       // its shape but loses a third of its pixels, and 26% of a narrow screen is not a column.
       wallWide = wallBox.w > wallBox.h * 2.3 && wallBox.w * k > 560;
       el.classList.toggle('wide', wallWide);
+      // under ~620px the Type column costs the names their width; the edge colour and BOTH still say arb
+      el.classList.toggle('narrow', wallBox.w * k < 620);
       // Stacked (not wide), the number sits above the book instead of beside it, so a bigger font
       // now costs the book its own height. Below a real box the number and its breakdown collapse
       // to one line -- the list of positions is why this board exists, and a hero digit that leaves
@@ -1709,13 +1730,17 @@
 
     if (chartBox) {
       const el = $('chart');
-      fit(el, chartBox, Math.max(9, Math.min(15, k * 4.6)));
+      fit(el, chartBox, Math.max(11, Math.min(16, k * 5.2)));
       if (el.dataset.frame !== String(frameSeq)) { el.dataset.frame = String(frameSeq); drawChart(el, false); }
     }
 
     if (tapeBox) {
       const el = $('tape');
-      fit(el, { x: tapeBox.x + 1, y: tapeBox.y + 1, w: tapeBox.w - 2, h: tapeBox.h - 2 }, Math.max(11.5, Math.min(18, k * 6.2)));
+      fit(el, { x: tapeBox.x + 1, y: tapeBox.y + 1, w: tapeBox.w - 2, h: tapeBox.h - 2 }, Math.max(11.5, Math.min(17, k * 5.6)));
+      // The clock used to hang in a case of its own above this board, a strip of glass with one
+      // number in it. It is this board's header now; the header and the list are built once and
+      // the list is refilled, so the clock ticking does not rebuild the trades under it.
+      if (!el.firstChild) el.innerHTML = '<div class="th"><span>Recent fills</span><span class="tclock"></span></div><div class="tbody"></div>';
       if (`${frameSeq}|${sel && sel.at}` !== tapeKey) {
         tapeKey = `${frameSeq}|${sel && sel.at}`;
         const groups = [];
@@ -1724,24 +1749,20 @@
           if (f.source === 'maker' && g && g.source === 'maker' && g.ticker === f.ticker && g.side === f.side) { g.qty += f.qty; g.val += f.qty * f.px; }
           else groups.push({ ...f, val: f.qty * f.px });
         }
-        el.innerHTML = `<div class="th"><span>Recent fills</span><span>all strategies</span></div>` +
-          (groups.length
-            ? `<ol>${groups.map((g) => `<li class="${g.side}${sel && sel.at === g.at ? ' on' : ''}"${g.source === 'maker' ? ` data-t="${esc(g.ticker)}" data-at="${g.at}"` : ''}><span class="act"><b>${esc(g.action)}</b> ${g.qty}</span><span class="px">${cc(g.val / g.qty)}</span>` +
-              `<span class="nm">${esc(fillName(g))}${g.source === 'taker' ? ` · ${esc(g.venue)}` : ''}</span><span class="ago"><b>${money(g.val)}</b> · ${ago(g.at).replace(' ago', '')}</span></li>`).join('')}</ol>`
-            : `<p class="none">${M.fills ? `${M.fills} fills before the last restart` : 'No fills yet'}</p>`);
+        // two lines a trade: what happened and what it cost, then which market and when
+        el.querySelector('.tbody').innerHTML = groups.length
+          ? `<ol>${groups.map((g) => `<li class="${g.side}${sel && sel.at === g.at ? ' on' : ''}"${g.source === 'maker' ? ` data-t="${esc(g.ticker)}" data-at="${g.at}"` : ''}>` +
+              `<span class="act"><b>${esc(g.action)}</b> ${g.qty}</span><span class="px">${money(g.val)}</span>` +
+              `<span class="nm" title="${esc(fillName(g))}">${esc(fillName(g))}${g.source === 'taker' ? ` · ${esc(g.venue)}` : ''}</span><span class="ago">${cc(g.val / g.qty)} · ${ago(g.at).replace(' ago', '').split(' ')[0]}</span></li>`).join('')}</ol>`
+          : `<p class="none">${M.fills ? `${M.fills} fills before the last restart` : 'No fills yet'}</p>`;
         const ol = el.querySelector('ol');
         el.classList.toggle('more', !!ol && ol.scrollHeight > ol.clientHeight + 2);
       }
-    }
-
-    if (clockBox) {
-      const el = $('clock');
-      fit(el, clockBox, Math.max(12, Math.min(26, k * 10)));
       const halted = S.halt || M.halted, on = !halted && M.quoting > 0;
       const t = new Date(S.now).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
       const hm = t.replace(/ [AP]M$/, '');
       const html = `<b class="${on ? 'on' : ''}">${hm.slice(0, -3)}<span class="sec">${hm.slice(-3)}</span></b><small>${t.slice(-2)} ET</small>`;
-      if (html !== clockTxt) { el.innerHTML = html; clockTxt = html; }
+      if (html !== clockTxt) { el.querySelector('.tclock').innerHTML = html; clockTxt = html; }
     }
   }
 
