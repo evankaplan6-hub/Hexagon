@@ -663,13 +663,14 @@
     return m ? lead(OUTCOME(m), QUESTION(m)) : { head: fillName(f), tail: '' };
   };
   const fillHtml = (f, extra = '') => { const p = fillParts(f); return `<span>${esc(unellipsis(p.head))}</span>${p.tail ? `<i> · ${esc(unellipsis(p.tail))}</i>` : ''}${extra}`; };
-  // A trade that closes something (a maker sale, a maker buy that covers a short, a cross-venue close
-  // or settlement) is told by what it made or lost, green or red: what it was worth says little once
-  // it is over. A maker sale that opened a short made nothing yet, so it reads $0.00, uncoloured. A
-  // fill from before the desk recorded its profit keeps its value. `val` is what the fill was worth.
-  const closes = (f) => f.action === 'Sold' || f.action === 'Closed' || f.action === 'Settled'
-    || (f.source === 'maker' && Number.isFinite(f.pnl) && Math.abs(f.pnl) >= 0.005);
-  const fillMoney = (f, val) => (!closes(f) || !Number.isFinite(f.pnl) ? money(val)
+  // A trade that closes something is told by what it made or lost, green or red: what it was worth
+  // says little once it is over. For the maker that is any fill that realised a profit or a loss (a
+  // sale out of a long, a buy that covers a short); a sale that only opened a short made nothing yet,
+  // and a row of grey $0.00s said so at length, so it shows what it was worth like any opening trade.
+  // A cross-venue close or settlement always shows its result. A fill from before the desk recorded
+  // its profit keeps its value. `val` is what the fill was worth.
+  const closes = (f) => Number.isFinite(f.pnl) && (f.source === 'maker' ? Math.abs(f.pnl) >= 0.005 : f.action === 'Closed' || f.action === 'Settled');
+  const fillMoney = (f, val) => (!closes(f) ? money(val)
     : Math.abs(f.pnl) < 0.005 ? money(0) : `<span class="${f.pnl > 0 ? 'pos' : 'neg'}">${signed(f.pnl)}</span>`);
   function recentFills(M) {
     const making = (M.recent || []).map((f) => ({ ...f, source: 'maker', action: f.side === 'buy' ? 'Bought' : 'Sold', label: marketName(f.ticker, f) }));
