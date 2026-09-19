@@ -4,6 +4,7 @@
 const ks = require('./venues/kalshi');
 const http = require('./http');
 const maker = require('./maker');
+const { makeMakerTape } = require('./makertape');
 const { makeTape } = require('./tape');
 const { openTradeStream } = require('./kalshi-ws');
 
@@ -66,6 +67,7 @@ const c = (x) => `${(x * 100).toFixed(1)}c`;
 const money = (x) => `$${Math.abs(x).toFixed(2)}`;
 
 function makeMakerDesk(cfg) {
+  const recordTape = makeMakerTape(cfg);
   let universe = [];         // tickers we are quoting
   let eligible = null;       // series that actually charge makers nothing
   let lastUniverseAt = 0;
@@ -431,6 +433,8 @@ function makeMakerDesk(cfg) {
       S.hist.push({ t: nowMs, c: r2(S.realized || 0), m: r2(mtm), e: r2(S.equity - cfg.initialBalance) });
       if (S.hist.length > 5000) S.hist.splice(0, S.hist.length - 5000);
     }
+    // the data this round already fetched, kept: see src/makertape.js
+    recordTape(E, { books: bookRes.books, trades: byTicker, markets: S.markets });
     E.touch('MAKR', filled ? `${filled} fills, ${Math.round(netQty)} contracts` : `${universe.length} quoted, ${Math.round(inv)} inv`);
     if (filled && E.due('makr-fill', 60)) {
       E.log('MAKR', 'FILL', r2(S.equity - cfg.initialBalance), `${filled} fill${filled > 1 ? 's' : ''} this cycle · ${Math.round(inv)} contracts held across ${Object.keys(S.markets).length} markets · equity ${money(S.equity)}`);

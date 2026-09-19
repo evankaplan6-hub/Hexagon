@@ -48,6 +48,7 @@ async function loadPairs(arg) {
     for (const line of fs.readFileSync(arg, 'utf8').split('\n')) {
       if (!line.trim()) continue;
       const r = JSON.parse(line);
+      if (!r.pair) continue;                 // the maker's book and prints share this file (src/makertape.js)
       const [pmPart, ticker] = String(r.pair).split('|');
       const [id, tokenIndex] = pmPart.split(':');
       if (!seen.has(r.pair)) seen.set(r.pair, { label: r.label, kind: r.kind, startsAt: null, pm: { id, tokenIndex: +tokenIndex }, ks: { ticker } });

@@ -39,6 +39,7 @@ function loadCycles(files) {
     for (const line of fs.readFileSync(f, 'utf8').split('\n')) {
       if (!line.trim()) continue;
       let r; try { r = JSON.parse(line); } catch { continue; }
+      if (!r.pair) continue;                 // the maker's book and prints share this file (src/makertape.js)
       const t = Date.parse(r.t);
       if (!Number.isFinite(t)) continue;
       if (!byT.has(t)) byT.set(t, []);
