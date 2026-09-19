@@ -15,7 +15,7 @@ to Fly once tests pass (paper only; see ops/DEPLOY.md → Auto-deploy).
 ## Running it
 
 ```bash
-npm test                                      # 1698 assertions, no network, no clock
+npm test                                      # 1787 assertions, no network, no clock
 node server.js                                # paper account, live market data → localhost:8787
 DEMO=1 DATA_DIR=./data-demo node server.js    # synthetic fills/settles, separate account
 npm run reset                                 # wipe the paper account
@@ -57,6 +57,7 @@ tools/            edge-scan, replay, maker-replay, maker-rank, pm-maker-scan, ma
                   whale-fetch + whale-lab (does copying top sports wallets pay? no, out of sample),
                   stock-fetch + stock-lab (ETF strategy tournament on Yahoo daily bars, walk-forward vs SPY;
                   research only, no broker code -- nothing beat buy-and-hold),
+                  pnl-report (one-screen realised P&L per book from data/fly/archive journals; --marks prices held maker inventory),
                   fly-pull (copies the box's finished days to data/fly/archive, verifies, then trims old box tapes)
                   tests: test.js (npm test) + decide/probe/maker/broker/fees/matcher/match-any/rules/discovery/anymarket/stream/engine/brain/lab/stock-lab/whale/http/disk/ask/askui-test.js
 data/fly/         gitignored: journals, state and tick tapes copied down from the Fly box, plus
