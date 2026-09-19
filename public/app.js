@@ -1538,6 +1538,13 @@
   // A locked arb is two contracts on the same question, one per venue. Listed leg by leg it read as
   // two unrelated bets; it is one position, so it gets one row: the question, what each side is
   // worth now, and the total.
+  // A pair's label is "question · outcome" or "question - outcome" (Fed OCT 26 · Hike 25bps,
+  // Texas Senate - James Talarico (D)). Split at the last separator so a pair reads like a maker
+  // row: the outcome first, the question after it in the dimmer type.
+  const splitLabel = (label) => {
+    const t = String(label || ''), i = Math.max(t.lastIndexOf(' · '), t.lastIndexOf(' - '));
+    return i > 0 ? { outcome: t.slice(i + 3).trim(), question: t.slice(0, i).trim() } : { outcome: t, question: '' };
+  };
   const takerRows = () => {
     const groups = new Map();
     for (const p of S.positions || []) {
@@ -1548,7 +1555,8 @@
     return [...groups.values()].map((legs) => {
       legs.sort((a, b) => (a.venue === 'PM' ? -1 : 1) - (b.venue === 'PM' ? -1 : 1));
       const worth = (p) => p.qty * (p.mark ?? p.entry);
-      return { arb: legs, key: legs[0].group || legs[0].id, name: String(legs[0].label || ''), type: cap(String(legs[0].strategy || 'taker')),
+      const { outcome, question } = splitLabel(legs[0].label);
+      return { arb: legs, key: legs[0].group || legs[0].id, name: outcome, question, label: String(legs[0].label || ''), type: cap(String(legs[0].strategy || 'taker')),
         side: legs.length > 1 ? 'both' : legs[0].side, qty: legs[0].qty, value: r2(legs.reduce((a, p) => a + worth(p), 0)), pl: r2(legs.reduce((a, p) => a + (p.pnl || 0), 0)),
         sides: legs.map((p) => `${venueName(p.venue)} ${p.side.toUpperCase()} ${money(worth(p))}`).join(' + ') };
     });
@@ -1582,7 +1590,7 @@
     const colBtn = (k, label) => `<button type="button" role="columnheader" aria-sort="${wallSortCol === k ? (wallSortDir === 'asc' ? 'ascending' : 'descending') : 'none'}" data-wcol="${k}" class="${wallSortCol === k ? 'on' : ''}">${label}${wallSortCol === k ? `<i>${arrow(wallSortDir)}</i>` : ''}</button>`;
     const head = `<div class="wcols" role="row">${colBtn('name', 'Name')}${colBtn('type', 'Type')}${colBtn('side', 'Side')}${colBtn('value', 'Value')}${colBtn('pl', 'P&amp;L')}</div>`;
     const row = (x) => x.arb
-      ? `<button class="wr arb" data-g="${esc(x.key)}" title="${esc(x.name)}"><span class="nm">${esc(x.name)}<small class="legs">${esc(x.sides)}</small></span><span class="ty">${esc(x.type)}</span>` +
+      ? `<button class="wr arb" data-g="${esc(x.key)}" title="${esc(x.label)}"><span class="nm">${esc(x.name)}${x.question ? `<i> · ${esc(x.question)}</i>` : ''}<small class="legs">${esc(x.sides)}</small></span><span class="ty">${esc(x.type)}</span>` +
         `<span class="sd ${x.arb.length > 1 ? 'arb' : 'long'}">${x.arb.length > 1 ? 'BOTH' : x.arb[0].side.toUpperCase()} ${x.arb[0].qty}</span><span class="val">${money(x.value)}</span><span class="pl ${x.pl >= 0 ? 'pos' : 'neg'}">${signed(x.pl)}</span></button>`
       : `<button class="wr ${x.m.inv > 0 ? 'long' : 'short'}" data-m="${esc(x.m.ticker)}" title="${esc(x.m.title || '')}">` +
         `<span class="nm">${esc(OUTCOME(x.m) || QUESTION(x.m))}${OUTCOME(x.m) && QUESTION(x.m) ? `<i> · ${esc(QUESTION(x.m))}</i>` : ''}</span><span class="ty">Maker</span>${sideTag(x.m.inv)}<span class="val">${money(Math.abs(x.m.mark))}</span><span class="pl ${x.pl >= 0 ? 'pos' : 'neg'}">${signed(x.pl)}</span></button>`;
@@ -1629,7 +1637,9 @@
     const cost = r2(legs.reduce((a, p) => a + p.cost, 0));
     const worth = r2(legs.reduce((a, p) => a + p.qty * (p.mark ?? p.entry), 0));
     const pl = r2(worth - cost);
-    h += `<div class="wtitle">${esc(legs[0].label || key)}</div>`;
+    const { outcome, question } = splitLabel(legs[0].label || key);
+    h += `<div class="wtitle">${esc(outcome)}</div>`;
+    if (question) h += `<div class="wq">${esc(question)}</div>`;
     h += `<div class="wbig ${pl >= 0 ? 'pos' : 'neg'}">${signed(pl)}</div><div class="wsub">profit if sold at today's marks</div>`;
     h += `<ul class="wrecap">`;
     for (const p of legs) {
