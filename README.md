@@ -610,6 +610,49 @@ at every threshold (+1.6 to +2.0c dev, +2.0 to +5.3c test), with t under 2 in de
 favourite–longshot bias Bürgi, Deng and Whelan measured on Kalshi, and 239 events cannot confirm it.
 Kalshi's historical endpoints (markets settled before 2026-07-15) are where more of those events are.
 
+**That lead was tested on older markets and did not replicate (2026-09-19).** `tools/lab-fetch.js
+--historical` pulled 1,148 non-Sports markets that closed 2026-04-15 to 07-14, none of which took
+part in finding the lead. `tools/favorites-check.js` scored one rule that was written down before
+the older data was scored: 70-90c favourite, at most 48 hours to the scheduled end, hold to
+resolution. On the older markets it made **-3.88c a contract on 55 events (t -0.9)**, negative in
+both halves, and failed all four preset criteria (300+ events, +1.0c, |t| >= 2, both halves
+positive). The newer markets the lead came from give +5.1c on 61 events under the same rule, so the
+two samples disagree in sign and pooled they are about zero. 55 events cannot rule a small effect
+out, but there is no evidence of an edge and no reason to build on it.
+
+### Weather: the public forecast does not beat Kalshi's temperature markets
+
+The desk only ever compared prediction markets with each other. This asks whether a price is worse
+than an outside source that is not a market. Kalshi's "Highest temperature in <city>" markets settle
+on a published number, and Open-Meteo archives the forecast that was issued a day earlier, so it can
+be scored on the past without waiting for data.
+
+```bash
+node tools/weather-fetch.js     # ~50 minutes: 10,089 markets, 7 cities, 12 months -> data/lab/weather/
+node tools/weather-lab.js       # the preset rule on the later half of the dates
+```
+
+The rule, and four pass criteria, were written into `tools/weather-lab.js` before anything was
+scored: the real high is Normal(forecast + city bias, city sigma), read as a whole degree the way
+Kalshi settles; bias and sigma are fitted per city on the EARLIER half of the dates only; decide at
+22:00 local the day before; buy YES or NO when the model beats the price by 8c after the fee; fill
+at the next hour's ask through `tools/lab.js` (one hour of latency, a 4c spread limit, the taker
+fee); hold to resolution. Scored on the later half (2026-04-05 to 09-17):
+
+| | |
+|---|---|
+| trades / events | 2,627 / 1,080 |
+| win rate | 37% |
+| per contract | **-2.77c** (t -3.9) |
+| first quarter / second quarter | -2.93c / -2.63c |
+| Brier score at the decision hour | model 0.1616, **market 0.1236** |
+
+**NOT CONFIRMED, and negative in both quarters.** The price is better informed than a one-model
+forecast with a fitted error: it beats the model on Brier score, and every edge threshold from 3c to
+16c loses (-2.8c to -3.6c), which is roughly the fee plus the spread paid for nothing. What this does
+not rule out is a better forecast (an ensemble, the NWS forecast, station-level model output) or a
+different decision hour. It does say the free, obvious version has no edge.
+
 ### Whale watch: copying the best sports bettors does not pay
 
 Paid "insider trackers" (sharpai.us, for one) sell a feed of what Polymarket's top wallets just
