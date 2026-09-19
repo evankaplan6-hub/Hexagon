@@ -1091,13 +1091,16 @@
   // sharp and take a mouse.
   //
   const RANGES = [['1h', 36e5], ['6h', 216e5], ['24h', 864e5], ['All', Infinity]];
-  const chart = { range: 'All', type: 'candles', hoverT: null, band: null, dragFrom: null };
+  // interval: how long one candle (or one point of the line) is, in minutes; 'auto' picks it from the range
+  const INTERVALS = ['auto', 1, 5, 15, 45];
+  const chart = { range: 'All', type: 'candles', interval: 'auto', hoverT: null, band: null, dragFrom: null };
   try {
     const c = JSON.parse(localStorage.getItem('hex-chart') || '{}');
     if (RANGES.some(([r]) => r === c.range)) chart.range = c.range;
     if (c.type === 'line' || c.type === 'candles') chart.type = c.type;
+    if (INTERVALS.includes(c.interval)) chart.interval = c.interval;
   } catch { /* private window: defaults */ }
-  const saveChart = () => { try { localStorage.setItem('hex-chart', JSON.stringify({ range: chart.range, type: chart.type })); } catch { /* ignore */ } };
+  const saveChart = () => { try { localStorage.setItem('hex-chart', JSON.stringify({ range: chart.range, type: chart.type, interval: chart.interval })); } catch { /* ignore */ } };
 
   function combinePnlHistory(balanceHistory, makerHistory, initial, validFrom = 0) {
     // Only the maker ledger had the bad 50c marks, so only its history is cut at the repair. The
@@ -1163,12 +1166,16 @@
   // come out in whole seconds, strictly increasing, which is what the library requires.
   const SLOT_STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 14400, 43200, 86400];
   const slotStep = (t0, t1, maxSlots) => SLOT_STEPS.find((n) => n >= (t1 - t0) / maxSlots) || 86400;
-  function evenPnlPoints(pts, maxSlots = 900, off = 0) {
+  // `stepSec` fixes the step (the interval the user picked) instead of choosing one to fit `maxSlots`;
+  // then a long history is cut to its newest `maxSlots` slots, as any chart at that interval would be.
+  function evenPnlPoints(pts, maxSlots = 900, off = 0, stepSec = 0) {
     if (pts.length < 2) return pts.slice();
     const t0 = Math.floor(pts[0].t / 1000), t1 = Math.floor(pts[pts.length - 1].t / 1000);
-    const step = slotStep(t0, t1, maxSlots);
-    const at = [t0];
-    for (let s = (Math.floor((t0 + off) / step) + 1) * step - off; s < t1; s += step) at.push(s);
+    const step = stepSec || slotStep(t0, t1, maxSlots);
+    const firstAt = (Math.floor((t0 + off) / step) + 1) * step - off;
+    const from = stepSec ? Math.max(firstAt, (Math.floor((t1 + off) / step) - maxSlots + 2) * step - off) : firstAt;
+    const at = from > firstAt ? [] : [t0];
+    for (let s = from; s < t1; s += step) at.push(s);
     if (t1 > t0) at.push(t1);
     let i = 0;
     return at.map((sec) => {
@@ -1182,12 +1189,17 @@
   // highest and lowest value the step ledger held in between. A slot with no news is flat, which is
   // true: the ledger did not move. (`v` is the close, so a candle can be found and measured like a
   // line's point.)
-  function pnlCandles(pts, maxCandles = 60, off = 0) {
+  function pnlCandles(pts, maxCandles = 60, off = 0, stepSec = 0) {
     if (pts.length < 2) return [];
     const t0 = Math.floor(pts[0].t / 1000), t1 = Math.floor(pts[pts.length - 1].t / 1000);
-    const step = slotStep(t0, t1, maxCandles), out = [];
+    const step = stepSec || slotStep(t0, t1, maxCandles), out = [];
+    const firstB = Math.floor((t0 + off) / step) * step - off, lastB = Math.floor((t1 + off) / step) * step - off;
+    // a fixed step shows the newest `maxCandles` candles; the first of them opens on the value the
+    // history had reached by then
+    const from = stepSec ? Math.max(firstB, lastB - (maxCandles - 1) * step) : firstB;
     let i = 0, carry = pts[0].v;
-    for (let b = Math.floor((t0 + off) / step) * step - off; b <= t1; b += step) {
+    while (i < pts.length && Math.floor(pts[i].t / 1000) < from) carry = pts[i++].v;
+    for (let b = from; b <= t1; b += step) {
       let h = carry, l = carry, c = carry;
       while (i < pts.length && Math.floor(pts[i].t / 1000) < b + step) { c = pts[i].v; h = Math.max(h, c); l = Math.min(l, c); i++; }
       out.push({ t: b * 1000, o: carry, h, l, c, v: c });
@@ -1215,8 +1227,12 @@
   // to share the top row with the series buttons and the change over the range sat at the bottom
   // beside the range buttons, where it read as a caption on them rather than as the headline fact.
   // The plot row is left empty here: the library builds its canvas inside it.
+  const intervalTxt = (i) => (i === 'auto' ? 'Auto' : `${i}m`);
   function chartSkeleton(big) {
-    return `<div class="ct"><span class="ctitle">All paper trades</span><button class="cx ctype" data-type="1"></button>` +
+    const every = big
+      ? `<span class="seg cint-seg">${INTERVALS.map((i) => `<button data-int="${i}">${intervalTxt(i)}</button>`).join('')}</span>`
+      : '<button class="cx cint" data-int="next"></button>';
+    return `<div class="ct"><span class="ctitle">All paper trades</span>${every}<button class="cx ctype" data-type="1"></button>` +
       `${big ? '' : '<button class="cx" data-expand="1" title="Open large">⤢</button>'}</div>` +
       `<div class="chead"><span class="cv"></span><span class="cd"></span></div>` +
       `<div class="cplot"><i class="cband" hidden></i><div class="ctip" hidden></div></div>` +
@@ -1353,13 +1369,21 @@
     const short = Number.isFinite(selectedSpan) && available < selectedSpan;
     el.querySelectorAll('[data-range]').forEach((b) => b.classList.toggle('on', b.dataset.range === chart.range));
     const candles = chart.type === 'candles', pts = chartPoints();
-    const off = zoneSec(), slots = candles ? pnlCandles(pts, big ? 120 : 48, off) : evenPnlPoints(pts, 900, off);
+    // a fixed interval shows the newest stretch of it that fits; auto fits the whole range
+    const off = zoneSec(), iv = chart.interval === 'auto' ? 0 : chart.interval * 60;
+    const slots = candles ? pnlCandles(pts, big ? 120 : 48, off, iv) : evenPnlPoints(pts, iv ? (big ? 300 : 120) : 900, off, iv);
     let plot = plots.get(el);
     // a different kind of chart is a different plot: build it again rather than swap its series
     if (plot && plot.candles !== candles) { dropPlot(el); plot = null; }
     plot = plot || makePlot(el, big, candles);
     const ty = el.querySelector('.ctype');
     ty.innerHTML = TYPE_ICON[chart.type]; ty.title = candles ? 'Candles. Click for a line' : 'Line. Click for candles';
+    el.querySelectorAll('.cint-seg [data-int]').forEach((b) => b.classList.toggle('on', b.dataset.int === String(chart.interval)));
+    const cycle = el.querySelector('.cint');
+    if (cycle) {
+      cycle.textContent = intervalTxt(chart.interval);
+      cycle.title = `${candles ? 'Candle' : 'Point'} size: ${intervalTxt(chart.interval)}. Click for ${intervalTxt(INTERVALS[(INTERVALS.indexOf(chart.interval) + 1) % INTERVALS.length])}`;
+    }
     if (pts.length < 2 || slots.length < 2) {
       if (plot) { plot.s.setData([]); plot.pts = []; }
       paintOverlay(el);
@@ -1386,6 +1410,9 @@
 
     // a range longer than the history says how much there is instead of the start and end times
     plot.read = short ? `only ${spanTxt(available)} of history` : `${hhmm(t0)} → ${hhmm(t1)}`;
+    // a fixed interval can show less than the range: say how much
+    const clipped = iv && slots[0].t > pts[0].t;
+    if (iv) plot.read = clipped ? `last ${spanTxt(t1 - slots[0].t)} · ${chart.interval}m` : `${plot.read} · ${chart.interval}m`;
     // more decimals only where the scale is tight enough to need them. The finest tick the library
     // may draw is the last decimal shown (minMove, below), so two ticks never print the same label
     const vs = candles ? slots.flatMap((p) => [p.h, p.l]) : slots.map((p) => p.v), r = pnlPriceRange(Math.min(...vs), Math.max(...vs), last.v), span = r.max - r.min;
@@ -1398,8 +1425,9 @@
     plot.pts = slots;
     const fs = Math.max(8, Math.round(parseFloat(getComputedStyle(el).fontSize) * (big ? 0.72 : 0.62)));
     if (fs !== plot.fs) { plot.fs = fs; plot.c.applyOptions({ layout: { fontSize: fs } }); }
-    const col = last.v >= first.v ? UP : DOWN, zeroIn = r.min <= 0 && r.max >= 0;
-    plot.open.applyOptions({ price: first.v, lineVisible: !zeroIn });
+    // where what is on show opened: the range's start, unless a fixed interval has cut the start off
+    const opened = slots[0].o ?? slots[0].v, col = last.v >= opened ? UP : DOWN, zeroIn = r.min <= 0 && r.max >= 0;
+    plot.open.applyOptions({ price: opened, lineVisible: !zeroIn });
     plot.zero.applyOptions({ lineVisible: zeroIn });
     // Zero is zero even as float noise (the library's ticks are sums). The finest tick the library will
     // draw is the last decimal shown, but it steps by 2.5 as readily as by 2, so an axis whose ticks
@@ -1446,6 +1474,11 @@
       const b = ev.target.closest('button');
       if (!b) return;
       if (b.dataset.range) { chart.range = b.dataset.range; chart.band = null; saveChart(); }
+      if (b.dataset.int) {
+        const now = INTERVALS.indexOf(chart.interval);
+        chart.interval = b.dataset.int === 'next' ? INTERVALS[(now + 1) % INTERVALS.length] : b.dataset.int === 'auto' ? 'auto' : +b.dataset.int;
+        chart.band = null; saveChart();
+      }
       if (b.dataset.type) { chart.type = chart.type === 'candles' ? 'line' : 'candles'; chart.band = null; saveChart(); }
       if (b.dataset.expand) { openBigChart(); return; }
       drawChart(root, big);
@@ -1492,10 +1525,11 @@
   let wallKey = '', tapeKey = '', clockTxt = '', wallSortCol = 'pl', wallSortDir = 'desc';
   const sideTag = (inv) => `<span class="sd ${inv > 0 ? 'long' : 'short'}">${inv > 0 ? 'LONG' : 'SHORT'} ${Math.abs(inv)}</span>`;
   const nameOf = (m) => String(OUTCOME(m) || QUESTION(m) || m.ticker);
-  // Every row is { name, value, pl }: a maker market, or one cross-venue position.
+  // Every row is { name, type, value, pl }: a maker market, or one cross-venue position.
   const sortHeld = (held) => {
     const dir = wallSortDir === 'asc' ? 1 : -1;
     const by = wallSortCol === 'name' ? (a, b) => dir * a.name.localeCompare(b.name)
+      : wallSortCol === 'type' ? (a, b) => dir * a.type.localeCompare(b.type) || b.pl - a.pl
       : wallSortCol === 'value' ? (a, b) => dir * (a.value - b.value)
         : (a, b) => dir * (a.pl - b.pl);
     return held.slice().sort(by);
@@ -1513,7 +1547,7 @@
     return [...groups.values()].map((legs) => {
       legs.sort((a, b) => (a.venue === 'PM' ? -1 : 1) - (b.venue === 'PM' ? -1 : 1));
       const worth = (p) => p.qty * (p.mark ?? p.entry);
-      return { arb: legs, name: String(legs[0].label || ''), value: r2(legs.reduce((a, p) => a + worth(p), 0)), pl: r2(legs.reduce((a, p) => a + (p.pnl || 0), 0)),
+      return { arb: legs, name: String(legs[0].label || ''), type: cap(String(legs[0].strategy || 'taker')), value: r2(legs.reduce((a, p) => a + worth(p), 0)), pl: r2(legs.reduce((a, p) => a + (p.pnl || 0), 0)),
         sides: legs.map((p) => `${venueName(p.venue)} ${p.side.toUpperCase()} ${money(worth(p))}`).join(' + ') };
     });
   };
@@ -1526,7 +1560,7 @@
     const makerNet = r2((M.equity ?? M.initial ?? 0) - (M.initial ?? 0));
     const pairNet = r2((S.equity ?? S.initial ?? 0) - (S.initial ?? 0));
     const net = r2(makerNet + pairNet);
-    const held = sortHeld((M.markets || []).filter((m) => m.inv).map((m) => ({ m, name: nameOf(m), value: Math.abs(m.mark), pl: m.mark - m.cost })).concat(takerRows()));
+    const held = sortHeld((M.markets || []).filter((m) => m.inv).map((m) => ({ m, name: nameOf(m), type: 'Maker', value: Math.abs(m.mark), pl: m.mark - m.cost })).concat(takerRows()));
     const up = held.filter((x) => x.pl > 0).length, down = held.filter((x) => x.pl < 0).length;
     const rows = held;
     // A number, what it means, and the two standing facts as labelled figures. They used to run
@@ -1545,12 +1579,12 @@
     // Side isn't a sortable field, just a label, so it keeps the row's middle column aligned.
     const arrow = (dir) => dir === 'asc' ? '▲' : '▼';
     const colBtn = (k, label) => `<button type="button" role="columnheader" aria-sort="${wallSortCol === k ? (wallSortDir === 'asc' ? 'ascending' : 'descending') : 'none'}" data-wcol="${k}" class="${wallSortCol === k ? 'on' : ''}">${label}${wallSortCol === k ? `<i>${arrow(wallSortDir)}</i>` : ''}</button>`;
-    const head = `<div class="wcols" role="row">${colBtn('name', 'Name')}<span class="wcolside">Side</span>${colBtn('value', 'Value')}${colBtn('pl', 'P&amp;L')}</div>`;
+    const head = `<div class="wcols" role="row">${colBtn('name', 'Name')}${colBtn('type', 'Type')}<span class="wcolside">Side</span>${colBtn('value', 'Value')}${colBtn('pl', 'P&amp;L')}</div>`;
     const row = (x) => x.arb
-      ? `<div class="wr arb" title="${esc(x.name)}"><span class="nm">${esc(x.name)}<small class="legs">${esc(x.sides)}</small></span>` +
-        `<span class="sd ${x.arb.length > 1 ? 'arb' : 'long'}">${x.arb.length > 1 ? 'ARB' : x.arb[0].side.toUpperCase()} ${x.arb[0].qty}</span><span class="val">${money(x.value)}</span><span class="pl ${x.pl >= 0 ? 'pos' : 'neg'}">${signed(x.pl)}</span></div>`
+      ? `<div class="wr arb" title="${esc(x.name)}"><span class="nm">${esc(x.name)}<small class="legs">${esc(x.sides)}</small></span><span class="ty">${esc(x.type)}</span>` +
+        `<span class="sd ${x.arb.length > 1 ? 'arb' : 'long'}">${x.arb.length > 1 ? 'BOTH' : x.arb[0].side.toUpperCase()} ${x.arb[0].qty}</span><span class="val">${money(x.value)}</span><span class="pl ${x.pl >= 0 ? 'pos' : 'neg'}">${signed(x.pl)}</span></div>`
       : `<button class="wr ${x.m.inv > 0 ? 'long' : 'short'}" data-m="${esc(x.m.ticker)}" title="${esc(x.m.title || '')}">` +
-        `<span class="nm">${esc(OUTCOME(x.m) || QUESTION(x.m))}${OUTCOME(x.m) && QUESTION(x.m) ? `<i> · ${esc(QUESTION(x.m))}</i>` : ''}</span>${sideTag(x.m.inv)}<span class="val">${money(Math.abs(x.m.mark))}</span><span class="pl ${x.pl >= 0 ? 'pos' : 'neg'}">${signed(x.pl)}</span></button>`;
+        `<span class="nm">${esc(OUTCOME(x.m) || QUESTION(x.m))}${OUTCOME(x.m) && QUESTION(x.m) ? `<i> · ${esc(QUESTION(x.m))}</i>` : ''}</span><span class="ty">Maker</span>${sideTag(x.m.inv)}<span class="val">${money(Math.abs(x.m.mark))}</span><span class="pl ${x.pl >= 0 ? 'pos' : 'neg'}">${signed(x.pl)}</span></button>`;
     const list = `<div class="wlist">${rows.map(row).join('')}</div>`;
     h += `<div class="wbody">${`<div class="wnum">${num}</div>`}<div class="wbook">${head}${list}</div></div>`;
     return h;
@@ -1709,7 +1743,7 @@
     if (b.dataset.back) sel = null;
     else if (b.dataset.wcol) {
       if (wallSortCol === b.dataset.wcol) wallSortDir = wallSortDir === 'asc' ? 'desc' : 'asc';
-      else { wallSortCol = b.dataset.wcol; wallSortDir = b.dataset.wcol === 'name' ? 'asc' : 'desc'; }
+      else { wallSortCol = b.dataset.wcol; wallSortDir = b.dataset.wcol === 'name' || b.dataset.wcol === 'type' ? 'asc' : 'desc'; }
     }
     else if (b.dataset.m) sel = sel && sel.kind === 'market' && sel.key === b.dataset.m ? null : { kind: 'market', key: b.dataset.m };
     wallKey = '';

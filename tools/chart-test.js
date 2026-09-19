@@ -104,6 +104,23 @@ const { combinePnlHistory, windowPnlPoints, pnlPriceRange, evenPnlPoints, pnlCan
     ok(`candles start on the local clock (offset ${off / 3600}h)`, cb.every((x) => x % 3600 === 0), cb.slice(0, 3));
   }
   eq('no offset means the UTC clock, as before', evenPnlPoints([{ t: T(0), v: 1 }, { t: T(7200), v: 2 }], 4).slice(1, -1).every((p) => (p.t / 1000) % 1800 === 0), true);
+
+  // a fixed interval: the step is the one asked for, and a long history is cut to its newest slots
+  const long = [];
+  for (let m = 0; m <= 3 * 24 * 60; m += 7) long.push({ t: T(60 * m + 1234), v: Math.round(m / 7) });
+  for (const [mins, off] of [[1, -4 * 3600], [5, 0], [15, 5.5 * 3600], [45, -4 * 3600]]) {
+    const step = mins * 60;
+    const cs = pnlCandles(long, 48, off, step);
+    ok(`${mins}m candles: exactly ${mins} minutes apart, on the local clock, newest 48 only`,
+      cs.length <= 49 && cs.length >= 47 && cs.every((c, i) => (c.t / 1000 + off) % step === 0 && (i === 0 || c.t / 1000 - cs[i - 1].t / 1000 === step)), cs.slice(0, 3).map((c) => c.t / 1000));
+    ok(`${mins}m candles: the last one closes on the newest value`, cs[cs.length - 1].c === long[long.length - 1].v, cs[cs.length - 1]);
+    ok(`${mins}m candles: the first one opens on what the history had reached`, cs[0].o === [...long].reverse().find((p) => p.t / 1000 < cs[0].t / 1000)?.v, cs[0]);
+    const ls = evenPnlPoints(long, 120, off, step);
+    ok(`${mins}m line: newest slots only, ${mins} minutes apart, ending on the newest point`,
+      ls.length <= 121 && ls.slice(1, -1).every((p, i, a) => (p.t / 1000 + off) % step === 0 && (i === 0 || p.t / 1000 - a[i - 1].t / 1000 === step)) && ls[ls.length - 1].v === long[long.length - 1].v, ls.length);
+  }
+  eq('a fixed interval longer than the history is one whole history, not clipped', pnlCandles([{ t: T(10), v: 1 }, { t: T(200), v: 2 }], 48, 0, 2700).length, 1);
+  eq('a fixed line interval on a short history keeps the first point', evenPnlPoints([{ t: T(10), v: 1 }, { t: T(200), v: 2 }], 120, 0, 60)[0].t, T(10));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
