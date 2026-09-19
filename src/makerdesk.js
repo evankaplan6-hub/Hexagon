@@ -66,6 +66,16 @@ const r4 = (x) => Math.round(x * 10000) / 10000;
 const c = (x) => `${(x * 100).toFixed(1)}c`;
 const money = (x) => `$${Math.abs(x).toFixed(2)}`;
 
+// the exchange-wide tape grouped by ticker, oldest first as it arrived
+function bucket(trades) {
+  const by = new Map();
+  for (const t of trades || []) {
+    if (!by.has(t.ticker)) by.set(t.ticker, []);
+    by.get(t.ticker).push(t);
+  }
+  return by;
+}
+
 function makeMakerDesk(cfg) {
   const recordTape = makeMakerTape(cfg);
   let universe = [];         // tickers we are quoting
@@ -238,9 +248,11 @@ function makeMakerDesk(cfg) {
     // TESS's computed halt is refreshed on the taker cadence. An operator flatten is immediate,
     // so it must be read directly here and again after this function's awaits before we install a
     // fresh resting quote.
-    const withdraw = () => {
+    const withdraw = (extra) => {
       for (const m of Object.values(S.markets)) m.quotes = { bid: null, ask: null };
       E.touch('MAKR', 'quotes withdrawn');
+      // tell the tape: without this it would show the last quote resting straight through the halt
+      recordTape(E, { markets: S.markets, gap: 'halt', ...extra });
     };
     if (E.operatorHalt || E.halt || S.halted) { withdraw(); return; }
 
@@ -296,9 +308,11 @@ function makeMakerDesk(cfg) {
       [tapeRes, bookRes] = await Promise.all([tape.since(tickers), tape.books(tickers)]);
     } catch (e) {
       E.log('MAKR', 'OPS', null, `market data failed (${String(e.message).slice(0, 80)}) · quotes left as they are`);
+      recordTape(E, { markets: S.markets, gap: 'data-failure' });
       return;
     }
-    if (E.operatorHalt || E.halt || S.halted) { withdraw(); return; }
+    // the prints this round already consumed are not thrown away by a halt that landed during the await
+    if (E.operatorHalt || E.halt || S.halted) { withdraw({ trades: bucket(tapeRes.trades) }); return; }
     if (tapeRes.gap && E.due('makr-gap', 300)) {
       E.log('MAKR', 'OPS', null, `tape gap: the exchange traded more than ${cfg.makerTapePages} pages between polls (${tapeRes.gaps} so far) · some fills were not seen`);
     }
@@ -306,11 +320,7 @@ function makeMakerDesk(cfg) {
       E.log('MAKR', 'OPS', null, `${bookRes.failed} book(s) failed to load · those markets keep their last quote`);
     }
     // bucket the exchange-wide tape by ticker, oldest first
-    const byTicker = new Map();
-    for (const t of tapeRes.trades) {
-      if (!byTicker.has(t.ticker)) byTicker.set(t.ticker, []);
-      byTicker.get(t.ticker).push(t);
-    }
+    const byTicker = bucket(tapeRes.trades);
 
     let filled = 0, netQty = 0, settled = 0, settledQty = 0, settledPnl = 0;
     for (const u of work) {
@@ -434,7 +444,7 @@ function makeMakerDesk(cfg) {
       if (S.hist.length > 5000) S.hist.splice(0, S.hist.length - 5000);
     }
     // the data this round already fetched, kept: see src/makertape.js
-    recordTape(E, { books: bookRes.books, trades: byTicker, markets: S.markets });
+    recordTape(E, { books: bookRes.books, trades: byTicker, markets: S.markets, at: bookRes.at, missed: !!tapeRes.gap });
     E.touch('MAKR', filled ? `${filled} fills, ${Math.round(netQty)} contracts` : `${universe.length} quoted, ${Math.round(inv)} inv`);
     if (filled && E.due('makr-fill', 60)) {
       E.log('MAKR', 'FILL', r2(S.equity - cfg.initialBalance), `${filled} fill${filled > 1 ? 's' : ''} this cycle · ${Math.round(inv)} contracts held across ${Object.keys(S.markets).length} markets · equity ${money(S.equity)}`);

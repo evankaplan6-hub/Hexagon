@@ -85,5 +85,52 @@ group('the file is the pair tape, named by Eastern day');
   ok('20:30 Eastern on the 19th is still the 19th', Object.keys(io.files)[0].endsWith('ticks-2026-09-19.jsonl'), Object.keys(io.files));
 }
 
+group('a halt is a hole in the tape, not a quote resting through it');
+{
+  const io = disk(); let now = T0; const rec = makeMakerTape(cfg(), { io, clock: () => now }); const e = E();
+  const quoted = { A: { quotes: { bid: 0.44, ask: 0.45 }, inv: 0 } }, withdrawn = { A: { quotes: { bid: null, ask: null }, inv: 0 } };
+  rec(e, { books: new Map([['A', book(0.44, 120, 0.45, 300)]]), markets: quoted });
+  now += 2000; rec(e, { markets: withdrawn, gap: 'halt' });
+  now += 2000; rec(e, { markets: withdrawn, gap: 'halt' });
+  let L = io.lines();
+  ok('entering a halt writes one marker and a null quote for the withdrawn market', L.filter((x) => x.mk === 'g' && x.why === 'halt').length === 1 && L.some((x) => x.mk === 'q' && x.b === null && x.a === null), L);
+  ok('...and a halt that lasts does not write a marker every round', L.filter((x) => x.mk === 'g').length === 1);
+  now += 600000; rec(e, { books: new Map([['A', book(0.44, 120, 0.45, 300)]]), markets: quoted });
+  L = io.lines();
+  ok('the first round after says the desk is back, and after what', L.some((x) => x.mk === 'g' && x.why === 'resume' && x.after === 'halt'), L.filter((x) => x.mk === 'g'));
+  ok('...rewrites the book even though it did not change', L.filter((x) => x.mk === 'b').length === 2, L.filter((x) => x.mk === 'b').length);
+  ok('...and rewrites the quote it rejoined with, which the halt had cleared', L.filter((x) => x.mk === 'q').length === 3 && L.filter((x) => x.mk === 'q').pop().b === 0.44, L.filter((x) => x.mk === 'q'));
+  const io2 = disk(); const r2 = makeMakerTape(cfg(), { io: io2, clock: () => T0 });
+  r2(E(), { markets: withdrawn, gap: 'halt', trades: new Map([['A', [print('h1', 0.45, 5, 'bid', T0 - 200)]]]) });
+  ok('prints read during a halt are still kept', io2.lines().some((x) => x.mk === 'p' && x.id === 'h1'), io2.lines());
+  const io3 = disk(); makeMakerTape(cfg(), { io: io3, clock: () => T0 })(E(), { markets: withdrawn, gap: 'data-failure' });
+  ok('a failed data round is marked as a hole too, by name', io3.lines().some((x) => x.mk === 'g' && x.why === 'data-failure'), io3.lines());
+}
+
+group('a poll that skipped prints says so');
+{
+  const io = disk(); makeMakerTape(cfg(), { io, clock: () => T0 })(E(), { missed: true });
+  ok('a tape gap is a marker, not a quiet market', io.lines().length === 1 && io.lines()[0].mk === 'g' && io.lines()[0].why === 'tape-gap', io.lines());
+}
+
+group('a failed write does not mark anything as written');
+{
+  const io = disk(); let now = T0; const rec = makeMakerTape(cfg(), { io, clock: () => now }); const e = E();
+  const round = () => ({ books: new Map([['A', book(0.44, 120, 0.45, 300)]]), trades: new Map([['A', [print('f1', 0.45, 5, 'bid', T0)]]]), markets: { A: { quotes: { bid: 0.44, ask: 0.45 }, inv: -12 } } });
+  io.fail = true; rec(e, round());
+  io.fail = false; now += 2000; rec(e, round());
+  const L = io.lines();
+  ok('the book, the print and the quote are all written by the next round that works', L.some((x) => x.mk === 'b') && L.some((x) => x.mk === 'p' && x.id === 'f1') && L.some((x) => x.mk === 'q' && x.i === -12), L);
+  ok('...behind a marker saying a write was lost', L[0].mk === 'g' && L[0].why === 'write-failed', L[0]);
+  now += 2000; rec(e, round());
+  ok('...and once it has landed the marker is not repeated', io.lines().filter((x) => x.why === 'write-failed').length === 1);
+}
+
+group('a book line is stamped when the book arrived');
+{
+  const io = disk(); makeMakerTape(cfg(), { io, clock: () => T0 + 1500 })(E(), { books: new Map([['A', book(0.44, 1, 0.45, 1)]]), at: T0 + 200 });
+  ok('the exchange answered at T0+200ms, the round finished at T0+1500ms: the line says 200', io.lines()[0].t === T0 + 200, io.lines()[0]);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
