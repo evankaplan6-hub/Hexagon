@@ -29,6 +29,7 @@ const SUITES = [
   ['disk', 'the box disk: pull copies and verifies before any delete, the brake only trims old tapes'],
   ['ask', 'the Ask panel: the tool loop, append-only chats, limits and budget, route locks, no secrets'],
   ['askui', "the Ask drawer's page code: the answer escaped before it is formatted, and when a chat is over"],
+  ['volume', "the desk's own trading volume: what counts as a trade, minute buckets, and the rebuild from the journal"],
   ['chart', 'the dashboard chart: combined ledgers, exact time windows, a flat day that looks flat, history on an even clock'],
   ['weather-lab', 'the weather lab: whole-degree settlement maths, the per-city fit, the answer never shown to the strategy'],
   ['favorites-check', 'the favourites check: the rule fixed in advance, Sports excluded, a four-part verdict'],

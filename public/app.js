@@ -1225,6 +1225,22 @@
     return out;
   }
 
+  // What the desk traded inside each slot, in dollars: `buckets` are the server's minutes that traded,
+  // [minute, contracts, dollars], oldest first. A slot owns everything from its start up to the next
+  // slot's start, and the last one owns everything after, so nothing is dropped or counted twice.
+  function pnlVolume(slots, buckets) {
+    const out = [];
+    let j = 0;
+    while (j < buckets.length && buckets[j][0] < slots[0].t) j++;
+    for (let i = 0; i < slots.length; i++) {
+      const to = i + 1 < slots.length ? slots[i + 1].t : Infinity;
+      let d = 0;
+      while (j < buckets.length && buckets[j][0] < to) d += buckets[j++][2];
+      out.push(d);
+    }
+    return out;
+  }
+
   function chartPoints() {
     const M = S.maker || {};
     const pts = combinePnlHistory(S.balanceHistory, M.hist, S.initial, M.historyValidFrom || 0);
@@ -1255,7 +1271,7 @@
       ? `<span class="seg">${rangeBtns}</span><span class="seg cint-seg" title="Candle size">${intBtns}</span>`
       : `<span class="cmenu-wrap"><button type="button" class="cmenu-btn" data-menu="1" aria-haspopup="true" aria-expanded="false"></button>` +
         `<span class="cmenu" hidden><span class="cmh">Range</span><span class="seg">${rangeBtns}</span><span class="cmh">Candle size</span><span class="seg cint-seg">${intBtns}</span></span></span>`;
-    return `<div class="ct"><span class="ctitle">All paper trades</span><button class="cx ctype" data-type="1"></button>` +
+    return `<div class="ct"><span class="ctitle">All paper trades</span><button class="cx crz" data-zoomreset="1" title="Back to the whole range" hidden>↺</button><button class="cx ctype" data-type="1"></button>` +
       `${big ? '' : '<button class="cx" data-expand="1" title="Open large">⤢</button>'}</div>` +
       `<div class="chead"><span class="cv"></span><span class="cd"></span></div>` +
       `<div class="cplot"><i class="cband" hidden></i><div class="ctip" hidden></div></div>` +
@@ -1263,6 +1279,16 @@
   }
 
   const UP = '#22c55e', DOWN = '#ef4444', FLAT = '#64748b';
+  // volume bars: the candle's own colours, softened; a line has no direction to colour by
+  const VOL = { up: 'rgba(34,197,94,.42)', down: 'rgba(239,68,68,.42)', flat: 'rgba(100,116,139,.42)', line: 'rgba(140,168,210,.32)' };
+  const volTxt = (d) => (d >= 1e6 ? `$${(d / 1e6).toFixed(1)}M` : d >= 1e3 ? `$${(d / 1e3).toFixed(1)}k` : `$${Math.round(d)}`);
+  // The desk's own trading by the minute, from the server. Not in the 2-second stream: it is a long
+  // series that changes slowly, so it is fetched on its own, now and then.
+  let volume = [];
+  async function loadVolume() {
+    try { const r = await fetch('/api/volume'); if (r.ok) volume = await r.json(); } catch { /* the chart is just without bars */ }
+  }
+  loadVolume(); setInterval(loadVolume, 30000);
   // the button shows the chart you have; the tip says what a click turns it into
   const TYPE_ICON = {
     candles: '<svg viewBox="0 0 16 16" width="1.1em" height="1.1em" aria-hidden="true"><path d="M4.5 1.5v13M11.5 3v10" stroke="currentColor" stroke-width="1.3"/><rect x="2.5" y="4.5" width="4" height="6" fill="currentColor"/><rect x="9.5" y="5.5" width="4" height="5" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>',
@@ -1288,14 +1314,43 @@
     old.ro.disconnect(); old.c.remove(); plots.delete(el);
   }
 
+  // One chart at a time can be "active": clicked, outlined, and the only one that hears the trackpad.
+  // The rest leave wheel and touch alone, so the page still scrolls under the pointer. Active: two
+  // fingers up or down (or a pinch) zooms, two fingers sideways pans. A drag stays the measure.
+  let activeChart = null;
+  const hands = (on) => (on
+    ? { handleScroll: { mouseWheel: true, pressedMouseMove: false, horzTouchDrag: true, vertTouchDrag: false },
+        handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: false } }
+    : { handleScroll: false, handleScale: false });
+  function setActive(el) {
+    if (activeChart === el) return;
+    const was = activeChart;
+    activeChart = el;
+    for (const e of [was, el]) {
+      if (!e) continue;
+      e.classList.toggle('active', e === el);
+      const plot = plots.get(e);
+      if (plot) plot.c.applyOptions(hands(e === el));
+    }
+  }
+  const syncReset = (el) => { const b = el.querySelector('.crz'), plot = plots.get(el); if (b) b.hidden = !(plot && plot.zoomed); };
+  function resetZoom(el) {
+    const plot = plots.get(el);
+    if (!plot) return;
+    plot.zoomed = false; plot.c.timeScale().fitContent();
+    syncReset(el); paintOverlay(el);
+  }
+  // a click anywhere outside the active chart lets it go
+  document.addEventListener('pointerdown', (ev) => { if (activeChart && !activeChart.contains(ev.target)) setActive(null); });
+
   function makePlot(el, big, candles) {
     const LW = window.LightweightCharts;
     if (!LW) return null;   // the script did not load: the headline and the ranges still work
-    const plot = { c: null, s: null, ro: null, zero: null, open: null, candles, pts: [], start: null, end: 0, step: 0, off: 0, last: 0, digits: 2, fs: 0, read: '' };
+    const plot = { c: null, s: null, v: null, vols: [], zoomed: false, ro: null, zero: null, open: null, candles, pts: [], start: null, end: 0, step: 0, off: 0, last: 0, digits: 2, fs: 0, read: '' };
     const c = plot.c = LW.createChart(el.querySelector('.cplot'), {
       autoSize: true,
-      // a plot cannot be dragged or zoomed: the range buttons are the zoom, and a drag is the measure
-      handleScroll: false, handleScale: false,
+      // a plot is not dragged (a drag is the measure) and is zoomed only once it has been clicked
+      ...hands(el === activeChart),
       layout: { background: { type: LW.ColorType.Solid, color: 'transparent' }, textColor: '#657086',
         fontFamily: "'JetBrains Mono', ui-monospace, Menlo, monospace", fontSize: 9,
         // TradingView's terms for the library: their logo, linked, where the chart is (the page's
@@ -1311,6 +1366,11 @@
         vertLine: { color: 'rgba(148,163,184,.6)', labelVisible: big, labelBackgroundColor: '#212b3c' },
         horzLine: { visible: big, labelVisible: big, labelBackgroundColor: '#212b3c' } },
     });
+    // Volume is its own series on its own scale, in the bottom fifth of the plot, drawn first so the
+    // price sits over it. It has no axis of its own: the tip says the number.
+    plot.v = c.addSeries(LW.HistogramSeries, { priceScaleId: '', priceLineVisible: false, lastValueVisible: false,
+      priceFormat: { type: 'custom', minMove: 0.01, formatter: volTxt } });
+    plot.v.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
     const scale = {
       autoscaleInfoProvider: (original) => {
         const r = original();
@@ -1333,13 +1393,20 @@
     const ref = { color: '#44526b', lineWidth: 1, lineStyle: LW.LineStyle.Dashed, axisLabelVisible: false };
     plot.zero = plot.s.createPriceLine({ ...ref, price: 0 });
     plot.open = plot.s.createPriceLine({ ...ref, price: 0, lineVisible: false });
-    c.subscribeCrosshairMove((p) => { chart.hoverT = p.time == null ? null : (p.time - plot.off) * 1000; paintOverlay(el); });
+    // A chart that is shut (the large one, once closed) still gets one last crosshair event as it is
+    // resized away, and that would leave its hover on the floor chart. Only a chart on show hovers.
+    c.subscribeCrosshairMove((p) => {
+      if (!el.offsetWidth) return;
+      chart.hoverT = p.time == null ? null : (p.time - plot.off) * 1000; paintOverlay(el);
+    });
     // A panel that was hidden (the large chart, the phone card) gets its size a moment after it shows,
     // and a window can be resized: refit, once the library has taken the new size (its own observer
     // was made first, so it runs first). The library's own size-change event does not fire when its
     // time axis is hidden, which is the small chart and the phone card.
-    plot.ro = new ResizeObserver(() => { c.timeScale().fitContent(); paintOverlay(el); });
+    plot.ro = new ResizeObserver(() => { if (!plot.zoomed) c.timeScale().fitContent(); paintOverlay(el); });
     plot.ro.observe(el.querySelector('.cplot'));
+    // the band and the tip are pixels, so they follow a zoom or a pan
+    c.timeScale().subscribeVisibleTimeRangeChange(() => paintOverlay(el));
     plots.set(el, plot);
     return plot;
   }
@@ -1369,6 +1436,7 @@
     tip.hidden = false;
     tip.innerHTML = `<b>${hhmm(p.t)}</b> <span class="${p.v >= 0 ? 'pos' : 'neg'}">${signed(p.v)}</span><br>` +
       (plot.candles && w >= 300 ? `<small>O ${signed(p.o)} · H ${signed(p.h)} · L ${signed(p.l)}</small><br>` : '') +
+      (plot.vols[pts.indexOf(p)] > 0 ? `<small>Vol ${volTxt(plot.vols[pts.indexOf(p)])}</small><br>` : '') +
       `<small>${signed(r2(p.v - start.v))} since ${hhmm(start.t)}</small>`;
     // beside the crosshair, on the roomier side, and never past either edge of the plot
     const tw = tip.offsetWidth, at = x > w * 0.55 ? x - tw - 10 : x + 10;
@@ -1405,7 +1473,7 @@
     const mb = el.querySelector('.cmenu-btn');
     if (mb) mb.innerHTML = `${chart.range} · ${intervalTxt(chart.interval)}<i>▾</i>`;
     if (pts.length < 2 || slots.length < 2) {
-      if (plot) { plot.s.setData([]); plot.pts = []; }
+      if (plot) { plot.s.setData([]); plot.v.setData([]); plot.pts = []; plot.vols = []; }
       paintOverlay(el);
       el.querySelector('.cv').textContent = signed(pts.length ? pts[0].v : 0);
       el.querySelector('.cd').innerHTML = '';
@@ -1449,6 +1517,8 @@
     const opened = slots[0].o ?? slots[0].v, col = last.v >= opened ? UP : DOWN, zeroIn = r.min <= 0 && r.max >= 0;
     plot.open.applyOptions({ price: opened, lineVisible: !zeroIn });
     plot.zero.applyOptions({ lineVisible: zeroIn });
+    // what the user has zoomed to, by time, so the desk's next frame does not undo it
+    const view = plot.zoomed ? plot.c.timeScale().getVisibleRange() : null;
     // Zero is zero even as float noise (the library's ticks are sums). The finest tick the library will
     // draw is the last decimal shown, but it steps by 2.5 as readily as by 2, so an axis whose ticks
     // are not all whole at that many decimals gets one more for every tick, rather than a "-$3" at -$2.50.
@@ -1467,7 +1537,19 @@
       plot.s.applyOptions({ lineColor: col, topColor: `${col}29`, bottomColor: `${col}00` });
       plot.s.setData(slots.map((p) => ({ time: p.t / 1000 + off, value: p.v })));
     }
-    plot.c.timeScale().fitContent();
+    const vols = pnlVolume(slots, volume), most = Math.max(...vols);
+    plot.vols = vols;
+    plot.v.setData(slots.map((p, i) => ({ time: p.t / 1000 + off, value: vols[i],
+      color: !candles ? VOL.line : p.c > p.o ? VOL.up : p.c < p.o ? VOL.down : VOL.flat })));
+    // room for the bars only when there are some: a desk that has not traded keeps the whole plot
+    plot.c.priceScale('right').applyOptions({ scaleMargins: { top: 0.1, bottom: most > 0 ? 0.24 : 0.1 } });
+    const ts = plot.c.timeScale(), lo = slots[0].t / 1000 + off, hi = slots[slots.length - 1].t / 1000 + off;
+    // a zoom survives the next frame if what it was looking at is still in the data; otherwise the
+    // range or the candle size has changed under it, and the chart starts over
+    if (view && view.to > lo && view.from < hi) {
+      try { ts.setVisibleRange({ from: Math.max(view.from, lo), to: Math.min(view.to, hi) }); } catch { plot.zoomed = false; ts.fitContent(); }
+    } else { plot.zoomed = false; ts.fitContent(); }
+    syncReset(el);
     paintOverlay(el);
   }
 
@@ -1501,6 +1583,9 @@
     root.addEventListener('click', (ev) => {
       const b = ev.target.closest('button');
       if (!b) return;
+      if (b.dataset.zoomreset) { resetZoom(root); return; }
+      // a different range, candle size or kind of chart is a different picture: zoom starts over
+      if (b.dataset.range || b.dataset.int || b.dataset.type) { const pl = plots.get(root); if (pl) pl.zoomed = false; }
       if (b.dataset.menu) { const m = menu('.cmenu'); setMenu(m && m.hidden); return; }
       if (b.dataset.range) { chart.range = b.dataset.range; chart.band = null; saveChart(); }
       if (b.dataset.int) {
@@ -1511,6 +1596,14 @@
       if (b.dataset.expand) { openBigChart(); return; }
       drawChart(root, big);
     });
+    // a click on the plot makes it the active chart (the highlight, and the trackpad); a double-click
+    // takes the whole range back; a wheel or pinch on the active one is a zoom, which is remembered
+    root.addEventListener('pointerdown', (ev) => { if (ev.target.closest('.cplot')) setActive(root); });
+    root.addEventListener('dblclick', (ev) => { if (ev.target.closest('.cplot')) resetZoom(root); });
+    root.addEventListener('wheel', () => {
+      const plot = plots.get(root);
+      if (plot && activeChart === root && !plot.zoomed) { plot.zoomed = true; syncReset(root); }
+    }, { passive: true });
     root.addEventListener('pointerdown', (ev) => {
       // the left button only: a right-click or a Ctrl-click opens a menu and may never send a release.
       // No preventDefault here: it would stop the library hearing the mouse move, and freeze its
@@ -1843,7 +1936,7 @@
   const bigChart = $('chartbig');
   wireChart($('chartbig-pnl'), true);
   function openBigChart() { bigChart.hidden = false; chart.band = null; drawChart($('chartbig-pnl'), true); bigChart.querySelector('.cbback').focus(); }
-  function closeBigChart() { if (bigChart.hidden) return; bigChart.hidden = true; chart.hoverT = null; chart.dragFrom = null; chart.band = null; }
+  function closeBigChart() { if (bigChart.hidden) return; if (activeChart === $('chartbig-pnl')) setActive(null); bigChart.hidden = true; chart.hoverT = null; chart.dragFrom = null; chart.band = null; }
   // A click lands on the nearest ancestor of where the press began and where it ended, so a measuring
   // drag let go over the dark backdrop clicks the backdrop. Only a press that began there closes it.
   let pressedInBox = false;
@@ -1852,7 +1945,7 @@
     if ((ev.target === bigChart && !pressedInBox) || ev.target.closest('[data-close]')) closeBigChart();
     pressedInBox = false;
   });
-  window.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') closeBigChart(); });
+  window.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') { setActive(null); closeBigChart(); } });
 
   $('wall').addEventListener('click', (ev) => {
     const b = ev.target.closest('button');

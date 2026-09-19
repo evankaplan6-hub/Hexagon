@@ -220,6 +220,7 @@ const server = http.createServer((req, res) => {
   if (p === '/api/state') return json(res, engine.snapshot());
   if (p === '/api/pairs') return json(res, engine.pairs.map((x) => ({ ...x, q: x.q || null })));
   if (p === '/api/trades') return json(res, engine.state.closed);
+  if (p === '/api/volume') return json(res, engine.volume.entries());
   if (p === '/api/positions') return json(res, engine.state.positions);
   if (p === '/api/log') return json(res, engine.state.log);
   if (p === '/api/stream') {

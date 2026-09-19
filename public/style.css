@@ -511,6 +511,10 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 .pnl .cd { margin-left: auto; font: 600 .7em/1 var(--mono); color: var(--brd-label); white-space: nowrap; }
 .pnl.big .cd { font-size: .95em; }
 .pnl .cplot { position: relative; flex: 1 1 auto; min-height: 0; margin: .3em 0 .4em; cursor: crosshair; touch-action: none; }
+/* clicked: the plot is outlined, and the trackpad zooms it */
+.pnl .cplot { border-radius: 4px; transition: box-shadow .15s; }
+.pnl.active .cplot { box-shadow: 0 0 0 1px rgba(94,200,224,.65), 0 0 16px rgba(94,200,224,.16); }
+.pnl .crz { color: #5ec8e0 !important; }
 /* the library's canvas fills this box; the measuring band and the hover tip float over it */
 .pnl .cband { position: absolute; top: 0; bottom: 0; z-index: 2; background: rgba(94,200,224,.12); pointer-events: none; }
 .pnl .ctip { position: absolute; z-index: 3; top: 4%; padding: .4em .6em; border-radius: 7px; background: rgba(9,12,18,.96); border: 1px solid var(--brd-rule2);
