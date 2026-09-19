@@ -173,8 +173,49 @@ async function retryTests() {
   } finally { global.fetch = real; }
 }
 
+// The stall watchdog's evidence: which calls are started and not finished, and for how long.
+async function inflightTests() {
+  group('calls that have started and not finished can be listed, and are gone when they finish');
+  const real = global.fetch;
+  const KS = 'https://api.elections.kalshi.com/trade-api/v2';
+  try {
+    let release;
+    global.fetch = () => new Promise((r) => { release = () => r({ ok: true, status: 200, headers: { get: () => null }, json: async () => ({ ok: 1 }) }); });
+    ok('nothing in flight to begin with', http.inflight().length === 0, http.inflight());
+    const p = http.getJSON(`${KS}/markets?series_ticker=KXTEST`);
+    await new Promise((r) => setImmediate(r));
+    const now = Date.now() + 42000;
+    const held = http.inflight(now);
+    ok('a call waiting on the network is listed', held.length === 1 && held[0].phase === 'fetch' && /series_ticker=KXTEST/.test(held[0].url), held);
+    ok('...with its age', held[0].ageSec >= 41 && held[0].ageSec <= 43, held[0]);
+    release();
+    await p;
+    ok('...and gone once it returns', http.inflight().length === 0, http.inflight());
+
+    global.fetch = async () => { throw new Error('boom'); };
+    try { await http.getJSON(`${KS}/markets`); } catch { /* expected */ }
+    ok('...and gone when it fails', http.inflight().length === 0, http.inflight());
+
+    // a call still waiting for its turn is listed as queued, and counted
+    // a pacer whose wait holds until the test lets it go
+    let t = 1000, letGo = null;
+    http.paceHost(KS, 1000, { now: () => t, sleep: (ms) => new Promise((r) => { letGo = () => { t += ms; r(); }; }) });
+    global.fetch = async () => ({ ok: true, status: 200, headers: { get: () => null }, json: async () => ({}) });
+    const first = http.getJSON(`${KS}/a`), second = http.getJSON(`${KS}/b`);
+    await first;
+    await new Promise((r) => setImmediate(r));
+    ok('a call waiting for its turn is listed as queued', http.inflight().length === 1 && http.inflight()[0].phase === 'queue', http.inflight());
+    ok('...and the queue is counted', http.queued() === 1, http.queued());
+    while (!letGo) await new Promise((r) => setImmediate(r));
+    letGo();
+    await second;
+    ok('...and it drains', http.inflight().length === 0 && http.queued() === 0, { held: http.inflight(), q: http.queued() });
+  } finally { global.fetch = real; http.paceHost(KS, 0); }
+}
+
 run()
   .then(retryTests)
+  .then(inflightTests)
   .catch((e) => { fail++; console.log(`  FAIL  threw: ${e.stack}`); })
   .finally(() => {
     console.log(`\n${pass} passed, ${fail} failed`);
