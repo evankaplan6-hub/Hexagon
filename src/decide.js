@@ -389,8 +389,8 @@ function biasFor(history, cfg) {
 // it EVER been narrow in the window I can see". A gap that opened from nothing an hour ago has a
 // narrow sample behind it and passes; one that has been 4c for the whole window does not.
 //
-// Fails OPEN on a short history: the desk restarts often and `E.history` starts empty, and a gate
-// that vetoes everything for the first half hour after every deploy would be worse than the churn.
+// Answers only the question it is named for. "Not enough history to say" is a DIFFERENT question
+// and belongs to `gapUnseen` below, which is what KETT actually acts on first.
 // Returns the veto reason, or null.
 function standingGap(history, cfg) {
   if (!history || history.length < 3) return null;
@@ -408,6 +408,37 @@ function standingGap(history, cfg) {
   }
   if (hi - lo > cfg.standingGapRange) return null;                 // it moves, even if it stays wide
   return `gap has stood at ${(lo * 100).toFixed(1)}c for ${Math.round(mins)}m without moving`;
+}
+
+// Have we watched this pair long enough to have any opinion about its gap? A convergence trade is
+// a bet that a gap will MOVE, and that bet cannot be made off a book you have never seen move.
+//
+// This exists because of what the desk did on 2026-09-18 at 21:01Z. It restarted, `E.history` came
+// back empty, and within the same minute it opened three convergence positions -- Wisconsin
+// Governor, Maine Senate, Balance of Power -- on gaps it had never observed. They cost $56.39, the
+// three largest convergence losses of that week, and RIGO's mind closed two of them with the
+// verdict "gap unchanged at 4c through 220 of 240 min". The gap had been standing the whole time.
+// The desk simply had no way to know, because the only evidence lived in a Map that a restart had
+// just emptied.
+//
+// So the warm-up bar is not caution, it is the same veto as `standingGap` arriving in time to be
+// worth something. Replayed over 2026-09-10..20 it takes the veto from 19 trades and $192.93 to 29
+// trades and $319.02 -- $126 more -- and kills no additional winner. The cost is that the desk
+// takes no convergence trade for the first `standingGapMin` after a restart, on a book whose every
+// measured week has lost money; the arb book, which is hedged and does not care which way a gap
+// moves, is untouched by this.
+//
+// Returns the veto reason, or null once the pair has been watched long enough to judge.
+function gapUnseen(history, cfg) {
+  if (!(cfg.standingGapMin > 0)) return null;                     // the bar is switched off
+  const span = history && history.length >= 2
+    && Number.isFinite(history[0].t) && Number.isFinite(history[history.length - 1].t)
+    ? (history[history.length - 1].t - history[0].t) / 60000
+    : 0;
+  if (!history || history.length < 3 || span < cfg.standingGapMin) {
+    return `pair watched for ${Math.round(span)}m of the ${cfg.standingGapMin}m needed to judge its gap`;
+  }
+  return null;
 }
 
 // Is there room in the book for this signal? Unhedged convergence positions and locked arbs are
@@ -494,4 +525,4 @@ function arbEdgeLive(signal, books, cfg) {
   return 1 - cost;
 }
 
-module.exports = { fairValue, quoteFault, convEdge, pairSignals, scan, liveWindow, exitIntent, gainLockIntent, arbUnwind, arbReturn, arbEdgeLive, riskState, biasFor, standingGap, bookFull, persistFilter, sizePlan, rankSignals, pmRate };
+module.exports = { fairValue, quoteFault, convEdge, pairSignals, scan, liveWindow, exitIntent, gainLockIntent, arbUnwind, arbReturn, arbEdgeLive, riskState, biasFor, standingGap, gapUnseen, bookFull, persistFilter, sizePlan, rankSignals, pmRate };

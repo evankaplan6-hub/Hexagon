@@ -36,6 +36,15 @@ function engine(over = {}) {
   E.journal = (_e, type, data) => { (E.journalled = E.journalled || []).push({ type, data }); };
   return E;
 }
+// A pair KETT has watched long enough to have an opinion about (decide.gapUnseen), whose gap was
+// narrow to begin with so the standing-gap veto does not fire either. Convergence entries need
+// both before they are allowed, so any test that drives KETT through one has to supply it.
+const watched = (mins = 40) => Array.from({ length: mins + 1 }, (_, i) => ({
+  t: Date.now() - (mins - i) * 60000,
+  pmMid: 0.50,
+  ksMid: i < 5 ? 0.505 : 0.60,   // opened from nothing: exactly the setup the book exists for
+}));
+
 const position = (over = {}) => ({
   id: 'p1', group: 'g1', pairId: 'pair1', label: 'test pair', venue: 'KS', ref: 'KXTEST-A',
   side: 'yes', qty: 100, entry: 0.60, mark: 0.62, cost: 60.90, fee: 0.90,
@@ -313,6 +322,7 @@ const position = (over = {}) => ({
     const E = engine();
     E.cfg.mode = 'live'; E.liveReady = true; E.halt = null;
     const pair = { id: 'unknown-pair', label: 'unknown pair', pm: { id: 'pm-unknown' }, ks: { ticker: 'KXUNKNOWN' }, q: { pmVol: 1000, ksVol: 1000 } };
+    E.history.set('unknown-pair', watched());
     E.signals = [{ pair, type: 'converge', edge: 0.10, gap: 0.10, legs: [{ venue: 'KS', side: 'yes', px: 0.50 }] }];
     E.book = async (venue) => venue === 'PM'
       ? ({ asks: [{ price: 0.80, size: 100 }], yesBid: 0.79, yesAsk: 0.80 })

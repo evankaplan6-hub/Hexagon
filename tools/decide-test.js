@@ -237,6 +237,31 @@ group('the standing-gap veto: a gap that never moves is not an edge');
   ok('the range config is a usable number', Number.isFinite(cfg.standingGapRange) && cfg.standingGapRange >= 0, cfg.standingGapRange);
 }
 
+group('the warm-up bar: never bet a gap will move off a book you have not watched');
+{
+  const MIN = 60000;
+  const watched = [];
+  for (let i = 0; i <= 40; i++) watched.push({ pmMid: 0.500, ksMid: i < 30 ? 0.505 : 0.545, t: i * MIN });
+  ok('a pair watched long enough is judged normally', d.gapUnseen(watched, cfg) === null, d.gapUnseen(watched, cfg));
+
+  // 2026-09-18T21:01Z: the desk restarted, history came back empty, and it opened three
+  // convergence positions inside the minute. They cost $56.39.
+  ok('an empty history is refused', typeof d.gapUnseen([], cfg) === 'string');
+  ok('a history of one cycle is refused', typeof d.gapUnseen(watched.slice(0, 1), cfg) === 'string');
+  ok('a history shorter than the window is refused', typeof d.gapUnseen(watched.slice(0, 10), cfg) === 'string',
+    d.gapUnseen(watched.slice(0, 10), cfg));
+  ok('and the refusal says how far short it is', /of the 30m needed/.test(d.gapUnseen(watched.slice(0, 10), cfg) || ''),
+    d.gapUnseen(watched.slice(0, 10), cfg));
+  ok('a history without timestamps is refused, not trusted', typeof d.gapUnseen(watched.map(({ t, ...r }) => r), cfg) === 'string');
+
+  // The bar is a knob, and at 0 it is off -- the behaviour before 2026-09-19.
+  ok('the bar can be switched off', d.gapUnseen([], { ...cfg, standingGapMin: 0 }) === null);
+
+  // The two gates answer different questions and must not be conflated: a thin history is not a
+  // standing gap, and KETT asks gapUnseen FIRST.
+  ok('a thin history is not itself a standing gap', d.standingGap(watched.slice(0, 10), cfg) === null);
+}
+
 group('a convergence trade needs a thick venue to lean on');
 {
   // 4c gap, tight books, and the two venues carrying the same volume. Fair sits in the middle of
