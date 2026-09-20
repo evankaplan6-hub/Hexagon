@@ -445,9 +445,28 @@ module.exports = {
   // all months from settling -- are repriced every ANY_REFRESH_SEC, inside MAX_DATA_AGE_SEC.
   discoverGapMs: Math.max(0, num('DISCOVER_GAP_MS', 1500)),
   anyRefreshSec: Math.max(15, num('ANY_REFRESH_SEC', 60)),
-  // Polymarket events under this 24h volume are not crawled. $500 keeps ~1,200 events (every one
-  // traded at least $1k on 2026-09-14 but a handful) and stops well inside Gamma's offset cap of 2,000.
-  pmDiscoverMinVol: num('PM_DISCOVER_MIN_VOL', 500),
+  // Polymarket events under this 24h volume are not crawled. It was $500 while sports was excluded,
+  // which kept ~1,200 events. Crawling sports put 29,605 markets and 63.8 MB through that floor --
+  // Polymarket more than tripled, where Kalshi only doubled, because sports floods a listing ranked
+  // by 24h volume and the crawl runs until it drops below the floor. Measured 2026-09-19:
+  //     $500 -> 29,605 markets, 63.8 MB      $5,000 -> 13,290 markets, 25.6 MB
+  //   $2,000 -> 18,704 markets, 38.1 MB     $25,000 ->  7,079 markets, 12.6 MB
+  // $5,000 halves the Polymarket side and still keeps every fight on the card (the first floor that
+  // loses one is $25,000, and it is still more markets than the $500 floor crawled before sports).
+  pmDiscoverMinVol: num('PM_DISCOVER_MIN_VOL', 5000),
+  // Categories the crawl skips. Both were 'Sports' (plus 'Esports' on Polymarket) until 2026-09-19,
+  // on the reasoning that the fast path below already owned games. It does not own everything: the
+  // eleven KS_SERIES are team-game series, so fights -- UFC and boxing, which are listed on both
+  // venues and settle on one unambiguous result -- were never crawled, never paired and never seen.
+  // Measured before unblocking, with the keep filter the desk passes: sports is 22,797 of the 45,017
+  // Kalshi markets kept and 35 MB of the 69 MB of records, and the whole crawl peaks at 107 MB of
+  // heap on a 512 MB box. It roughly doubles the crawl and still fits.
+  // Note what this does NOT do: nothing in the rules allowlist (src/rules.js) is a sports family, so
+  // every new pair lands `unclear` and is watch-only. A sports pair can only begin trading if the
+  // Claude rules judge upgrades it, which needs RULES_CHECK and a key and is capped by ASK_DAILY_USD.
+  // Set DISCOVER_EXCLUDE_KS=Sports and DISCOVER_EXCLUDE_PM=Sports,Esports to put the wall back.
+  discoverExcludeKs: env('DISCOVER_EXCLUDE_KS', '').split(',').map((s) => s.trim()).filter(Boolean),
+  discoverExcludePm: env('DISCOVER_EXCLUDE_PM', '').split(',').map((s) => s.trim()).filter(Boolean),
   // The rules gate's Claude check (src/rules.js): a matched pair with no verified rule family is
   // watch-only, and when one shows an edge its two rules texts can be put to Claude ONCE (the answer
   // is cached in DATA_DIR/rules-verdicts.jsonl, keyed by both texts). Nothing is asked without

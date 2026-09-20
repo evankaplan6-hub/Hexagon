@@ -190,6 +190,24 @@ function namesMatch(a, b) {
   return X.length === Y.length && X.length >= 2 && X[0] === Y[0] && X.slice(1, -1).join(' ') === Y.slice(1, -1).join(' ')
     && X[X.length - 1].length >= 5 && lev(X[X.length - 1], Y[Y.length - 1]) === 1;
 }
+// ---------------------------------------------------------------- two named outcomes (fights)
+// Everything else in this file pairs one Kalshi market to one Polymarket YES, on token 0. A fight
+// is not that shape: Polymarket lists it as ONE market whose two OUTCOMES are the fighters
+// ("Alexandre Pantoja" / "Joshua Van"), and Kalshi lists it as TWO markets, "Alexandre Pantoja
+// wins" and "Joshua Van wins". So the generic path cannot see it twice over -- the Polymarket side
+// has no groupItemTitle to match a name against, and the loser's leg lives on token 1, which no
+// candidate was ever built for. UFC 331 on 2026-09-19 was eight fights on both venues and matched
+// nothing at all.
+// A pair of outcomes qualifies only when BOTH are real names: Yes/No, Over/Under and Draw/Tie are
+// the ordinary binary shapes and belong to the generic path, which already knows their polarity.
+const YESNO = /^(yes|no|over|under|draw|tie|none|other)$/i;
+function namedOutcomes(p) {
+  const o = Array.isArray(p && p.outcomes) ? p.outcomes : null;
+  if (!o || o.length !== 2) return null;
+  if (o.some((x) => !x || YESNO.test(String(x).trim()))) return null;
+  return o.map((x) => String(x));
+}
+
 // "R Senate, D House" and "D-House, R-Senate" are the same combination.
 function combo(s) {
   const t = norm(s);
@@ -348,6 +366,39 @@ function matchAny(pmMarkets, ksMarkets, opts = {}) {
       for (const p of pe.markets) {
         const pLabel = p.groupItemTitle || '';
         if (OTHER.test(pLabel.trim())) { if (ke.markets.length) reject(p, ke.markets[0], 'other-bucket', pLabel); continue; }
+
+        // The fight shape: two named Polymarket outcomes against the Kalshi event's two legs. Each
+        // leg becomes its own candidate on its own token, so both sides of the fight are priced.
+        // The gate is deliberately narrow and needs no help from missingEntity: BOTH Kalshi legs
+        // must name a fighter, and they must name DIFFERENT ones. That rules out an event whose
+        // legs are not the two sides of one contest, and it is stronger than the generic proper-noun
+        // check would be here -- which would fail this shape anyway, rejecting "Flyweight" and "Main
+        // Card" as entities Kalshi never mentions, when they describe the bout and not the outcome.
+        const named = namedOutcomes(p);
+        if (named && ke.markets.length === 2) {
+          const legs = [];
+          for (const k of ke.markets) {
+            const kLabel = k.yesSubTitle || k.subTitle || '';
+            const i = named.findIndex((o) => namesMatch(o, kLabel));
+            if (i >= 0) legs.push({ k, i });
+          }
+          if (legs.length === 2 && legs[0].i !== legs[1].i) {
+            // "UFC 331" must not pair with "UFC 332": the card number is on both event titles.
+            const pn = nameNumbers(`${pe.text} ${p.question || ''}`), kn = nameNumbers(ke.fullText);
+            const onlyOne = [...pn].filter((x) => !kn.has(x)).concat([...kn].filter((x) => !pn.has(x)));
+            if (onlyOne.length) { reject(p, legs[0].k, 'figures', `numbers ${[...pn]} vs ${[...kn]}`); continue; }
+            for (const { k, i } of legs) {
+              candidates.push({
+                id: `${p.id}:${i}|${k.ticker}`, pm: p, ks: k, tokenIndex: i, how: 'outcomes',
+                score: Math.round((score + 0.5) * 1000) / 1000,
+                label: makeLabel(pe.text, p, k), category: k.category || null, series: k.seriesTicker || null,
+                rulesKey: `${p.rulesHash || ''}:${k.rulesHash || ''}`,
+              });
+            }
+            continue;
+          }
+        }
+
         let best = null;
         for (const k of ke.markets) {
           const kLabel = k.yesSubTitle || k.subTitle || '';
@@ -403,12 +454,15 @@ function matchAny(pmMarkets, ksMarkets, opts = {}) {
     }
   }
 
-  // one Polymarket market per Kalshi ticker and back: best score wins
+  // one Polymarket TOKEN per Kalshi ticker and back: best score wins. The key is the token, not the
+  // market: a fight is one Polymarket market whose two tokens are two different things to hold, and
+  // keying on the market id alone would throw the second fighter away as a duplicate of the first.
   candidates.sort((a, b) => b.score - a.score);
   const usedK = new Set(), usedP = new Set(), out = [];
   for (const c of candidates) {
-    if (usedK.has(c.ks.ticker) || usedP.has(c.pm.id)) { reject(c.pm, c.ks, 'duplicate', c.label); continue; }
-    usedK.add(c.ks.ticker); usedP.add(c.pm.id); out.push(c);
+    const pKey = `${c.pm.id}:${c.tokenIndex || 0}`;
+    if (usedK.has(c.ks.ticker) || usedP.has(pKey)) { reject(c.pm, c.ks, 'duplicate', c.label); continue; }
+    usedK.add(c.ks.ticker); usedP.add(pKey); out.push(c);
     stats.byHow[c.how] = (stats.byHow[c.how] || 0) + 1;
     stats.byCategory[c.category || 'Other'] = (stats.byCategory[c.category || 'Other'] || 0) + 1;
   }

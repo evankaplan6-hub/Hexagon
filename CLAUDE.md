@@ -18,7 +18,7 @@ to Fly once tests pass (paper only; see ops/DEPLOY.md → Auto-deploy).
 ## Running it
 
 ```bash
-npm test                                      # 2045 assertions, no network, no clock
+npm test                                      # 2126 assertions, no network, no clock
 node server.js                                # paper account, live market data → localhost:8787
 DEMO=1 DATA_DIR=./data-demo node server.js    # synthetic fills/settles, separate account
 npm run reset                                 # wipe the paper account
@@ -45,7 +45,7 @@ server.js         HTTP + SSE server, .env loader, live-mode gate
 src/config.js     all tunables          src/engine.js    state, cash, positions, cycle loop
 src/decide.js     pure decision core: gates, ranking, sizing, exits (no I/O, no clock)
 src/agents.js     the six desks         src/matcher.js   cross-venue matching (Fed + games, every cycle)
-src/anymarket.js  any-market scanner: src/discovery.js crawls both venues, src/match-any.js pairs any
+src/anymarket.js  any-market scanner: src/discovery.js crawls both venues (sports included since 2026-09-19), src/match-any.js pairs any
                   category, src/rules.js decides which pairs' resolution rules match (only those trade)
 src/broker.js     paper broker + live Kalshi adapter
 src/makerdesk.js  the maker's loop: universe from the any-market crawl (MAKER_WIDEN, no extra calls),
@@ -60,7 +60,8 @@ src/tape.js       maker market data     src/kalshi-ws.js Kalshi trade socket (re
 src/makertape.js  records the maker's book, prints and quotes into the ticks-*.jsonl tape (RECORD_MAKER=0 off)
 src/whales.js     whale watch: top wallets' big bets on Polymarket's sports/politics/economics/crypto/culture/tech/finance boards (advisory, never trades; WHALE_WATCH=0 off)
 src/ask.js        the dashboard Ask panel: read-only Claude tool loop (src/ask-tools.js), ASK_DAILY_USD ceiling; needs ANTHROPIC_API_KEY
-tools/            edge-scan, replay, maker-replay, maker-rank, pm-maker-scan, maker-report, fillcheck,
+tools/            edge-scan, replay, maker-replay, maker-rank, pm-maker-scan, maker-report, fillcheck, ufc-scan (prices a
+                  fight card on both venues, cross-venue and within Kalshi, net of fees; read-only),
                   history-scan, golden, api, lab-fetch + lab (strategy tournament on settled markets),
                   whale-fetch + whale-lab (does copying top sports wallets pay? no, out of sample),
                   stock-fetch + stock-lab (ETF strategy tournament on Yahoo daily bars, walk-forward vs SPY;

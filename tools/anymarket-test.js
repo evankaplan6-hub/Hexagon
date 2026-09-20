@@ -18,6 +18,7 @@ const ok = (name, cond, got) => {
   console.log(`  FAIL  ${name}${got === undefined ? '' : `\n        got: ${JSON.stringify(got)}`}`);
 };
 const group = (n) => console.log(`\n${n}`);
+const r2 = (x) => Math.round(x * 1e6) / 1e6;   // 1 - 0.59 is not 0.41 in binary floating point
 
 const T0 = 1788900000000;
 const dirs = [];
@@ -40,14 +41,15 @@ function harness(list, over = {}) {
   let prices = over.prices || new Map();
   let ksLive = over.ksLive || [];
   const requested = [];
+  const crawlArgs = {};
   const saved = { data: null };
   let clockAt = T0;
   const deps = {
     now: () => clockAt,
     discovery: {
       makeDiscoveryFetch: () => async () => ({}),
-      crawlKalshi: async () => { if (crawl.throw) throw new Error('boom'); return crawl.k; },
-      crawlPolymarket: async () => crawl.p,
+      crawlKalshi: async (opts) => { crawlArgs.ks = opts; if (crawl.throw) throw new Error('boom'); return crawl.k; },
+      crawlPolymarket: async (opts) => { crawlArgs.pm = opts; return crawl.p; },
     },
     store: {
       save: (file, data) => { saved.data = JSON.parse(JSON.stringify(data)); saved.file = file; },
@@ -61,7 +63,7 @@ function harness(list, over = {}) {
   };
   deps.sleep = async (ms) => { clockAt += ms; };   // pacing moves the fake clock instead of waiting
   const A = makeAnyMarket(E.cfg, deps);
-  return { A, E, logs, requested, saved, set: { clock: (t) => { clockAt = t; }, crawl: (c) => { crawl = c; }, prices: (p) => { prices = p; }, ksLive: (k) => { ksLive = k; } } };
+  return { A, E, logs, requested, saved, crawlArgs, set: { clock: (t) => { clockAt = t; }, crawl: (c) => { crawl = c; }, prices: (p) => { prices = p; }, ksLive: (k) => { ksLive = k; } } };
 }
 
 (async () => {
@@ -80,6 +82,27 @@ function harness(list, over = {}) {
     const noMaker = harness([]);
     await noMaker.A.discover(noMaker.E);   // no maker on the engine at all
     ok('a desk with no maker still finishes its crawl', noMaker.logs.some((l) => l.agent === 'HOLT'), noMaker.logs.map((l) => l.agent));
+  }
+
+  group('the config decides which categories the crawl skips');
+  {
+    // The crawlers default to skipping Sports; the desk overrides that with DISCOVER_EXCLUDE_KS /
+    // DISCOVER_EXCLUDE_PM, which are empty, so sports is crawled. Passing the lists explicitly is
+    // the whole mechanism -- if anymarket stops forwarding them the library default silently puts
+    // the wall back, and fights disappear from the scan again with nothing to show for it.
+    const open = harness([]);
+    await open.A.discover(open.E);
+    ok('the Kalshi crawl is told what to exclude', Array.isArray(open.crawlArgs.ks.excludeCategories), open.crawlArgs.ks.excludeCategories);
+    ok('the Polymarket crawl is told what to exclude', Array.isArray(open.crawlArgs.pm.excludeTags), open.crawlArgs.pm.excludeTags);
+    ok('by default nothing is excluded, so sports is crawled',
+      open.crawlArgs.ks.excludeCategories.length === 0 && open.crawlArgs.pm.excludeTags.length === 0,
+      [open.crawlArgs.ks.excludeCategories, open.crawlArgs.pm.excludeTags]);
+
+    const walled = harness([], { cfg: { discoverExcludeKs: ['Sports'], discoverExcludePm: ['Sports', 'Esports'] } });
+    await walled.A.discover(walled.E);
+    ok('and a config that names them puts the wall back',
+      walled.crawlArgs.ks.excludeCategories.join() === 'Sports' && walled.crawlArgs.pm.excludeTags.join() === 'Sports,Esports',
+      [walled.crawlArgs.ks.excludeCategories, walled.crawlArgs.pm.excludeTags]);
   }
 
   group('discovery keeps verified pairs first, drops different rules, and respects the cap');
@@ -150,6 +173,21 @@ function harness(list, over = {}) {
     ok('the Polymarket price comes from the CLOB', p && p.bestBid === 0.53 && p.bestAsk === 0.54 && p.at === T0, p);
     const empty = E.quotes.ks.get('SENATEIA-26-R');
     ok('an empty Kalshi book keeps its OLD time, so the pair goes stale instead of pricing 0/1', empty && empty.at !== T0 && empty.yesBid === 0, empty);
+
+    // A token-1 leg (a fight's second fighter) is priced on token 1, but the cache is keyed by
+    // MARKET and holds outcome 0's quote -- the engine takes the complement itself for such a pair,
+    // so storing token 1's price raw would flip an already-flipped quote.
+    const two = harness([{ ...cand('f', 'KXUFCFIGHT-26SEP19VANPAN-VAN', 'same'), tokenIndex: 1 }]);
+    two.set.clock(T0 - 600000);
+    await two.A.discover(two.E);
+    two.set.clock(T0);
+    two.set.ksLive([{ ticker: 'KXUFCFIGHT-26SEP19VANPAN-VAN', yesBid: 0.58, yesAsk: 0.59, vol24: 900, status: 'active', closeTime: '2026-10-04T02:20:00Z' }]);
+    two.set.prices(new Map([['f-n', { bid: 0.58, ask: 0.59 }]]));   // token 1 is tokenIds[1]
+    await two.A.refresh(two.E);
+    two.A.inject(two.E);
+    const fp = two.E.quotes.pm.get('f');
+    ok('a token-1 leg is repriced off its own token', fp && fp.at === T0, fp);
+    ok('...and stored as outcome 0, so the engine\'s flip lands on the right side', fp && r2(fp.bestBid) === 0.41 && r2(fp.bestAsk) === 0.42, fp && [fp.bestBid, fp.bestAsk]);
     set.ksLive([{ ticker: 'CONTROLS-2026-D', status: 'finalized', result: 'yes' }]);
     set.clock(T0 + 61000);   // the next reprice, a minute on
     await A.refresh(E);

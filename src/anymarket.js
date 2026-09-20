@@ -122,8 +122,10 @@ function makeAnyMarket(cfg, deps = {}) {
       const [k, p] = await Promise.all([
         // A Kalshi market nobody holds and nobody traded today has no counterparty to arb against;
         // skipping it as the page is read keeps the crawl's memory to what can matter.
-        discovery.crawlKalshi({ getJSON: getJSONks, seriesInfo: ks.seriesInfo, sleep, keep: (m) => (m.oi || 0) > 0 || (m.vol24 || 0) > 0 }),
-        discovery.crawlPolymarket({ getJSON, minEventVol: cfg.pmDiscoverMinVol, sleep }),
+        discovery.crawlKalshi({ getJSON: getJSONks, seriesInfo: ks.seriesInfo, sleep, keep: (m) => (m.oi || 0) > 0 || (m.vol24 || 0) > 0,
+          excludeCategories: cfg.discoverExcludeKs }),
+        discovery.crawlPolymarket({ getJSON, minEventVol: cfg.pmDiscoverMinVol, sleep,
+          excludeTags: cfg.discoverExcludePm }),
       ]);
       if (!k.markets.length || !p.markets.length) {
         E.log('HOLT', 'OPS', null, `any-market discovery came back empty (${k.markets.length} Kalshi, ${p.markets.length} Polymarket markets) · keeping the last good set of ${candidates.length} pairs`);
@@ -187,11 +189,20 @@ function makeAnyMarket(cfg, deps = {}) {
     }
     if (pr.status === 'fulfilled') {
       for (const c of candidates) {
-        const tok = c.pm.tokenIds && c.pm.tokenIds[c.tokenIndex || 0];
+        const idx = c.tokenIndex || 0;
+        const tok = c.pm.tokenIds && c.pm.tokenIds[idx];
         const live = tok && pr.value.get(tok);
         const prev = pmCache.get(c.pm.id);
         if (!live || !prev) continue;
-        pmCache.set(c.pm.id, { ...prev, bestBid: live.bid, bestAsk: live.ask, at: now });
+        // The cache is keyed by MARKET and holds outcome-0's quote, which is the convention the rest
+        // of the desk reads it in (src/engine.js takes the complement for a tokenIndex-1 pair). A
+        // token-1 leg was priced on token 1, so it is stored as its complement -- otherwise the
+        // engine flips an already-flipped quote. It matters now that one market can carry two legs:
+        // a fight's two fighters share a market id and both write here, and without this they would
+        // write contradictory quotes and the last one to run would win.
+        const bid = idx === 1 ? 1 - live.ask : live.bid;
+        const ask = idx === 1 ? 1 - live.bid : live.ask;
+        pmCache.set(c.pm.id, { ...prev, bestBid: bid, bestAsk: ask, at: now });
       }
     } else if (E.due('any-pm-refresh', 300)) {
       E.log('TESS', 'OPS', null, `any-market Polymarket reprice failed: ${String(pr.reason && pr.reason.message).slice(0, 100)} · those pairs go stale until it recovers`);

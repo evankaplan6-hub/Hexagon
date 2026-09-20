@@ -136,6 +136,60 @@ group('near-misses are rejected, with the reason');
   ok('different years in the titles reject the event pair', m.eventGate('Will Karen Bass win the 2026 Los Angeles mayoral election?', 'Who will win the 2030 Los Angeles Mayoral Election?').why === 'figures');
 }
 
+group('a fight: two named Polymarket outcomes against two Kalshi legs');
+{
+  // Real text from UFC 331, 2026-09-19. Polymarket lists the bout as ONE market whose outcomes are
+  // the fighters; Kalshi lists it as TWO "X wins" markets. Before this shape was matched, the whole
+  // card -- eight fights, live on both venues -- paired nothing at all.
+  const vanpanK = [
+    K('KXUFCFIGHT-26SEP19VANPAN-VAN', { eventTicker: 'KXUFCFIGHT-26SEP19VANPAN', category: 'Sports', seriesTicker: 'KXUFCFIGHT', eventTitle: '331: Van vs Pantoja', eventSubTitle: 'Van vs Pantoja', title: 'Joshua Van wins', yesSubTitle: 'Joshua Van', yesBid: 0.58, yesAsk: 0.59 }),
+    K('KXUFCFIGHT-26SEP19VANPAN-PAN', { eventTicker: 'KXUFCFIGHT-26SEP19VANPAN', category: 'Sports', seriesTicker: 'KXUFCFIGHT', eventTitle: '331: Van vs Pantoja', eventSubTitle: 'Van vs Pantoja', title: 'Alexandre Pantoja wins', yesSubTitle: 'Alexandre Pantoja', yesBid: 0.41, yesAsk: 0.42 }),
+  ];
+  const vanpanP = [P({ eventId: 'ufc331vp', eventTitle: 'UFC 331: Alexandre Pantoja vs. Joshua Van (Flyweight, Main Card)',
+    question: 'UFC 331: Alexandre Pantoja vs. Joshua Van (Flyweight, Main Card)', outcomes: ['Alexandre Pantoja', 'Joshua Van'], tokenIds: ['pan-tok', 'van-tok'] })];
+
+  // Scoring is idf-weighted, so it only means anything against a corpus. Half of these are other
+  // fights, on purpose: Kalshi had 250 open fight markets that night, so "UFC", "Flyweight" and
+  // "Main Card" are ORDINARY words there, and the fighters' names are the rare ones that carry the
+  // match. Score them against a corpus with no other fight in it and the reverse happens -- the
+  // words Polymarket adds outweigh the names and the bout misses the 0.34 floor. That is a property
+  // of the fixture, not of the matcher, and it is why the noise is shaped like the real listing.
+  const noise = ['Fed decision in September', 'Who will win the Iowa Senate race', 'TIME Person of the Year',
+    'Premier League: Arsenal vs Chelsea', 'Highest temperature in New York', 'Bitcoin above 100000 on Dec 31',
+    'Oscar Best Picture winner', 'Government shutdown before October', 'NBA Finals champion', 'Next UK prime minister',
+    'CPI year over year for August', 'Who will control the Senate',
+    'UFC Flyweight Title holder on Dec 31, 2027', 'UFC Heavyweight Title holder on Dec 31, 2027',
+    'UFC Main Card: Islam Makhachev wins', '331: Tuivasa vs Despaigne', '331: Vera vs Jourdain',
+    'UFC Method of Victory: Sean Strickland', 'Will Conor McGregor compete in a UFC fight',
+    'Boxing Welterweight Title holder'].map((t, i) =>
+    K(`NOISE${i}-26-Y`, { eventTicker: `NOISE${i}-26`, eventTitle: t, eventSubTitle: '', title: t, yesSubTitle: 'Yes' }));
+
+  const r = m.matchAny(vanpanP, vanpanK.concat(noise));
+  ok('both sides of the fight are paired, not just one', r.candidates.length === 2, r.candidates.map((c) => c.ks.ticker));
+  const pan = r.candidates.find((c) => c.ks.ticker.endsWith('-PAN'));
+  const van = r.candidates.find((c) => c.ks.ticker.endsWith('-VAN'));
+  ok('Pantoja\'s Kalshi leg takes the Pantoja token', pan && pan.tokenIndex === 0, pan && pan.tokenIndex);
+  ok('Van\'s Kalshi leg takes the Van token, which no candidate could reach before', van && van.tokenIndex === 1, van && van.tokenIndex);
+  ok('the id carries the token, so the two legs are distinct', pan && van && pan.id !== van.id && /:1\|/.test(van.id), [pan && pan.id, van && van.id]);
+  ok('how says how it matched', r.candidates.every((c) => c.how === 'outcomes'), r.candidates.map((c) => c.how));
+  ok('the category and series come off the Kalshi leg', pan.category === 'Sports' && pan.series === 'KXUFCFIGHT', [pan.category, pan.series]);
+  ok('the weight class and card position are not read as missing entities', !r.rejected.some((x) => x.why === 'entity'), r.rejected);
+
+  // the gates
+  const otherCard = m.matchAny([P({ eventId: 'x', eventTitle: 'UFC 332: Alexandre Pantoja vs. Joshua Van', question: 'UFC 332: Alexandre Pantoja vs. Joshua Van', outcomes: ['Alexandre Pantoja', 'Joshua Van'], tokenIds: ['a', 'b'] })], vanpanK.concat(noise));
+  ok('UFC 332 does not pair with the 331 event', otherCard.candidates.length === 0, otherCard.candidates.map((c) => c.ks.ticker));
+
+  const oneFighter = m.matchAny([P({ eventId: 'y', eventTitle: 'UFC 331: Alexandre Pantoja vs. Joshua Van (Flyweight, Main Card)', question: 'UFC 331: Alexandre Pantoja vs. Joshua Van (Flyweight, Main Card)', outcomes: ['Alexandre Pantoja', 'Brandon Moreno'], tokenIds: ['a', 'b'] })], vanpanK.concat(noise));
+  ok('a card where only one fighter matches is not the same bout', !oneFighter.candidates.some((c) => c.how === 'outcomes'), oneFighter.candidates.map((c) => [c.how, c.ks.ticker]));
+
+  const yesNo = m.matchAny([P({ eventId: 'z', eventTitle: '331: Van vs Pantoja', question: 'Will Joshua Van win?', outcomes: ['Yes', 'No'], tokenIds: ['a', 'b'] })], vanpanK.concat(noise));
+  ok('a plain Yes/No market still goes down the generic path', !yesNo.candidates.some((c) => c.how === 'outcomes'), yesNo.candidates.map((c) => c.how));
+
+  // both tokens of one market must survive the de-duplication
+  ok('two candidates share one Polymarket market id', pan.pm.id === van.pm.id, [pan.pm.id, van.pm.id]);
+  ok('and neither was dropped as a duplicate', !r.rejected.some((x) => x.why === 'duplicate'), r.rejected);
+}
+
 group('one Polymarket market per Kalshi ticker, best first');
 {
   const k = K('KXTIME-26-DT', { eventTicker: 'KXTIME-26', category: 'Entertainment', eventTitle: 'Time Person of the Year 2026', title: 'Will Donald Trump be Time Person of the Year in 2026?', yesSubTitle: 'Donald Trump' });

@@ -164,8 +164,10 @@ async function fetchPage(getJSON, url, { sleep, backoffMs, label, errors }) {
 
 // ---------------------------------------------------------------- the crawls
 
-// Walks every open Kalshi event by cursor. Sports stays on the existing fast path, so it is
-// excluded by default. Returns { markets, events, pages, complete, errors }: `events` counts the
+// Walks every open Kalshi event by cursor. `excludeCategories` defaults to Sports -- the desk now
+// passes DISCOVER_EXCLUDE_KS instead, which is empty, so the desk crawls sports too; the default
+// here stays as it was so a caller that says nothing gets the smaller crawl.
+// Returns { markets, events, pages, complete, errors }: `events` counts the
 // events that passed the category filter, `seen` every event read.
 // `keep`, when given, is applied to each normalized market as its page is read, so what it drops is
 // never held: the desk passes one that skips markets nobody holds or trades, because the whole
