@@ -79,6 +79,11 @@ const PM_ESPORTS = {"id":"1025935","slug":"cs2-forzer-upgrad-2026-09-15","title"
     {"id":"4573020","question":"Counter-Strike: FORZE Reload vs UPGRADE - Map 1 Winner","conditionId":"0xdc024ed8fb0ba5bbfd79ac6fc08a8c583e29034da43e663ace05d7dd8c1e17a9","slug":"cs2-forzer-upgrad-2026-09-15-game1","endDate":"2026-09-15T21:30:00Z","description":"This market refers to the Counter-Strike Quarterfinal 3 match between FORZE Reload and UPGRADE in the CIS LAN Championship Playoffs, initially scheduled for September 15, 2026 at 12:00 PM ET.\n\nThis market will resolve to \"FORZE Reload\" if FORZE Reload win Map ","outcomes":"[\"FORZE Reload\", \"UPGRADE\"]","outcomePrices":"[\"0.9995\", \"0.0005\"]","clobTokenIds":"[\"2045264127813449378467820057626190155888520958184349779170291761772722787494\", \"1802174699299608821692283385063543476680957896999298561160128776327503253345\"]","active":true,"closed":false,"acceptingOrders":true,"negRisk":false,"negRiskOther":false,"groupItemTitle":"Map 1 Winner","bestBid":0.999,"bestAsk":1,"spread":0.001,"lastTradePrice":0.999,"volume24hr":17075.867112000004,"liquidityNum":128371.08819,"feesEnabled":true,"feeType":"sports_fees_v3","feeSchedule":{"exponent":1,"rate":0.05,"takerOnly":true,"rebateRate":0.15},"resolutionSource":"https://hltv.org","umaResolutionStatus":"proposed","gameStartTime":"2026-09-15 15:30:00+00","sportsMarketType":"child_moneyline"},
   ] };
 
+const PM_FIGHT = {"id":"991001","slug":"ufc-332-green-ribovics","title":"UFC 332: King Green vs. Esteban Ribovics (Lightweight, Main Card)","volume24hr":0,"tags":[{"label":"Sports","slug":"sports"},{"label":"UFC","slug":"ufc"},{"label":"MMA","slug":"mma"}],
+  markets: [
+    {"id":"4991001","question":"UFC 332: King Green vs. Esteban Ribovics","conditionId":"0xfight0000000000000000000000000000000000000000000000000000000001","slug":"ufc-332-green-ribovics","endDate":"2026-10-03T23:00:00Z","description":"Winner of the bout.","outcomes":"[\"King Green\", \"Esteban Ribovics\"]","outcomePrices":"[\"0.42\", \"0.58\"]","clobTokenIds":"[\"111\", \"222\"]","active":true,"closed":false,"acceptingOrders":true,"bestBid":0.41,"bestAsk":0.43,"spread":0.02,"volume24hr":0,"feesEnabled":true,"feeSchedule":{"exponent":1,"rate":0.05,"takerOnly":true,"rebateRate":0.15}},
+  ] };
+
 // The same four series as GET /series returned them (category, fee_multiplier, fee_type, title).
 // KXNEXTDNCCHAIR is the useful one: its events say Politics, the series says Elections.
 const SERIES = new Map([
@@ -363,6 +368,46 @@ async function run() {
     ok('excluding no tags keeps the soccer market (the esports one has no ask)', all.markets.some((m) => m.id === '4111371'));
     const lower = await D.crawlPolymarket({ getJSON: fakeGet((url) => ({ 0: first, 100: second })[offsetOf(url)] || []).getJSON, minEventVol: 1000, sleep: s.sleep });
     ok('a higher floor stops sooner', lower.markets.length === 100 && lower.pages === 2, [lower.markets.length, lower.pages]);
+  }
+
+  group('Polymarket crawl: the tags that ignore the volume floor');
+  {
+    // A fight is listed days ahead and trades almost nothing until the day, so the volume floor --
+    // whose premise is that a quiet event is not worth holding -- removes exactly the thing the
+    // sports crawl was turned on for. Measured 2026-09-20: of 34 single fights listed, the $5,000
+    // floor kept 5 and $500 kept 9, while every UFC 332 fight read $0 and Kalshi listed all 24.
+    const byUrl = (url) => (/tag_slug=ufc/.test(url) ? (offsetOf(url) === 0 ? [PM_FIGHT] : [])
+      : /tag_slug=/.test(url) ? []
+        : (offsetOf(url) === 0 ? [PM_FED, ...fullPage(0, 5000).slice(0, 99)] : []));
+
+    const without = fakeGet(byUrl);
+    const off = await D.crawlPolymarket({ getJSON: without.getJSON, minEventVol: 5000, sleep: fakeSleep().sleep });
+    ok('a $0 fight is invisible to the volume walk', !off.markets.some((m) => m.id === '4991001'), off.markets.length);
+    ok('and no tag url is fetched when none are asked for', !without.calls.some((u) => /tag_slug/.test(u)), without.calls);
+
+    const withTag = fakeGet(byUrl);
+    const on = await D.crawlPolymarket({ getJSON: withTag.getJSON, minEventVol: 5000, alwaysTags: ['ufc'], sleep: fakeSleep().sleep });
+    ok('the tag pass finds it anyway', on.markets.some((m) => m.id === '4991001'), on.tagged);
+    ok('and counts what it added', on.tagged === 1, on.tagged);
+    ok('the tag url is asked without a volume order, which would only mislead here',
+      withTag.calls.some((u) => /tag_slug=ufc/.test(u) && !/order=volume24hr/.test(u)), withTag.calls.filter((u) => /tag_slug/.test(u)));
+
+    // Every fight carries Polymarket's own Sports tag, so honouring the exclusion here would make
+    // the option silently do nothing. Naming a tag is the stronger statement.
+    const over = await D.crawlPolymarket({ getJSON: fakeGet(byUrl).getJSON, minEventVol: 5000,
+      excludeTags: ['Sports', 'Esports'], alwaysTags: ['ufc'], sleep: fakeSleep().sleep });
+    ok('a named tag outranks an excluded category', over.markets.some((m) => m.id === '4991001'), over.tagged);
+
+    // The main listing is the crawl; these passes only ever add to it.
+    const broken = fakeGet((url) => { if (/tag_slug/.test(url)) { const e = new Error('HTTP 500'); e.status = 500; throw e; } return byUrl(url); });
+    const still = await D.crawlPolymarket({ getJSON: broken.getJSON, minEventVol: 5000, alwaysTags: ['ufc'],
+      sleep: fakeSleep().sleep, backoffMs: [0] });
+    ok('a tag pass that fails never fails the crawl', still.complete === true && still.markets.length > 0, still.markets.length);
+    ok('and the failure is still reported', still.errors.length > 0, still.errors.length);
+
+    const none = fakeGet(byUrl);
+    await D.crawlPolymarket({ getJSON: none.getJSON, minEventVol: 5000, alwaysTags: ['', '  '], sleep: fakeSleep().sleep });
+    ok('blank tag names are skipped rather than fetched', !none.calls.some((u) => /tag_slug/.test(u)), none.calls);
   }
 
   group('Polymarket crawl: the offset wall, short and empty pages, duplicates');

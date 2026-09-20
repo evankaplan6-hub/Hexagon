@@ -125,7 +125,7 @@ function makeAnyMarket(cfg, deps = {}) {
         discovery.crawlKalshi({ getJSON: getJSONks, seriesInfo: ks.seriesInfo, sleep, keep: (m) => (m.oi || 0) > 0 || (m.vol24 || 0) > 0,
           excludeCategories: cfg.discoverExcludeKs }),
         discovery.crawlPolymarket({ getJSON, minEventVol: cfg.pmDiscoverMinVol, sleep,
-          excludeTags: cfg.discoverExcludePm }),
+          excludeTags: cfg.discoverExcludePm, alwaysTags: cfg.discoverAlwaysPm }),
       ]);
       if (!k.markets.length || !p.markets.length) {
         E.log('HOLT', 'OPS', null, `any-market discovery came back empty (${k.markets.length} Kalshi, ${p.markets.length} Polymarket markets) · keeping the last good set of ${candidates.length} pairs`);

@@ -30,6 +30,9 @@ const polymarket = require('./venues/polymarket');
 const KS_EVENTS = `${kalshi.BASE}/events?status=open&with_nested_markets=true&limit=200`;
 const PM_EVENTS = 'https://gamma-api.polymarket.com/events?closed=false&active=true&order=volume24hr&ascending=false&limit=100';
 const PM_PAGE = 100;        // Gamma caps `limit` at 100 whatever you ask for
+// The volume-exempt tag pass (see crawlPolymarket's `alwaysTags`). No `order` on purpose: these are
+// wanted whatever they trade, so ranking them by the number the floor uses would only mislead.
+const PM_TAGGED = 'https://gamma-api.polymarket.com/events?closed=false&active=true&limit=100';
 
 const num = (x) => { const n = parseFloat(x); return Number.isFinite(n) ? n : null; };
 const sha1 = (s) => crypto.createHash('sha1').update(s, 'utf8').digest('hex');
@@ -211,7 +214,19 @@ async function crawlKalshi({ getJSON, seriesInfo = null, maxPages = 80, excludeC
 // is the deepest page there is. Reaching it is as complete as the listing gets; `capped` says so.
 // Gamma caches responses up to 300 s and ranks by a moving number, so an event can slide across a
 // page boundary between two reads: markets are de-duplicated by id.
+// `alwaysTags` are Gamma tag slugs crawled REGARDLESS of volume, after the main walk. They exist
+// because a volume floor is the wrong instrument for a fight. The floor's premise is that a quiet
+// event is not worth holding; a fight's premise is the opposite -- the card is listed days ahead
+// and trades almost nothing until the day, which is exactly when it is still worth pairing.
+// Measured 2026-09-20 on 34 single fights listed on Polymarket: the $5,000 floor kept 5 of them,
+// the old $500 floor kept 9, and every UFC 332 fight read $0 while Kalshi already listed all 24.
+// The card was on both venues and the desk could not see one side of it.
+//
+// A named tag overrides `excludeTags` as well as the floor: naming a tag is a stronger statement
+// than excluding the category it happens to sit in, and every fight carries Polymarket's Sports
+// tag, so honouring the exclusion here would make the option silently do nothing.
 async function crawlPolymarket({ getJSON, minEventVol = 500, maxOffset = 2000, excludeTags = ['Sports', 'Esports'],
+  alwaysTags = [], alwaysMaxOffset = 500,
   sleep = defaultSleep, backoffMs = [2000, 4000, 8000] } = {}) {
   if (typeof getJSON !== 'function') throw new Error('crawlPolymarket needs getJSON');
   const excluded = new Set(excludeTags || []);
@@ -246,7 +261,38 @@ async function crawlPolymarket({ getJSON, minEventVol = 500, maxOffset = 2000, e
     }
     if (quiet || list.length < PM_PAGE) { complete = true; break; }
   }
-  return { markets, events, seen, pages, complete, capped, errors };
+  // The volume-exempt passes. Each tag is its own short walk and its failures are recorded like any
+  // other, but a tag that cannot be fetched never fails the crawl: the main listing is the crawl,
+  // and these only ADD to it. Events already read above are skipped by id, so a busy fight that the
+  // main walk caught is not counted twice.
+  let tagged = 0;
+  for (const tag of alwaysTags || []) {
+    const slug = String(tag || '').trim();
+    if (!slug) continue;
+    for (let offset = 0; offset <= alwaysMaxOffset; offset += PM_PAGE) {
+      const got = await fetchPage(getJSON, `${PM_TAGGED}&tag_slug=${encodeURIComponent(slug)}&offset=${offset}`,
+        { sleep, backoffMs, label: `PM tag ${slug} offset ${offset}`, errors });
+      if (!got.ok) break;                       // recorded in `errors`; the crawl itself stands
+      const list = Array.isArray(got.data) ? got.data : [];
+      got.data = null;
+      if (!list.length) break;
+      for (const ev of list) {
+        if (!ev) continue;
+        seen++;
+        if (eventIds.has(String(ev.id))) continue;
+        eventIds.add(String(ev.id));
+        events++; tagged++;
+        for (const m of normalizePmEvent(ev)) {
+          if (ids.has(m.id)) continue;
+          ids.add(m.id);
+          markets.push(m);
+        }
+      }
+      if (list.length < PM_PAGE) break;
+    }
+  }
+
+  return { markets, events, seen, pages, tagged, complete, capped, errors };
 }
 
 // ---------------------------------------------------------------- the fetcher

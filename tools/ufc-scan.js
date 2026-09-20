@@ -77,15 +77,26 @@ async function kalshi() {
 
 // ---------------------------------------------------------------- Polymarket side
 async function polymarket() {
+  // Ask Gamma for the UFC tag directly. This used to page the whole listing ranked by 24h volume
+  // and stop at offset 800, which is the wrong shape for the question: a fight is listed days ahead
+  // and trades almost nothing until the day, so the fights this tool exists to price sit at the
+  // BOTTOM of a volume ranking, not the top. On 2026-09-20, with an NFL Sunday at the head of the
+  // listing, it reported "Polymarket fights 0" while 34 were listed -- confidently wrong, and wrong
+  // about the one thing it is for.
   let evs = [];
-  for (let off = 0; off < 800; off += 100) {
-    const p = await get(`${GAMMA}/events?closed=false&active=true&limit=100&offset=${off}&order=volume24hr&ascending=false`);
-    if (!Array.isArray(p) || !p.length) break;
-    evs = evs.concat(p);
+  for (const slug of ['ufc', 'boxing']) {
+    for (let off = 0; off < 500; off += 100) {
+      const p = await get(`${GAMMA}/events?closed=false&active=true&limit=100&offset=${off}&tag_slug=${slug}`);
+      if (!Array.isArray(p) || !p.length) break;
+      evs = evs.concat(p);
+      if (p.length < 100) break;
+    }
   }
+  const seen = new Set();
   const out = new Map();
   for (const e of evs) {
-    if (!(e.tags || []).some((t) => t && /^UFC/i.test(t.label || ''))) continue;
+    if (seen.has(String(e && e.id))) continue;
+    seen.add(String(e && e.id));
     const mkts = (e.markets || []).filter((m) => m && m.active && !m.closed && m.acceptingOrders !== false);
     const main = mkts.find((m) => /vs\./i.test(m.question || '') && !/win|round|distance|decision|submission/i.test(m.question || ''));
     if (!main) continue;
