@@ -66,10 +66,19 @@ const KS_RATE = cfg.ksFeeRate ?? 0.07;
 const ksFee = (p, ref) => ks.feePerContract(p, KS_RATE, ref);
 const c = (x) => (x == null || !Number.isFinite(x) ? '   -  ' : (x * 100).toFixed(1).padStart(5) + 'c');
 const et = (t) => new Date(t).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', second: '2-digit' });
-const get = (u) => new Promise((res, rej) => https.get(u, { headers: { 'user-agent': 'hexagon-inplay-scan' } }, (r) => {
-  let s = ''; r.on('data', (d) => (s += d));
-  r.on('end', () => { try { res(JSON.parse(s)); } catch (e) { rej(new Error(`${r.statusCode} ${u}`)); } });
-}).on('error', rej));
+// A request with no timeout does not fail, it HANGS -- and a hung request inside the watch loop
+// stops the whole scan without an error line, so the process stays alive and writes nothing. That
+// happened twice on 2026-09-20 (once when the laptop slept, once on the box) and both times the
+// symptom was a healthy-looking pid and two hours of missing data. The repo's own http layer times
+// out at 15s; this helper has to as well.
+const get = (u, ms = 15000) => new Promise((res, rej) => {
+  const req = https.get(u, { headers: { 'user-agent': 'hexagon-inplay-scan' } }, (r) => {
+    let s = ''; r.on('data', (d) => (s += d));
+    r.on('end', () => { try { res(JSON.parse(s)); } catch (e) { rej(new Error(`${r.statusCode} ${u}`)); } });
+  });
+  req.on('error', rej);
+  req.setTimeout(ms, () => { req.destroy(new Error(`timeout after ${ms}ms: ${u}`)); });
+});
 
 // Kalshi abbreviates an NFL side to its city; Polymarket names the nickname. src/matcher.js carries
 // the same map for the desk's own pairing -- this tool matches by Kalshi ticker instead, so it only
@@ -220,11 +229,18 @@ function print(rows) {
   const out = path.join(cfg.dataDir, `inplay-${new Date().toISOString().slice(0, 10)}.jsonl`);
   console.log(`${et(Date.now())}  in-play scan · ${SERIES.join(',')} · every ${EVERY_MS / 1000}s until ${et(UNTIL)} · ${out}`);
   const open = new Map();   // ticker -> the edge window currently running, so its LENGTH is recorded
+  let polls = 0, fails = 0, written = 0, lastOk = Date.now(), lastBeat = Date.now();
   while (Date.now() < UNTIL) {
     try {
-      const { rows } = await snapshot();
+      // Belt as well as braces: even with every request bounded, one call stalling near its own
+      // limit could still outrun the poll interval and stack up. A poll that overruns is abandoned.
+      const { rows } = await Promise.race([
+        snapshot(),
+        new Promise((_, rej) => setTimeout(() => rej(new Error(`poll exceeded ${Math.round(EVERY_MS * 0.9 / 1000)}s, abandoned`)), EVERY_MS * 0.9)),
+      ]);
+      polls++; lastOk = Date.now();
       for (const r of rows) {
-        fs.appendFileSync(out, JSON.stringify(r) + '\n');
+        fs.appendFileSync(out, JSON.stringify(r) + '\n'); written++;
         if (!r.live) continue;
         const run = open.get(r.game);
         const live = r.confirmed != null ? r.confirmed : -1;   // no book, no claim
@@ -232,7 +248,13 @@ function print(rows) {
         else if (live > 0) { run.peak = Math.max(run.peak, live); }
         else if (run) { console.log(`${et(r.at)}  SHUT  after ${Math.round((r.at - run.start) / 1000)}s, peak ${c(run.peak)} · ${r.game.replace(/^KX|GAME-/g, '')}`); open.delete(r.game); }
       }
-    } catch (e) { console.log(`${et(Date.now())}  poll failed: ${String(e.message).slice(0, 90)}`); }
+    } catch (e) { fails++; console.log(`${et(Date.now())}  poll failed: ${String(e.message).slice(0, 90)}`); }
+    // Say something even when nothing happens. A scan with no edges and a scan that died look
+    // identical in a log that only speaks on edges, and that is exactly how two hours went missing.
+    if (Date.now() - lastBeat >= 1800000) {
+      lastBeat = Date.now();
+      console.log(`${et(Date.now())}  still watching · ${polls} polls, ${fails} failed, ${written} rows · last good poll ${et(lastOk)}`);
+    }
     await new Promise((r) => setTimeout(r, EVERY_MS));
   }
   console.log(`${et(Date.now())}  done`);
