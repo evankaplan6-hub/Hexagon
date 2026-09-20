@@ -22,8 +22,6 @@
 // with no network and no clock.
 
 const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
 const kalshi = require('./venues/kalshi');
 const polymarket = require('./venues/polymarket');
 
@@ -322,61 +320,7 @@ function makeDiscoveryFetch({ timeoutMs = 60000, pace = null, fetchImpl = null }
   };
 }
 
-// ---------------------------------------------------------------- the registry on disk
-
-// Persisted so a restart does not wait for a full crawl. Written in chunks rather than one
-// JSON.stringify: tens of thousands of records with rules text is a string of tens of MB, and
-// building it whole would double the crawl's footprint on a 512 MB box. Written to a temp file and
-// renamed, so a crash mid-write leaves the previous registry intact rather than half a file.
-function saveRegistry(file, data) {
-  const ks = (data && data.ksMarkets) || [];
-  const pm = (data && data.pmMarkets) || [];
-  const head = {
-    at: data && data.at != null ? data.at : new Date().toISOString(),
-    kalshi: { complete: !!(data && data.kalshi && data.kalshi.complete), count: ks.length },
-    polymarket: { complete: !!(data && data.polymarket && data.polymarket.complete), count: pm.length },
-  };
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}`;
-  const fd = fs.openSync(tmp, 'w');
-  try {
-    const body = JSON.stringify(head);
-    fs.writeSync(fd, `${body.slice(0, -1)},"ksMarkets":[`);
-    writeArray(fd, ks);
-    fs.writeSync(fd, '],"pmMarkets":[');
-    writeArray(fd, pm);
-    fs.writeSync(fd, ']}\n');
-    fs.fsyncSync(fd);
-  } catch (e) {
-    fs.closeSync(fd);
-    try { fs.unlinkSync(tmp); } catch { /* already gone */ }
-    throw e;
-  }
-  fs.closeSync(fd);
-  fs.renameSync(tmp, file);
-  return head;
-}
-function writeArray(fd, arr) {
-  const CHUNK = 500;
-  for (let i = 0; i < arr.length; i += CHUNK) {
-    const part = arr.slice(i, i + CHUNK).map((x) => JSON.stringify(x)).join(',\n');
-    fs.writeSync(fd, `${i ? ',\n' : '\n'}${part}`);
-  }
-}
-
-// The saved registry, or null when there is none or it cannot be read. Never throws: a corrupt
-// file means "crawl again", not "fail to start".
-function loadRegistry(file) {
-  try {
-    const d = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (!d || !Array.isArray(d.ksMarkets) || !Array.isArray(d.pmMarkets)) return null;
-    return d;
-  } catch {
-    return null;
-  }
-}
-
 module.exports = {
   normalizeKsEvent, normalizePmEvent, crawlKalshi, crawlPolymarket, makeDiscoveryFetch,
-  saveRegistry, loadRegistry, ksCategory, KS_EVENTS, PM_EVENTS,
+  ksCategory, KS_EVENTS, PM_EVENTS,
 };

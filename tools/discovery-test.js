@@ -14,9 +14,6 @@
 //
 //   node tools/discovery-test.js
 const crypto = require('crypto');
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
 const http = require('../src/http');
 const D = require('../src/discovery');
 
@@ -488,42 +485,6 @@ async function run() {
     ok('and TESS still saw no error', http.stats.err === before.err);
   }
 
-  // ---------------------------------------------------------------- the registry
-  group('registry: save and load');
-  {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hexagon-discovery-'));
-    try {
-      const file = path.join(dir, 'sub', 'pairs-any.json');
-      const ksMarkets = D.normalizeKsEvent(KS_FED, SERIES).concat(D.normalizeKsEvent(KS_DNC, SERIES));
-      const pmMarkets = D.normalizePmEvent(PM_RUSSIA).concat(D.normalizePmEvent(PM_FED), fullPage(0).slice(0, 3).flatMap(D.normalizePmEvent));
-      const head = D.saveRegistry(file, { at: '2026-09-15T12:00:00.000Z', kalshi: { complete: true }, polymarket: { complete: false }, ksMarkets, pmMarkets });
-      ok('save reports the counts', head.kalshi.count === 3 && head.polymarket.count === 7, head);
-      const back = D.loadRegistry(file);
-      ok('load returns what was saved', back && JSON.stringify(back.ksMarkets) === JSON.stringify(ksMarkets) && JSON.stringify(back.pmMarkets) === JSON.stringify(pmMarkets));
-      ok('with the timestamp and per-venue completeness and counts', back.at === '2026-09-15T12:00:00.000Z'
-        && back.kalshi.complete === true && back.kalshi.count === 3 && back.polymarket.complete === false && back.polymarket.count === 7, { at: back.at, kalshi: back.kalshi, polymarket: back.polymarket });
-      ok('the parent directory was created', fs.existsSync(path.dirname(file)));
-      ok('no temp file is left behind', fs.readdirSync(path.dirname(file)).join() === 'pairs-any.json', fs.readdirSync(path.dirname(file)));
-
-      const many = Array.from({ length: 1234 }, (_, i) => ({ ...ksMarkets[0], ticker: `T-${i}` }));
-      D.saveRegistry(file, { at: 'x', kalshi: { complete: true }, polymarket: { complete: true }, ksMarkets: many, pmMarkets: [] });
-      const back2 = D.loadRegistry(file);
-      ok('a registry larger than one write chunk round-trips, replacing the old one', back2 && back2.ksMarkets.length === 1234 && back2.ksMarkets[1233].ticker === 'T-1233' && back2.pmMarkets.length === 0);
-      D.saveRegistry(file, { at: 'y', ksMarkets: [], pmMarkets: [] });
-      const back3 = D.loadRegistry(file);
-      ok('an empty registry round-trips', back3 && back3.ksMarkets.length === 0 && back3.kalshi.complete === false);
-
-      ok('a missing file loads as null', D.loadRegistry(path.join(dir, 'nope.json')) === null);
-      const bad = path.join(dir, 'bad.json');
-      fs.writeFileSync(bad, '{"at":"2026-09-15","ksMarkets":[{"ticker":');
-      ok('a half-written file loads as null', D.loadRegistry(bad) === null);
-      fs.writeFileSync(bad, '{"at":"2026-09-15"}');
-      ok('JSON without the market lists loads as null', D.loadRegistry(bad) === null);
-      ok('a directory in place of the file loads as null', D.loadRegistry(dir) === null);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  }
 }
 
 run()

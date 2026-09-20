@@ -899,7 +899,7 @@ tools/broker-test.js   assertions for fills, incl. the live Kalshi order path (n
 tools/fees-test.js     assertions for what each venue charges: Polymarket per market, Kalshi per series
 tools/match-any-test.js  assertions for any-market matching on real venue text, every near-miss included
 tools/rules-test.js    assertions for the rules gate: same rules, look-alikes, and the cached Claude check
-tools/discovery-test.js  assertions for the any-market crawl: paging, backoff, partial results, the registry
+tools/discovery-test.js  assertions for the any-market crawl: paging, backoff, partial results, the fetcher
 tools/anymarket-test.js  assertions for the scanner: discover off the cycle, reprice in it, only verified pairs trade
 tools/matcher-test.js  assertions for cross-venue matching
 tools/stream-test.js   assertions for the trade socket and the tape's fallback to the poll

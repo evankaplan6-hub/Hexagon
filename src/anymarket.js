@@ -40,6 +40,22 @@ const fileStore = {
 
 const r3 = (x) => Math.round(x * 1000) / 1000;
 
+// How long after boot the first crawl waits.
+//
+// It used to be a flat 20s however fresh the restored pairs were -- and a stalled desk restarts
+// often. On 2026-09-20 the watchdog restarted the box 21 times, and each restart pulled a ~500s
+// crawl in behind it 20 seconds later, which starved the one shared vCPU and stalled it again: the
+// crawl was both the cause of the restart and the first thing the restart did. loadSaved() already
+// brings `last.at` back from disk, so the boot crawl can serve out whatever is left of the interval
+// instead of starting over. With nothing saved (`at` 0 or absent) this is the old 20s, so a cold box
+// still crawls at once; `minMs` keeps even an almost-due crawl off the desk's own first cycles, and
+// the interval is the ceiling, so a clock that jumped cannot park the crawl indefinitely.
+function bootCrawlDelayMs(lastAt, everyMin, now, minMs = 20000) {
+  const everyMs = Math.max(0, everyMin) * 60000;
+  const due = lastAt > 0 ? everyMs - (now - lastAt) : 0;
+  return Math.min(everyMs || minMs, Math.max(minMs, due));
+}
+
 function makeAnyMarket(cfg, deps = {}) {
   const discovery = deps.discovery || require('./discovery');
   const matchAny = deps.matchAny || require('./match-any').matchAny;
@@ -275,8 +291,10 @@ function makeAnyMarket(cfg, deps = {}) {
   function start(E) {
     const n = loadSaved();
     if (n) E.log('HOLT', 'SCAN', null, `any-market scanner restored ${n} matched pairs from the last discovery · repricing them before any can trade`);
-    // the first crawl a little after boot, so the desk's own first cycles are not competing with it
-    setTimeout(() => discover(E), 20000);
+    // the first crawl a little after boot, so the desk's own first cycles are not competing with it --
+    // but no sooner than the interval would have asked for it anyway (see bootCrawlDelayMs)
+    const wait = bootCrawlDelayMs(last && last.at, cfg.discoverEveryMin, clock());
+    setTimeout(() => discover(E), wait);
     timer = setInterval(() => discover(E), cfg.discoverEveryMin * 60000);
   }
 
@@ -293,4 +311,4 @@ function makeAnyMarket(cfg, deps = {}) {
   return { start, discover, refresh, inject, pairs, afterPricing, snapshot, summary, loadSaved, _candidates: () => candidates, stop: () => timer && clearInterval(timer) };
 }
 
-module.exports = { makeAnyMarket };
+module.exports = { makeAnyMarket, bootCrawlDelayMs };
