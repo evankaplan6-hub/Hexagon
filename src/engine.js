@@ -111,7 +111,16 @@ class Engine {
     this.halt = 'warming up';
     this.cycle = 0;
     this.resolutionChecks = new Map();
-    this.cooldown = new Map(); // pairId -> last exit time; no re-entry for a while
+    // pairId -> last exit time; no re-entry for a while. RESTORED FROM THE LEDGER, because a
+    // cooldown that only lives in memory is not a cooldown: the box restarts on every deploy and
+    // on every watchdog stall, and until 2026-09-19 each restart re-armed every pair the desk had
+    // just closed. Six of the week's twenty-four re-entries inside the window happened that way,
+    // and they lost $151 of the convergence book's $622. Entries older than the window are dropped
+    // on the way in, so a ledger that sat idle for a day does not come back holding stale bars.
+    this.cooldown = new Map(
+      Object.entries((this.state && this.state.cooldown) || {})
+        .filter(([, at]) => Number.isFinite(at) && Date.now() - at < cfg.reentryCooldownMs),
+    );
     this.demoShift = new Map();
     this.liveReady = cfg.mode !== 'live';
     this.liveBalance = null;
@@ -155,6 +164,11 @@ class Engine {
       fs.mkdirSync(this.cfg.dataDir, { recursive: true });
       const tmp = `${this.file}.tmp`;
       this.state.operatorHalt = this.operatorHalt || null;   // latched across restarts
+      // The re-entry bars, latched the same way. Pruned on the way out as well as on the way in,
+      // so the ledger cannot grow a bar per pair the desk has ever traded.
+      this.state.cooldown = Object.fromEntries(
+        [...this.cooldown].filter(([, at]) => Number.isFinite(at) && Date.now() - at < this.cfg.reentryCooldownMs),
+      );
       fs.writeFileSync(tmp, JSON.stringify(this.state));
       fs.renameSync(tmp, this.file);
       this.dirty = false;
@@ -452,7 +466,7 @@ class Engine {
     this.state.cash = r2(this.state.cash - fill.cost);
     this.state.stats.fees = r2(this.state.stats.fees + fill.fee);
     this.state.positions.push(pos);
-    this.journal(this, 'OPEN', { id: pos.id, group, label: pos.label, venue: pos.venue, side: pos.side, qty: pos.qty, entry: pos.entry, fee: pos.fee, cost: pos.cost, strategy: pos.strategy, ref: pos.ref, orderId: pos.orderId, cash: this.state.cash });
+    this.journal(this, 'OPEN', { id: pos.id, group, pairId: pos.pairId, label: pos.label, venue: pos.venue, side: pos.side, qty: pos.qty, entry: pos.entry, fee: pos.fee, cost: pos.cost, strategy: pos.strategy, entryGap: pos.entryGap, ref: pos.ref, orderId: pos.orderId, cash: this.state.cash });
     this.dirty = true;
     return pos;
   }
@@ -559,7 +573,7 @@ class Engine {
         this.journal(this, resolved ? 'ARB_SETTLED' : 'ARB_UNWOUND', { group: pos.group, label: pos.label, pnl: gpnl, reason });
       }
     }
-    this.journal(this, resolved ? 'SETTLE' : 'CLOSE', { id: pos.id, group: pos.group, label: pos.label, venue: pos.venue, side: pos.side, qty: pos.qty, entry: pos.entry, exit: fill.avg, fee: fill.fee, proceeds: fill.proceeds, pnl: exitPnl, legPnl: pnl, partialPnl, reason, strategy: pos.strategy, heldMs: Date.now() - pos.openedAt, cash: this.state.cash });
+    this.journal(this, resolved ? 'SETTLE' : 'CLOSE', { id: pos.id, group: pos.group, pairId: pos.pairId, label: pos.label, venue: pos.venue, side: pos.side, qty: pos.qty, entry: pos.entry, exit: fill.avg, fee: fill.fee, proceeds: fill.proceeds, pnl: exitPnl, legPnl: pnl, partialPnl, reason, strategy: pos.strategy, heldMs: Date.now() - pos.openedAt, cash: this.state.cash });
     this.log('RIGO', 'SETTLE', exitPnl, text);
     this.dirty = true;
   }

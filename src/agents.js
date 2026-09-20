@@ -352,6 +352,21 @@ async function KETT(E) {
         continue;
       }
       if (!mind && b && b.reliable && b.score <= -0.5) { if (E.due(`kett-flow-${s.pair.id}`, 300)) E.log('KETT', 'PASS', null, `${s.pair.label}: gap ${c(Math.abs(s.gap))} but ILSA reads it widening off an already-tradeable gap, pass`); continue; }
+      // A gap that has not moved in half an hour is the two venues' settled opinion, not an edge.
+      // Checked AFTER the mind, which is allowed to argue that a still gap is about to close, and
+      // before sizing, because the answer here is never "smaller" -- it is "not this pair".
+      // The warm-up bar comes first: "I have never watched this gap" outranks "this gap looks
+      // fine", and on a restart the second is only true because the first is.
+      const unseen = mind ? null : decide.gapUnseen(E.history.get(s.pair.id), E.cfg);
+      if (unseen) {
+        if (E.due(`kett-unseen-${s.pair.id}`, 300)) E.log('KETT', 'PASS', null, `${s.pair.label}: ${unseen}, pass`);
+        continue;
+      }
+      const standing = mind ? null : decide.standingGap(E.history.get(s.pair.id), E.cfg);
+      if (standing) {
+        if (E.due(`kett-standing-${s.pair.id}`, 300)) E.log('KETT', 'PASS', null, `${s.pair.label}: ${standing} — the venues agree to differ, pass`);
+        continue;
+      }
       if (mind) sizeMult = mind.stance === 'converging' ? 1 : E.cfg.baseSizeMult;
       else sizeMult = b && b.reliable && b.score >= 0.5 ? 1 : E.cfg.baseSizeMult;
     }
