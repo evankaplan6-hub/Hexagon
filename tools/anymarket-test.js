@@ -8,7 +8,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { makeAnyMarket } = require('../src/anymarket');
+const { makeAnyMarket, bootCrawlDelayMs } = require('../src/anymarket');
 const base = require('../src/config');
 
 let pass = 0, fail = 0;
@@ -265,6 +265,25 @@ function harness(list, over = {}) {
     ok('restored from disk', A.loadSaved() === 1 && A._candidates()[0].id === 'b:0|CONTROLS-2026-D');
     A.inject(E);
     ok('with the crawl time, not now, so nothing trades until refresh', E.quotes.ks.get('CONTROLS-2026-D').at === T0 - 3600000);
+  }
+
+  group('the boot crawl serves out the interval instead of restarting it');
+  {
+    const MIN = 45, every = MIN * 60000, now = T0;
+    ok('a cold box, with nothing saved, still crawls 20s after boot',
+      bootCrawlDelayMs(0, MIN, now) === 20000, bootCrawlDelayMs(0, MIN, now));
+    ok('...and so does one whose saved set carries no crawl time',
+      bootCrawlDelayMs(undefined, MIN, now) === 20000, bootCrawlDelayMs(undefined, MIN, now));
+    ok('a crawl from five minutes ago waits out the other forty',
+      bootCrawlDelayMs(now - 5 * 60000, MIN, now) === every - 5 * 60000, bootCrawlDelayMs(now - 5 * 60000, MIN, now));
+    ok('a crawl already older than the interval goes at once, not never',
+      bootCrawlDelayMs(now - 2 * every, MIN, now) === 20000, bootCrawlDelayMs(now - 2 * every, MIN, now));
+    ok('a crawl due in a second still keeps off the desk\'s first cycles',
+      bootCrawlDelayMs(now - (every - 1000), MIN, now) === 20000, bootCrawlDelayMs(now - (every - 1000), MIN, now));
+    ok('a crawl time in the future cannot park the crawl past one interval',
+      bootCrawlDelayMs(now + 10 * every, MIN, now) === every, bootCrawlDelayMs(now + 10 * every, MIN, now));
+    ok('the restart loop is broken: 21 restarts cost one crawl, not 21',
+      [...Array(21)].every(() => bootCrawlDelayMs(now - 60000, MIN, now) === every - 60000));
   }
 
   for (const d of dirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch {} }
