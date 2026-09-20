@@ -299,6 +299,16 @@ module.exports = {
   // Floored at 2 and forced to an integer: `history[length - 0]` is undefined and the next line
   // reads `.ksMid` off it, which throws inside ILSA's per-pair loop and aborts the whole cycle.
   biasLookback: Math.max(2, Math.round(num('BIAS_LOOKBACK', 8))),
+  // The standing-gap veto (decide.standingGap). A gap that has been wide and MOTIONLESS for this
+  // many minutes is what the two venues think the market is worth, not a mispricing, and the desk
+  // stops renting it. Thirty minutes is 120 samples at the 15s cadence and comfortably inside the
+  // 240 the engine keeps; it is also short enough to catch a pair before max hold runs a second
+  // round trip on it. Raising it makes the veto rarer, not safer.
+  standingGapMin: Math.max(0, num('STANDING_GAP_MIN', 30)),
+  // How far the gap may wander over that window and still count as standing. 1c is one tick: the
+  // AOC gap that funded eight losing round trips moved 0.2c in three days. A pair whose gap is
+  // wide but genuinely moving stays tradeable -- movement is the thing being bet on.
+  standingGapRange: Math.max(0, num('STANDING_GAP_RANGE', 0.01)),
 
   // cadence (seconds)
   priceEvery: num('PRICE_EVERY_SEC', 15),

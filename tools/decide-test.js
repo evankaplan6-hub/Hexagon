@@ -203,6 +203,40 @@ group('riskState and biasFor take their numbers from config');
   ok('the API-error rail stays inside the buffer that feeds it', cfg.maxApiErrors <= 200, cfg.maxApiErrors);
 }
 
+group('the standing-gap veto: a gap that never moves is not an edge');
+{
+  const MIN = 60000;
+  // The real Presidential 2028 - AOC tape, which funded eight losing round trips: a gap that read
+  // 4.0c, 3.9c, 4.0c, 3.9c over three days while the price moved 0.2c.
+  const standing = [];
+  for (let i = 0; i <= 40; i++) standing.push({ pmMid: 0.868, ksMid: 0.907 + (i % 2) * 0.001, t: i * MIN });
+  const why = d.standingGap(standing, cfg);
+  ok('a wide, motionless gap is vetoed', typeof why === 'string', why);
+  ok('and the veto says how wide and for how long', /3\.9c for 40m/.test(why || ''), why);
+
+  // A gap that opened from nothing is the setup this book exists for -- biasFor scores it -1 and
+  // this gate must not double up on that.
+  const opened = [];
+  for (let i = 0; i <= 40; i++) opened.push({ pmMid: 0.500, ksMid: i < 30 ? 0.505 : 0.545, t: i * MIN });
+  ok('a freshly opened gap is left alone', d.standingGap(opened, cfg) === null, d.standingGap(opened, cfg));
+
+  // Wide but genuinely moving: movement is the thing being bet on.
+  const moving = [];
+  for (let i = 0; i <= 40; i++) moving.push({ pmMid: 0.500, ksMid: 0.560 - i * 0.0005, t: i * MIN });
+  ok('a wide gap that is actually moving still trades', d.standingGap(moving, cfg) === null, d.standingGap(moving, cfg));
+
+  // Fails open: the box restarts often and history starts empty. A gate that vetoed everything
+  // for the first half hour after each deploy would cost more than the churn it prevents.
+  ok('too little history vetoes nothing', d.standingGap(standing.slice(0, 2), cfg) === null);
+  ok('too short a window vetoes nothing', d.standingGap(standing.slice(0, 10), cfg) === null,
+    d.standingGap(standing.slice(0, 10), cfg));
+  ok('a history without timestamps vetoes nothing', d.standingGap(standing.map(({ t, ...r }) => r), cfg) === null);
+  ok('a torn sample vetoes nothing', d.standingGap([...standing.slice(0, 20), { pmMid: NaN, ksMid: 0.9, t: 99 * MIN }], cfg) === null);
+  // The window is bounded so no env value can turn the veto into "never" by accident.
+  ok('the window config is a usable number', Number.isFinite(cfg.standingGapMin) && cfg.standingGapMin >= 0, cfg.standingGapMin);
+  ok('the range config is a usable number', Number.isFinite(cfg.standingGapRange) && cfg.standingGapRange >= 0, cfg.standingGapRange);
+}
+
 group('a convergence trade needs a thick venue to lean on');
 {
   // 4c gap, tight books, and the two venues carrying the same volume. Fair sits in the middle of

@@ -373,6 +373,43 @@ function biasFor(history, cfg) {
   return { score, reliable: Math.abs(gapThen) >= cfg.minGap, pmDrift: b.pmMid - a.pmMid, ksDrift: b.ksMid - a.ksMid, gapNow, mins };
 }
 
+// Has this gap been sitting still, wide, for a long time? Then it is not a mispricing waiting to
+// close -- it is what the two venues simply think this market is worth, and the desk has no reason
+// to expect it to move today.
+//
+// This is the gate the week of 2026-09-10 argued for. `biasFor` already vetoes a gap that is
+// WIDENING, and sizes down one that is flat, but flat was the whole problem: of 67 convergence
+// trades, 40 ran to max hold and 39 of those lost. The clearest case is Presidential 2028 - AOC,
+// opened EIGHT times over three days on a gap that read 4.0c, 3.9c, 4.0c, 3.9c, 3.9c, 3.9c, 3.8c
+// while the price moved 0.2c. Every one paid a ~1.8c round trip to rent a gap that never intended
+// to close. `biasFor` scored it ~0 -- neither converging nor diverging -- so it passed every time.
+//
+// Deliberately NOT a bias threshold. A freshly opened gap scores -1 and is exactly the setup this
+// book exists for (see biasFor's own note), so the test is not "which way is it moving" but "has
+// it EVER been narrow in the window I can see". A gap that opened from nothing an hour ago has a
+// narrow sample behind it and passes; one that has been 4c for the whole window does not.
+//
+// Fails OPEN on a short history: the desk restarts often and `E.history` starts empty, and a gate
+// that vetoes everything for the first half hour after every deploy would be worse than the churn.
+// Returns the veto reason, or null.
+function standingGap(history, cfg) {
+  if (!history || history.length < 3) return null;
+  const first = history[0], last = history[history.length - 1];
+  if (!Number.isFinite(first.t) || !Number.isFinite(last.t)) return null;
+  const mins = (last.t - first.t) / 60000;
+  if (mins < cfg.standingGapMin) return null;                     // not enough seen yet
+  let lo = Infinity, hi = -Infinity;
+  for (const h of history) {
+    const g = Math.abs(h.ksMid - h.pmMid);
+    if (!Number.isFinite(g)) return null;                          // a torn sample: do not judge
+    if (g < cfg.minGap) return null;                               // it HAS been narrow: tradeable
+    if (g < lo) lo = g;
+    if (g > hi) hi = g;
+  }
+  if (hi - lo > cfg.standingGapRange) return null;                 // it moves, even if it stays wide
+  return `gap has stood at ${(lo * 100).toFixed(1)}c for ${Math.round(mins)}m without moving`;
+}
+
 // Is there room in the book for this signal? Unhedged convergence positions and locked arbs are
 // counted separately, and an arb counts once rather than once per leg: one limit over legs let six
 // hedged Fed arbs fill a book whose limit was written for directional bets. Returns why not, or null.
@@ -457,4 +494,4 @@ function arbEdgeLive(signal, books, cfg) {
   return 1 - cost;
 }
 
-module.exports = { fairValue, quoteFault, convEdge, pairSignals, scan, liveWindow, exitIntent, gainLockIntent, arbUnwind, arbReturn, arbEdgeLive, riskState, biasFor, bookFull, persistFilter, sizePlan, rankSignals, pmRate };
+module.exports = { fairValue, quoteFault, convEdge, pairSignals, scan, liveWindow, exitIntent, gainLockIntent, arbUnwind, arbReturn, arbEdgeLive, riskState, biasFor, standingGap, bookFull, persistFilter, sizePlan, rankSignals, pmRate };

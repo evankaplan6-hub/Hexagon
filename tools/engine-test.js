@@ -547,6 +547,60 @@ const position = (over = {}) => ({
     ok('unreadable text becomes a readable fallback, not a throw', b.action === null && /no json/.test(b.sentence), b);
   }
 
+  group('the journal names the pair, not just the trade');
+  {
+    // Without this the journals cannot answer "did the desk re-enter the same pair?" -- the week
+    // of 2026-09-10 had to be reconstructed from labels, which cannot distinguish two pairs that
+    // share one. `pairId` is what the cooldown is actually keyed on, so it is what gets recorded.
+    const E = engine();
+    E.state.positions = [position({ pairId: 'pairX', entryGap: 0.039 })];
+    await E.close(E.state.positions[0], 0.60, 'max hold 240m reached, gap still 4.0c');
+    const close = E.journalled.find((j) => j.type === 'CLOSE');
+    ok('a close records the pair it was on', close.data.pairId === 'pairX', close.data);
+  }
+
+  group('the re-entry cooldown survives a restart');
+  {
+    // Until 2026-09-19 this Map lived only in memory, so every deploy and every watchdog restart
+    // re-armed each pair the desk had just closed. Six of that week's twenty-four re-entries
+    // inside the window happened that way and lost $151 between them.
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hexagon-cooldown-'));
+    dirs.push(dataDir);
+    const cfg = { ...base, mode: 'paper', demo: false, dataDir, record: false, makerEnabled: false };
+    const E = new Engine(cfg);
+    E.log = () => {}; E.journal = () => {};
+    E.state.positions = [position({ pairId: 'pairX' })];
+    await E.close(E.state.positions[0], 0.60, 'max hold 240m reached, gap still 4.0c');
+    ok('closing sets the bar', E.cooldown.get('pairX') > 0, [...E.cooldown]);
+    E.save();
+    ok('and the bar is written to the ledger', readState(dataDir).cooldown.pairX > 0, readState(dataDir).cooldown);
+
+    const back = new Engine(cfg);
+    back.log = () => {}; back.journal = () => {};
+    ok('a restart comes back still holding it', back.cooldown.get('pairX') > 0, [...back.cooldown]);
+    ok('so KETT would still refuse the pair',
+      Date.now() - back.cooldown.get('pairX') < cfg.reentryCooldownMs);
+
+    // ...but a bar older than the window is dead weight, not a permanent ban.
+    const stale = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
+    stale.cooldown = { pairX: Date.now() - cfg.reentryCooldownMs - 1000, pairY: Date.now() };
+    fs.writeFileSync(path.join(dataDir, 'state.json'), JSON.stringify(stale));
+    const aged = new Engine(cfg);
+    aged.log = () => {}; aged.journal = () => {};
+    ok('an expired bar is dropped on the way in', !aged.cooldown.has('pairX'), [...aged.cooldown]);
+    ok('a live one beside it is kept', aged.cooldown.get('pairY') > 0, [...aged.cooldown]);
+    aged.save();
+    ok('and the expired bar does not come back on the next save',
+      !('pairX' in readState(dataDir).cooldown), readState(dataDir).cooldown);
+
+    // A ledger written before this shipped has no cooldown key at all.
+    const older = JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8'));
+    delete older.cooldown;
+    fs.writeFileSync(path.join(dataDir, 'state.json'), JSON.stringify(older));
+    const legacy = new Engine(cfg);
+    ok('an older ledger without the key still starts', legacy.cooldown.size === 0, [...legacy.cooldown]);
+  }
+
   for (const d of dirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch {} }
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
