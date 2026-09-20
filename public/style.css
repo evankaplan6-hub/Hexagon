@@ -234,11 +234,13 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
    State, then what the desk is doing now, then the last thing it did, with the
    standing facts pinned to the bottom under a rule so the gap above them reads
    as a footer rather than as a board that ran out of things to say. */
-#status { position: absolute; box-sizing: border-box; padding: .65em .8em .55em; overflow: hidden;
+#status { position: absolute; box-sizing: border-box; padding: .7em .85em .6em; overflow: hidden;
   display: flex; flex-direction: column; color: var(--brd-body); line-height: 1.35; font-variant-numeric: tabular-nums; }
 #status > * { flex: none; }
 /* on a small board the mode has nowhere to go: it wraps to its own line rather than being sliced */
-#status .st { display: flex; flex-wrap: wrap; align-items: center; gap: .3em .5em; font: 700 1.15em/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+#status .st { display: flex; flex-wrap: wrap; align-items: center; gap: .3em .5em; padding-bottom: .5em;
+  border-bottom: 1px solid var(--brd-rule);
+  font: 700 1.15em/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; }
 #status .st i { width: .48em; height: .48em; border-radius: 50%; background: currentColor; box-shadow: 0 0 7px currentColor; flex: none; }
 #status .st em { margin-left: auto; font: 600 .6em/1 var(--mono); font-style: normal; letter-spacing: .16em; color: var(--brd-label); }
 #status .st em.real { color: var(--red); }
@@ -246,7 +248,7 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #status p { margin: .55em 0 0; }
 #status .alarm { color: var(--brd-bright); font-weight: 600; }
 /* Two figures, each set large over a small word, side by side in hairline tiles. */
-#status .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: .45em; margin: .8em 0 0; }
+#status .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: .45em; margin: .7em 0 0; }
 #status .tiles > div { display: flex; flex-direction: column; gap: .3em; min-width: 0; padding: .55em .6em .5em;
   border: 1px solid var(--brd-rule); border-radius: 6px; background: rgba(140,168,210,.035); }
 #status .tiles b { font: 700 1.45em/1 var(--sans); letter-spacing: -.02em; color: var(--brd-bright); }
@@ -437,11 +439,12 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
    The tape used to be green on green on green, which made a list of trades
    into a wash. The side is a tint down the edge and one coloured word; the
    rest of the row is the same body type as every other board. */
-#tape { position: absolute; z-index: 1; pointer-events: auto; box-sizing: border-box; padding: .55em .65em; display: flex; flex-direction: column;
+#tape { position: absolute; z-index: 1; pointer-events: auto; box-sizing: border-box; padding: .7em .75em .6em; display: flex; flex-direction: column;
   font-family: var(--sans); color: var(--brd-body); overflow: hidden; font-variant-numeric: tabular-nums; }
-#tape .th { flex: none; display: flex; justify-content: space-between; align-items: center; gap: .6em; padding: .1em .1em .5em;
+#tape .th { flex: none; display: flex; justify-content: space-between; align-items: center; gap: .6em; padding: 0 0 .45em;
   border-bottom: 1px solid var(--brd-rule);
-  font: 600 .66em/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: #86efac; }
+  font: 600 .72em/1 var(--mono); letter-spacing: .16em; text-transform: uppercase; color: var(--brd-label); }
+#tape .th > span:first-child { color: #9aa4ba; }
 #tape .tbody { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 #tape ol { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; list-style: none; margin: 0; padding: 0; }
 #tape li { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: .6em; row-gap: .12em; align-items: baseline;
@@ -481,7 +484,7 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
    Four rows, each with one job: which series, the number, the plot, the range.
    The change over the range used to sit at the bottom next to the range buttons,
    where it read as a caption; it belongs beside the number it is a change in. */
-#chart { position: absolute; z-index: 1; pointer-events: auto; box-sizing: border-box; padding: .5em .6em .45em; }
+#chart { position: absolute; z-index: 1; pointer-events: auto; box-sizing: border-box; padding: .7em .8em .6em; }
 .pnl { display: flex; flex-direction: column; font-family: var(--sans); color: var(--brd-body); user-select: none;
   font-variant-numeric: tabular-nums; }
 /* the chart opened large, over the page */
@@ -500,6 +503,10 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 @media (max-width: 640px) { #chartbig { padding: 8px; } #chartbig .cbbox { height: min(460px, 100%); padding: 12px; } #chartbig .cbh span { display: none; } }
 .pnl button { font: inherit; background: none; border: 0; cursor: pointer; color: inherit; padding: 0; }
 .pnl .ct, .pnl .cb { flex: none; display: flex; align-items: center; gap: .5em; }
+/* the stand's title row is a board header like the others: same type, same rule under it */
+#chart .ct { padding-bottom: .45em; border-bottom: 1px solid var(--brd-rule); }
+#chart .ctitle { font: 600 .72em/1 var(--mono); letter-spacing: .16em; text-transform: uppercase; color: #9aa4ba; }
+#chart .chead { margin-top: .5em; }
 .pnl .seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 999px;
   background: rgba(255,255,255,.035); border: 1px solid var(--brd-rule2); }
 /* #wall button resets every button on the wall screen, so these need the id to win there too */
