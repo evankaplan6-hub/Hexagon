@@ -32,6 +32,15 @@
 // waits for a game played days later. Game pairs come from the FAST path (src/matcher.js), which
 // runs no rules check at all, so nothing else in the desk guards this.
 //
+// WHAT THIS MEASURED, 2026-09-20. The listing endpoints (Kalshi /markets, Polymarket CLOB /prices)
+// showed in-play edges constantly -- 4c, 8c, once 15c. Not one of them survived contact with the
+// order book. Priced from the books alone, every live game on the slate sat between -1.3c and
+// -3.0c, stable across rounds: the fee floor, which is what an efficient market looks like. The
+// gap is between an indicative top-of-book and the thing you would actually have to trade against,
+// and it is widest exactly when the game is moving fastest. So a positive number from the price
+// endpoints is not an opportunity, it is a measurement artifact -- and that is why a window here
+// opens on the book's verdict and nothing else.
+//
 //   node tools/inplay-scan.js                 one snapshot of every live game
 //   node tools/inplay-scan.js --series KXNFLGAME
 //   node tools/inplay-scan.js --watch         poll until stopped, logging to DATA_DIR
@@ -137,26 +146,52 @@ async function snapshot() {
       ks: `${c(X.kBid)}/${c(X.kAsk)}`, pm: `${c(X.pBid)}/${c(X.pAsk)}`,
       // mid-to-mid on the SAME team, the plain statement of how far apart the venues are
       gap: +(((X.kBid + X.kAsk) / 2) - ((X.pBid + X.pAsk) / 2)).toFixed(4),
-      edge: +best.edge.toFixed(4), fees: +best.fees.toFixed(4),
+      edge: +best.edge.toFixed(4), fees: +best.fees.toFixed(4), rate: g.p.rate,
       _best: best,
       buy: `PM ${best.buyPm} @${c(best.buyPm === X.name ? X.pAsk : Y.pAsk)} + KS ${best.buyKs} @${c(best.buyKs === X.name ? X.kAsk : Y.kAsk)}`,
       other: +Math.min(a.edge, b.edge).toFixed(4) });
   }
-  // Depth, but only where it can matter. An edge computed from two top-of-book asks says nothing
-  // about SIZE, and on a fast in-play move the touch is often a handful of contracts: 15.3c on 12
-  // contracts is $1.84, not an opportunity. Both books are read only for a game already showing a
-  // positive edge, so the common case costs no extra calls at all.
+  // Depth, but only where it can matter, and taken from the SAME snapshot as the price. An edge
+  // computed from two top-of-book asks says nothing about size, and on a fast in-play move the
+  // touch is often a handful of contracts: 15.3c on 12 contracts is $1.84, not an opportunity.
+  //
+  // The first version of this asked fetchPrices for the price and then fetched the book, and read
+  // zero size every single time -- not because the books were empty but because the market had
+  // moved during the extra round trip, so nothing sat at the price the edge had assumed. Price and
+  // size must come from one read. So the books ARE the second opinion: the edge is recomputed from
+  // them, which both revalidates it and sizes it, and a window that closed in the meantime simply
+  // reports no size.
+  //
+  // Then walk the two ladders together. An arb buys one contract on each venue, so each unit is
+  // limited by the thinner side, and it stops paying at the depth where the two asks plus fees stop
+  // coming to less than $1 -- which is the honest answer to "how much of this is actually there".
   for (const r of rows) {
     if (r.edge <= 0) { delete r._best; continue; }
     const b = r._best; delete r._best;
     try {
       const [pb, kb] = await Promise.all([pm.fetchBook(b.pmSide.tok), ks.fetchBook(b.ksSide.leg.ticker)]);
-      // contracts offered at or better than the price the edge assumed
-      const pmQty = (pb.asks || []).filter((x) => x.price <= b.pmSide.pAsk + 1e-9).reduce((a, x) => a + x.size, 0);
-      const ksQty = (kb.yesAsks || []).filter((x) => x.price <= b.ksSide.kAsk + 1e-9).reduce((a, x) => a + x.size, 0);
-      r.qty = Math.floor(Math.min(pmQty, ksQty));
-      r.dollars = +(r.edge * r.qty).toFixed(2);
-    } catch { r.qty = null; r.dollars = null; }
+      const pmAsks = (pb.asks || []).slice().sort((x, y) => x.price - y.price);
+      const ksAsks = (kb.yesAsks || []).slice().sort((x, y) => x.price - y.price);
+      let qty = 0, dollars = 0, i = 0, j = 0;
+      let pmLeft = pmAsks[0] ? pmAsks[0].size : 0, ksLeft = ksAsks[0] ? ksAsks[0].size : 0;
+      while (i < pmAsks.length && j < ksAsks.length) {
+        const take = Math.min(pmLeft, ksLeft);
+        if (!(take > 0)) break;
+        const pp = pmAsks[i].price, kp = ksAsks[j].price;
+        const per = 1 - pp - kp - pm.feePerShare(pp, r.rate) - ksFee(kp, b.ksSide.leg.ticker);
+        if (per <= 0) break;
+        qty += take; dollars += take * per;
+        pmLeft -= take; ksLeft -= take;
+        if (pmLeft <= 0) { i++; pmLeft = pmAsks[i] ? pmAsks[i].size : 0; }
+        if (ksLeft <= 0) { j++; ksLeft = ksAsks[j] ? ksAsks[j].size : 0; }
+      }
+      r.qty = Math.floor(qty);
+      r.dollars = +dollars.toFixed(2);
+      // what the books say the touch is worth, which may differ from the listing-derived `edge`
+      r.confirmed = pmAsks[0] && ksAsks[0]
+        ? +(1 - pmAsks[0].price - ksAsks[0].price - pm.feePerShare(pmAsks[0].price, r.rate) - ksFee(ksAsks[0].price, b.ksSide.leg.ticker)).toFixed(4)
+        : null;
+    } catch { r.qty = null; r.dollars = null; r.confirmed = null; }
   }
   return { rows, games: games.length };
 }
@@ -165,12 +200,12 @@ function print(rows) {
   const live = rows.filter((r) => r.live);
   console.log(`${'game'.padEnd(22)} ${'teams'.padEnd(26)} ${'KS'.padEnd(14)} ${'PM'.padEnd(14)} ${'gap'.padEnd(7)}${'edge'.padEnd(7)}${'fees'.padEnd(7)}`);
   for (const r of rows.sort((a, b) => b.edge - a.edge)) {
-    console.log(`${r.game.replace(/^KX|GAME-/g, '').padEnd(22)} ${r.teams.padEnd(26)} ${r.ks} ${r.pm} ${c(r.gap)}${c(r.edge)}${c(r.fees)} ${r.live ? 'LIVE' : 'pre '}${r.edge > 0 ? `  <== ${r.buy}  ${r.qty == null ? '(depth unknown)' : `${r.qty} lots, $${r.dollars}`}` : ''}`);
+    console.log(`${r.game.replace(/^KX|GAME-/g, '').padEnd(22)} ${r.teams.padEnd(26)} ${r.ks} ${r.pm} ${c(r.gap)}${c(r.edge)}${c(r.fees)} ${r.live ? 'LIVE' : 'pre '}${r.edge > 0 ? `  <== ${r.buy}  ${r.qty == null ? '(depth unknown)' : `${r.qty} lots, $${r.dollars}${r.confirmed != null ? `, book says ${c(r.confirmed)}` : ''}`}` : ''}`);
   }
   const hit = live.filter((r) => r.edge > 0);
   const gaps = live.map((r) => Math.abs(r.gap)).sort((a, b) => a - b);
   console.log(`\n${live.length} live games · ${hit.length} clear both venues' fees · median gap ${c(gaps[Math.floor(gaps.length / 2)])} · widest ${c(gaps[gaps.length - 1])}`);
-  console.log(`${rows.length - live.length} pre-game (reliably flat: the edge is in-play)`);
+  console.log(`${rows.length - live.length} pre-game · both are flat once priced off the books; the listing endpoints are what look otherwise`);
 }
 
 (async () => {
@@ -192,8 +227,9 @@ function print(rows) {
         fs.appendFileSync(out, JSON.stringify(r) + '\n');
         if (!r.live) continue;
         const run = open.get(r.game);
-        if (r.edge > 0 && !run) { open.set(r.game, { start: r.at, peak: r.edge }); console.log(`${et(r.at)}  OPEN  ${c(r.edge)} net on ${r.qty == null ? '?' : r.qty} lots ($${r.dollars == null ? '?' : r.dollars}) · ${r.game.replace(/^KX|GAME-/g, '')} · ${r.buy}`); }
-        else if (r.edge > 0) { run.peak = Math.max(run.peak, r.edge); }
+        const live = r.confirmed != null ? r.confirmed : -1;   // no book, no claim
+        if (live > 0 && !run) { open.set(r.game, { start: r.at, peak: live }); console.log(`${et(r.at)}  OPEN  ${c(r.edge)} listed / ${r.confirmed == null ? '?' : c(r.confirmed)} on the book · ${r.qty == null ? '?' : r.qty} lots worth $${r.dollars == null ? '?' : r.dollars} · ${r.game.replace(/^KX|GAME-/g, '')} · ${r.buy}`); }
+        else if (live > 0) { run.peak = Math.max(run.peak, live); }
         else if (run) { console.log(`${et(r.at)}  SHUT  after ${Math.round((r.at - run.start) / 1000)}s, peak ${c(run.peak)} · ${r.game.replace(/^KX|GAME-/g, '')}`); open.delete(r.game); }
       }
     } catch (e) { console.log(`${et(Date.now())}  poll failed: ${String(e.message).slice(0, 90)}`); }
