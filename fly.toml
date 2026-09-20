@@ -37,6 +37,17 @@ primary_region = "iad"          # Ashburn, Virginia — close to the exchange, a
   # thrown away than kept. Free memory measured ~245 MB of 512 MB at the time. Watch memory after
   # this deploy; if the box gets tight, the number to pull back down is this one.
   ANY_MAX_PAIRS = "300"
+  # Raised from src/config.js's 300 on 2026-09-20, the first Sunday the desk could see the NFL.
+  # The fast path's Polymarket side is the top N markets by 24h volume, and a football Sunday
+  # floods that ranking with ONE game's own derivatives: Polymarket lists ~328 markets per NFL
+  # game (spreads, totals, quarters, props), so Commanders v Cowboys pushed its own moneyline --
+  # the only leg Kalshi has a counterpart for -- out of the top 300 while four of its spread and
+  # total markets stayed in. 13 of the day's 14 games paired; that one did not. 500 restores it
+  # and takes today's moneylines from 27 to 36. The pages are fetched in parallel, so this costs
+  # two more Gamma requests a cycle and ~170 more market objects, against the 31,840 the
+  # any-market crawl already holds. If the box gets tight, ANY_MAX_PAIRS above is still the
+  # number to pull down first -- this one is small.
+  PM_UNIVERSE = "500"
   # Raised from the 3% default (src/config.js) on 2026-09-17: the desk hit 3% intraday and TESS
   # correctly halted new risk, but 3% of a $10k paper account is $300 -- tight enough that one bad
   # day parks the desk for the rest of it. Widened by request; it is still paper money.
