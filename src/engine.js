@@ -58,6 +58,10 @@ function pmSettlement(px) {
   return null;
 }
 
+// When this process started. Module scope, so it is fixed at require time and a restart is the
+// only thing that can move it.
+const BOOTED_AT = Date.now();
+
 class Engine {
   constructor(cfg) {
     this.cfg = cfg;
@@ -888,6 +892,10 @@ class Engine {
     takerFills.sort((a, b) => b.at - a.at);
     return {
       now, name: 'The Hexagon', mode: this.cfg.mode, demo: this.cfg.demo, startedAt: s.startedAt, halt: this.halt,
+      // What this process was built from, and when it started. `bootedAt` is deliberately not
+      // `startedAt`: that one is the ACCOUNT's age and survives every restart, so it cannot answer
+      // "did the box actually pick up that deploy?" -- which is the question this pair exists for.
+      build: { sha: this.cfg.buildSha || null, bootedAt: BOOTED_AT },
       initial: s.initial, cash: s.cash, equity, deployed, unrealized, realized: s.stats.realized, fees: s.stats.fees, pnl,
       wins: s.stats.wins, losses: s.stats.losses, liveBalance: this.liveBalance,
       // `sellPx` is what sellGroup would ask for this leg right now, so the confirm box can say it

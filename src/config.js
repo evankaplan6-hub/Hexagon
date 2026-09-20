@@ -7,6 +7,12 @@ module.exports = {
   port: num('PORT', 8787),
   mode: env('MODE', 'paper') === 'live' ? 'live' : 'paper',
   demo: env('DEMO', '0') === '1',
+  // The commit this build came from, stamped into the image by the deploy (Dockerfile ARG
+  // GIT_SHA). Empty when the desk is run from a working copy, which the dashboard shows as "dev"
+  // rather than guessing: a version string that might be wrong is worse than none. Nothing reads
+  // this to make a decision -- it exists so "is the box running what I just merged?" has an answer
+  // that does not depend on trusting the pipeline's own success message.
+  buildSha: env('GIT_SHA', '').trim().slice(0, 40),
   initialBalance: num('INITIAL_BALANCE', 10000),
   dataDir: env('DATA_DIR', path.join(__dirname, '..', 'data')),
   record: env('RECORD', '1') !== '0', // append a tick line per priced pair per cycle under dataDir

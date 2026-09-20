@@ -21,6 +21,16 @@ ENV DATA_DIR=/data
 RUN mkdir -p /data
 VOLUME ["/data"]
 
+# What commit this image was built from. The deploy passes --build-arg GIT_SHA; a hand-built image
+# leaves it empty and the dashboard says "dev" rather than inventing a version. This exists because
+# on 2026-09-20 a deploy reported success and there was no way to confirm from the outside WHICH
+# commit the box ended up running -- the same class of problem as the deploy-order race the
+# fly-deployed tag guards against, seen from the box's side instead of the pipeline's.
+# Kept low in the file on purpose: an ARG invalidates every layer after it, so putting it above the
+# COPYs would rebuild the whole image on every commit.
+ARG GIT_SHA=""
+ENV GIT_SHA=$GIT_SHA
+
 # Paper by default and bound to every interface, because in a container the only route in is the
 # port the host maps. server.js refuses to start on a non-loopback bind unless DASH_PASS is set.
 ENV MODE=paper
