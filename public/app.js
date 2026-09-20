@@ -1121,8 +1121,14 @@
     // the widest gap already clears the bar says the checks are what is holding it, rather than
     // implying the desk is ignoring free money.
     const wide = closest ? Math.abs(closest.gap) : 0;
+    // When candidates clear the bar and still nothing is bought, KETT says why in its own log --
+    // an arb book at its limit, the long-dated budget spent, cash under the floor. Quote it rather
+    // than guessing at "waiting on room", which is what this line used to claim.
+    const pass = (S.log || []).find((e) => e.agent === 'KETT' && e.kind === 'PASS');
+    const why = pass && S.now - pass.t < 20 * 60000 ? String(pass.text).split(', passing on')[0] : '';
     const near = ready
-      ? `<span class="nx good"><b>${ready}</b> over the bar, waiting on room to trade</span>`
+      ? `<span class="nx good"><b>${ready}</b> over the bar</span>` +
+        (why ? `<span class="nn">${esc(cap(why))}</span>` : `<span class="nn">waiting on room to trade</span>`)
       : cl
         ? `<span class="nx"><b>${cc(wide)}</b> widest gap · ${wide >= bar ? `none clear the fee and liquidity checks` : `needs ${cc(bar)}`}</span>` +
           `<span class="nn fitw"><span>${esc(unellipsis(cl.outcome || closest.label))}</span>${cl.question ? `<i> · ${esc(unellipsis(cl.question))}</i>` : ''}</span>`
