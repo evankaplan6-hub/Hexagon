@@ -213,6 +213,10 @@
   const ROOM_H = 282, WALL_H = 172, SIDE_W = 120;
   // the deepest the desks can be: back row, front row and the front nametag take 4 + 101 units per SEAT
   const SEAT_MAX = (ROOM_H - WALL_H - 4) / 101;
+  // One grid for the boards: margin from the room's edge, gutter between neighbours, and the
+  // height every board on the wall shares. The strip left under the wall line is the lane the back
+  // row's speech bubbles rise into.
+  const M = 8, G = 10, BUBBLE_LANE = 22, BOARD_H = WALL_H - M - BUBBLE_LANE;
   let L = null;
   function layout(RW) {
     if (L && L.RW === RW) return L;
@@ -221,7 +225,7 @@
     // stand was a fixed 166 units -- a plot barely wider than its own headline -- while a wide room
     // spread the desks across a floor they did not need. It takes a share of the room now, up to a
     // limit, and never so much that the four front desks cannot stand in what remains.
-    const bandR = RW - 40;
+    const bandR = RW - M - 30;
     const DESK_BAND = 320;                       // four desks at their smallest, with gaps
     const stand = Math.round(Math.min(Math.max(170, RW * 0.33), 300, Math.max(150, bandR - DESK_BAND)));
     const bandL = stand + 16, band = bandR - bandL, gap = 16;
@@ -254,18 +258,20 @@
       // neighbour's desk and a click in the overlap picked whichever bot was tested last. Never wider
       // than the row it is in.
       cell: [0, 1, 2].map(() => Math.min(72, backPitch / SEAT - 2)).concat([0, 1, 2, 3].map(() => Math.min(72, pitch / SEAT - 2))),
-      status: { x: 8, y: 6, w: SIDE_W, h: WALL_H - 26 },
+      // Every board sits on one grid: the same margin from the room's edge, the same gutter
+      // between neighbours, the same top and the same bottom. They used to start at y=2, y=6 and
+      // y=6 and end 4 units apart, which is what made four boards read as four pasted rectangles.
+      status: { x: M, y: M, w: SIDE_W, h: BOARD_H },
       // the clock is the fill board's header now: one board, not a case with a clock in it
-      tape:   { x: RW - SIDE_W - 8, y: 6, w: SIDE_W, h: WALL_H - 26 },
-      // the glass stops 20 units short of the floor line: that strip is where the back row's bubbles
-      // go, and it is the only reason a bubble can no longer cover the number it is talking about
-      screen: { x: SIDE_W + 18, y: 2, w: RW - 2 * SIDE_W - 36, h: WALL_H - 26 },
-      // the stand starts just under the wall: the 24 units above it were empty floor that no
-      // desk can use (the desks start at bandL), and the plot is the one board that wants height
-      // The stand rises past the floor line: the strip of wall above it, left of the big screen and
-      // under the status board, is empty, and a plot wants height more than the wall wants space.
-      chart:  { x: 4, y: WALL_H - 16, w: stand, h: ROOM_H - WALL_H - 8 + 16 },
-      rack:   { x: RW - 34, y: WALL_H + 18, w: 26, h: 60 },
+      tape:   { x: RW - M - SIDE_W, y: M, w: SIDE_W, h: BOARD_H },
+      // the glass stops short of the floor line: that strip is where the back row's bubbles go,
+      // and it is the only reason a bubble can no longer cover the number it is talking about
+      screen: { x: M + SIDE_W + G, y: M, w: RW - 2 * (M + SIDE_W + G), h: BOARD_H },
+      // The stand hangs off the same left margin as the status board above it, one gutter below
+      // it, and stands on the floor at the same margin the room keeps everywhere else. It crosses
+      // the wall line on the way -- the strip up there is empty, and a plot wants the height.
+      chart:  { x: M, y: M + BOARD_H + G, w: stand, h: ROOM_H - M - (M + BOARD_H + G) },
+      rack:   { x: RW - M - 26, y: WALL_H + 18, w: 26, h: 60 },
     };
     return L;
   }
@@ -294,11 +300,26 @@
     ctx.restore();
   }
   // A recessed panel: dark face, lit top edge, shadowed bottom. One call instead of four px().
-  function panel(ctx, x, y, w, h, face, edge) {
-    px(ctx, x, y, w, h, face);
+  // Every board on the floor is the same object: one dark face, one lit top and left edge, one
+  // shadowed bottom and right, and the same corner. They used to differ -- a green frame on the
+  // fills, a blue-grey one on the status board, a third on the stand -- which read as three things
+  // stuck on a picture rather than three boards in one room.
+  const BRD_FACE = '#080c14', BRD_EDGE = '#26324a', BRD_DARK = '#04060a';
+  function panel(ctx, x, y, w, h, face = BRD_FACE, edge = BRD_EDGE) {
+    const r = 3;
+    ctx.save();
+    ctx.beginPath(); ctx.roundRect(x, y, w, h, r);
+    ctx.fillStyle = face; ctx.fill();
+    ctx.clip();
     px(ctx, x, y, w, 1, edge);
-    px(ctx, x, y + h - 1, w, 1, '#05070b');
-    px(ctx, x, y, 1, h, edge); px(ctx, x + w - 1, y, 1, h, '#05070b');
+    px(ctx, x, y + h - 1, w, 1, BRD_DARK);
+    px(ctx, x, y, 1, h, edge); px(ctx, x + w - 1, y, 1, h, BRD_DARK);
+    ctx.restore();
+    // the corner pixels the clip rounded off, so the frame closes rather than frays
+    ctx.save();
+    ctx.beginPath(); ctx.roundRect(x + 0.5, y + 0.5, w - 1, h - 1, r);
+    ctx.strokeStyle = 'rgba(38,50,74,.55)'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.restore();
   }
   // one-line job descriptions, because "RIGO · MANAGING" tells you nothing on its own
   const ROLE = {
@@ -465,7 +486,7 @@
     // ---- status board (left) : the "is it working" answer, in words
     // The board is drawn here; its words are HTML laid over it (placeStatus), for the same reason
     // as the bubbles -- 5-unit canvas text was unreadable and its lines ran into each other.
-    panel(ctx, L.status.x, L.status.y, L.status.w, L.status.h, '#080c14', '#243047');
+    panel(ctx, L.status.x, L.status.y, L.status.w, L.status.h);
     scanlines(ctx, L.status.x + 1, L.status.y + 1, L.status.w - 2, L.status.h - 2, 0.10);
     statusBox = L.status;
 
@@ -474,9 +495,7 @@
     // shadowed bottom make it an object hanging on it. It is as wide as the room allows now --
     // the desk's own number is the biggest thing in the frame, which is what a scoreboard is for.
     const ws = L.screen, gx = ws.x + 6, gy = ws.y + 6, gw = ws.w - 12, gh = ws.h - 12;
-    px(ctx, ws.x, ws.y, ws.w, ws.h, '#0a0e17');
-    px(ctx, ws.x, ws.y, ws.w, 1, '#2c3a55'); px(ctx, ws.x, ws.y + ws.h - 1, ws.w, 1, '#04060a');
-    px(ctx, ws.x, ws.y, 1, ws.h, '#222d42'); px(ctx, ws.x + ws.w - 1, ws.y, 1, ws.h, '#04060a');
+    panel(ctx, ws.x, ws.y, ws.w, ws.h, '#0a0e17', '#2c3a55');
     px(ctx, gx, gy, gw, gh, '#050810');
     const glass = ctx.createLinearGradient(0, gy, 0, gy + gh);
     glass.addColorStop(0, 'rgba(70,120,190,0.10)'); glass.addColorStop(1, 'rgba(70,120,190,0.02)');
@@ -491,8 +510,8 @@
     px(ctx, VPX - 3, ws.y + ws.h, 6, 5, '#141b28'); px(ctx, VPX - 9, ws.y + ws.h + 3, 18, 2, '#0d1420');   // wall mount
 
     // ---- the fill tape, clock in its header (right): boards drawn here, words laid over them (placeBoards)
-    panel(ctx, L.tape.x, L.tape.y, L.tape.w, L.tape.h, '#060f0a', '#1e4a2c');
-    scanlines(ctx, L.tape.x + 1, L.tape.y + 1, L.tape.w - 2, L.tape.h - 2, 0.12);
+    panel(ctx, L.tape.x, L.tape.y, L.tape.w, L.tape.h);
+    scanlines(ctx, L.tape.x + 1, L.tape.y + 1, L.tape.w - 2, L.tape.h - 2, 0.10);
     tapeBox = L.tape;
 
     // desks + agents
@@ -617,7 +636,8 @@
     ctx.restore();
 
     // P&L board, standing on the floor left of the desks (after the vignette, which would bury it)
-    panel(ctx, L.chart.x, L.chart.y, L.chart.w, L.chart.h, '#080c14', '#243047');
+    shadow(ctx, L.chart.x + 4, L.chart.y + L.chart.h - 3, L.chart.w - 8, 8, 0.55);
+    panel(ctx, L.chart.x, L.chart.y, L.chart.w, L.chart.h);
     chartBox = { x: L.chart.x + 1, y: L.chart.y + 1, w: L.chart.w - 2, h: L.chart.h - 2 };
 
     // a dead feed greys the room out entirely: no chance of reading a frozen board as a live one
