@@ -44,7 +44,7 @@ function standDown(E) {
 // ---------------------------------------------------------------- HOLT
 function HOLT(E) {
   const prev = new Map(E.pairs.map((p) => [p.id, p]));
-  const { pairs, rejected } = matchPairs([...E.quotes.pm.values()], [...E.quotes.ks.values()]);
+  const { pairs, rejected, coverage } = matchPairs([...E.quotes.pm.values()], [...E.quotes.ks.values()]);
   // Every other category, from the any-market scanner (src/anymarket.js). The fast matcher's pairs
   // win where both found the same market: it re-matches from live listings every cycle.
   if (E.any) {
@@ -63,6 +63,7 @@ function HOLT(E) {
   for (const p of pairs) p.inPlay = decide.liveWindow(p, now, E.cfg);
   E.pairs = pairs;
   E.rejected = rejected;
+  E.coverage = coverage;
   const added = pairs.filter((p) => !prev.has(p.id));
   const nowIds = new Set(pairs.map((p) => p.id));
   const dropped = [...prev.keys()].filter((id) => !nowIds.has(id));
@@ -84,6 +85,16 @@ function HOLT(E) {
       txt += ` · ${rejected.length} rejected (${rejected.length - figs} on 30c+ disagreement, ${figs} on a mismatched figure)`;
     }
     E.log('HOLT', 'SCAN', null, txt);
+  }
+
+  // A league that pairs NOTHING while Polymarket is listing its games is the one failure this scan
+  // cannot otherwise report: an unmatched name is not a rejection, so the count above simply gets
+  // smaller and nothing says which league left. That is how the NFL stayed unpaired for a season --
+  // Kalshi naming teams by city, Polymarket by nickname, and no line anywhere saying so. One event
+  // could be a postponement, so this asks for two.
+  const blind = (coverage || []).filter((c) => c.events >= 2 && c.matched === 0);
+  if (blind.length && E.due('holt-blind', 900)) {
+    E.log('HOLT', 'SCAN', null, `${blind.map((c) => `${c.league} ${c.date}: 0 of ${c.events} games paired`).join(' · ')} · Polymarket is listing these games and none matched a Kalshi event, which is what a renamed team looks like`);
   }
 }
 

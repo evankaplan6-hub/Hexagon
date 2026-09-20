@@ -352,5 +352,36 @@ group('matchPairs: an NFL game -- Kalshi says the city, Polymarket says the nick
   ok('an MLB Giants game still pairs as MLB', mlbGiants.pairs.length === 1 && /^MLB/.test(mlbGiants.pairs[0].label), mlbGiants.pairs);
 }
 
+group('matchPairs: coverage names a league that pairs nothing');
+{
+  const nflEvent = (ev, a, b) => [
+    ks({ ticker: `KXNFLGAME-${ev}-A`, eventTicker: `KXNFLGAME-${ev}`, subTitle: a, title: `${a} wins` }),
+    ks({ ticker: `KXNFLGAME-${ev}-B`, eventTicker: `KXNFLGAME-${ev}`, subTitle: b, title: `${b} wins` }),
+  ];
+  const game = (id, q, outcomes) => pm({ id, question: q, sport: 'moneyline', outcomes, gameStart: '2026-09-20 17:00:00+00' });
+  const pmSunday = [game('p1', 'Vikings vs. Bears', ['Vikings', 'Bears']), game('p2', 'Packers vs. Jets', ['Packers', 'Jets'])];
+
+  const good = matchPairs(pmSunday, [...nflEvent('26SEP20MINCHI', 'Minnesota', 'Chicago'), ...nflEvent('26SEP20GBNYJ', 'Green Bay', 'New York J')]);
+  const nfl = good.coverage.find((c) => c.league === 'NFL');
+  ok('a league that pairs is reported as fully covered', nfl && nfl.events === 2 && nfl.matched === 2, good.coverage);
+
+  // A naming change Polymarket has not made yet, and the whole point of the counter: names that do
+  // not match produce NO rejection, so without coverage the scan just quietly gets smaller.
+  const blindKs = [...nflEvent('26SEP20MINCHI', 'Minneapolis', 'Chicagoland'), ...nflEvent('26SEP20GBNYJ', 'Titletown', 'Gotham'),
+    ks({ ticker: 'KXMLBGAME-26SEP20PHINYM-PHI', eventTicker: 'KXMLBGAME-26SEP20PHINYM', subTitle: 'Phillies', title: 'Phillies wins' }),
+    ks({ ticker: 'KXMLBGAME-26SEP20PHINYM-NYM', eventTicker: 'KXMLBGAME-26SEP20PHINYM', subTitle: 'Mets', title: 'Mets wins' })];
+  const blind = matchPairs([...pmSunday, game('p3', 'Phillies vs. Mets', ['Phillies', 'Mets'])], blindKs);
+  ok('the failure is silent in pairs and rejects', blind.pairs.length === 1 && blind.rejected.length === 0, { pairs: blind.pairs.length, rejected: blind.rejected.length });
+  const dark = blind.coverage.find((c) => c.league === 'NFL');
+  ok('...but coverage says 0 of 2 NFL games paired', dark && dark.events === 2 && dark.matched === 0, blind.coverage);
+  ok('...and does not drag in the league that worked', blind.coverage.find((c) => c.league === 'MLB').matched === 1, blind.coverage);
+
+  // The denominator is what Polymarket is LISTING: a Kalshi event weeks out is not an alarm.
+  const future = matchPairs(pmSunday, [...nflEvent('26SEP20MINCHI', 'Minnesota', 'Chicago'), ...nflEvent('26SEP20GBNYJ', 'Green Bay', 'New York J'),
+    ks({ ticker: 'KXNBAGAME-26OCT14BOSNYK-BOS', eventTicker: 'KXNBAGAME-26OCT14BOSNYK', subTitle: 'Celtics', title: 'Celtics wins' }),
+    ks({ ticker: 'KXNBAGAME-26OCT14BOSNYK-NYK', eventTicker: 'KXNBAGAME-26OCT14BOSNYK', subTitle: 'Knicks', title: 'Knicks wins' })]);
+  ok('a Kalshi event on a date Polymarket is not listing is not counted', !future.coverage.some((c) => c.league === 'NBA'), future.coverage);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

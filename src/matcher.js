@@ -112,6 +112,7 @@ const SPORT_SERIES = {
   mlb: ['KXMLBGAME'], nfl: ['KXNFLGAME'], nba: ['KXNBAGAME'], tennis: ['KXATPMATCH', 'KXWTAMATCH'],
   college: ['KXNCAAFGAME'], soccer: ['KXMLSGAME', 'KXEPLGAME', 'KXUCLGAME', 'KXLALIGAGAME'],
 };
+const SPORT_KEY = Object.fromEntries(Object.entries(SPORT_SERIES).flatMap(([sport, list]) => list.map((ser) => [ser, sport])));
 const TAG = { KXMLBGAME: 'MLB', KXNFLGAME: 'NFL', KXNBAGAME: 'NBA', KXATPMATCH: 'ATP', KXWTAMATCH: 'WTA', KXNCAAFGAME: 'NCAAF', KXMLSGAME: 'MLS', KXEPLGAME: 'EPL', KXUCLGAME: 'UCL', KXLALIGAGAME: 'LaLiga', KXFEDDECISION: 'Fed' };
 const MLB = new Set(['diamondbacks', 'braves', 'orioles', 'red sox', 'cubs', 'white sox', 'reds', 'guardians', 'rockies', 'tigers', 'astros', 'royals', 'angels', 'dodgers', 'marlins', 'brewers', 'twins', 'mets', 'yankees', 'athletics', 'phillies', 'pirates', 'padres', 'giants', 'mariners', 'cardinals', 'rays', 'rangers', 'blue jays', 'nationals']);
 const NFL = new Set(['cardinals', 'falcons', 'ravens', 'bills', 'panthers', 'bears', 'bengals', 'browns', 'cowboys', 'broncos', 'lions', 'packers', 'texans', 'colts', 'jaguars', 'chiefs', 'raiders', 'chargers', 'rams', 'dolphins', 'vikings', 'patriots', 'saints', 'giants', 'jets', 'eagles', 'steelers', '49ers', 'seahawks', 'buccaneers', 'titans', 'commanders']);
@@ -145,6 +146,10 @@ function classify(question, A, B) {
 function matchPairs(pmList, ksList) {
   const pairs = [], rejected = [];
   const usedKs = new Set();
+  // What Polymarket is LISTING, as `sport|ET date`, whether or not it paired. Coverage (below)
+  // needs the denominator: a Kalshi event days out with no Polymarket counterpart yet is normal,
+  // a Kalshi event on a date Polymarket is actively listing that sport for is not.
+  const pmListing = new Set();
   const ksByTicker = new Map(ksList.map((k) => [k.ticker, k]));
   const events = new Map();
   for (const k of ksList) {
@@ -205,7 +210,9 @@ function matchPairs(pmList, ksList) {
     if (!hit && m.sport === 'moneyline' && m.outcomes.length === 2 && m.gameStart) {
       const d = etDate(m.gameStart);
       const [A, B] = m.outcomes;
-      const allowed = SPORT_SERIES[classify(q, A, B)] || [];
+      const sport = classify(q, A, B);
+      const allowed = SPORT_SERIES[sport] || [];
+      if (d) pmListing.add(`${sport}|${d}`);
       for (const ms of byDate.get(d) || []) {
         const ser = series(ms[0].ticker);
         if (!allowed.includes(ser)) continue;
@@ -226,6 +233,7 @@ function matchPairs(pmList, ksList) {
 
     // 3) "Will X win on YYYY-MM-DD?" (PM soccer style)  <->  Kalshi 3-way soccer market (event has a Tie leg)
     if (!hit && (r = q.match(/^Will (.+?) win on (\d{4}-\d{2}-\d{2})\?$/))) {
+      pmListing.add(`soccer|${r[2]}`);
       for (const ms of byDate.get(r[2]) || []) {
         const ser = series(ms[0].ticker);
         if (!SPORT_SERIES.soccer.includes(ser)) continue;
@@ -287,7 +295,27 @@ function matchPairs(pmList, ksList) {
       ks: { ticker: hit.ks.ticker, title: hit.ks.title, eventTicker: hit.ks.eventTicker, url: hit.ks.url },
     });
   }
-  return { pairs, rejected };
+  // ---------------------------------------------------------------- coverage
+  // A name that does not match is not a rejection -- almost every comparison in the loop above is
+  // between two unrelated markets, and logging those would bury the scan. But a whole LEAGUE that
+  // pairs nothing, on a date Polymarket is listing that sport for, is the shape of a naming change,
+  // and that has no voice at all: when Kalshi said "Minnesota" and Polymarket said "Vikings", the
+  // NFL paired zero games for a season and produced no reject, no log line and no number anywhere.
+  // Counted per series per date, so the caller can say which league went quiet rather than only
+  // that the total moved.
+  const coverage = new Map();
+  for (const [ev, ms] of events) {
+    const ser = series(ms[0].ticker);
+    const sport = SPORT_KEY[ser];
+    const d = tickerDate(ev);
+    if (!sport || !d || !pmListing.has(`${sport}|${d}`)) continue;
+    const key = `${ser}|${d}`;
+    if (!coverage.has(key)) coverage.set(key, { series: ser, league: TAG[ser] || ser, date: d, events: 0, matched: 0 });
+    const c = coverage.get(key);
+    c.events++;
+    if (ms.some((x) => usedKs.has(x.ticker))) c.matched++;
+  }
+  return { pairs, rejected, coverage: [...coverage.values()] };
 }
 
 module.exports = { matchPairs, nameMatch, tickerDate, etDate, figures, figuresConflict, MAX_VENUE_DISAGREE };
