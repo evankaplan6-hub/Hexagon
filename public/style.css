@@ -254,7 +254,12 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #status .tiles b { font: 700 1.45em/1 var(--sans); letter-spacing: -.02em; color: var(--brd-bright); }
 #status .tiles span { font: 500 .74em/1.2 var(--sans); color: #8892a3; }
 #status .tiles .off b { color: #5d6678; }
-#status .pairs, #status .near { display: flex; flex-direction: column; gap: .22em; margin: .8em 0 0; min-width: 0; }
+#status .pairs, #status .near, #status .room, #status .next { display: flex; flex-direction: column; gap: .22em; margin: .7em 0 0; min-width: 0; }
+/* how much room is left before each of the desk's own limits */
+#status .rr { display: flex; flex-wrap: wrap; gap: .2em .9em; font-size: .86em; color: #8892a3; }
+#status .rr b { font-weight: 700; color: var(--brd-bright); }
+#status .rr .full { color: #e8c35a; }
+#status .rr .full b { color: #e8c35a; }
 /* why the desk is not trading: the gap it can see, and the gap it needs */
 #status .nx { font-size: .92em; color: #aeb6c4; }
 #status .nx b { font-weight: 700; color: var(--brd-bright); }
@@ -378,7 +383,7 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
    click the active one again to flip the arrow. Type sorts maker rows apart from arbs; Side groups long, short and both. */
 /* Same font-size as a row (.88em), so the em-sized columns, gap and padding come out the same width
    and each heading sits over its column; the labels are made smaller one level down. */
-#wall .wcols { flex: none; display: grid; grid-template-columns: minmax(0, 1fr) 3.8em 5.4em 5em 5.2em; gap: .7em; align-items: center;
+#wall .wcols { flex: none; display: grid; grid-template-columns: minmax(0, 1fr) 5.4em 5.4em 5.6em; gap: .8em; align-items: center;
   padding: 0 .35em .5em .75em; margin-bottom: .2em; border-bottom: 1px solid var(--brd-rule);
   font: 600 .88em/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--brd-label); }
 #wall .wcols > * { font-size: .91em; }
@@ -387,13 +392,10 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #wall .wcols button.on { color: #dceaff; }
 #wall .wcols button[data-wcol="pl"], #wall .wcols button[data-wcol="value"] { justify-content: flex-end; text-align: right; }
 #wall .wcols i { font-style: normal; font-size: .9em; }
-#wall.narrow .ty, #wall.narrow .wcols [data-wcol="type"] { display: none; }
-#wall.narrow .wcols, #wall.narrow .wr { grid-template-columns: minmax(0, 1fr) 5.4em 5em 5.2em; }
-#wall .ty { font: 500 .78em var(--mono); color: var(--brd-label); white-space: nowrap; }
 #wall .val { font: 500 .92em var(--mono); text-align: right; color: #aeb6c4; }
 #wall .wlist { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #243047 transparent; }
 /* A position is a row with a side: the tint down its left edge says long or short before the words do. */
-#wall .wr { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 3.8em 5.4em 5em 5.2em; gap: .7em; align-items: first baseline; width: 100%;
+#wall .wr { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 5.4em 5.4em 5.6em; gap: .8em; align-items: first baseline; width: 100%;
   padding: .26em .35em .26em .75em; font-size: .88em; border-bottom: 1px solid var(--brd-rule); border-radius: 5px; }
 #wall .wr::before { content: ''; position: absolute; left: 0; top: .4em; bottom: .4em; width: 2px; border-radius: 2px; background: var(--brd-rule2); }
 #wall .wr.long::before { background: rgba(34,197,94,.65); }
