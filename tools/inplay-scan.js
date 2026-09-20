@@ -8,6 +8,15 @@
 // locked -- while the same day's tape held 226 net-of-fee-positive in-play observations across 147
 // distinct windows, median 26 seconds, the longest 391.
 //
+// ONE ROW PER GAME, and the trade is two BUYS. Kalshi has no naked short: "selling" a team means
+// buying the other one, so pricing both legs separately reports the same trade twice -- the first
+// version of this scan did exactly that and double-counted every window. The real position is
+//   buy YES on team X at one venue + buy YES on team Y at the other
+// which pays $1 whichever team wins, so it is locked when the two asks plus both fees come to less
+// than $1. Two directions exist (PM X + KS Y, or PM Y + KS X) and they are NOT the same number:
+// Kalshi lists each side as its own book, so kAskY is not always 1 - kBidX. The better of the two
+// is the game's edge.
+//
 // Fees are the whole story, so no edge is printed without them:
 //   Kalshi KXNFLGAME: fee_type `quadratic_with_maker_fees`, multiplier 1 -> taker 0.07 x P x (1-P).
 //   Polymarket NFL moneyline: feeSchedule {rate 0, takerOnly} -> taker FREE.
@@ -71,7 +80,7 @@ async function moneylines() {
       if ((m.sportsMarketType || '') !== 'moneyline') continue;
       try {
         const outcomes = JSON.parse(m.outcomes), tok = JSON.parse(m.clobTokenIds);
-        if (outcomes.length === 2 && tok.length === 2) rows.push({ outcomes, tok, start: m.gameStartTime });
+        if (outcomes.length === 2 && tok.length === 2) rows.push({ outcomes, tok, start: m.gameStartTime, rate: pm.feeRateOf(m) });
       } catch { /* a malformed listing row is not worth failing the scan over */ }
     }
   }
@@ -101,38 +110,46 @@ async function snapshot() {
   const prices = await pm.fetchPrices(games.flatMap((g) => g.p.tok));
   const rows = [];
   for (const g of games) {
-    for (let i = 0; i < 2; i++) {
+    const side = [0, 1].map((i) => {
       const leg = g.legs[i], name = g.names[i];
       const j = g.p.outcomes.findIndex((o) => o === name || o.endsWith(` ${name}`));
       const q = prices.get(g.p.tok[j]);
-      if (!q) continue;
-      const { yesBid: kBid, yesAsk: kAsk } = leg;
-      const pBid = q.bid, pAsk = q.ask;
-      if (![kBid, kAsk, pBid, pAsk].every((x) => Number.isFinite(x) && x > 0 && x < 1)) continue;
-      // Buy the cheap venue's YES, sell the dear one's. Polymarket's leg is fee-free on these
-      // boards, so only the Kalshi side is charged, at its own series multiplier.
-      const buyPm = kBid - pAsk - ksFee(kBid, leg.ticker);
-      const buyKs = pBid - kAsk - ksFee(kAsk, leg.ticker);
-      const kMid = (kBid + kAsk) / 2, pMid = (pBid + pAsk) / 2;
-      rows.push({ at: Date.now(), ticker: leg.ticker, game: g.ticker, team: name, live: g.live,
-        kBid, kAsk, pBid, pAsk, gap: +(kMid - pMid).toFixed(4),
-        buyPm: +buyPm.toFixed(4), buyKs: +buyKs.toFixed(4), best: +Math.max(buyPm, buyKs).toFixed(4),
-        fee: +ksFee(kMid, leg.ticker).toFixed(4) });
-    }
+      return q ? { leg, name, kBid: leg.yesBid, kAsk: leg.yesAsk, pBid: q.bid, pAsk: q.ask } : null;
+    });
+    if (side.some((x) => !x)) continue;
+    const [X, Y] = side;
+    const ok = (v) => Number.isFinite(v) && v > 0 && v < 1;
+    if (![X.kBid, X.kAsk, X.pBid, X.pAsk, Y.kBid, Y.kAsk, Y.pBid, Y.pAsk].every(ok)) continue;
+    // Buy one team on Polymarket and the OTHER on Kalshi: $1 comes back whoever wins.
+    const leg = (P, K) => {
+      const cost = P.pAsk + K.kAsk;
+      const fees = pm.feePerShare(P.pAsk, g.p.rate) + ksFee(K.kAsk, K.leg.ticker);
+      return { edge: 1 - cost - fees, cost, fees, buyPm: P.name, buyKs: K.name };
+    };
+    const a = leg(X, Y), b = leg(Y, X);
+    const best = a.edge >= b.edge ? a : b;
+    rows.push({ at: Date.now(), game: g.ticker, live: g.live,
+      teams: `${X.name}/${Y.name}`,
+      ks: `${c(X.kBid)}/${c(X.kAsk)}`, pm: `${c(X.pBid)}/${c(X.pAsk)}`,
+      // mid-to-mid on the SAME team, the plain statement of how far apart the venues are
+      gap: +(((X.kBid + X.kAsk) / 2) - ((X.pBid + X.pAsk) / 2)).toFixed(4),
+      edge: +best.edge.toFixed(4), fees: +best.fees.toFixed(4),
+      buy: `PM ${best.buyPm} @${c(best.buyPm === X.name ? X.pAsk : Y.pAsk)} + KS ${best.buyKs} @${c(best.buyKs === X.name ? X.kAsk : Y.kAsk)}`,
+      other: +Math.min(a.edge, b.edge).toFixed(4) });
   }
   return { rows, games: games.length };
 }
 
 function print(rows) {
   const live = rows.filter((r) => r.live);
-  console.log(`${'game'.padEnd(24)} ${'team'.padEnd(13)} ${'KS bid/ask'.padEnd(14)} ${'PM bid/ask'.padEnd(14)} ${'buyPM'.padEnd(7)}${'buyKS'.padEnd(7)}${'fee'.padEnd(7)}`);
-  for (const r of rows.sort((a, b) => b.best - a.best)) {
-    console.log(`${r.game.replace(/^KX|GAME-/g, '').padEnd(24)} ${r.team.padEnd(13)} ${c(r.kBid)}/${c(r.kAsk)} ${c(r.pBid)}/${c(r.pAsk)} ${c(r.buyPm)}${c(r.buyKs)}${c(r.fee)} ${r.live ? 'LIVE' : 'pre '}${r.best > 0 ? '  <== clears fees' : ''}`);
+  console.log(`${'game'.padEnd(22)} ${'teams'.padEnd(26)} ${'KS'.padEnd(14)} ${'PM'.padEnd(14)} ${'gap'.padEnd(7)}${'edge'.padEnd(7)}${'fees'.padEnd(7)}`);
+  for (const r of rows.sort((a, b) => b.edge - a.edge)) {
+    console.log(`${r.game.replace(/^KX|GAME-/g, '').padEnd(22)} ${r.teams.padEnd(26)} ${r.ks} ${r.pm} ${c(r.gap)}${c(r.edge)}${c(r.fees)} ${r.live ? 'LIVE' : 'pre '}${r.edge > 0 ? `  <== ${r.buy}` : ''}`);
   }
-  const hit = live.filter((r) => r.best > 0);
+  const hit = live.filter((r) => r.edge > 0);
   const gaps = live.map((r) => Math.abs(r.gap)).sort((a, b) => a - b);
-  console.log(`\n${live.length} in-play legs · ${hit.length} clear both venues' fees · median gap ${c(gaps[Math.floor(gaps.length / 2)])} · widest ${c(gaps[gaps.length - 1])}`);
-  console.log(`${rows.length - live.length} pre-game legs (these are reliably flat: the edge is in-play)`);
+  console.log(`\n${live.length} live games · ${hit.length} clear both venues' fees · median gap ${c(gaps[Math.floor(gaps.length / 2)])} · widest ${c(gaps[gaps.length - 1])}`);
+  console.log(`${rows.length - live.length} pre-game (reliably flat: the edge is in-play)`);
 }
 
 (async () => {
@@ -153,10 +170,10 @@ function print(rows) {
       for (const r of rows) {
         fs.appendFileSync(out, JSON.stringify(r) + '\n');
         if (!r.live) continue;
-        const run = open.get(r.ticker);
-        if (r.best > 0 && !run) { open.set(r.ticker, { start: r.at, peak: r.best }); console.log(`${et(r.at)}  OPEN  ${c(r.best)} net · ${r.game.replace(/^KX|GAME-/g, '')} ${r.team} · KS ${c(r.kBid)}/${c(r.kAsk)} PM ${c(r.pBid)}/${c(r.pAsk)}`); }
-        else if (r.best > 0) { run.peak = Math.max(run.peak, r.best); }
-        else if (run) { console.log(`${et(r.at)}  SHUT  after ${Math.round((r.at - run.start) / 1000)}s, peak ${c(run.peak)} · ${r.game.replace(/^KX|GAME-/g, '')} ${r.team}`); open.delete(r.ticker); }
+        const run = open.get(r.game);
+        if (r.edge > 0 && !run) { open.set(r.game, { start: r.at, peak: r.edge }); console.log(`${et(r.at)}  OPEN  ${c(r.edge)} net · ${r.game.replace(/^KX|GAME-/g, '')} · ${r.buy}`); }
+        else if (r.edge > 0) { run.peak = Math.max(run.peak, r.edge); }
+        else if (run) { console.log(`${et(r.at)}  SHUT  after ${Math.round((r.at - run.start) / 1000)}s, peak ${c(run.peak)} · ${r.game.replace(/^KX|GAME-/g, '')}`); open.delete(r.game); }
       }
     } catch (e) { console.log(`${et(Date.now())}  poll failed: ${String(e.message).slice(0, 90)}`); }
     await new Promise((r) => setTimeout(r, EVERY_MS));
