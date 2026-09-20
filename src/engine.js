@@ -236,7 +236,17 @@ class Engine {
       // closed on a resolution is half settled, not broken, and what the open leg will pay is
       // already known: the complement of what the settled leg paid.
       const settledLeg = legs.length === 1 ? this.state.closed.find((c) => c.group === id && c.strategy === 'arb' && /^resolved/.test(String(c.reason || '')) && c.venue !== legs[0].venue && c.side !== legs[0].side) : null;
-      if (settledLeg) integrity = 'half_settled';
+      // ...but "already known" holds only if the settled leg settled the OUTCOME, at 0 or 1. A leg
+      // that paid something in between did not answer the question, it cashed out of it, and the
+      // open leg is then naked on an outcome still to come. Kalshi's game rules do exactly this: a
+      // game "not started within 48 hours" of its scheduled time resolves "to a fair price", while
+      // Polymarket keeps its market open until the game is actually played and pays 0 or 1 then.
+      // So a postponed game leaves a settled Kalshi leg at, say, 55c against a Polymarket leg that
+      // is still a coin flip -- and the complement rule below would book that as a tidy locked
+      // profit. Game pairs come from the fast path (src/matcher.js), which runs no rules check at
+      // all, so this scorecard is the only place the mismatch can be caught.
+      const terminal = (x) => Number.isFinite(x) && (x <= 0.001 || x >= 0.999);
+      if (settledLeg) integrity = terminal(settledLeg.exit) ? 'half_settled' : 'settled_midprice';
       else if (legs.length !== 2) integrity = legs.length < 2 ? 'orphan_leg' : 'too_many_legs';
       else if (sides.size !== 2 || !sides.has('yes') || !sides.has('no')) integrity = 'missing_complement';
       else if (venues.size !== 2 || !venues.has('PM') || !venues.has('KS')) integrity = 'venue_mismatch';
@@ -263,6 +273,9 @@ class Engine {
       const entryCost = r2(legs.reduce((a, p) => a + p.cost, 0));
       const liquidationValue = r2(legs.reduce((a, p) => a + p.qty * (p.mark ?? p.entry), 0));
       const qty = legs.length ? Math.min(...legs.map((p) => p.qty)) : 0;
+      // `settled_midprice` deliberately falls through to null: with no vouchable settlement figure
+      // the group enters the totals at its liquidation value (pnlScorecard's arbUnvouched), which
+      // is what it is demonstrably worth rather than what a broken hedge would have paid.
       const settlementValue = integrity === 'valid' ? qty
         : integrity === 'half_settled' && Number.isFinite(settledLeg.exit) ? r2(qty * (1 - settledLeg.exit)) : null;
       groups.push({

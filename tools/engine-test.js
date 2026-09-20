@@ -511,6 +511,31 @@ const position = (over = {}) => ({
     U.state.positions = [position({ id: 'u-pm', group: 'u', strategy: 'arb', venue: 'PM', side: 'no', qty: 20, cost: 12.0 })];
     U.state.closed = [{ ...position({ id: 'u-ks', group: 'u', strategy: 'arb', venue: 'KS', side: 'yes', qty: 20 }), exit: 0.1, reason: 'unwound: second leg failed', pnl: -1 }];
     ok('a leg closed by an unwind is still an orphan', U.arbScorecard()[0].integrity === 'orphan_leg', U.arbScorecard()[0]);
+
+    // The postponement shape. Kalshi resolves a game "not started within 48 hours" of its scheduled
+    // time TO A FAIR PRICE, while Polymarket keeps its market open until the game is actually
+    // played. So the Kalshi leg settles at 55c and the Polymarket leg is still a coin flip -- the
+    // complement rule would book (1 - 0.55) x 20 as a tidy locked profit on an unhedged position.
+    const M = engine();
+    M.state.positions = [position({ id: 'm-pm', group: 'm', strategy: 'arb', venue: 'PM', side: 'no', qty: 20, cost: 12.0, mark: 0.5, pairId: 'same' })];
+    M.state.closed = [{ ...position({ id: 'm-ks', group: 'm', strategy: 'arb', venue: 'KS', side: 'yes', qty: 20, cost: 7.0, pairId: 'same' }), exit: 0.55, reason: 'resolved at a fair price', pnl: 4 }];
+    M.state.arbGroups.m = { pairId: 'same', qty: 20, expectedPayout: 20, status: 'filled' };
+    const mg = M.arbScorecard()[0];
+    ok('a leg settled at a MID price is not half_settled', mg.integrity === 'settled_midprice', mg);
+    ok('...so the group is not vouched for at all', mg.settlementValue === null && mg.lockedPnl === null, mg);
+    ok('...and it raises an integrity alert', M.pnlScorecard().integrityAlerts === 1, M.pnlScorecard());
+    // What it is demonstrably worth is what it would sell for, which is the Everton rule already
+    // in pnlScorecard: an unvouched group enters the settlement total at its liquidation P&L.
+    ok('...and enters the totals at liquidation value, not a phantom hedge',
+      Math.abs(M.pnlScorecard().arbUnvouched - mg.liquidationPnl) < 0.001, { unvouched: M.pnlScorecard().arbUnvouched, liq: mg.liquidationPnl });
+    // The boundary: a leg that settled at 0 or 1 DID answer the outcome, and still vouches.
+    for (const exit of [0, 1]) {
+      const T = engine();
+      T.state.positions = [position({ id: 't-pm', group: 't', strategy: 'arb', venue: 'PM', side: 'no', qty: 20, cost: 12.0, mark: 0.99, pairId: 'same' })];
+      T.state.closed = [{ ...position({ id: 't-ks', group: 't', strategy: 'arb', venue: 'KS', side: 'yes', qty: 20, cost: 7.0, pairId: 'same' }), exit, reason: 'resolved', pnl: 0 }];
+      T.state.arbGroups.t = { pairId: 'same', qty: 20, expectedPayout: 20, status: 'filled' };
+      ok(`a leg settled at ${exit} is still half_settled`, T.arbScorecard()[0].integrity === 'half_settled', T.arbScorecard()[0]);
+    }
   }
 
   group('quotes carry the Polymarket fee rate and positions carry their market\'s close');

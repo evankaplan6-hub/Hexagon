@@ -267,6 +267,13 @@ async function RIGO(E) {
       return { arbLocked: 0, totalLiquidation: unreal + E.state.stats.realized, realized: E.state.stats.realized, integrityAlerts: 0 };
     })();
     E.log('RIGO', 'RESEARCH', null, `scorecard: ${E.state.positions.length} open · arb locked ${pnl.arbLocked >= 0 ? '+' : '−'}${money(pnl.arbLocked)} · liquidation ${pnl.totalLiquidation >= 0 ? '+' : '−'}${money(pnl.totalLiquidation)} · realized ${pnl.realized >= 0 ? '+' : '−'}${money(pnl.realized)} · ${pnl.integrityAlerts} integrity alerts`);
+    // A count is not a warning. `settled_midprice` means one leg cashed out at a price between 0
+    // and 1 -- a postponed game on Kalshi -- so the other leg is no longer hedged against anything,
+    // and that is worth naming every half hour rather than hiding inside "1 integrity alert".
+    const broken = (typeof E.arbScorecard === 'function' ? E.arbScorecard() : []).filter((g) => g.integrity === 'settled_midprice');
+    if (broken.length && E.due('rigo-unhedged', 1800)) {
+      E.log('RIGO', 'PASS', null, `${broken.length} arb${broken.length > 1 ? 's' : ''} no longer hedged: one leg settled at a mid price, so the open leg is naked · ${broken.map((g) => `${g.label} (${g.qty} lots, worth ${g.liquidationPnl >= 0 ? '+' : '−'}$${Math.abs(g.liquidationPnl).toFixed(2)} if sold now)`).join(' · ')}`);
+    }
   }
 }
 
