@@ -308,6 +308,53 @@ January 2027. Two more long-dated arbs filled the budget and it passed on the ne
 Any-market pairs are written to the tick tape when a price or veto changes and on a
 `RECORD_HEARTBEAT_MIN` (15) heartbeat; `tools/replay.js` carries them forward between lines.
 
+### Fights, and the wall around sports
+
+The crawl skipped Sports on both venues until 2026-09-19, on the reasoning that the taker's fast
+path (`KS_SERIES`) already covered games. It did not cover everything: those eleven series are all
+**team-game** series, so fights — UFC and boxing, listed on both venues and settling on one
+unambiguous result — were never crawled, never paired, and never seen. UFC 331 was eight fights live
+on both venues and the scanner matched nothing.
+
+Two things had to change, and neither was enough alone.
+
+**The wall.** `DISCOVER_EXCLUDE_KS` and `DISCOVER_EXCLUDE_PM` are the lists now, both empty by
+default; `src/discovery.js` still defaults to excluding Sports, so only the desk opts in. Measured
+the night it shipped, with the keep filter the desk passes: Kalshi roughly doubles (22,232 → 45,051
+markets), Polymarket more than **triples** (8,762 → 29,605), because sports floods a listing ranked
+by 24h volume and the crawl runs until it drops below `PM_DISCOVER_MIN_VOL`. Heap went from 92 MB to
+300 MB on a 512 MB box, which is not a margin worth having. Raising that floor from $500 to $5,000
+is what pays for sports: Polymarket comes back to 13,290 markets and 25.6 MB, heap settles at
+**148 MB**, and every fight on the card survives — the first floor that drops one is $25,000.
+
+**The shape.** Everything else here pairs one Kalshi market to one Polymarket YES, on token 0. A
+fight is not that shape. Polymarket lists the bout as ONE market whose two *outcomes* are the
+fighters; Kalshi lists it as TWO markets, "Alexandre Pantoja wins" and "Joshua Van wins". So the
+generic path missed it twice over: the Polymarket side has no `groupItemTitle` to match a name
+against, and the loser's leg lives on token 1, which no candidate was ever built for. `matchAny` now
+recognises two *named* outcomes (Yes/No, Over/Under and Draw/Tie stay on the generic path) and emits
+one candidate per Kalshi leg on its own token, and the de-duplication keys on the **token** rather
+than the market id — otherwise the second fighter is thrown away as a duplicate of the first.
+
+The gate is narrow on purpose: both Kalshi legs must name a fighter and they must name *different*
+ones. That is stronger here than the generic proper-noun check, which would reject the pair outright
+for "Flyweight" and "Main Card" — words that describe the bout, not the outcome.
+
+It found 12 fight pairs on the remaining UFC 331 card, both tokens correct, plus 56 more of the same
+shape across tennis, NCAAF, MLS, Serie A and League of Legends — 68 pairs that were invisible before.
+
+**None of them trade.** Nothing in the rules allowlist is a sports family, so every one lands
+`unclear` and is watch-only. A sports pair can only begin trading if the Claude rules judge upgrades
+it, which needs `RULES_CHECK`, a key, and stays under `ASK_DAILY_USD`.
+
+`tools/ufc-scan.js` prices a card on both venues by hand, cross-venue and within Kalshi, and flags a
+pair only when it clears both venues' fees. On UFC 331 it found no pre-fight arb at all — six of
+eight fights priced *identically* on both venues, against a fee floor of ~3c. What it did catch was
+the post-decision lag: Kalshi marked the winner 99/100 within seconds of the finish while Polymarket
+still offered him at 93c, worth ~6.7c net, for about 90 seconds. Note that Gamma's `bestBid`/
+`bestAsk` go stale during a fast move (83/85 against a real book of 86/91), so that scan reads the
+CLOB directly; trading the listing price would have chased an arb that was not there.
+
 ## The MAKER desk (07)
 
 Everything above this line TAKES liquidity: buy the ask, sell the bid, pay a taker fee both ways.
@@ -377,9 +424,12 @@ list was never selecting for quality — it was just a list.
 trade-rate probe still picks it, and the run-over gate still benches markets that keep getting swept.
 The change is what the probe gets to choose from.
 
-Two things it is careful about. The crawl excludes Sports (the taker's fast path covers games), so a
-listed sports series is missing from it for a reason that is not merit; those few series are still
-scanned by name, which keeps the new pool a superset of the old one. And if the scanner is off, or
+One thing it is careful about. The crawl excluded Sports until 2026-09-19, so a listed sports series
+was missing from it for a reason that was not merit; those few series were still scanned by name,
+which kept the pool a superset of the old one. Sports is crawled now (see *Fights, and the wall
+around sports* below), so the exception is gone and the maker sees sports like anything else — but
+`MAKER_MIN_DAYS_TO_CLOSE` (7) keeps it away from a fight or a game settling that night, which is a
+coin flip and not a spread. And if the scanner is off, or
 its last crawl is older than two intervals, the desk falls back to the 39-series scan rather than
 quoting off stale tickers. `MAKER_WIDEN=0` turns the whole thing off.
 
