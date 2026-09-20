@@ -557,6 +557,38 @@ const position = (over = {}) => ({
     ok('unreadable text becomes a readable fallback, not a throw', b.action === null && /no json/.test(b.sentence), b);
   }
 
+  group('the desk says which commit it is running');
+  {
+    // On 2026-09-20 a deploy reported success and there was no way to confirm from outside WHICH
+    // commit the box ended up on: nothing exposed a build, and the dashboard's "Up 248h" is the
+    // ACCOUNT's age, which survives every restart.
+    const fresh = engine();
+    ok('an unstamped build reports no sha rather than inventing one', fresh.snapshot().build.sha === null, fresh.snapshot().build);
+    ok('and still reports when this process booted', Number.isFinite(fresh.snapshot().build.bootedAt), fresh.snapshot().build);
+    // The property that matters: a ledger ten days old must still report a boot from moments ago.
+    // That difference is the entire reason this field exists -- "Up 248h" through a fresh restart
+    // is what made the 2026-09-20 deploy unverifiable from the dashboard.
+    const aged = engine();
+    aged.state.startedAt = Date.now() - 10 * 86400000;
+    const snap = aged.snapshot();
+    ok('a ten-day-old account still reports a boot from seconds ago',
+      snap.now - snap.build.bootedAt < 60000 && snap.now - snap.startedAt > 9 * 86400000,
+      { accountAgeDays: (snap.now - snap.startedAt) / 86400000, bootAgeMs: snap.now - snap.build.bootedAt });
+
+    const stamped = engine({ buildSha: '3ebaa5d927f7743a387e92351066a2e326f60aaa' });
+    ok('a stamped build reports its commit', stamped.snapshot().build.sha === '3ebaa5d927f7743a387e92351066a2e326f60aaa', stamped.snapshot().build);
+
+    // The stamp is worthless if the pipeline stops passing it, and neither half is exercised by
+    // any other test: the Dockerfile declares the ARG, the deploy supplies it.
+    const root = path.join(__dirname, '..');
+    const dockerfile = fs.readFileSync(path.join(root, 'Dockerfile'), 'utf8');
+    ok('the Dockerfile takes GIT_SHA as a build arg', /^ARG GIT_SHA/m.test(dockerfile));
+    ok('and puts it in the image environment', /^ENV GIT_SHA=\$GIT_SHA/m.test(dockerfile));
+    const wf = fs.readFileSync(path.join(root, '.github', 'workflows', 'test.yml'), 'utf8');
+    ok('the deploy passes the commit it is deploying', /flyctl deploy .*--build-arg GIT_SHA=/.test(wf),
+      (wf.match(/flyctl deploy.*/) || [])[0]);
+  }
+
   group('the journal names the pair, not just the trade');
   {
     // Without this the journals cannot answer "did the desk re-enter the same pair?" -- the week

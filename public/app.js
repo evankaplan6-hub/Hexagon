@@ -1140,6 +1140,14 @@
     // When candidates clear the bar and still nothing is bought, KETT says why in its own log --
     // an arb book at its limit, the long-dated budget spent, cash under the floor. Quote it rather
     // than guessing at "waiting on room", which is what this line used to claim.
+    // What commit this desk is running (S.build, stamped into the image by the deploy) and how long
+    // the PROCESS has been up. Both come from the server; the page never guesses either.
+    const bsha = S.build && S.build.sha ? String(S.build.sha) : '';
+    const build = S.build ? {
+      full: bsha || 'built from a working copy, not a tagged commit',
+      short: bsha ? bsha.slice(0, 7) : 'dev',
+      upFor: Number.isFinite(S.build.bootedAt) ? dur(S.now - S.build.bootedAt) : '',
+    } : null;
     const pass = (S.log || []).find((e) => e.agent === 'KETT' && e.kind === 'PASS');
     const why = pass && S.now - pass.t < 20 * 60000 ? String(pass.text).split(', passing on')[0] : '';
     const near = ready
@@ -1165,7 +1173,13 @@
         `<span class="nn fitw"><span>${esc(unellipsis(nextUp.head))}</span>${nextUp.tail ? `<i> · ${esc(unellipsis(nextUp.tail))}</i>` : ''}</span></div>` : '') +
       // the taker's reach: markets matched on both venues, across every category
       (am ? `<div class="pairs extra"><span class="lh">Both venues</span><span><b>${S.pairCount || 0}</b> matched · <b>${am.rulesVerified || 0}</b> tradeable</span></div>` : '') +
-      `<p class="dim">Up ${dur(S.now - S.startedAt)} · ${feed.mode === 'stream' && feed.connected ? 'live feed' : 'polling'}</p>`;
+      // Which commit the box is running, and how long this PROCESS has been up. `Up` above is the
+      // ACCOUNT's age and survives restarts, so on its own it cannot answer "did the box pick up
+      // that deploy?" -- on 2026-09-20 it read 248h through a deploy that had just restarted it.
+      // A working copy has no stamp and says "dev": a version that might be wrong is worse than none.
+      `<p class="dim">Up ${dur(S.now - S.startedAt)} · ${feed.mode === 'stream' && feed.connected ? 'live feed' : 'polling'}` +
+      (build ? ` · <span title="${esc(build.full)}">build ${esc(build.short)}</span>${build.upFor ? ` · restarted ${build.upFor} ago` : ''}` : '') +
+      `</p>`;
     const key = `${html}|${Math.round(statusBox.w * k)}x${Math.round(statusBox.h * k)}`;
     if (key !== statusHtml) { el.innerHTML = html; statusHtml = key; fitText(el, Math.max(12, Math.min(21, k * 7.2)), 9); fitAll(el); }
   }

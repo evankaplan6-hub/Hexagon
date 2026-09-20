@@ -94,6 +94,23 @@ fly ssh console -C "node tools/fillcheck.js 24"    # the one number that matters
 fly ssh console -C "node tools/maker-report.js"
 ```
 
+### Which commit is the box actually running?
+
+The deploy stamps the commit into the image (`Dockerfile` ARG `GIT_SHA`, passed by the workflow),
+and the desk reports it:
+
+```bash
+curl -s https://hexagon-desk.fly.dev/api/state | python3 -c 'import json,sys; print(json.load(sys.stdin)["build"])'
+```
+
+The dashboard shows the same thing under the status panel: `build 3ebaa5d · restarted 12m ago`,
+with the full SHA on hover. A desk run from a working copy is unstamped and says `dev`.
+
+Read `restarted` and not `Up`: `Up` is the ACCOUNT's age and survives every restart, so it keeps
+counting through a deploy. On 2026-09-20 it read 248h on a box that had just been redeployed, and
+there was no way to tell from the outside whether the new code was live. That is what this answers.
+The `fly-deployed` tag is the pipeline's record of the same fact; this is the box's own.
+
 ## When the desk freezes
 
 On 2026-09-19 the taker cycle and the maker's requote loop stopped in the same second (15:32Z) and
