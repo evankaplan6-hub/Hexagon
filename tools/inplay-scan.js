@@ -114,7 +114,7 @@ async function snapshot() {
       const leg = g.legs[i], name = g.names[i];
       const j = g.p.outcomes.findIndex((o) => o === name || o.endsWith(` ${name}`));
       const q = prices.get(g.p.tok[j]);
-      return q ? { leg, name, kBid: leg.yesBid, kAsk: leg.yesAsk, pBid: q.bid, pAsk: q.ask } : null;
+      return q ? { leg, name, tok: g.p.tok[j], kBid: leg.yesBid, kAsk: leg.yesAsk, pBid: q.bid, pAsk: q.ask } : null;
     });
     if (side.some((x) => !x)) continue;
     const [X, Y] = side;
@@ -128,14 +128,35 @@ async function snapshot() {
     };
     const a = leg(X, Y), b = leg(Y, X);
     const best = a.edge >= b.edge ? a : b;
+    // Keep what each side of the chosen trade would have to be bought at, so depth can be checked
+    // against the SAME prices the edge was computed from.
+    best.pmSide = best.buyPm === X.name ? X : Y;
+    best.ksSide = best.buyKs === X.name ? X : Y;
     rows.push({ at: Date.now(), game: g.ticker, live: g.live,
       teams: `${X.name}/${Y.name}`,
       ks: `${c(X.kBid)}/${c(X.kAsk)}`, pm: `${c(X.pBid)}/${c(X.pAsk)}`,
       // mid-to-mid on the SAME team, the plain statement of how far apart the venues are
       gap: +(((X.kBid + X.kAsk) / 2) - ((X.pBid + X.pAsk) / 2)).toFixed(4),
       edge: +best.edge.toFixed(4), fees: +best.fees.toFixed(4),
+      _best: best,
       buy: `PM ${best.buyPm} @${c(best.buyPm === X.name ? X.pAsk : Y.pAsk)} + KS ${best.buyKs} @${c(best.buyKs === X.name ? X.kAsk : Y.kAsk)}`,
       other: +Math.min(a.edge, b.edge).toFixed(4) });
+  }
+  // Depth, but only where it can matter. An edge computed from two top-of-book asks says nothing
+  // about SIZE, and on a fast in-play move the touch is often a handful of contracts: 15.3c on 12
+  // contracts is $1.84, not an opportunity. Both books are read only for a game already showing a
+  // positive edge, so the common case costs no extra calls at all.
+  for (const r of rows) {
+    if (r.edge <= 0) { delete r._best; continue; }
+    const b = r._best; delete r._best;
+    try {
+      const [pb, kb] = await Promise.all([pm.fetchBook(b.pmSide.tok), ks.fetchBook(b.ksSide.leg.ticker)]);
+      // contracts offered at or better than the price the edge assumed
+      const pmQty = (pb.asks || []).filter((x) => x.price <= b.pmSide.pAsk + 1e-9).reduce((a, x) => a + x.size, 0);
+      const ksQty = (kb.yesAsks || []).filter((x) => x.price <= b.ksSide.kAsk + 1e-9).reduce((a, x) => a + x.size, 0);
+      r.qty = Math.floor(Math.min(pmQty, ksQty));
+      r.dollars = +(r.edge * r.qty).toFixed(2);
+    } catch { r.qty = null; r.dollars = null; }
   }
   return { rows, games: games.length };
 }
@@ -144,7 +165,7 @@ function print(rows) {
   const live = rows.filter((r) => r.live);
   console.log(`${'game'.padEnd(22)} ${'teams'.padEnd(26)} ${'KS'.padEnd(14)} ${'PM'.padEnd(14)} ${'gap'.padEnd(7)}${'edge'.padEnd(7)}${'fees'.padEnd(7)}`);
   for (const r of rows.sort((a, b) => b.edge - a.edge)) {
-    console.log(`${r.game.replace(/^KX|GAME-/g, '').padEnd(22)} ${r.teams.padEnd(26)} ${r.ks} ${r.pm} ${c(r.gap)}${c(r.edge)}${c(r.fees)} ${r.live ? 'LIVE' : 'pre '}${r.edge > 0 ? `  <== ${r.buy}` : ''}`);
+    console.log(`${r.game.replace(/^KX|GAME-/g, '').padEnd(22)} ${r.teams.padEnd(26)} ${r.ks} ${r.pm} ${c(r.gap)}${c(r.edge)}${c(r.fees)} ${r.live ? 'LIVE' : 'pre '}${r.edge > 0 ? `  <== ${r.buy}  ${r.qty == null ? '(depth unknown)' : `${r.qty} lots, $${r.dollars}`}` : ''}`);
   }
   const hit = live.filter((r) => r.edge > 0);
   const gaps = live.map((r) => Math.abs(r.gap)).sort((a, b) => a - b);
@@ -171,7 +192,7 @@ function print(rows) {
         fs.appendFileSync(out, JSON.stringify(r) + '\n');
         if (!r.live) continue;
         const run = open.get(r.game);
-        if (r.edge > 0 && !run) { open.set(r.game, { start: r.at, peak: r.edge }); console.log(`${et(r.at)}  OPEN  ${c(r.edge)} net · ${r.game.replace(/^KX|GAME-/g, '')} · ${r.buy}`); }
+        if (r.edge > 0 && !run) { open.set(r.game, { start: r.at, peak: r.edge }); console.log(`${et(r.at)}  OPEN  ${c(r.edge)} net on ${r.qty == null ? '?' : r.qty} lots ($${r.dollars == null ? '?' : r.dollars}) · ${r.game.replace(/^KX|GAME-/g, '')} · ${r.buy}`); }
         else if (r.edge > 0) { run.peak = Math.max(run.peak, r.edge); }
         else if (run) { console.log(`${et(r.at)}  SHUT  after ${Math.round((r.at - run.start) / 1000)}s, peak ${c(run.peak)} · ${r.game.replace(/^KX|GAME-/g, '')}`); open.delete(r.game); }
       }
