@@ -467,6 +467,15 @@ module.exports = {
   // Set DISCOVER_EXCLUDE_KS=Sports and DISCOVER_EXCLUDE_PM=Sports,Esports to put the wall back.
   discoverExcludeKs: env('DISCOVER_EXCLUDE_KS', '').split(',').map((s) => s.trim()).filter(Boolean),
   discoverExcludePm: env('DISCOVER_EXCLUDE_PM', '').split(',').map((s) => s.trim()).filter(Boolean),
+  // Polymarket tag slugs crawled whatever their 24h volume, after the main walk (src/discovery.js
+  // `alwaysTags`). A volume floor is the wrong instrument for a fight: the card is listed days
+  // ahead and trades almost nothing until the day, which is exactly when it is still worth pairing.
+  // Measured 2026-09-20, with 34 single fights listed on Polymarket: PM_DISCOVER_MIN_VOL at $5,000
+  // kept 5 of them and at $500 kept 9, while every UFC 332 fight read $0 and Kalshi already listed
+  // all 24. Pairing fights was the entire point of crawling sports, and the floor was quietly
+  // undoing it. Two tags cost about four Gamma requests a cycle.
+  // Empty turns the passes off and the floor alone decides again.
+  discoverAlwaysPm: env('DISCOVER_ALWAYS_PM', 'ufc,boxing').split(',').map((s) => s.trim()).filter(Boolean),
   // The rules gate's Claude check (src/rules.js): a matched pair with no verified rule family is
   // watch-only, and when one shows an edge its two rules texts can be put to Claude ONCE (the answer
   // is cached in DATA_DIR/rules-verdicts.jsonl, keyed by both texts). Nothing is asked without
