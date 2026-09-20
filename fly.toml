@@ -48,6 +48,21 @@ primary_region = "iad"          # Ashburn, Virginia — close to the exchange, a
   # any-market crawl already holds. If the box gets tight, ANY_MAX_PAIRS above is still the
   # number to pull down first -- this one is small.
   PM_UNIVERSE = "500"
+  # Raised from src/config.js's 20 on 2026-09-20, because the crawl had grown into the gap between
+  # crawls. One any-market scan now takes 474-541s, and at DISCOVER_EVERY_MIN=20 that is ~42% of
+  # every window spent crawling. The box is one shared vCPU: /proc/pressure/cpu read
+  # "some avg60=59.05 avg300=44.50" -- tasks waiting on CPU about half the time -- against
+  # /proc/pressure/memory flat 0.00, so this is CPU, not the 512 MB. Starved that hard, timers stop
+  # firing: getJSON aborts at 15s, yet the stall watchdog caught calls stuck in `fetch` for
+  # 292-1513s, and it restarted the desk 18 times on 2026-09-20. The cost is the crawl's own HTTP
+  # and JSON volume, not the matching -- src/match-any.js benchmarks at ~175ms over a full
+  # 22.5k x 9.7k crawl, so making it yield would fix nothing. The crawl also roughly doubled that
+  # day (22,524 -> 42,573 Kalshi markets) when #82 dropped its volume floor. 45 min puts the duty
+  # cycle near 19%. These pairs are Oscars 2027 and September unemployment; they do not move in 20
+  # minutes, and src/anymarket.js restores the last crawl's pairs across a restart. If the box is
+  # still starved, the next things to turn off are WHALE_WATCH (advisory, never trades) and
+  # RECORD_MAKER (the tape writes 57-97 MB a day) -- and only then buy a bigger machine.
+  DISCOVER_EVERY_MIN = "45"
   # Raised from the 3% default (src/config.js) on 2026-09-17: the desk hit 3% intraday and TESS
   # correctly halted new risk, but 3% of a $10k paper account is $300 -- tight enough that one bad
   # day parks the desk for the rest of it. Widened by request; it is still paper money.
