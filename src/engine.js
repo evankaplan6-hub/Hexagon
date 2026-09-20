@@ -249,6 +249,8 @@ class Engine {
         : integrity === 'half_settled' && Number.isFinite(settledLeg.exit) ? r2(qty * (1 - settledLeg.exit)) : null;
       groups.push({
         id, label: legs[0] && legs[0].label, pairId: legs[0] && legs[0].pairId,
+        // when the pair resolves, where the desk knows: the dashboard says what settles next
+        settlesAt: legs.map((p) => p.settlesAt).find(Number.isFinite) ?? null,
         qty, legs: legs.length, integrity, venueGap, entryCost, liquidationValue,
         liquidationPnl: r2(liquidationValue - entryCost),
         settlementValue, lockedPnl: settlementValue == null ? null : r2(settlementValue - entryCost),
@@ -875,7 +877,7 @@ class Engine {
       initial: s.initial, cash: s.cash, equity, deployed, unrealized, realized: s.stats.realized, fees: s.stats.fees, pnl,
       wins: s.stats.wins, losses: s.stats.losses, liveBalance: this.liveBalance,
       // `sellPx` is what sellGroup would ask for this leg right now, so the confirm box can say it
-      positions: s.positions.map((p) => ({ id: p.id, group: p.group, label: p.label, venue: p.venue, side: p.side, qty: p.qty, entry: p.entry, mark: p.mark, cost: p.cost, pnl: r2(p.qty * (p.mark ?? p.entry) - p.cost), sellPx: this.venueMark(p) ?? p.mark ?? p.entry, strategy: p.strategy, openedAt: p.openedAt })),
+      positions: s.positions.map((p) => ({ id: p.id, group: p.group, label: p.label, venue: p.venue, side: p.side, qty: p.qty, entry: p.entry, mark: p.mark, cost: p.cost, pnl: r2(p.qty * (p.mark ?? p.entry) - p.cost), sellPx: this.venueMark(p) ?? p.mark ?? p.entry, strategy: p.strategy, openedAt: p.openedAt, settlesAt: Number.isFinite(p.settlesAt) ? p.settlesAt : null })),
       arbGroups,
       closed: s.closed.slice(-80).map((c) => ({ t: c.exitAt, pnl: c.pnl, label: c.label, reason: c.reason, strategy: c.strategy })),
       takerFills: takerFills.slice(0, 120),
@@ -900,7 +902,7 @@ class Engine {
         ksTop: top([...this.quotes.ks.values()]).map((m) => ({ q: m.title, px: r3((m.yesBid + m.yesAsk) / 2), vol: Math.round(m.vol24), url: m.url })),
       },
       signals: this.signals.slice(0, 5).map((x) => ({ type: x.type, label: x.pair.label, edge: r3(x.edge), gap: x.gap != null ? r3(x.gap) : null })),
-      cfg: { minGap: this.cfg.minGap, minEdge: this.cfg.minEdge, exitGap: this.cfg.exitGap, stopLoss: this.cfg.stopLoss, paperStopLossPct: this.cfg.paperStopLossPct, gainLockTriggerPct: this.cfg.gainLockTriggerPct, gainLockGivebackPct: this.cfg.gainLockGivebackPct, gainLockRetainPct: this.cfg.gainLockRetainPct, minArbEdge: this.cfg.minArbEdge, maxPositionPct: this.cfg.maxPositionPct, maxOpenPositions: this.cfg.maxOpenPositions, maxArbGroups: this.cfg.maxArbGroups, maxDailyDrawdownPct: this.cfg.maxDailyDrawdownPct, maxHoldMin: this.cfg.maxHoldMin, priceEvery: this.cfg.priceEvery,
+      cfg: { minGap: this.cfg.minGap, minEdge: this.cfg.minEdge, exitGap: this.cfg.exitGap, stopLoss: this.cfg.stopLoss, paperStopLossPct: this.cfg.paperStopLossPct, gainLockTriggerPct: this.cfg.gainLockTriggerPct, gainLockGivebackPct: this.cfg.gainLockGivebackPct, gainLockRetainPct: this.cfg.gainLockRetainPct, minArbEdge: this.cfg.minArbEdge, maxPositionPct: this.cfg.maxPositionPct, maxOpenPositions: this.cfg.maxOpenPositions, maxArbGroups: this.cfg.maxArbGroups, maxLongArbGroups: this.cfg.maxLongArbGroups, longDays: this.cfg.longDays, maxDailyDrawdownPct: this.cfg.maxDailyDrawdownPct, maxHoldMin: this.cfg.maxHoldMin, priceEvery: this.cfg.priceEvery,
         makerMarkets: this.cfg.makerMarkets, makerMinTradesPerDay: this.cfg.makerMinTradesPerDay },
     };
   }

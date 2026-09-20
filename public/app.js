@@ -1121,6 +1121,22 @@
     // the widest gap already clears the bar says the checks are what is holding it, rather than
     // implying the desk is ignoring free money.
     const wide = closest ? Math.abs(closest.gap) : 0;
+    // How much room is left before each rail. The rails are the config's own, so this says what
+    // KETT will hit next rather than a number picked for the picture.
+    const pos = S.positions || [], arbLegs = pos.filter((p) => p.strategy === 'arb');
+    const arbs = new Set(arbLegs.map((p) => p.group || p.id)).size;
+    const longMs = (cfg.longDays || 30) * 86400000;
+    const longArbs = new Set(arbLegs.filter((p) => Number.isFinite(p.settlesAt) && p.settlesAt - S.now > longMs).map((p) => p.group || p.id)).size;
+    const bets = pos.filter((p) => p.strategy !== 'arb').length;
+    const used = (n, cap, label) => cap ? `<span class="${n >= cap ? 'full' : ''}"><b>${n}</b>/${cap} ${label}</span>` : '';
+    const roomBars = [used(arbs, cfg.maxArbGroups, 'arbs'), used(longArbs, cfg.maxLongArbGroups, `over ${cfg.longDays || 30}d`), used(bets, cfg.maxOpenPositions, 'bets')].filter(Boolean).join('');
+    // What resolves soonest, and what it pays when it does
+    const soon = (S.arbGroups || []).filter((g) => Number.isFinite(g.settlesAt) && g.settlesAt > S.now)
+      .sort((a, b) => a.settlesAt - b.settlesAt)[0];
+    const until = (ms) => { const d = ms / 86400000; return d >= 2 ? `in ${Math.round(d)}d` : ms >= 36e5 ? `in ${Math.round(ms / 36e5)}h` : `in ${Math.max(1, Math.round(ms / 6e4))}m`; };
+    const soonParts = soon ? splitLabel(soon.label || '') : null;
+    const soonLead = soonParts ? lead(soonParts.outcome, soonParts.question) : null;
+    const nextUp = soon ? { when: until(soon.settlesAt - S.now), pays: soon.lockedPnl == null ? '' : signed(soon.lockedPnl), head: soonLead.head, tail: soonLead.tail } : null;
     // When candidates clear the bar and still nothing is bought, KETT says why in its own log --
     // an arb book at its limit, the long-dated budget spent, cash under the floor. Quote it rather
     // than guessing at "waiting on room", which is what this line used to claim.
@@ -1144,6 +1160,9 @@
       `<dl class="mny"><div><dt>At work</dt><dd>${money(atWork, 0)}</dd></div>` +
       `<div><dt>Cash free</dt><dd>${money(freeCash, 0)}</dd></div></dl>` +
       `<div class="near"><span class="lh">${ready ? 'Ready to trade' : 'Why no trade'}</span>${near}</div>` +
+      `<div class="room extra"><span class="lh">Room to trade</span><span class="rr">${roomBars}</span></div>` +
+      (nextUp ? `<div class="next extra"><span class="lh">Settles next</span><span class="nx"><b>${esc(nextUp.when)}</b>${nextUp.pays ? ` · pays ${nextUp.pays}` : ''}</span>` +
+        `<span class="nn fitw"><span>${esc(unellipsis(nextUp.head))}</span>${nextUp.tail ? `<i> · ${esc(unellipsis(nextUp.tail))}</i>` : ''}</span></div>` : '') +
       // the taker's reach: markets matched on both venues, across every category
       (am ? `<div class="pairs extra"><span class="lh">Both venues</span><span><b>${S.pairCount || 0}</b> matched · <b>${am.rulesVerified || 0}</b> tradeable</span></div>` : '') +
       `<p class="dim">Up ${dur(S.now - S.startedAt)} · ${feed.mode === 'stream' && feed.connected ? 'live feed' : 'polling'}</p>`;
@@ -2001,7 +2020,6 @@
     const dir = wallSortDir === 'asc' ? 1 : -1;
     const by = wallSortCol === 'name' ? (a, b) => dir * a.name.localeCompare(b.name)
       : wallSortCol === 'side' ? (a, b) => dir * a.side.localeCompare(b.side) || b.qty - a.qty
-      : wallSortCol === 'type' ? (a, b) => dir * a.type.localeCompare(b.type) || b.pl - a.pl
       : wallSortCol === 'value' ? (a, b) => dir * (a.value - b.value)
         : (a, b) => dir * (a.pl - b.pl);
     return held.slice().sort(by);
@@ -2090,6 +2108,12 @@
     const pairNet = r2((S.equity ?? S.initial ?? 0) - (S.initial ?? 0));
     const net = r2(makerNet + pairNet);
     const P = S.pnl || {}, banked = r2((S.realized || 0) + (M.realized || 0));
+    // Today, specifically: the account's own curve since local midnight. Day 10 and an all-time
+    // number said nothing about whether this morning went well.
+    const midnight = new Date(S.now); midnight.setHours(0, 0, 0, 0);
+    const curve = combinePnlHistory(S.balanceHistory, M.hist, S.initial ?? 0, M.historyValidFrom || 0);
+    const opened = curve.filter((p) => p.t <= midnight.getTime()).pop();
+    const today = curve.length && opened ? r2(curve[curve.length - 1].v - opened.v) : null;
     const stat = (label, v, cls) => `<div class="${cls || ''}"><dt>${label}</dt><dd class="${v >= 0 ? 'pos' : 'neg'}">${signed(v)}</dd></div>`;
     const held = sortHeld((M.markets || []).filter((m) => m.inv).map((m) => ({ m, name: nameOf(m), tail: lead(OUTCOME(m), QUESTION(m)).tail, type: 'Maker', side: m.inv > 0 ? 'long' : 'short', qty: Math.abs(m.inv), value: Math.abs(m.mark), pl: m.mark - m.cost })).concat(takerRows()));
     const up = held.filter((x) => x.pl > 0).length, down = held.filter((x) => x.pl < 0).length;
@@ -2098,7 +2122,7 @@
     // together in one dim sentence, which is the slowest way to read two numbers.
     const num = `<div class="wbig ${net >= 0 ? 'pos' : 'neg'}">${signed(net)}</div>` +
       `<div class="wsub">all paper trades, marked now</div>` +
-      `<dl class="wstats">${stat('Maker', makerNet)}${stat('Cross-venue', pairNet)}` +
+      `<dl class="wstats">${today == null ? '' : stat('Today', today)}${stat('Maker', makerNet)}${stat('Cross-venue', pairNet)}` +
       // the rest of the column: how much of that is money already, how much is still a mark,
       // what the arbs are sure to pay, and what the venues have taken
       `${stat('Banked', banked, 'x sep')}` +
@@ -2117,12 +2141,14 @@
     // The header row is the sort control -- click a column, click it again to flip the arrow.
     const arrow = (dir) => dir === 'asc' ? '▲' : '▼';
     const colBtn = (k, label) => `<button type="button" role="columnheader" aria-sort="${wallSortCol === k ? (wallSortDir === 'asc' ? 'ascending' : 'descending') : 'none'}" data-wcol="${k}" class="${wallSortCol === k ? 'on' : ''}">${label}${wallSortCol === k ? `<i>${arrow(wallSortDir)}</i>` : ''}</button>`;
-    const head = `<div class="wcols" role="row">${colBtn('name', 'Name')}${colBtn('type', 'Type')}${colBtn('side', 'Side')}${colBtn('value', 'Value')}${colBtn('pl', 'P&amp;L')}</div>`;
+    // The Type column said "Arb" beside a blue bar and a BOTH tag, or "Maker" beside everything
+    // else: two ways of saying what the row's own colour already says, taking width from the names.
+    const head = `<div class="wcols" role="row">${colBtn('name', 'Name')}${colBtn('side', 'Side')}${colBtn('value', 'Value')}${colBtn('pl', 'P&amp;L')}</div>`;
     const row = (x) => x.arb
-      ? `<button class="wr arb" data-g="${esc(x.key)}" title="${esc(x.label)}"><span class="nm"><span class="l1 fitw"><span>${esc(x.name)}</span>${x.question ? `<i> · ${esc(x.question)}</i>` : ''}</span><small class="legs">${x.sides}</small></span><span class="ty">${esc(x.type)}</span>` +
+      ? `<button class="wr arb" data-g="${esc(x.key)}" title="${esc(x.label)}"><span class="nm"><span class="l1 fitw"><span>${esc(x.name)}</span>${x.question ? `<i> · ${esc(x.question)}</i>` : ''}</span><small class="legs">${x.sides}</small></span>` +
         `<span class="sd ${x.arb.length > 1 ? 'arb' : 'long'}">${x.arb.length > 1 ? 'BOTH' : x.arb[0].side.toUpperCase()} ${x.arb[0].qty}</span><span class="val">${money(x.value)}</span><span class="pl ${x.pl >= 0 ? 'pos' : 'neg'}">${signed(x.pl)}</span></button>`
       : `<button class="wr ${x.m.inv > 0 ? 'long' : 'short'}" data-m="${esc(x.m.ticker)}" title="${esc(x.m.title || '')}">` +
-        `<span class="nm"><span class="l1 fitw"><span>${esc(x.name)}</span>${x.tail ? `<i> · ${esc(x.tail)}</i>` : ''}</span></span><span class="ty">Maker</span>${sideTag(x.m.inv)}<span class="val">${money(Math.abs(x.m.mark))}</span><span class="pl ${x.pl >= 0 ? 'pos' : 'neg'}">${signed(x.pl)}</span></button>`;
+        `<span class="nm"><span class="l1 fitw"><span>${esc(x.name)}</span>${x.tail ? `<i> · ${esc(x.tail)}</i>` : ''}</span></span>${sideTag(x.m.inv)}<span class="val">${money(Math.abs(x.m.mark))}</span><span class="pl ${x.pl >= 0 ? 'pos' : 'neg'}">${signed(x.pl)}</span></button>`;
     const list = `<div class="wlist">${rows.map(row).join('')}</div>`;
     h += `<div class="wbody">${`<div class="wnum">${num}</div>`}<div class="wbook">${head}${list}</div></div>`;
     return h;
@@ -2236,8 +2262,6 @@
       // its shape but loses a third of its pixels, and 26% of a narrow screen is not a column.
       wallWide = wallBox.w > wallBox.h * 2.3 && wallBox.w * k > 560;
       el.classList.toggle('wide', wallWide);
-      // under ~620px the Type column costs the names their width; the edge colour and BOTH still say arb
-      el.classList.toggle('narrow', wallBox.w * k < 620);
       // Stacked (not wide), the number sits above the book instead of beside it, so a bigger font
       // now costs the book its own height. Below a real box the number and its breakdown collapse
       // to one line -- the list of positions is why this board exists, and a hero digit that leaves
