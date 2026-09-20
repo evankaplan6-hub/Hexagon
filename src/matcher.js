@@ -115,6 +115,21 @@ const SPORT_SERIES = {
 const TAG = { KXMLBGAME: 'MLB', KXNFLGAME: 'NFL', KXNBAGAME: 'NBA', KXATPMATCH: 'ATP', KXWTAMATCH: 'WTA', KXNCAAFGAME: 'NCAAF', KXMLSGAME: 'MLS', KXEPLGAME: 'EPL', KXUCLGAME: 'UCL', KXLALIGAGAME: 'LaLiga', KXFEDDECISION: 'Fed' };
 const MLB = new Set(['diamondbacks', 'braves', 'orioles', 'red sox', 'cubs', 'white sox', 'reds', 'guardians', 'rockies', 'tigers', 'astros', 'royals', 'angels', 'dodgers', 'marlins', 'brewers', 'twins', 'mets', 'yankees', 'athletics', 'phillies', 'pirates', 'padres', 'giants', 'mariners', 'cardinals', 'rays', 'rangers', 'blue jays', 'nationals']);
 const NFL = new Set(['cardinals', 'falcons', 'ravens', 'bills', 'panthers', 'bears', 'bengals', 'browns', 'cowboys', 'broncos', 'lions', 'packers', 'texans', 'colts', 'jaguars', 'chiefs', 'raiders', 'chargers', 'rams', 'dolphins', 'vikings', 'patriots', 'saints', 'giants', 'jets', 'eagles', 'steelers', '49ers', 'seahawks', 'buccaneers', 'titans', 'commanders']);
+// Polymarket names an NFL side by nickname alone ("Vikings"); Kalshi names it by city ("Minnesota",
+// "New York J"). No other league splits the name this way -- MLB and NBA carry the city on
+// Polymarket, college and soccer use the club on both -- so nameMatch, which walks Kalshi's tokens
+// as prefixes of Polymarket's, could never pair a single NFL game: 0 of 14 on Sunday 2026-09-20,
+// silently, all season. Putting the city back in front of the nickname is the whole fix:
+// "New York J" then prefixes "New York Jets" and not "New York Giants", exactly as MLB's
+// "New York Y" already does.
+const NFL_CITY = { cardinals: 'Arizona', falcons: 'Atlanta', ravens: 'Baltimore', bills: 'Buffalo', panthers: 'Carolina',
+  bears: 'Chicago', bengals: 'Cincinnati', browns: 'Cleveland', cowboys: 'Dallas', broncos: 'Denver', lions: 'Detroit',
+  packers: 'Green Bay', texans: 'Houston', colts: 'Indianapolis', jaguars: 'Jacksonville', chiefs: 'Kansas City',
+  raiders: 'Las Vegas', chargers: 'Los Angeles', rams: 'Los Angeles', dolphins: 'Miami', vikings: 'Minnesota',
+  patriots: 'New England', saints: 'New Orleans', giants: 'New York', jets: 'New York', eagles: 'Philadelphia',
+  steelers: 'Pittsburgh', '49ers': 'San Francisco', seahawks: 'Seattle', buccaneers: 'Tampa Bay', titans: 'Tennessee',
+  commanders: 'Washington' };
+const nflFull = (name) => { const c = NFL_CITY[norm(name)]; return c ? `${c} ${name}` : name; };
 const NBA = new Set(['hawks', 'celtics', 'nets', 'hornets', 'bulls', 'cavaliers', 'mavericks', 'nuggets', 'pistons', 'warriors', 'rockets', 'pacers', 'clippers', 'lakers', 'grizzlies', 'heat', 'bucks', 'timberwolves', 'pelicans', 'knicks', 'thunder', 'magic', '76ers', 'suns', 'trail blazers', 'kings', 'spurs', 'raptors', 'jazz', 'wizards']);
 function nick(name) { const t = toks(name); return [t.slice(-2).join(' '), t[t.length - 1]]; }
 function inLeague(set, name) { return nick(name).some((n) => set.has(n)); }
@@ -197,8 +212,9 @@ function matchPairs(pmList, ksList) {
         const sides = ms.filter((x) => !/^tie\b/i.test(x.subTitle) && !/^tie\b/i.test(x.title));
         if (sides.length !== 2) continue;
         const people = /MATCH/.test(ser); // tennis-style series carry player names
-        const ia = sides.findIndex((x) => nameMatch(x.subTitle, A, people));
-        const ib = sides.findIndex((x) => nameMatch(x.subTitle, B, people));
+        const [pa, pb] = ser === 'KXNFLGAME' ? [nflFull(A), nflFull(B)] : [A, B];
+        const ia = sides.findIndex((x) => nameMatch(x.subTitle, pa, people));
+        const ib = sides.findIndex((x) => nameMatch(x.subTitle, pb, people));
         if (ia < 0 || ib < 0 || ia === ib) continue;
         const label = `${TAG[ser] || ser} ${short(A)} v ${short(B)} · ${short(A)}`;
         const conflict = conflictWith(sides[ia]);

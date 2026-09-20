@@ -327,5 +327,30 @@ group('matchPairs: a PM "Will X win" market must match BOTH clubs, not one share
   ok('the opponent must be the other side, not the same one twice', matchPairs([sameSide], eplEvent).pairs.length === 0);
 }
 
+group('matchPairs: an NFL game -- Kalshi says the city, Polymarket says the nickname');
+{
+  // Real labels from Sunday 2026-09-20. Before nflFull, every one of the 14 games on the slate
+  // missed here with no reject logged: "minnesota" is not a prefix of "vikings".
+  const nfl = (ev, a, b) => [
+    ks({ ticker: `KXNFLGAME-${ev}-A`, eventTicker: `KXNFLGAME-${ev}`, subTitle: a, title: `${a} wins` }),
+    ks({ ticker: `KXNFLGAME-${ev}-B`, eventTicker: `KXNFLGAME-${ev}`, subTitle: b, title: `${b} wins` }),
+  ];
+  const game = (q, outcomes, gameStart) => pm({ question: q, sport: 'moneyline', outcomes, gameStart });
+  const r = matchPairs([game('Vikings vs. Bears', ['Vikings', 'Bears'], '2026-09-20 17:00:00+00')], nfl('26SEP20MINCHI', 'Minnesota', 'Chicago'));
+  ok('a city-vs-nickname NFL game pairs', r.pairs.length === 1, r.pairs);
+  ok('...to the first-named side, tagged NFL', r.pairs[0] && r.pairs[0].label === 'NFL Vikings v Bears · Vikings' && /-A$/.test(r.pairs[0].ks.ticker), r.pairs[0]);
+
+  // the two New York and two Los Angeles teams: Kalshi's one-letter suffix picks the club
+  const ny = matchPairs([game('Packers vs. Jets', ['Packers', 'Jets'], '2026-09-20 17:00:00+00'), game('Giants vs. Rams', ['Giants', 'Rams'], '2026-09-22 00:15:00+00')],
+    [...nfl('26SEP20GBNYJ', 'Green Bay', 'New York J'), ...nfl('26SEP21NYGLAR', 'New York G', 'Los Angeles R')]);
+  ok('"New York J" is the Jets and "New York G" the Giants', ny.pairs.length === 2 && ny.pairs.every((p) => /GBNYJ-A|NYGLAR-A/.test(p.ks.ticker)), ny.pairs.map((p) => `${p.label} -> ${p.ks.ticker}`));
+  const wrongNy = matchPairs([game('Giants vs. Rams', ['Giants', 'Rams'], '2026-09-20 17:00:00+00')], nfl('26SEP20GBNYJ', 'Green Bay', 'New York J'));
+  ok('the Giants do not pair with the Jets\' game', wrongNy.pairs.length === 0, wrongNy.pairs);
+
+  // the expansion is NFL-only: an MLB "Giants" keeps its own city
+  const mlbGiants = matchPairs([game('Giants vs. Cardinals', ['San Francisco Giants', 'St. Louis Cardinals'], '2026-09-20 17:00:00+00')], mlbEvent('26SEP20', 'San Francisco Giants', 'St. Louis Cardinals'));
+  ok('an MLB Giants game still pairs as MLB', mlbGiants.pairs.length === 1 && /^MLB/.test(mlbGiants.pairs[0].label), mlbGiants.pairs);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
