@@ -171,6 +171,9 @@ function pairSignals(p, cfg, now) {
   // the shape of the desk's largest taker loss. The edge itself is already measured from the entry
   // price to fair (convEdge), never from the gap; this gate is about whether fair means anything.
   const conv = (() => {
+    // The book itself may be switched off (config.convergeEnabled). First, so the ledger says so on
+    // every pair; the candidate above is still priced and recorded, which is what a tape is for.
+    if (cfg.convergeEnabled === false) return { veto: 'convergence book off' };
     // A convergence trade is a bet on the next few hours. If the Kalshi market closes before max
     // hold would end it, the close guard (exitIntent) flattens it first -- the round trip is paid
     // for a position that was never given the time its edge assumes.

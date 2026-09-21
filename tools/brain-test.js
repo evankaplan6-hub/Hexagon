@@ -78,6 +78,8 @@ group('every data-integrity rail drops the proposal rather than shrinking it');
     // an any-market pair whose resolution rules are unverified: two contracts that may settle differently
     ['rules unverified', mkE([mkPair({ watchOnly: 'unclear' })]), propose(), 'rules unverified'],
     ['stale quote', mkE([mkPair({ q: { ...mkPair().q, t: Date.now() - (cfg.maxDataAgeSec + 60) * 1000 } })]), propose(), 'stale quote'],
+    // a proposal IS a convergence trade, and the book may be switched off (config.convergeEnabled)
+    ['convergence book off', mkE([mkPair()], { cfg: { ...cfg, convergeEnabled: false } }), propose(), 'convergence book off'],
     ['bad venue', mkE([mkPair()]), propose({ venue: 'NYSE' }), 'bad venue'],
     ['bad side', mkE([mkPair()]), propose({ side: 'maybe' }), 'bad side'],
   ];

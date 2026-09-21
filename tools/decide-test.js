@@ -48,6 +48,24 @@ group('convergence still fires on its own when no arb shadows it');
   ok('and it is the converge', r.signals[0].type === 'converge', r.signals[0].type);
 }
 
+group('the convergence book can be switched off without touching the arb book');
+{
+  const off = { ...cfg, convergeEnabled: false };
+  // the same quote that fires a convergence trade above
+  const r = d.pairSignals(mk(0.05, 0.06, 0.07, 0.11, 1e5, 5e5), off);
+  ok('no signal', r.signals.length === 0, r.signals.map((s) => s.type));
+  ok('the ledger says why', r.veto === 'convergence book off', r.veto);
+  ok('the candidate is still priced for the tape', r.best && Number.isFinite(r.best.edge) && r.fair != null, r.best);
+  // ...and the same quote that fires a locked arb above
+  const a = d.pairSignals(mk(0.40, 0.41, 0.50, 0.51), off);
+  ok('the arb still fires', a.signals.length === 1 && a.signals[0].type === 'arb', a.signals.map((s) => s.type));
+  // scan() counts it like any other rail
+  const s = d.scan([mk(0.05, 0.06, 0.07, 0.11, 1e5, 5e5)], off, 1000);
+  ok('scan reports the rail by name', s.rejects.get('convergence book off') === 1, [...s.rejects]);
+  // a config that does not know the knob (a hand-built one, an old tape's) behaves as before
+  ok('an unset knob means on', d.pairSignals(mk(0.05, 0.06, 0.07, 0.11, 1e5, 5e5), { ...cfg, convergeEnabled: undefined }).signals.length === 1);
+}
+
 group('arbs outrank convergence in the ranked list regardless of edge');
 {
   const arb = { type: 'arb', edge: 0.001 }, conv = { type: 'converge', edge: 0.900 };

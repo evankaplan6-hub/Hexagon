@@ -283,6 +283,8 @@ function ilsaApply(E, answer) {
     const p = byId.get(pr.pairId);
     const drop = (why) => out.dropped.push({ pairId: pr.pairId, why });
     if (!p) { drop('unknown pair'); continue; }
+    // a mind's proposal is a convergence trade, and the book may be switched off (config.convergeEnabled)
+    if (E.cfg.convergeEnabled === false) { drop('convergence book off'); continue; }
     const q = p.q;
     if (!q) { drop('no quote'); continue; }
     const fault = decide.quoteFault(q);

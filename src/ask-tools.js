@@ -436,6 +436,7 @@ const SETTINGS = [
   ['initialBalance', 'INITIAL_BALANCE', 'starting balance of each book, dollars'],
   ['maxPositionPct', 'MAX_POSITION_PCT', 'largest single position as a share of equity'],
   ['baseSizeMult', 'BASE_SIZE_MULT', 'share of the position cap a neutral convergence bet takes'],
+  ['convergeEnabled', 'CONVERGE', 'convergence bets (unhedged) on or off; off, none are opened, open ones still run to their exit, arbs and the maker are unaffected'],
   ['maxOpenPositions', 'MAX_OPEN_POSITIONS', 'most open convergence bets (unhedged) at once'],
   ['maxArbGroups', 'MAX_ARB_GROUPS', 'most locked arbs at once, counted per arb, not per leg'],
   ['maxDailyDrawdownPct', 'MAX_DAILY_DRAWDOWN_PCT', 'daily loss share that halts new taker trades'],
