@@ -14,6 +14,7 @@ const os = require('os');
 const path = require('path');
 const { makeSession, parseChain, parseOsi, daysToExpiry, CHAIN_COLS } = require('../src/venues/cboe');
 const { chainHash, tapeLines, headerLine, appendLines, readSeen, writeSeen, snapshot, etDay, SEEN, SYMBOLS } = require('./chain-record');
+const { read: readTape, summarize, latestFile, tail, pickAtm } = require('../src/chaintape');
 
 let pass = 0, fail = 0;
 const ok = (name, cond, got) => {
@@ -191,6 +192,90 @@ group('the seen file');
   ok('it round-trips', readSeen(dir).SPY.hash === 'abc');
   fs.writeFileSync(path.join(dir, SEEN), '{ not json');
   ok('a corrupt seen file reads as empty rather than stopping the run', JSON.stringify(readSeen(dir)) === '{}');
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+group('reading the tape back: the newest file, and only its tail');
+{
+  const dir = tmp();
+  fs.writeFileSync(path.join(dir, 'chains-2026-09-18.jsonl'), '{}\n');
+  fs.writeFileSync(path.join(dir, 'chains-2026-09-21.jsonl'), '{}\n');
+  fs.writeFileSync(path.join(dir, 'chains-2026-09-19.jsonl'), '{}\n');
+  fs.writeFileSync(path.join(dir, 'notes.txt'), 'ignore me');
+  fs.writeFileSync(path.join(dir, SEEN), '{}');
+  ok('the newest day wins', (latestFile(dir) || {}).name === 'chains-2026-09-21.jsonl', latestFile(dir));
+  ok('a file that is not a tape is ignored', !/notes|seen/.test((latestFile(dir) || {}).name || ''));
+  ok('a directory with no tape is null, not a throw', latestFile(path.join(dir, 'nope')) === null);
+
+  const big = path.join(dir, 'chains-2026-09-21.jsonl');
+  fs.writeFileSync(big, 'AAAA\nBBBB\nCCCC\nDDDD\n');
+  ok('a tail bigger than the file is the whole file', tail(big, { maxBytes: 1e6 }).startsWith('AAAA'));
+  // the cut lands mid-line; that fragment is not parseable and must be dropped, not repaired
+  const cut = tail(big, { maxBytes: 12 });
+  ok('a tail cut mid-line drops the fragment', !/^A|^BB/.test(cut) && cut.includes('DDDD'), cut);
+  ok('an unreadable file is empty, not a throw', tail(path.join(dir, 'gone.jsonl')) === '');
+  ok('no tape at all reads as ok:false with a reason', (() => { const r = readTape(path.join(dir, 'nope')); return r.ok === false && r.why === 'no tape yet' && r.symbols.length === 0; })());
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+group('summarize: newest line per symbol-expiry wins');
+{
+  const hdr = JSON.stringify(headerLine({ at: NOW, band: 0.3, maxDte: 70, symbols: ['AAA'] }));
+  // same symbol+expiry twice: the LATER line (further down the file) is the truth
+  const early = JSON.stringify({ t: '2026-09-21T14:00:00.000Z', sym: 'AAA', spot: 100, sb: 99.9, sa: 100.1, qt: 'x', exp: '2026-09-25', dte: 4, c: [[100, 1, 5, 1.1, 5, 1, 0.2, 0.5, 0, 0, 0, 0, 0, 7, 3, null]], p: [] });
+  const late = JSON.stringify({ t: '2026-09-21T20:00:00.000Z', sym: 'AAA', spot: 101, sb: 100.9, sa: 101.1, qt: 'y', exp: '2026-09-25', dte: 4, c: [[100, 2, 5, 2.1, 5, 2, 0.3, 0.6, 0, 0, 0, 0, 0, 9, 4, null]], p: [] });
+  // same snapshot as `late`, so it carries the same underlying quote -- tapeLines stamps every
+  // line of a snapshot with it, and a fixture that omits it tests a file the recorder cannot write
+  const other = JSON.stringify({ t: '2026-09-21T20:00:00.000Z', sym: 'AAA', spot: 101, sb: 100.9, sa: 101.1, qt: 'y', exp: '2026-11-20', dte: 60, c: [[100, 5, 1, 5.2, 1, 5, 0.4, 0.7, 0, 0, 0, 0, 0, 1, 0, null]], p: [] });
+  const r = summarize([hdr, early, late, other, 'not json', ''].join('\n'), { now: NOW });
+  ok('one entry per symbol', r.symbols.length === 1, r.symbols.length);
+  const s0 = r.symbols[0];
+  ok('the later line wins the spot', s0.spot === 101, s0.spot);
+  ok('and the later quote', s0.sb === 100.9 && s0.qt === 'y', [s0.sb, s0.qt]);
+  ok('both expiries are kept', s0.expiries.length === 2, s0.expiries.map((e) => e.exp));
+  ok('expiries come out in date order', s0.expiries[0].exp < s0.expiries[1].exp);
+  ok('the duplicate is not double-counted', s0.contracts === 2, s0.contracts);
+  ok('distinct snapshots are counted', r.snapshots === 2, r.snapshots);
+  ok('the header is picked up', r.header && r.header.band === 0.3 && r.header.maxDte === 70, r.header);
+  ok('the column order comes back for the reader', (r.cols || []).length === CHAIN_COLS.length, r.cols);
+  ok('a malformed line is skipped, not fatal', true);
+  ok('empty text is an empty summary, not a throw', summarize('', { now: NOW }).symbols.length === 0);
+  ok('the nearest expiry wins the atm strip', s0.atm && s0.atm.exp === '2026-09-25', s0.atm);
+}
+
+group('pickAtm: the strike a person actually reads');
+{
+  const mk = (k, bid) => [k, bid, 5, bid + 0.1, 5, bid, 0.2, 0.5, 0, 0, 0, 0, 0, 11, 2, null];
+  const r = { spot: 100.4, exp: '2026-09-25', dte: 4, c: [mk(95, 6), mk(100, 2), mk(105, 0.5)], p: [mk(95, 0.4), mk(100, 1.5)] };
+  const a = pickAtm(r);
+  ok('the strike nearest spot is chosen', a.k === 100, a.k);
+  ok('the call side is carried', a.call.bid === 2 && a.call.ask === 2.1, a.call);
+  ok('the put at the SAME strike is paired with it', a.put.bid === 1.5, a.put);
+  ok('implied vol rides along', a.call.iv === 0.2 && a.call.delta === 0.5, a.call);
+  ok('open interest and volume too', a.call.oi === 11 && a.call.vol === 2, a.call);
+  // a strike quoted on one side only must not invent the other
+  const oneSided = pickAtm({ spot: 105, exp: 'x', dte: 1, c: [mk(105, 1)], p: [mk(95, 1)] });
+  ok('an unlisted put comes back null, not zero', oneSided.put === null, oneSided.put);
+  ok('a chain with no calls is null', pickAtm({ spot: 100, c: [], p: [mk(100, 1)] }) === null);
+  ok('no spot means no atm rather than a wrong one', pickAtm({ spot: null, c: [mk(100, 1)] }) === null);
+  // ties: 100 and 101 are equidistant from 100.5 — the first wins, and it must be deterministic
+  const tie = pickAtm({ spot: 100.5, exp: 'x', dte: 1, c: [mk(100, 1), mk(101, 1)], p: [] });
+  ok('a tie resolves the same way every time', tie.k === pickAtm({ spot: 100.5, exp: 'x', dte: 1, c: [mk(100, 1), mk(101, 1)], p: [] }).k, tie.k);
+}
+
+group('the reader against a tape the recorder actually wrote');
+{
+  const dir = tmp();
+  const c = parseChain(fixture({ symbol: 'AAA' }), { maxDte: 70, today: TODAY });
+  const lines = tapeLines(c, { at: NOW, hash: chainHash(c) });
+  appendLines(dir, NOW, lines, { header: headerLine({ at: NOW, band: 0.3, maxDte: 70, symbols: ['AAA'] }) });
+  const r = readTape(dir, { now: () => NOW });
+  ok('it reads what the recorder wrote', r.ok === true && r.symbols.length === 1, r);
+  ok('the day and file name come back', r.day === '2026-09-21' && /chains-2026-09-21/.test(r.file), [r.day, r.file]);
+  ok('the byte size is reported', r.bytes > 0, r.bytes);
+  ok('the spot survives the round trip', r.symbols[0].spot === 100, r.symbols[0].spot);
+  ok('every recorded expiry is listed', r.symbols[0].expiries.length === lines.length, r.symbols[0].expiries.length);
+  ok('and the atm strike is found', r.symbols[0].atm && r.symbols[0].atm.k === 100, r.symbols[0].atm);
   fs.rmSync(dir, { recursive: true, force: true });
 }
 

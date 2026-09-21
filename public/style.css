@@ -139,6 +139,61 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #themebar .th.on b { color: #9dc0fb; }
 #themebar .th:focus-visible { outline: 2px solid #3b82f6; outline-offset: 1px; }
 
+/* ---- the three views ------------------------------------------------------ */
+/* Floor, Stocks, Options. The floor is the desk and opens by default; the other two are research
+   surfaces read off the chain tape and hold no position, which the panels say in words. */
+#viewtabs { display: flex; gap: 6px; align-items: center; padding: 8px 10px 0; }
+#viewtabs .vt { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 8px 8px 0 0;
+  font: 600 12px/1 var(--sans); letter-spacing: .01em; cursor: pointer;
+  color: #8b93a3; background: rgba(255,255,255,.03); border: 1px solid #1e2634; border-bottom-color: transparent; }
+#viewtabs .vt i { font-style: normal; font-size: 12px; line-height: 1; }
+#viewtabs .vt:hover { color: #c3c9d4; border-color: #2b3446; background: rgba(255,255,255,.055); }
+#viewtabs .vt.on { color: #eef1f6; background: rgba(59,130,246,.14); border-color: rgba(59,130,246,.45); }
+#viewtabs .vt:focus-visible { outline: 2px solid #3b82f6; outline-offset: 1px; }
+
+/* grows to fill the way #floor does. .wrap centres its children vertically on a tall screen, so a
+   panel that only takes its natural height floats in the middle with dead space above it. */
+#assetview { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+/* an explicit `display` beats the [hidden] attribute's own display:none, so the panel has to say it
+   again -- without this the Stocks panel sits under the tabs while the Floor is the chosen view */
+#assetview[hidden], #floor[hidden] { display: none; }
+#asset-body { overflow-y: auto; padding: 0 10px 12px; }
+.ameta { padding: 8px 10px; font: 500 11px/1.5 var(--mono); color: #6b7384; border-bottom: 1px solid #161d2b; margin: 0 -10px 10px; }
+.anone { padding: 28px 12px; text-align: center; }
+.anone p { margin: 0 0 6px; font: 600 14px/1.5 var(--sans); color: #c3c9d4; }
+.anone .asub { font: 400 12px/1.6 var(--sans); color: #6b7384; max-width: 46ch; margin: 0 auto; }
+.afoot { margin: 12px 0 0; font: 400 11px/1.6 var(--sans); color: #6b7384; max-width: 84ch; }
+.adim { color: #545c6b; }
+
+.alist { list-style: none; margin: 0; padding: 0; }
+/* Stocks: one row a symbol, the quote and how old it is */
+.alist.stk li { display: grid; grid-template-columns: 5em 6em 11em 7em 1fr; gap: 10px; align-items: baseline;
+  padding: 7px 4px; border-bottom: 1px solid #131926; font: 500 13px/1.3 var(--mono); }
+.alist.stk .ahead { font: 600 10px/1 var(--sans); letter-spacing: .06em; text-transform: uppercase; color: #545c6b; border-bottom-color: #1e2634; }
+.asym { font: 700 13px/1 var(--sans); color: #eef1f6; letter-spacing: .02em; }
+.aspot { color: #eef1f6; }
+.aq { color: #9aa3b2; }
+.aq em, .aleg em { font-style: normal; color: #4a5263; padding: 0 2px; }
+.aspr, .aage { color: #6b7384; font-size: 11px; }
+
+/* Options: a card a symbol — the strike nearest spot, then the expiry ladder behind it */
+.alist.opt { display: grid; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); gap: 10px; }
+.acard { border: 1px solid #1a2130; border-radius: 10px; padding: 10px 11px; background: rgba(255,255,255,.015); }
+.ahd { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.ahd .aspot { margin-left: auto; font: 600 13px/1 var(--mono); }
+.ahd .aage { font-size: 10px; }
+.aatm { border-left: 2px solid rgba(59,130,246,.45); padding-left: 9px; margin-bottom: 9px; }
+.aexp { font: 600 11px/1.4 var(--sans); color: #9dc0fb; margin-bottom: 4px; }
+.aleg { font: 500 12px/1.7 var(--mono); color: #c3c9d4; }
+.aleg b { display: inline-block; width: 3em; font: 600 10px/1 var(--sans); letter-spacing: .04em;
+  text-transform: uppercase; color: #6b7384; }
+.aiv, .aoi { font-size: 10px; color: #6b7384; padding-left: 6px; }
+.aexps { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 7px; }
+.ae { font: 500 10px/1 var(--mono); color: #7d8596; background: rgba(255,255,255,.04);
+  border: 1px solid #1e2634; border-radius: 4px; padding: 3px 5px; }
+.ae b { color: #545c6b; font-weight: 500; padding-left: 4px; }
+.acount { font: 400 10px/1 var(--sans); color: #545c6b; }
+
 /* ---- notices over the floor ---------------------------------------------- */
 /* The room stays a canvas; the words on it are HTML so they render at a size a person can read.
    app.js (placeFx) positions everything from the room's own drawing coordinates. */
@@ -843,6 +898,16 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
   #feedlist .fs { overflow-wrap: anywhere; }
   /* Five columns do not fit a phone. The name takes the full width and the prices line up in a
      row under it, which is the same information in the shape a narrow screen can hold. */
+  #viewtabs { padding: 7px 8px 0; gap: 5px; }
+  #viewtabs .vt { padding: 7px 11px; font-size: 12px; }
+  .alist.stk li { grid-template-columns: 4.4em 5.4em 1fr; grid-template-areas: 'sym spot q' 'sym age age'; gap: 2px 8px; }
+  .alist.stk .asym { grid-area: sym; }
+  .alist.stk .aspot { grid-area: spot; }
+  .alist.stk .aq { grid-area: q; }
+  .alist.stk .aspr { display: none; }
+  .alist.stk .aage { grid-area: age; }
+  .alist.stk .ahead { display: none; }
+  .alist.opt { grid-template-columns: 1fr; }
   #themebar { padding: 8px; gap: 5px; }
   #themebar .th { padding: 7px 11px; font-size: 12px; }
   #marketlist { padding: 0 7px 8px; font-size: 13px; }

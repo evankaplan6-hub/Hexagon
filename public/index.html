@@ -36,6 +36,26 @@
     </div>
   </header>
 
+  <!-- Three views, and the floor is the one that opens. The desk trades prediction markets and that
+       is what the room shows; Stocks and Options are the other half of the research -- the ETF
+       underlyings and the option-chain tape (tools/chain-record.js) that nobody sells a history of,
+       so the desk writes its own. Nothing in those two tabs trades, and the desk holds no position
+       in any of it. Switching hides the floor rather than shrinking it: a half-size room reads as
+       broken, and the canvas is sized from its container. -->
+  <nav id="viewtabs" aria-label="Choose a view">
+    <button type="button" class="vt on" data-view="floor" aria-pressed="true"><i>◆</i>Floor</button>
+    <button type="button" class="vt" data-view="stocks" aria-pressed="false"><i>📈</i>Stocks</button>
+    <button type="button" class="vt" data-view="options" aria-pressed="false"><i>⛓</i>Options</button>
+  </nav>
+
+  <!-- Filled by app.js from /api/chains, which reads only the tail of the newest tape file. Hidden
+       until a tab asks for it, and it says so plainly when no tape has been recorded yet rather
+       than showing an empty frame that looks like a bug. -->
+  <section class="panel" id="assetview" hidden>
+    <div class="ph"><span><i>◆</i><span id="asset-title">Stocks</span></span><span id="asset-meta"></span></div>
+    <div id="asset-body"></div>
+  </section>
+
   <section class="panel" id="floor">
     <div class="ph"><span><i>◆</i><span class="desktop-title">Trading Floor</span><span class="mobile-title">Desk Overview</span></span><span id="floor-meta"></span></div>
     <!-- What the desk is watching, by subject: MLB, UFC, NFL, Elections, Weather. Pick one and the

@@ -40,6 +40,19 @@ const THEMES = [
   // economic question anybody names by itself. Only the rate-policy series: KXFEDCHAIRNOM is a
   // nomination and belongs with Politics, KXFEDMENTION with Mentions.
   { key: 'fed', name: 'Fed', glyph: '🏦', ks: /^KX(FED(DECISION|FUNDS|RATE|HIKE|CUT|CHG|COMBO|DISSENT|MEET|FACILITY|FREQ)?$|FED(DECISION|FUNDS|RATE|HIKE|CUT|CHG|COMBO)|FOMC)/, in: ['Economics'] },
+  // Share prices and the two index levels the desk could actually hedge against. This is a ticker
+  // rule for the same reason the league ones are: "Financials" and "Companies" also hold Netflix app
+  // downloads, US Open ticket prices and a congressional stock-trading ban, none of which is a share
+  // price. What belongs here is the level of an index (KXINX, KXNASDAQ100, KXDJIA) or the price of a
+  // share (KXAMZN, KXGOOG, KXMETA, and the KX...SHARE series that price private companies like
+  // Anthropic, OpenAI and Tencent).
+  //
+  // Three collisions it has to survive, all real: KXESPYS is the ESPY AWARDS and contains "SPY";
+  // KXEARNINGSMENTION<TICKER> is ~100 series about what a CEO says on the call, not what the stock
+  // does; and KXGOOGLELAKE and KXAAPLCEOCHANGE begin with a ticker but are a lake and a CEO. So the
+  // single-name alternatives are END-ANCHORED and the index ones are not, which is what tells
+  // KXGOOG (the share) from KXGOOGLELAKE (the lake).
+  { key: 'stocks', name: 'Stocks & indices', glyph: '📈', ks: /^KX(INX|NASDAQ\d*|DJIA|SPXFOMC|AMZN(CC)?$|GOOG(SHARE)?$|META$|AAPLPRICE|[A-Z]{2,}SHARE$)/, in: ['Financials', 'Companies', 'Economics'] },
   { key: 'sports', name: 'Other sports', glyph: '🏅', cats: ['Sports'] },
   { key: 'elections', name: 'Elections', glyph: '🗳️', cats: ['Elections'] },
   { key: 'politics', name: 'Politics', glyph: '🏛️', cats: ['Politics', 'World', 'Social'] },

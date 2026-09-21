@@ -92,6 +92,39 @@ const collisions = [
 ];
 for (const [ser, cat, want, why] of collisions) eq(`${ser} is ${want} (${why})`, themeOf({ series: ser, category: cat }), want);
 
+group('share prices and index levels are Stocks, and the look-alikes are not');
+// Taken from the 1,818 Kalshi series in data/lab/listing.json: these 23 are every one the rule
+// claims, checked by hand. Index levels, single names, and the KX...SHARE series that price
+// private companies.
+for (const ser of ['KXINX', 'KXINXU', 'KXINXDUD', 'KXINXMAXY', 'KXNASDAQ100', 'KXNASDAQ100U', 'KXNASDAQDUD',
+  'KXDJIA', 'KXSPXFOMC', 'KXAMZN', 'KXAMZNCC', 'KXGOOG', 'KXMETA', 'KXAAPLPRICEFOLD',
+  'KXANTHSHARE', 'KXOPENSHARE', 'KXGOOGSHARE', 'KXTENCENTSHARE', 'KXXIAOMISHARE', 'KXBABASHARE',
+  'KXDEEPSHARE', 'KXSTEALTHSHARE', 'KXMLABELSHARE']) {
+  eq(`${ser} is a stock`, themeOf({ series: ser, category: 'Financials' }), 'stocks');
+}
+// The ones that begin like a ticker and are not a price. KXESPYS is the best of them: the ESPY
+// awards, carrying "SPY" inside it, in a listing full of S&P markets.
+const notStocks = [
+  ['KXESPYS', 'Entertainment', 'culture', 'the ESPY awards, not the S&P'],
+  ['KXEARNINGSMENTIONTSLA', 'Mentions', 'mentions', 'what was said on the call, not the stock'],
+  ['KXEARNINGSMENTIONNVDA', 'Mentions', 'mentions', 'one of ~100 such series'],
+  ['KXGOOGLELAKE', 'Science and Technology', 'tech', 'a lake, and it starts with KXGOOG'],
+  ['KXGOOGLMENTION', 'Mentions', 'mentions', 'a mention, and it starts with KXGOOG'],
+  ['KXAAPLCEOCHANGE', 'Companies', 'economics', 'a CEO, not a share price'],
+  ['KXSTOCKBANHOUSE', 'Politics', 'politics', 'a trading ban in Congress'],
+  ['KXIPOOPENAI', 'Companies', 'economics', 'whether it lists, not what it trades at'],
+  ['KXSP500ADDQ', 'Financials', 'economics', 'index membership, not the level'],
+];
+for (const [ser, cat, want, why] of notStocks) eq(`${ser} is ${want} (${why})`, themeOf({ series: ser, category: cat }), want);
+// The end anchor is what separates the share from the lake; without it KXGOOG's rule swallows both.
+eq('KXGOOG is the share', themeOf({ series: 'KXGOOG', category: 'Companies' }), 'stocks');
+eq('KXGOOGLELAKE is still not', themeOf({ series: 'KXGOOGLELAKE', category: 'Companies' }), 'economics');
+// A category on its own never makes a stock: Financials holds app downloads and ticket prices too.
+eq('Financials alone is still economics', themeOf({ series: 'SENATETX', category: 'Financials' }), 'economics');
+eq('Companies alone is still economics', themeOf({ series: 'SENATETX', category: 'Companies' }), 'economics');
+// An index ticker with no category at all is still a stock, the way a league ticker is still a league.
+eq('KXINX with no category is a stock', themeOf({ series: 'KXINX' }), 'stocks');
+
 group('the rate-policy series are the Fed');
 for (const ser of ['KXFED', 'KXFEDDECISION', 'KXFEDFUNDSYEAR', 'KXFEDRATEMIN', 'KXFEDHIKE', 'KXFEDCHGCOUNT', 'KXFOMCGUIDE']) {
   eq(`${ser} is the Fed`, themeOf({ series: ser, category: 'Economics' }), 'fed');

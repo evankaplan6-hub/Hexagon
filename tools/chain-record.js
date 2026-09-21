@@ -56,7 +56,9 @@ const { ET_DAY } = require('../src/recorder');
 // optioned broad ETFs, and each already has daily bars in data/stocks/bars/, so a chain and its
 // underlying's history join on the date with nothing left to reconcile.
 const SYMBOLS = ['SPY', 'QQQ', 'IWM', 'DIA', 'TLT', 'GLD'];
-const DIR = path.join('data', 'chains');
+// Under DATA_DIR when the desk sets one, so the server's /api/chains reads what this writes
+// (server.js joins cfg.dataDir with 'chains'). Overridden per run by --dir.
+const DIR = path.join(process.env.DATA_DIR || 'data', 'chains');
 const SEEN = '.seen.json';
 const BAND = 0.30;
 const MAX_DTE = 70;
