@@ -122,8 +122,16 @@ function readBody(req) {
   });
 }
 
-const server = http.createServer((req, res) => {
-  const url = new URL(req.url, 'http://localhost');
+// A request must never take the desk down. This ran straight inside createServer's listener, so
+// anything it threw was an uncaught exception and the process died -- and `new URL(req.url)` throws
+// on a request line like `GET http://[ HTTP/1.1`, which Node's parser passes through and which
+// arrives BEFORE the login check. One malformed request from anywhere on the internet was enough
+// to stop the desk and lose whatever the ledger had not saved. A throw is now a 500 (or a 400 for
+// the URL) with the stack in the log, and a rejected branch is caught the same way.
+function handle(req, res) {
+  let url;
+  try { url = new URL(req.url, 'http://localhost'); }
+  catch { res.writeHead(400); return res.end('bad request'); }
   const p = url.pathname;
   if (cfg.dashPass && p === '/login') {
     if (req.method === 'POST') {
@@ -290,6 +298,18 @@ const server = http.createServer((req, res) => {
   }
   res.writeHead(200, { 'content-type': MIME[path.extname(file)] || 'application/octet-stream', 'cache-control': 'no-store' });
   fs.createReadStream(file).pipe(res);
+}
+
+function failed(res, e) {
+  console.error('request failed:', (e && e.stack) || e);
+  if (res.headersSent) { res.destroy(); return; }
+  res.writeHead(500); res.end('internal error');
+}
+const server = http.createServer((req, res) => {
+  try {
+    const out = handle(req, res);
+    if (out && typeof out.catch === 'function') out.catch((e) => failed(res, e));
+  } catch (e) { failed(res, e); }
 });
 
 setInterval(() => {
@@ -307,3 +327,8 @@ server.listen(cfg.port, cfg.bindHost, () => {
 engine.start().catch((e) => { console.error('engine failed to start:', e); process.exit(1); });
 
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { engine.save(); console.log('\nstate saved, bye'); process.exit(0); });
+// Whatever else gets past every catch above still exits (Fly restarts the desk), but with the
+// ledger saved first rather than losing the last ten seconds of it -- the same courtesy a signal gets.
+for (const ev of ['uncaughtException', 'unhandledRejection']) {
+  process.on(ev, (e) => { console.error(`${ev}:`, (e && e.stack) || e); try { engine.save(); } catch { /* nothing left to save with */ } process.exit(1); });
+}

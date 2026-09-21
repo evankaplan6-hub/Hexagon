@@ -392,11 +392,12 @@ function makeMakerDesk(cfg) {
       // A profitable maker inventory stops growing once its mark has made a meaningful gain.
       // Keep the reducing quote resting (so the position can still work down without crossing),
       // but withdraw the side that would add risk. This is the maker form of gain-lock.
+      // The peak is this position's own (maker.gainLock): a peak that outlived its position was
+      // how 49 of the box's 128 held markets came to quote one side only.
       const markPnl = m.inv ? (m.inv * (q.mid ?? m.mid ?? 0.5) - (m.cost || 0)) : 0;
-      m.gainPeak = Math.max(Number.isFinite(m.gainPeak) ? m.gainPeak : markPnl, markPnl);
-      const gainTrigger = Math.abs(m.cost || 0) * (cfg.gainLockTriggerPct || 0);
-      const gainFloor = m.gainPeak - Math.abs(m.cost || 0) * (cfg.gainLockGivebackPct || 0);
-      const gainLocked = m.inv !== 0 && m.gainPeak >= gainTrigger && markPnl <= gainFloor;
+      const lock = maker.gainLock(m, markPnl, cfg);
+      m.gainPeak = lock.peak; m.gainSide = lock.side;
+      const gainLocked = lock.locked;
       // The run-over gate: a market whose touch keeps getting swept is withdrawn from entirely,
       // inventory included, for the cooling period. Said once per market per trip, and journalled,
       // because a market that is quietly not being quoted looks exactly like a quiet market.
@@ -500,6 +501,7 @@ function makeMakerDesk(cfg) {
   function snapshot(E) {
     const S = E.state.maker || {};
     const meta = new Map(universe.map((u) => [u.ticker, u]));
+    const recentTickers = new Set((S.recent || []).map((f) => f.ticker));
     const markets = Object.entries(S.markets || {}).map(([ticker, m]) => {
       const u = meta.get(ticker);
       return {
@@ -526,7 +528,11 @@ function makeMakerDesk(cfg) {
       quoting: universe.length, tracked: markets.length,
       inv: markets.reduce((a, m) => a + Math.abs(m.inv || 0), 0),
       mark: r2(markets.reduce((a, m) => a + m.mark, 0)),
-      markets: markets.slice(0, 40),
+      // Every market the desk is quoting or holding, plus the ones its recent fills name. This was
+      // the top forty, and the page built its "held in N" tile, the theme counts and the held list
+      // from that cut -- so with 128 markets held the board said 40 and the totals above disagreed
+      // with the rows under them. What is dropped is the flat, unquoted tail, which nothing shows.
+      markets: markets.filter((m) => m.quoting || m.inv || recentTickers.has(m.ticker)),
     };
   }
 

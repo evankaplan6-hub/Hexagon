@@ -232,6 +232,25 @@ function candidatesFrom(markets, feeTypeOf, cfg, now = Date.now()) {
   return rows;
 }
 
+// ---------------------------------------------------------------- gain lock
+// A profitable inventory stops growing once its mark has made a meaningful gain and then given
+// part of it back: the growing side is withdrawn, the reducing side stays up (the maker form of
+// decide.gainLockIntent). `peak` is the best mark P&L THIS position has seen, and it belongs to
+// this position alone. It used to be carried across a flat book, so the peak of a trade that had
+// already closed locked the next position in that market from its first contract: on 2026-09-21
+// the box held 128 markets and 49 of them were quoting one side for exactly that reason. The peak
+// starts over whenever the book is flat or the position has changed sides. Pure, like the rest of
+// this file: returns the next peak and side and whether the lock is on; makerdesk assigns them.
+function gainLock(m, markPnl, cfg) {
+  const side = Math.sign(m.inv || 0);
+  const fresh = side === 0 || side !== (m.gainSide || 0);
+  const peak = fresh ? markPnl : Math.max(Number.isFinite(m.gainPeak) ? m.gainPeak : markPnl, markPnl);
+  const cost = Math.abs(m.cost || 0);
+  const trigger = cost * (cfg.gainLockTriggerPct || 0);
+  const floor = peak - cost * (cfg.gainLockGivebackPct || 0);
+  return { peak, side, locked: side !== 0 && peak >= trigger && markPnl <= floor };
+}
+
 // ---------------------------------------------------------------- toxicity
 // Run-over is adverse selection made visible: the tape traded through a resting quote, so we sold
 // below the print or bought above it. It is where the maker's money went (43% of live fills, 59%
@@ -303,4 +322,4 @@ async function eligibleSeries(candidates) {
   return ok;
 }
 
-module.exports = { tickerEventDays, daysToEnd, desiredQuotes, fillsFrom, applyFill, settlePosition, toxWindow, toxicGate, drawdownFrom, eligibleSeries, candidatesFrom };
+module.exports = { tickerEventDays, daysToEnd, desiredQuotes, fillsFrom, applyFill, settlePosition, gainLock, toxWindow, toxicGate, drawdownFrom, eligibleSeries, candidatesFrom };
