@@ -108,8 +108,21 @@ function ruleFeatures(text) {
   else if (has(/alphabetical|resolve to a single winner|precedence/i, t)) f.ties = 'single';
   if (has(/caucus/i, t)) f.caucus = true;
   if (has(/style control/i, t)) f.styleControl = has(/(remove|without|off)[^.]{0,20}style control|style control[^.]{0,10}(off|removed)/i, t) ? 'off' : 'on';
+  // What a match, game or fight that never happens pays. Polymarket's sports templates say 50-50;
+  // Kalshi's say "a fair price" -- the last traded price, not half a dollar. On 2026-09-20 the desk
+  // held a Davis Cup dead rubber as a locked arb: Polymarket paid 50c a contract and Kalshi will pay
+  // about 69c on the other side, so the "$1 at settlement" was never there. Claude's judge had read
+  // both texts and called them the same ("both void/50-50"); this is the deterministic read, and a
+  // feature conflict is never overridden by a cached `same`.
+  const cancel = CANCEL_PAYS.exec(t);
+  if (cancel) {
+    const how = cancel[2].toLowerCase();
+    f.cancel = /50/.test(how) ? 'split' : /fair/.test(how) ? 'fair price' : /void|refund/.test(how) ? 'void' : 'no';
+  }
   return f;
 }
+// a cancellation clause and, inside it, what the market then pays
+const CANCEL_PAYS = /\b(cancel|not (?:be )?(?:played|completed|occur|held)|walkover|postpon|abandon|forfeit|does not (?:occur|take place))[^.]{0,240}?\b(50[-\/–]50|fair (?:price|value)|void(?:ed)?|refund(?:ed)?|resolves? (?:to )?(?:['"“]no['"”]|no\b))/i;
 
 // Where both sides speak on a dimension and disagree, one short reason each.
 function featureConflicts(a, b) {
@@ -124,6 +137,7 @@ function featureConflicts(a, b) {
   if (a.ties && b.ties && a.ties !== b.ties) out.push(`ties ${a.ties} on one venue, ${b.ties} on the other`);
   if (a.caucus !== b.caucus && (a.caucus || b.caucus) && (a.trigger || b.trigger || a.power || b.power)) out.push('caucus membership counts on one venue only');
   if (a.styleControl && b.styleControl && a.styleControl !== b.styleControl) out.push('leaderboard style control differs');
+  if (a.cancel && b.cancel && a.cancel !== b.cancel) out.push(`a cancellation pays ${a.cancel} on one venue, ${b.cancel} on the other`);
   return out;
 }
 
@@ -156,6 +170,8 @@ const MAX_TOKENS = 2000;
 const SYSTEM = `You compare the resolution rules of two prediction-market contracts, one on Polymarket and one on Kalshi, that a matcher believes are the same outcome. A trading desk will buy YES on one and NO on the other as a "locked" arbitrage, which only works if EVERY possible real-world outcome settles both contracts the same way.
 
 Answer "same" only if you are confident that every resolvable outcome -- including edge cases -- settles both identically. Answer "different" if any of these differ in a way that could split them: the data source or measuring station, the time or timezone of a snapshot, the start or end of the window, inclusive vs strict thresholds, what triggers resolution (announcement vs actual event, agreement vs completion), how death, acting or interim holders, ties, joint winners, cancellations, delays or "Other" are handled, or which office, entity or chart is meant. Answer "unclear" if the texts do not say enough to decide.
+
+What a cancelled, unplayed or voided event pays is a settlement outcome like any other. "Resolves to a fair price" (Kalshi: the last traded price) is NOT the same as "resolves 50-50" (Polymarket: half a dollar), and neither is the same as a void or refund; two contracts that pay differently when the event does not happen are "different".
 
 Reply with JSON only, no prose and no code fences: {"verdict":"same"|"different"|"unclear","reasons":["short reason", ...]}`;
 
