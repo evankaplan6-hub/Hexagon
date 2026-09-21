@@ -915,6 +915,20 @@ default because `/api/positions` and the activity log are unauthenticated.
 flatten and resume, never rewritten. `state.json` stays the fast working copy, but it trims
 `log` at 500 entries and `closed` at 2000 — oldest first — so the journal is the real history.
 
+### The daily check
+
+```bash
+bash ops/daily-check.sh
+```
+
+One screen, read-only, five questions about the Fly box: did the morning pull run; does the ledger
+add up (`tools/ledger-check.js --box --venues`: the journal rebuilds the state line by line and every
+settlement agrees with the venues); what each book has realised (`tools/pnl-report.js`); how many
+times the watchdog restarted the desk yesterday and today; and whether the box is starved
+(`/proc/pressure/cpu`), which commit it runs and how much of `/data` is free. First run,
+2026-09-21: 159 settlements, 159 agree; 29 restarts on the 20th, 7 on the 21st. The exit code is the
+number of steps that flagged something.
+
 ## Honest notes
 - Paper results are not predictive. Cross-venue gaps on liquid pre-game and macro markets are usually 0 to 1c, so expect the desk to spend most of its time researching and to trade rarely. That is correct behavior, not a bug.
 - The viral desk this is modeled on made most of its money trading a memecoin overnight, with prediction-market books as the smaller line. This project is the books side only. It does not trade tokens.
