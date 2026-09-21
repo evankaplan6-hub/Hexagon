@@ -182,6 +182,35 @@ const position = (over = {}) => ({
     ok('a fill short of the request is stuck', pos.orphan === true && pos.qty === 40, pos);
   }
 
+  group('no sale into a market that is not taking orders');
+  {
+    // Kalshi halted the cancelled Davis Cup match ("inactive") before settling it at a fair
+    // price. The paper broker fills whatever it is asked, so a sell would have booked a sale no
+    // exchange could have made. The position waits for settlement instead, and says why.
+    const E = engine();
+    let asked = 0;
+    E.broker = { sell: async ({ qty, px }) => { asked++; return { filled: qty, avg: px, fee: 0, proceeds: qty * px }; } };
+    const ks = position({ id: 'k', group: 'gk', ref: 'KXHALTED', strategy: 'arb' });
+    const pmPos = position({ id: 'p', group: 'gp', venue: 'PM', pmId: 'm9', tokenIndex: 0, ref: 'tok0', strategy: 'arb' });
+    E.state.positions = [ks, pmPos];
+    E.quotes.ks.set('KXHALTED', { ticker: 'KXHALTED', status: 'inactive', yesBid: 0.66, yesAsk: 0.70 });
+    E.quotes.pm.set('m9', { id: 'm9', closed: true, bestBid: 0.4, bestAsk: 0.5 });
+    const r1 = await E.close(ks, 0.30, 'operator: sell');
+    const r2 = await E.close(pmPos, 0.40, 'operator: sell');
+    ok('the broker is never asked', asked === 0, asked);
+    ok('both positions stay on the book, unflagged', E.state.positions.length === 2 && !ks.orphan && !pmPos.orphan, E.state.positions.map((p) => [p.id, p.orphan]));
+    ok('and the caller is told why', r1 && /inactive/.test(r1.why) && r2 && /closed/.test(r2.why), [r1, r2]);
+    const sold = await E.sellGroup('gk', 'test');
+    ok('sellGroup reports the halt rather than a retry', sold.ok === false && sold.remaining === 1 && /inactive/.test(sold.error), sold);
+    // a market that IS taking orders, and a settlement, still go through
+    E.quotes.ks.set('KXHALTED', { ticker: 'KXHALTED', status: 'active', yesBid: 0.66, yesAsk: 0.70 });
+    await E.close(ks, 0.30, 'operator: sell');
+    ok('an active market sells', asked === 1 && !E.state.positions.some((p) => p.id === 'k'), asked);
+    E.quotes.pm.set('m9', { id: 'm9', closed: true, bestBid: 0.4, bestAsk: 0.5 });
+    await E.close(pmPos, 0.5, 'resolved 50-50', true);
+    ok('a settlement never goes to the broker, halted or not', asked === 1 && E.state.positions.length === 0, E.state.positions.length);
+  }
+
   group('a full fill still closes normally');
   {
     const E = engine();

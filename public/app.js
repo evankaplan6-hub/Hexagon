@@ -1117,7 +1117,8 @@
       busy = true; renderPanel();
       const r = await act(a.group, 'sell');
       busy = false; confirming = false;
-      sellMsg = r.ok ? 'Sold. The position is closed.' : r.remaining ? `Only part of it sold; the desk will keep retrying the rest.` : `Not sold: ${r.error || 'unknown error'}`;
+      // a halted market is not a retry: the desk says so, and the page must not promise one
+      sellMsg = r.ok ? 'Sold. The position is closed.' : r.error ? `Not sold: ${r.error}` : r.remaining ? `Only part of it sold; the desk will keep retrying the rest.` : 'Not sold: unknown error';
       if (r.ok) { kept.delete(a.group); saveKept(); }
       return renderPanel();
     }

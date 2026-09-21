@@ -117,6 +117,31 @@ group('the rule features catch the traps on their own, without the denylist');
   ok('one side silent on a dimension is not a conflict', rules.featureConflicts(rules.ruleFeatures('Death does NOT satisfy the Payout Criterion.'), rules.ruleFeatures('Resolves Yes if she leaves.')).length === 0);
 }
 
+group('what a cancelled event pays is a settlement outcome: 50-50 is not "a fair price"');
+{
+  // the Davis Cup dead rubber of 2026-09-20, from both venues' live rules. Claude's judge had
+  // read these two texts and called them the same ("both void/50-50"); Kalshi paid the last price.
+  const pmText = "This market will resolve to 'Cristian Garin' if Cristian Garin advances against Daniel Merida. If the match is canceled (not played at all), ends in a tie, or a winner has not been determined by October 4, 2026, 11:59 PM ET (14 days after the scheduled start), this market will resolve to 50-50. If the match begins but is not completed, and one player advances due to the opponent's retirement, default, or disqualification, this market will resolve to the player who advances. If the match ends in a walkover (player withdraws before the start and the other advances automatically), this market will resolve to 50-50.";
+  const ksPrimary = 'If Daniel Merida wins the Garin vs Merida professional tennis match in the 2026 Davis Cup round after a ball has been played, then the market resolves to Yes.';
+  const ksSecondary = 'The following market refers to the Garin vs Merida professional tennis match in the 2026 Davis Cup round after a ball has been played. If the match does not occur (signaled by a ball being played) due to a player injury, walkover, forfeiture, or any other cancellation (all before the match starts), the market will resolve to a fair price in accordance with the rules. If this match is postponed or delayed, the market will remain open and close after the rescheduled match has finished (within two weeks).';
+  const a = rules.ruleFeatures(pmText), b = rules.ruleFeatures(`${ksPrimary}\n${ksSecondary}`);
+  ok('Polymarket: a cancellation pays 50-50', a.cancel === 'split', a);
+  ok('Kalshi: a cancellation pays a fair price', b.cancel === 'fair price', b);
+  const conflicts = rules.featureConflicts(a, b);
+  ok('...and that is a conflict', conflicts.some((r) => /cancellation pays split.*fair price/.test(r)), conflicts);
+  const davis = pair('davis',
+    { eventTitle: 'Davis Cup: Cristian Garin vs. Daniel Merida', question: 'Davis Cup: Cristian Garin vs. Daniel Merida', groupItemTitle: '', description: pmText },
+    { ticker: 'KXDAVISCUPMATCH-26SEP20GARMER-MER', seriesTicker: 'KXDAVISCUPMATCH', title: 'Merida wins', yesSubTitle: 'Daniel Merida', rulesPrimary: ksPrimary, rulesSecondary: ksSecondary });
+  const v = rules.staticVerdict(davis);
+  ok('the pair is `different`, from the features', v.verdict === 'different' && v.source === 'features', v);
+  const judge = { verdictFor: () => ({ verdict: 'same', reasons: ['both void/50-50'] }) };
+  ok('a cached Claude `same` does not override it', rules.finalVerdict(davis, judge).verdict === 'different');
+  ok('a refund is its own answer, and so is No', rules.ruleFeatures('If the fight is cancelled, all positions are refunded.').cancel === 'void'
+    && rules.ruleFeatures('If the game is not played by the date, the market resolves to No.').cancel === 'no');
+  ok('two venues that both pay 50-50 do not conflict', rules.featureConflicts(rules.ruleFeatures('If the match is canceled, this market will resolve 50-50.'), rules.ruleFeatures('If the match does not occur, this market will resolve 50-50.')).length === 0);
+  ok('a text with no cancellation clause says nothing', !('cancel' in rules.ruleFeatures(FIX.iowa.pm.description)), rules.ruleFeatures(FIX.iowa.pm.description));
+}
+
 group('an allowlisted family still needs the right Polymarket template');
 {
   const wrongPm = { ...FIX.control, pm: { ...FIX.control.pm, eventTitle: 'Who will be governor?', question: 'Will Jane Doe win?' } };

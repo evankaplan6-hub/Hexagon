@@ -429,6 +429,18 @@ class Engine {
     if (pos.venue === 'PM') return pos.side === 'yes' ? q.pmBid : r3(1 - q.pmAsk);
     return pos.side === 'yes' ? q.ksBid : r3(1 - q.ksAsk);
   }
+  // Is this position's market taking orders? Why not, in words, or null when it is (or when the
+  // desk has no listing to say). Kalshi halts a market it is about to settle ("inactive": a
+  // cancelled Davis Cup match, 2026-09-21), and Polymarket closes one awaiting resolution. A sell
+  // then cannot fill on either venue -- but PaperBroker.sell does no I/O and fills whatever it is
+  // asked, so the paper ledger would have booked a sale that no exchange could have made.
+  marketHalted(pos) {
+    const m = pos.venue === 'KS' ? this.quotes.ks.get(pos.ref) : this.quotes.pm.get(pos.pmId);
+    if (!m) return null;
+    if (pos.venue === 'KS') return m.status && m.status !== 'active' ? `Kalshi market is ${m.status}` : null;
+    if (m.closed) return 'Polymarket market is closed';
+    return m.accepting === false ? 'Polymarket market is not accepting orders' : null;
+  }
 
   // Fresh order book for a pair on `venue`: ask ladder for buying `side`, plus live YES top-of-book.
   async book(venue, pair, side) {
@@ -545,6 +557,14 @@ class Engine {
     let fill;
     if (resolved) fill = { filled: qty, avg: px, fee: 0, proceeds: r2(qty * px) };
     else {
+      // No order goes to a market that is not taking them: it could not fill on a real venue, and
+      // the paper broker would fill it anyway. The position waits for settlement (engine.resolution
+      // is already asking after it), and the caller is told why nothing was sold.
+      const halted = this.marketHalted(pos);
+      if (halted) {
+        if (this.due(`exit-halted-${pos.id}`, 300)) this.log('RIGO', 'PASS', null, `${pos.label}: ${halted} · no sale possible, waiting for settlement`);
+        return { sold: false, why: `${halted}: no sale possible until it settles` };
+      }
       // A position whose exit does not fill is STUCK, not closed. Flag it so RIGO keeps trying
       // every cycle instead of leaving naked directional risk sitting in the book unattended.
       pos.exitSeq = (pos.exitSeq || 0) + 1;
@@ -665,13 +685,17 @@ class Engine {
     if (!legs.length) return { ok: false, error: 'nothing open in that group' };
     this.journal(this, 'OPERATOR_SELL', { group: groupId, label: legs[0].label, legs: legs.length, reason });
     this.log('TESS', 'OPS', null, `operator sell requested \u00b7 ${legs[0].label} \u00b7 ${legs.length} leg${legs.length === 1 ? '' : 's'}`);
+    const whys = [];
     for (const pos of legs) {
       const px = this.venueMark(pos) ?? pos.mark ?? pos.entry;
-      await this.close(pos, px, `operator: ${reason}`).catch(() => {});
+      const r = await this.close(pos, px, `operator: ${reason}`).catch(() => null);
+      if (r && r.why) whys.push(r.why);
     }
     const left = this.state.positions.filter((p) => p.group === groupId).length;
     this.save();
-    return { ok: left === 0, sold: legs.length - left, remaining: left };
+    // `error` says why a leg could not be sold at all, so the page does not promise a retry that
+    // no exchange will honour
+    return { ok: left === 0, sold: legs.length - left, remaining: left, ...(whys.length ? { error: whys[0] } : {}) };
   }
 
   resume() {
