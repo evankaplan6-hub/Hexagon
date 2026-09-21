@@ -23,7 +23,6 @@ const SUITES = [
   ['brain', 'the minds: the proposal clamp, request shaping, cost metering and backoff'],
   ['lab', 'the strategy lab: fees, fills, settlement, and no strategy seeing the answer'],
   ['stock-lab', 'the ETF lab: next-open fills, costs per side, metric arithmetic, no peeking, no test data in the pick'],
-  ['chains', 'the chain tape: a 0 bid is not a missing one, adjusted roots, the band edges, and an unchanged chain is not news'],
   ['makertape', "the maker's tape: book on change, prints once, our own quote, and a bad disk never reaches the desk"],
   ['whale', 'whale watch: what counts as a bet, said once across a restart, what copying pays'],
   ['http', "the Kalshi pacer: calls spaced apart, the maker's calls first, nothing else waits"],
@@ -36,6 +35,7 @@ const SUITES = [
   ['favorites-check', 'the favourites check: the rule fixed in advance, Sports excluded, a four-part verdict'],
   ['pnl-report', 'the P&L report: convergence, arbs and maker realised from the journals, the mind kept apart'],
   ['lookout', 'the lookout page: the painted room, read-only, fed by the same stream as the floor'],
+  ['themes', 'what a market is about: leagues off the series, the tickers that only look like one, and the page filter built on it'],
 ];
 
 let failed = 0, totalPassed = 0;

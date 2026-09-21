@@ -38,6 +38,11 @@
 
   <section class="panel" id="floor">
     <div class="ph"><span><i>◆</i><span class="desktop-title">Trading Floor</span><span class="mobile-title">Desk Overview</span></span><span id="floor-meta"></span></div>
+    <!-- What the desk is watching, by subject: MLB, UFC, NFL, Elections, Weather. Pick one and the
+         whole panel narrows to it -- the book on the wall, the fills board, the gap line on the
+         status board, the feed, and the market list below. Built by app.js from the desk's own
+         board, so a theme with nothing in it never appears and the counts are never a guess. -->
+    <nav id="themebar" aria-label="Show one subject only"></nav>
     <!-- Phones get the facts as real type instead of a desktop control room shrunk to 390px.
          The animated floor remains the desktop interface; app.js fills this glanceable card from
          the same state on every frame. -->
@@ -56,7 +61,18 @@
       </div>
       <!-- drag (or arrow-key) this to set how much of the panel is floor and how much is feed -->
       <div id="split" role="separator" aria-orientation="horizontal" tabindex="0" aria-label="Resize the trading floor" title="Drag to resize the floor · double-click to reset"></div>
-      <div id="feed"><div class="fh">What's happening</div><ol id="feedlist"></ol></div>
+      <!-- Two views of the same board: what the desk has been doing, and what it is watching. The
+           market list is the one that answers "show me only the baseball", so it is a tab rather
+           than something that displaces the log. -->
+      <div id="feed">
+        <div class="fh" role="tablist">
+          <button type="button" class="ftab on" role="tab" data-tab="feed" aria-selected="true" aria-controls="feedlist">What's happening</button>
+          <button type="button" class="ftab" role="tab" data-tab="markets" aria-selected="false" aria-controls="marketlist">Markets</button>
+          <span class="fnote" id="feednote"></span>
+        </div>
+        <ol id="feedlist" role="tabpanel"></ol>
+        <div id="marketlist" role="tabpanel" hidden></div>
+      </div>
       <div id="alertpanel" hidden role="dialog" aria-label="Alert"></div>
     </div>
   </section>

@@ -219,6 +219,50 @@ const server = http.createServer((req, res) => {
   }
   if (p === '/api/state') return json(res, engine.snapshot());
   if (p === '/api/pairs') return json(res, engine.pairs.map((x) => ({ ...x, q: x.q || null })));
+  // Every market the desk is watching on one subject: MLB, UFC, Elections, Weather. The state
+  // snapshot carries only the forty widest gaps -- that is the right cut for a status board and
+  // the wrong one for a theme button, which exists precisely to reach the quiet markets it drops.
+  // Fetched when a theme is picked rather than pushed every two seconds, so a board of three
+  // hundred pairs costs the stream nothing.
+  if (p === '/api/markets') {
+    const r3 = (x) => (Number.isFinite(x) ? Math.round(x * 1000) / 1000 : null);
+    const want = url.searchParams.get('theme') || 'all';
+    const held = new Set(engine.state.positions.map((x) => x.pairId).filter(Boolean));
+    const list = engine.pairs
+      .map((x) => ({ x, theme: engine.themeFor(x) }))
+      .filter(({ theme }) => want === 'all' || theme === want)
+      .map(({ x, theme }) => ({
+        id: x.id, label: x.label, theme, kind: x.kind, series: x.series || null,
+        inPlay: !!x.inPlay, watchOnly: x.watchOnly || null, held: held.has(x.id),
+        startsAt: x.startsAt || null, closesAt: x.closesAt || null,
+        pmMid: x.q ? r3(x.q.pmMid) : null, ksMid: x.q ? r3(x.q.ksMid) : null,
+        gap: x.q ? r3(x.q.ksMid - x.q.pmMid) : null,
+        pmVol: x.q ? Math.round(x.q.pmVol) : null, ksVol: x.q ? Math.round(x.q.ksVol) : null,
+        age: x.q && x.q.t ? Math.round((Date.now() - x.q.t) / 1000) : null,
+        pmUrl: x.pm && x.pm.url, ksUrl: x.ks && x.ks.url,
+      }))
+      // Priced first and widest gap first, the same order the floor ranks by; an unpriced market
+      // still comes back, because "watching it, no price yet" is an answer and an absence is not.
+      .sort((a, b) => (a.gap == null) - (b.gap == null) || (a.inPlay - b.inPlay) || Math.abs(b.gap) - Math.abs(a.gap));
+    // The maker's own book belongs on this list too. It is the other half of what the desk is
+    // looking at, it is Kalshi-only so it has no gap to rank by, and leaving it out would make a
+    // theme button's count disagree with the list it opens -- 24 quoted markets under a "0".
+    const maker = engine.maker.snapshot(engine).markets || [];
+    const making = maker
+      .map((m) => ({ m, theme: engine.themeFor(m) }))
+      .filter(({ theme }) => want === 'all' || theme === want)
+      .map(({ m, theme }) => ({
+        id: m.ticker, label: m.sub && m.title && m.sub !== m.title ? `${m.title} · ${m.sub}` : (m.title || m.ticker),
+        theme, kind: 'maker', series: m.series || null, inPlay: false, watchOnly: null,
+        held: !!m.inv, quoting: !!m.quoting, inv: m.inv || 0,
+        startsAt: null, closesAt: null, pmMid: null, ksMid: r3(m.mid), gap: null,
+        pmVol: null, ksVol: null, age: null, pmUrl: null,
+        ksUrl: `https://kalshi.com/markets/${String(m.series || m.ticker).split('-')[0].toLowerCase()}`,
+      }))
+      .sort((a, b) => Math.abs(b.inv) - Math.abs(a.inv) || (b.quoting - a.quoting));
+    const all = [...list, ...making];
+    return json(res, { theme: want, total: all.length, pairs: list.length, making: making.length, markets: all.slice(0, 400) });
+  }
   if (p === '/api/trades') return json(res, engine.state.closed);
   if (p === '/api/volume') return json(res, engine.volume.entries());
   if (p === '/api/positions') return json(res, engine.state.positions);

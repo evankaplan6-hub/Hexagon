@@ -117,6 +117,28 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 #floorc { border-radius: 0; }
 .mobile-title, #mobile-summary { display: none; }
 
+/* ---- the theme bar: one subject at a time -------------------------------- */
+/* A strip of the desk's own board, not a menu of everything either venue lists: app.js builds it
+   from the counts the server sends, so a theme with nothing in it is simply not here. The row
+   scrolls sideways rather than wrapping into three lines and stealing the floor's height. */
+#themebar { display: flex; gap: 6px; align-items: center; padding: 8px 10px; overflow-x: auto; overscroll-behavior-x: contain;
+  border-bottom: 1px solid #161d2b; background: linear-gradient(180deg, #0b0f17, #080b11);
+  scrollbar-width: thin; scrollbar-color: #1d2533 transparent; }
+#themebar:empty { display: none; }
+#themebar .th { flex: none; display: inline-flex; align-items: baseline; gap: 6px; padding: 5px 10px; border-radius: 999px;
+  font: 600 11px/1 var(--sans); letter-spacing: .01em; white-space: nowrap; cursor: pointer;
+  color: #8b93a3; background: rgba(255,255,255,.03); border: 1px solid #1e2634; }
+#themebar .th i { font-style: normal; font-size: 11px; line-height: 1; }
+#themebar .th b { font: 600 11px/1 var(--mono); color: #6b7384; }
+/* held here, beside the count of what is watched: the one number that says this theme is not
+   just something the desk looks at */
+#themebar .th em { font-style: normal; font: 600 10px/1 var(--mono); color: #d4a72c;
+  padding-left: 5px; border-left: 1px solid rgba(255,255,255,.10); }
+#themebar .th:hover { color: #c3c9d4; border-color: #2b3446; background: rgba(255,255,255,.055); }
+#themebar .th.on { color: #eef1f6; background: rgba(59,130,246,.14); border-color: rgba(59,130,246,.45); }
+#themebar .th.on b { color: #9dc0fb; }
+#themebar .th:focus-visible { outline: 2px solid #3b82f6; outline-offset: 1px; }
+
 /* ---- notices over the floor ---------------------------------------------- */
 /* The room stays a canvas; the words on it are HTML so they render at a size a person can read.
    app.js (placeFx) positions everything from the room's own drawing coordinates. */
@@ -193,7 +215,49 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 /* 2026-09-19: the desks were shrunk (ROOM_H/WALL_H in app.js) and the feed took the height back. */
 #feed { flex: 0 0 auto; height: var(--feedh); display: flex; flex-direction: column; font-size: 14px; font-family: var(--sans);
   background: #070a10; border-top: 1px solid #1a2233; border-radius: 0 0 7px 7px; overflow: hidden; }
-#feed .fh { flex: none; padding: .7em 1em .4em; font: 700 .72em/1.2 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: #6b7384; }
+#feed .fh { flex: none; display: flex; align-items: baseline; gap: 1em; padding: .7em 1em .4em; font: 700 .72em/1.2 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: #6b7384; }
+/* The two views of this band -- the log, and what the desk is watching -- as tabs rather than a
+   second panel: a market list that pushed the log off the page would be a worse trade than a
+   click. Styled as the header they replaced, so the band still reads as one label at rest. */
+#feed .fh { flex-wrap: wrap; row-gap: .3em; }
+#feed .ftab { padding: 0 0 .3em; border: 0; border-bottom: 2px solid transparent; background: none; cursor: pointer;
+  white-space: nowrap; font: inherit; letter-spacing: inherit; text-transform: inherit; color: #545c6b; }
+#feed .ftab:hover { color: #8b93a3; }
+#feed .ftab.on { color: #c3c9d4; border-bottom-color: #3b82f6; }
+#feed .ftab:focus-visible { outline: 2px solid #3b82f6; outline-offset: 2px; }
+/* what the filter took out, so a shorter log never reads as a quieter desk */
+#feed .fnote { margin-left: auto; white-space: nowrap; font-weight: 400; letter-spacing: .06em; color: #4b5261; text-transform: none; }
+#feed .fnote:empty { display: none; }
+
+/* ---- the market list: what the desk is watching on one subject ------------ */
+#marketlist { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 .6em .5em;
+  scrollbar-width: thin; scrollbar-color: #262b36 transparent; font-size: .88em; }
+#marketlist .mcols, #marketlist .mlist li { display: grid; grid-template-columns: 1fr 5.8em 5.8em 4.6em 3.4em; gap: .5em; align-items: baseline; padding: .3em .3em; }
+/* the two venue columns are headed by their full names, so the prices under them never have to be
+   explained; the heading is the one line here allowed to be narrower than its column */
+#marketlist .mcols { position: sticky; top: 0; z-index: 1; background: #070a10; color: #545c6b;
+  font: 700 .74em/1.2 var(--mono); letter-spacing: .05em; text-transform: uppercase; border-bottom: 1px solid var(--brd-rule2); }
+#marketlist .mlist { list-style: none; margin: 0; padding: 0; }
+#marketlist .mlist li { border-bottom: 1px solid rgba(255,255,255,.04); line-height: 1.3; }
+#marketlist .nm { min-width: 0; color: #c3c9d4; white-space: nowrap; overflow: hidden; }
+#marketlist .nm i { font-style: normal; color: #7a8292; }
+#marketlist .v { font: .95em var(--mono); color: #aab2c0; text-align: right; }
+#marketlist .g { font: 600 .95em var(--mono); color: #7a8292; text-align: right; }
+#marketlist .g.wide { color: #e8c35a; }
+#marketlist .g.none { font-weight: 400; color: #4b5261; }
+#marketlist .lk { display: flex; gap: .45em; justify-content: flex-end; font: 700 .78em var(--mono); letter-spacing: .06em; }
+#marketlist .lk a { color: #4b5261; }
+#marketlist .lk a:hover { color: #9dc0fb; text-decoration: none; }
+/* held / in play / watch only: the three facts that change what a row MEANS */
+#marketlist .nm em { font-style: normal; margin-left: .5em; padding: .05em .4em; border-radius: 3px;
+  font: 700 .74em/1.5 var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+#marketlist .nm em.hold { color: #d4a72c; background: rgba(212,167,44,.12); }
+#marketlist .nm em.live { color: #fca5a5; background: rgba(239,68,68,.12); }
+#marketlist .nm em.watch { color: #7a8292; background: rgba(255,255,255,.05); }
+#marketlist .nm em.mk { color: #9dc0fb; background: rgba(59,130,246,.12); }
+#marketlist .mnone { margin: .8em .6em; color: #7a8292; font-family: var(--sans); line-height: 1.5; }
+#marketlist .mnone b { color: #aab2c0; font-family: var(--mono); }
+#marketlist .mnone em { font-style: italic; }
 #feedlist { flex: 1 1 auto; min-height: 0; list-style: none; margin: 0; padding: 0 .6em .5em; overflow-y: auto; overscroll-behavior: contain;
   scrollbar-width: thin; scrollbar-color: #262b36 transparent; }
 #feedlist li { display: grid; grid-template-columns: 3.4em 3.6em 1fr auto; gap: .5em; align-items: baseline;
@@ -777,6 +841,19 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
   #feedlist li { grid-template-columns: 3em 3.3em minmax(0, 1fr) auto; gap: 5px; padding: 7px 4px; line-height: 1.35; }
   #feedlist li:first-child { padding: 10px 4px 10px 9px; font-size: 1em; }
   #feedlist .fs { overflow-wrap: anywhere; }
+  /* Five columns do not fit a phone. The name takes the full width and the prices line up in a
+     row under it, which is the same information in the shape a narrow screen can hold. */
+  #themebar { padding: 8px; gap: 5px; }
+  #themebar .th { padding: 7px 11px; font-size: 12px; }
+  #marketlist { padding: 0 7px 8px; font-size: 13px; }
+  #marketlist .mcols { display: none; }
+  #marketlist .mlist li { grid-template-columns: 4.6em 4.6em 4.6em 1fr; grid-template-areas: 'nm nm nm nm' 'pm ks gap lk'; gap: 2px 6px; padding: 8px 4px; }
+  #marketlist .nm { grid-area: nm; margin-bottom: 3px; white-space: normal; }
+  #marketlist .v, #marketlist .g { text-align: left; }
+  /* the prices need saying on a phone: there is no column heading left to say it */
+  #marketlist .v.pm::before { content: 'PM '; color: #545c6b; }
+  #marketlist .v.ks::before { content: 'KS '; color: #545c6b; }
+  #marketlist .lk { justify-content: flex-end; }
   #alertpanel { position: fixed; top: 7dvh; width: calc(100% - 20px); max-height: 86dvh; padding: 16px; }
 
   .askd { top: auto; left: 0; width: 100%; height: 88vh; height: 88dvh; border-left: 0; border-top: 1px solid #2a3140;
@@ -797,10 +874,14 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
   body { min-height: 0; }
   .wrap { height: 100dvh; min-height: 0; padding: 4px max(8px, env(safe-area-inset-right)) 6px max(8px, env(safe-area-inset-left)); gap: 4px; }
   header { min-height: 36px; }
-  #floor { display: grid; grid-template-columns: minmax(310px, 42%) minmax(0, 1fr); grid-template-rows: 32px minmax(0, 1fr); flex: 1 1 auto; min-height: 0; }
+  #floor { display: grid; grid-template-columns: minmax(310px, 42%) minmax(0, 1fr); grid-template-rows: 32px auto minmax(0, 1fr); flex: 1 1 auto; min-height: 0; }
   #floor .ph { grid-column: 1 / -1; grid-row: 1; min-height: 32px; padding: 6px 10px; }
-  #mobile-summary { grid-column: 1; grid-row: 2; min-height: 0; overflow-y: auto; padding: 10px; border-right: 1px solid #1a2233; border-bottom: 0; }
-  .stage { grid-column: 2; grid-row: 2; min-width: 0; min-height: 0; }
+  /* A grid child with nowhere to go takes a cell of its own and shunts the room out of the
+     viewport, so the bar is placed rather than left to fall where it may. */
+  #themebar { grid-column: 1 / -1; grid-row: 2; padding: 5px 8px; gap: 4px; }
+  #themebar .th { padding: 4px 8px; font-size: 10.5px; }
+  #mobile-summary { grid-column: 1; grid-row: 3; min-height: 0; overflow-y: auto; padding: 10px; border-right: 1px solid #1a2233; border-bottom: 0; }
+  .stage { grid-column: 2; grid-row: 3; min-width: 0; min-height: 0; }
   #split { display: none; }
   .m-hero strong { font-size: 23px; }
   .m-hero > div > small { margin-top: 3px; }

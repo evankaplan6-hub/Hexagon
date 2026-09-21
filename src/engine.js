@@ -18,6 +18,7 @@ const { Brain } = require('./brain');
 const { Research } = require('./research');
 const { Ask } = require('./ask');
 const watchdog = require('./watchdog');
+const { themeOf, themeMeta, themeRank, tickerOfPairId } = require('./themes');
 
 const WATCHDOG_EVERY_MS = 15000;
 
@@ -197,12 +198,46 @@ class Engine {
     if (n.length > 30) n = n.slice(0, 30).replace(/\s+\S*$/, '').trim();
     a.note = n;
   }
+  // Which market a line is about, if it is about one at all. The desk writes its log in sentences
+  // that name a market in its own words, never by id, so this is a scan -- but it happens ONCE,
+  // here, when the line is written. Doing it in snapshot() would rescan 150 lines against 300
+  // labels every two seconds on a box that is already short of CPU.
+  //
+  // A line that names nothing gets no theme, and the dashboard's filter never hides one of those:
+  // "All clear", "Checked 305 pairs" and every warning the desk raises are about the whole desk.
+  lineTheme(text, refs) {
+    const t = String(text || '').toLowerCase();
+    // WHERE the name is, not just whether it appears. A line about one market opens with it
+    // ("Presidential 2028 - A.O.C.: pair watched for 1m...") or hangs it off the "@" the gap
+    // notices use ("venue gap 5.7c: Polymarket over Kalshi @ <market>"). A name anywhere else is
+    // a mention inside a desk-wide sentence -- HOLT's scan summary ends by naming the newest pair
+    // it found -- and attributing the whole line to it would hide that summary from every other
+    // theme. Being too strict here costs a line its tag, which shows it everywhere; being too
+    // loose hides something the desk meant everyone to read.
+    const heads = [t, ...t.split('@ ').slice(1)];
+    const refNames = Array.isArray(refs) ? refs.map((r) => String((r && r.label) || '').toLowerCase()) : [];
+    // shorter than this is not a name, it is a coincidence waiting to happen
+    const named = (label) => {
+      const l = String(label || '').toLowerCase();
+      return l.length >= 8 && (heads.some((h) => h.startsWith(l)) || refNames.some((r) => r.includes(l)));
+    };
+    for (const p of this.pairs) if (named(p.label)) return this.themeFor(p);
+    const mk = (this.state.maker && this.state.maker.markets) || {};
+    for (const ticker of Object.keys(mk)) {
+      const m = mk[ticker];
+      if (named(m.title) || named(m.sub)) return this.themeFor({ ticker, series: m.series });
+    }
+    return null;
+  }
+
   // `refs`: the open positions an entry is about, [{ id, g, label }], so the dashboard can name them
   // and open them on a click. A note that names no market ("the gap is unchanged") is unreadable
   // without it.
   log(agent, kind, pnl, text, refs) {
     const entry = { t: Date.now(), agent, kind, pnl: pnl == null ? null : r2(pnl), text };
     if (Array.isArray(refs) && refs.length) entry.refs = refs;
+    const theme = this.lineTheme(text, refs);
+    if (theme) entry.theme = theme;
     this.state.log.unshift(entry);
     if (this.state.log.length > 500) this.state.log.length = 500;
     this.touch(agent, text);
@@ -279,7 +314,7 @@ class Engine {
       const settlementValue = integrity === 'valid' ? qty
         : integrity === 'half_settled' && Number.isFinite(settledLeg.exit) ? r2(qty * (1 - settledLeg.exit)) : null;
       groups.push({
-        id, label: legs[0] && legs[0].label, pairId: legs[0] && legs[0].pairId,
+        id, label: legs[0] && legs[0].label, pairId: legs[0] && legs[0].pairId, theme: this.themeFor(legs[0] || {}),
         // when the pair resolves, where the desk knows: the dashboard says what settles next
         settlesAt: legs.map((p) => p.settlesAt).find(Number.isFinite) ?? null,
         qty, legs: legs.length, integrity, venueGap, entryCost, liquidationValue,
@@ -867,6 +902,21 @@ class Engine {
     }
   }
 
+  // What a market is ABOUT, in one word -- MLB, UFC, Elections, Weather (src/themes.js). The page's
+  // theme buttons are built out of this, so everything the page can filter carries one.
+  //
+  // The record itself often cannot answer. A pair from the any-market crawl has Kalshi's category,
+  // but a game pair from the fast path (src/matcher.js) has none, a maker market carries only its
+  // series, and a position carries only its pair id. All three do have a Kalshi ticker, so the
+  // exchange's own series index -- loaded at boot and re-read daily -- supplies the category. When
+  // it has not loaded, every ticker rule still decides on its own; only the category rules go quiet.
+  themeFor(m) {
+    const ticker = m.ticker || tickerOfPairId(m.pairId || m.id || '');
+    const series = m.series || (ticker ? ks.seriesFor(ticker) : '');
+    const category = m.category || (series ? (ks.seriesInfo.get(series) || {}).category : null);
+    return themeOf({ series, ticker, category });
+  }
+
   // ---------------------------------------------------------------- snapshot for the UI
   snapshot() {
     const now = Date.now();
@@ -879,7 +929,7 @@ class Engine {
     let hist = s.balanceHistory;
     if (hist.length > 600) { const k = Math.ceil(hist.length / 600); hist = hist.filter((_, i) => i % k === 0 || i === hist.length - 1); }
     const pairs = this.pairs.filter((p) => p.q).map((p) => ({
-      id: p.id, label: p.label, kind: p.kind, series: p.series, category: p.category || null, inPlay: !!p.inPlay, startsAt: p.startsAt || null,
+      id: p.id, label: p.label, kind: p.kind, series: p.series, category: p.category || null, theme: this.themeFor(p), inPlay: !!p.inPlay, startsAt: p.startsAt || null,
       closesAt: p.closesAt || null, watchOnly: p.watchOnly || null,
       pmMid: r3(p.q.pmMid), ksMid: r3(p.q.ksMid), gap: r3(p.q.ksMid - p.q.pmMid),
       age: p.q.t ? Math.round((now - p.q.t) / 1000) : null,
@@ -893,16 +943,58 @@ class Engine {
     // Otherwise the board labelled "Fills" contradicts a taker close directly below it in the log.
     const takerFills = [];
     for (const p of [...s.positions, ...s.closed.slice(-80)]) {
+      const theme = this.themeFor(p);
       if (Number.isFinite(p.openedAt)) takerFills.push({
-        id: `${p.id}:open`, at: p.openedAt, action: 'Opened', label: p.label,
+        id: `${p.id}:open`, at: p.openedAt, action: 'Opened', label: p.label, theme,
         qty: p.qty, px: p.entry, venue: p.venue, contractSide: p.side, pnl: null,
       });
       if (Number.isFinite(p.exitAt)) takerFills.push({
-        id: `${p.id}:close`, at: p.exitAt, action: /^resolved/.test(String(p.reason || '')) ? 'Settled' : 'Closed', label: p.label,
+        id: `${p.id}:close`, at: p.exitAt, action: /^resolved/.test(String(p.reason || '')) ? 'Settled' : 'Closed', label: p.label, theme,
         qty: p.qty, px: p.exit, venue: p.venue, contractSide: p.side, pnl: Number.isFinite(p.exitPnl) ? p.exitPnl : p.pnl,
       });
     }
     takerFills.sort((a, b) => b.at - a.at);
+    // The maker's own book and fill ring, themed the same way. Its markets carry a series and no
+    // category, which is exactly the case themeFor's series-index lookup exists for.
+    const maker = this.maker.snapshot(this);
+    maker.markets = (maker.markets || []).map((m) => ({ ...m, theme: this.themeFor(m) }));
+    maker.recent = (maker.recent || []).map((f) => ({ ...f, theme: this.themeFor(f) }));
+    // The theme bar the dashboard draws. Counted over EVERY pair, not the forty widest gaps sent
+    // above: the whole point of a theme button is to reach the markets that cut leaves out, and a
+    // bar built from the forty would report "MLB 1" on a fourteen-game Sunday.
+    const themeRows = new Map();
+    const themeRow = (k) => {
+      let r = themeRows.get(k);
+      if (!r) themeRows.set(k, r = { key: k, name: themeMeta(k).name, glyph: themeMeta(k).glyph, n: 0, watching: 0, making: 0, tradeable: 0, priced: 0, held: 0, quoting: 0, best: null });
+      return r;
+    };
+    // Per theme: how many of its pairs have a price on both venues, and the one standing widest
+    // apart. The status board needs both to say why a subject is not being traded, and it cannot
+    // work them out for itself -- `pairs` above is the forty widest on the WHOLE board, and on a
+    // quiet subject that cut is empty. A pair the desk could act on always wins over a wider one
+    // it may not (a watch-only pair's two venues' rules are unverified, src/rules.js), so the
+    // notice can tell "nothing is near the bar" from "everything here is unverified".
+    const pairScore = (p, gap) => (p.watchOnly ? 0 : 1e6) + Math.abs(gap);
+    for (const p of this.pairs) {
+      const r = themeRow(this.themeFor(p));
+      r.watching++; r.n++;
+      if (!p.watchOnly) r.tradeable++;
+      const gap = p.q ? p.q.ksMid - p.q.pmMid : null;
+      if (!Number.isFinite(gap)) continue;
+      r.priced++;
+      if (!r.best || pairScore(p, gap) > r.best.score) r.best = { score: pairScore(p, gap), gap: r3(gap), tradeable: !p.watchOnly, label: String(p.label || '').slice(0, 90) };
+    }
+    // Held is per POSITION GROUP, not per leg: a cross-venue arb is one position held in two
+    // places, and counting its legs would say the desk holds twice what it does.
+    for (const g of new Map(s.positions.map((p) => [p.group || p.id, p])).values()) themeRow(this.themeFor(g)).held++;
+    // The maker's own book is the other half of what the desk looks at, and it is Kalshi-only, so
+    // it is counted alongside the cross-venue pairs rather than inside them. `n` is what the
+    // dashboard's theme button shows, and it has to be everything that button then opens.
+    for (const m of maker.markets) { const r = themeRow(m.theme); r.n++; r.making++; if (m.inv) r.held++; if (m.quoting) r.quoting++; }
+    const themes = [...themeRows.values()]
+      .sort((a, b) => b.n - a.n || b.held - a.held || themeRank(a.key) - themeRank(b.key))
+      // `score` is only how the widest pair was picked; the page reads the gap and the label
+      .map((r) => ({ ...r, best: r.best ? { gap: r.best.gap, tradeable: r.best.tradeable, label: r.best.label } : null }));
     return {
       now, name: 'The Hexagon', mode: this.cfg.mode, demo: this.cfg.demo, startedAt: s.startedAt, halt: this.halt,
       // What this process was built from, and when it started. `bootedAt` is deliberately not
@@ -912,7 +1004,7 @@ class Engine {
       initial: s.initial, cash: s.cash, equity, deployed, unrealized, realized: s.stats.realized, fees: s.stats.fees, pnl,
       wins: s.stats.wins, losses: s.stats.losses, liveBalance: this.liveBalance,
       // `sellPx` is what sellGroup would ask for this leg right now, so the confirm box can say it
-      positions: s.positions.map((p) => ({ id: p.id, group: p.group, label: p.label, venue: p.venue, side: p.side, qty: p.qty, entry: p.entry, mark: p.mark, cost: p.cost, pnl: r2(p.qty * (p.mark ?? p.entry) - p.cost), sellPx: this.venueMark(p) ?? p.mark ?? p.entry, strategy: p.strategy, openedAt: p.openedAt, settlesAt: Number.isFinite(p.settlesAt) ? p.settlesAt : null })),
+      positions: s.positions.map((p) => ({ id: p.id, group: p.group, label: p.label, theme: this.themeFor(p), venue: p.venue, side: p.side, qty: p.qty, entry: p.entry, mark: p.mark, cost: p.cost, pnl: r2(p.qty * (p.mark ?? p.entry) - p.cost), sellPx: this.venueMark(p) ?? p.mark ?? p.entry, strategy: p.strategy, openedAt: p.openedAt, settlesAt: Number.isFinite(p.settlesAt) ? p.settlesAt : null })),
       arbGroups,
       closed: s.closed.slice(-80).map((c) => ({ t: c.exitAt, pnl: c.pnl, label: c.label, reason: c.reason, strategy: c.strategy })),
       takerFills: takerFills.slice(0, 120),
@@ -927,7 +1019,8 @@ class Engine {
       pairs: pairs.slice(0, 40),
       pairCount: this.pairs.length,
       cycleMs: this.lastCycleMs,
-      maker: this.maker.snapshot(this),
+      maker,
+      themes,
       whales: this.whales ? this.whales.snapshot() : { enabled: false },
       anyMarket: this.any ? this.any.snapshot() : { enabled: false },
       universe: {
@@ -936,7 +1029,7 @@ class Engine {
         pmTop: top([...this.quotes.pm.values()]).map((m) => ({ q: m.question, px: r3((m.bestBid + m.bestAsk) / 2), vol: Math.round(m.vol24), url: m.url })),
         ksTop: top([...this.quotes.ks.values()]).map((m) => ({ q: m.title, px: r3((m.yesBid + m.yesAsk) / 2), vol: Math.round(m.vol24), url: m.url })),
       },
-      signals: this.signals.slice(0, 5).map((x) => ({ type: x.type, label: x.pair.label, edge: r3(x.edge), gap: x.gap != null ? r3(x.gap) : null })),
+      signals: this.signals.slice(0, 5).map((x) => ({ type: x.type, label: x.pair.label, theme: this.themeFor(x.pair), edge: r3(x.edge), gap: x.gap != null ? r3(x.gap) : null })),
       cfg: { minGap: this.cfg.minGap, minEdge: this.cfg.minEdge, exitGap: this.cfg.exitGap, stopLoss: this.cfg.stopLoss, paperStopLossPct: this.cfg.paperStopLossPct, gainLockTriggerPct: this.cfg.gainLockTriggerPct, gainLockGivebackPct: this.cfg.gainLockGivebackPct, gainLockRetainPct: this.cfg.gainLockRetainPct, minArbEdge: this.cfg.minArbEdge, maxPositionPct: this.cfg.maxPositionPct, maxOpenPositions: this.cfg.maxOpenPositions, maxArbGroups: this.cfg.maxArbGroups, maxLongArbGroups: this.cfg.maxLongArbGroups, longDays: this.cfg.longDays, maxDailyDrawdownPct: this.cfg.maxDailyDrawdownPct, maxHoldMin: this.cfg.maxHoldMin, priceEvery: this.cfg.priceEvery,
         makerMarkets: this.cfg.makerMarkets, makerMinTradesPerDay: this.cfg.makerMinTradesPerDay },
     };
