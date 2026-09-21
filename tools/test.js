@@ -10,6 +10,7 @@ const SUITES = [
   ['decide', 'the taker decision core: ranking, vetoes, sizing rails, exits'],
   ['probe', 'the thin-market probe: threshold, in-play exclusion, cooldown, darkness'],
   ['maker', 'the maker core: quoting, queue and fills, and the realised-P&L invariant'],
+  ['makerdesk', "the maker's loop: a restart reposts, an empty universe waits, settlement, the dropped tail, reduce-only, the gain lock, cooling"],
   ['broker', 'fills: ladder walking, paper fees, and the live Kalshi order path'],
   ['fees', 'what each venue charges a taker: Polymarket per market, Kalshi per series, nothing assumed free'],
   ['matcher', 'cross-venue matching: names, dates, sports, the figure guard and the price guard'],

@@ -75,7 +75,7 @@ tools/            edge-scan, replay, maker-replay, maker-rank, pm-maker-scan, ma
                   ledger-check (does the ledger add up: rebuilds both books from the journals and compares them with
                   state.json line by line; --box checks the Fly box, --venues checks every settlement against the venues),
                   fly-pull (copies the box's finished days to data/fly/archive, verifies, then trims old box tapes)
-                  tests: test.js (npm test) + decide/probe/watchdog/maker/broker/fees/matcher/match-any/rules/discovery/anymarket/stream/engine/brain/lab/stock-lab/chains/whale/http/disk/ask/askui-test.js
+                  tests: test.js (npm test) + decide/probe/watchdog/maker/makerdesk/broker/fees/matcher/match-any/rules/discovery/anymarket/stream/engine/brain/lab/stock-lab/chains/whale/http/disk/ask/askui-test.js
 data/fly/         gitignored: journals, state and tick tapes copied down from the Fly box, plus
                   kstrades.jsonl (the trade history maker-replay scores against) and
                   rank-listing.json + rank-trades.jsonl (the 440-market pool maker-rank scores).

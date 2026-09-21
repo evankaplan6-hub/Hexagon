@@ -8,58 +8,7 @@ const { makeMakerTape } = require('./makertape');
 const { makeTape } = require('./tape');
 const { openTradeStream } = require('./kalshi-ws');
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-// Kalshi rate-limits, and a throttled scan is worse than a slow one: the first live run silently
-// fell back to whatever happened to load and quoted six dead markets at 10-14c. Back off and retry
-// rather than letting a 429 choose the book for us.
-async function getWithBackoff(url, tries = 3) {
-  for (let i = 0; i < tries; i++) {
-    try { return await http.getJSON(url); }
-    catch (e) {
-      if (!/429/.test(String(e.message)) || i === tries - 1) throw e;
-      await sleep(400 * (i + 1) * (i + 1));
-    }
-  }
-}
-
-// What a resting order is actually up against, measured rather than assumed.
-//
-// Two numbers, from ONE trades page. The depth used to cost a second call to
-// /markets/{t}/orderbook per candidate -- but `yes_bid_size_fp` and `yes_ask_size_fp` come back
-// with the per-series listing the scan already fetches, and they are the same numbers to the
-// hundredth (checked against a full orderbook call: 42.96 and 1142.12, both exact). Halving the
-// per-candidate cost is what lets the probe cover twice as many candidates, and how many markets
-// qualify is the binding constraint on this desk -- not capital, and not compute.
-//   tpd    -- observed trades per day, from the last 100 prints. `volume_24h` is a snapshot one
-//             block trade can inflate; this is closer to the flow that pays us.
-//   clear  -- days for the size ALREADY resting at the touch to trade through, at this market's own
-//             contract rate. Joining the touch means joining the back of that queue, and in the
-//             median market it is ~15,700 contracts deep. Scoring the backtest with each market's
-//             real depth took it from +$2187 to +$210. It ranked the book for two days and was
-//             scored out of it (see refreshUniverse); kept because the dashboard and the scan log
-//             say what a quote is up against.
-// Cached an hour: depth moves faster than the rate does, and the scan runs every fifteen minutes.
-const statCache = new Map();
-async function marketStats(ticker, depth) {
-  const hit = statCache.get(ticker);
-  if (hit && Date.now() - hit.at < 3600 * 1000) return hit.v;
-  const v = { tpd: 0, clear: Infinity, queue: 0 };
-  try {
-    const d = await getWithBackoff(`${ks.BASE}/markets/trades?ticker=${ticker}&limit=100`);
-    const tr = (d.trades || []).map((t) => ({ t: Date.parse(t.created_time), n: parseFloat(t.count_fp) || 0 })).filter((x) => Number.isFinite(x.t));
-    if (tr.length >= 10) {
-      const ts = tr.map((x) => x.t);
-      // floor the span at half an hour so one burst cannot report a six-figure daily rate
-      const span = Math.max((Math.max(...ts) - Math.min(...ts)) / 86400000, 1 / 48);
-      v.tpd = tr.length / span;
-      const cpd = tr.reduce((a, x) => a + x.n, 0) / span;
-      v.queue = depth;
-      v.clear = v.queue / Math.max(1, cpd);
-    }
-  } catch { /* unmeasurable is not tradeable: tpd 0 fails the filter */ }
-  statCache.set(ticker, { v, at: Date.now() });
-  return v;
-}
+const realSleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const r2 = (x) => Math.round(x * 100) / 100;
 const r4 = (x) => Math.round(x * 10000) / 10000;
@@ -78,8 +27,75 @@ function bucket(trades) {
   return by;
 }
 
-function makeMakerDesk(cfg) {
-  const recordTape = makeMakerTape(cfg);
+// `deps` is the test seam (tools/makerdesk-test.js): everything this loop reaches outside itself for.
+// It had none, which is why the one file that moves the maker's money was the one file with no
+// tests -- a desk could not be built without a network, a disk and a wall clock. Every default is
+// what the desk used before the seam existed, and the engine passes none.
+//   tape        { since, books, setStream, stats } -- src/tape.js
+//   recordTape  the maker tape writer -- src/makertape.js
+//   getJSON     the listing, probe and fee-type calls      fetchBook  the book flatten() crosses into
+//   clock       every "now" in this file                   sleep      the scan's pacing
+function makeMakerDesk(cfg, deps = {}) {
+  const clock = deps.clock || Date.now;
+  const sleep = deps.sleep || realSleep;
+  const getJSON = deps.getJSON || ((url, opts) => http.getJSON(url, opts));
+  const fetchBook = deps.fetchBook || ((ticker) => ks.fetchBook(ticker));
+  const recordTape = deps.recordTape || makeMakerTape(cfg);
+
+  // Kalshi rate-limits, and a throttled scan is worse than a slow one: the first live run silently
+  // fell back to whatever happened to load and quoted six dead markets at 10-14c. Back off and retry
+  // rather than letting a 429 choose the book for us.
+  async function getWithBackoff(url, tries = 3) {
+    for (let i = 0; i < tries; i++) {
+      try { return await getJSON(url); }
+      catch (e) {
+        if (!/429/.test(String(e.message)) || i === tries - 1) throw e;
+        await sleep(400 * (i + 1) * (i + 1));
+      }
+    }
+  }
+
+  // What a resting order is actually up against, measured rather than assumed.
+  //
+  // Two numbers, from ONE trades page. The depth used to cost a second call to
+  // /markets/{t}/orderbook per candidate -- but `yes_bid_size_fp` and `yes_ask_size_fp` come back
+  // with the per-series listing the scan already fetches, and they are the same numbers to the
+  // hundredth (checked against a full orderbook call: 42.96 and 1142.12, both exact). Halving the
+  // per-candidate cost is what lets the probe cover twice as many candidates, and how many markets
+  // qualify is the binding constraint on this desk -- not capital, and not compute.
+  //   tpd    -- observed trades per day, from the last 100 prints. `volume_24h` is a snapshot one
+  //             block trade can inflate; this is closer to the flow that pays us.
+  //   clear  -- days for the size ALREADY resting at the touch to trade through, at this market's own
+  //             contract rate. Joining the touch means joining the back of that queue, and in the
+  //             median market it is ~15,700 contracts deep. Scoring the backtest with each market's
+  //             real depth took it from +$2187 to +$210. It ranked the book for two days and was
+  //             scored out of it (see refreshUniverse); kept because the dashboard and the scan log
+  //             say what a quote is up against.
+  // Cached an hour: depth moves faster than the rate does, and the scan runs every fifteen minutes.
+  // The cache is the desk's own (it was the module's): one desk per process, so nothing changes for
+  // the server, and two desks in one test file do not answer each other's probes.
+  const statCache = new Map();
+  async function marketStats(ticker, depth) {
+    const hit = statCache.get(ticker);
+    if (hit && clock() - hit.at < 3600 * 1000) return hit.v;
+    const v = { tpd: 0, clear: Infinity, queue: 0 };
+    try {
+      const d = await getWithBackoff(`${ks.BASE}/markets/trades?ticker=${ticker}&limit=100`);
+      const tr = (d.trades || []).map((t) => ({ t: Date.parse(t.created_time), n: parseFloat(t.count_fp) || 0 })).filter((x) => Number.isFinite(x.t));
+      if (tr.length >= 10) {
+        const ts = tr.map((x) => x.t);
+        // floor the span at half an hour so one burst cannot report a six-figure daily rate
+        const span = Math.max((Math.max(...ts) - Math.min(...ts)) / 86400000, 1 / 48);
+        v.tpd = tr.length / span;
+        const cpd = tr.reduce((a, x) => a + x.n, 0) / span;
+        v.queue = depth;
+        v.clear = v.queue / Math.max(1, cpd);
+      }
+    } catch { /* unmeasurable is not tradeable: tpd 0 fails the filter */ }
+    statCache.set(ticker, { v, at: clock() });
+    return v;
+  }
+
   let universe = [];         // tickers we are quoting
   let eligible = null;       // series that actually charge makers nothing
   let lastUniverseAt = 0;    // when a scan last PICKED a universe (the dashboard's "last scan")
@@ -91,7 +107,7 @@ function makeMakerDesk(cfg) {
   let refreshing = null;     // in-flight refresh, so the scan never runs twice or blocks the tick
   let blocked = false;       // did the last step wait on a scan? (the engine's slow-round warning asks)
   // batched exchange-wide trades + per-series books; nothing printed before this desk was up counts
-  const tape = makeTape({ maxPages: cfg.makerTapePages, from: Date.now() });
+  const tape = deps.tape || makeTape({ maxPages: cfg.makerTapePages, from: clock() });
   let stream = null, streamTried = false, streamRetryAt = 0;
   // The quotes in the ledger were resting when the desk last ran, not since. They are withdrawn on
   // the first round after a start and re-posted at its end, so no print is filled against them.
@@ -104,7 +120,7 @@ function makeMakerDesk(cfg) {
   // An open that throws (an unreadable key file, a bad PEM) is retried a minute later rather than
   // written off for the life of the process; the socket's own reconnects handle everything after.
   function ensureStream(E) {
-    if (streamTried || Date.now() < streamRetryAt) return;
+    if (streamTried || clock() < streamRetryAt) return;
     streamTried = true;
     if (!cfg.makerStream) { E.log('MAKR', 'OPS', null, `trade stream off (MAKER_STREAM=0) · polling the tape every ${cfg.makerEverySec}s`); return; }
     if (!cfg.kalshiKeyId || !cfg.kalshiKeyPath) { E.log('MAKR', 'OPS', null, `no Kalshi key configured, and the socket handshake has to be signed · polling the tape every ${cfg.makerEverySec}s`); return; }
@@ -120,7 +136,7 @@ function makeMakerDesk(cfg) {
       });
       tape.setStream(stream);
     } catch (e) {
-      streamTried = false; streamRetryAt = Date.now() + 60000;
+      streamTried = false; streamRetryAt = clock() + 60000;
       E.log('MAKR', 'OPS', null, `trade stream not started (${String(e.message).slice(0, 80)}) · polling the tape every ${cfg.makerEverySec}s, retry in 60s`);
     }
   }
@@ -132,14 +148,14 @@ function makeMakerDesk(cfg) {
   function noteCrawl(E, markets, feeTypeOf) {
     if (!cfg.makerWiden) return 0;
     try {
-      crawled = maker.candidatesFrom(markets, feeTypeOf, cfg);
+      crawled = maker.candidatesFrom(markets, feeTypeOf, cfg, clock());
       // Which series the crawl SAW, quotable or not. The any-market crawl excludes Sports (the fast
       // path covers games), so a listed sports series is absent from it entirely rather than absent
       // on merit, and those few are still scanned by name below. A series the crawl saw and dropped
       // was judged on the same filters as everything else and is not re-scanned.
       crawlSeen = new Set();
       for (const m of markets || []) if (m && m.seriesTicker) crawlSeen.add(m.seriesTicker);
-      crawledAt = Date.now();
+      crawledAt = clock();
       return crawled.length;
     } catch (e) {
       E.log('MAKR', 'OPS', null, `wide universe not built (${String(e.message).slice(0, 80)}) · falling back to the ${cfg.makerSeries.length}-series list`);
@@ -150,11 +166,11 @@ function makeMakerDesk(cfg) {
 
   // Pick the most liquid mid-priced markets from the fee-free series.
   async function refreshUniverse(E) {
-    lastScanAt = Date.now();
+    lastScanAt = clock();
     // The wide universe first, when the crawl is recent enough to price off. Older than two crawl
     // intervals means the scanner is off, stuck or failing, and a stale list of tickers is worse
     // than a fresh narrow one: prices move, and a market that has closed is not worth probing.
-    const crawlAge = crawledAt ? Date.now() - crawledAt : Infinity;
+    const crawlAge = crawledAt ? clock() - crawledAt : Infinity;
     if (cfg.makerWiden && crawled && crawlAge < Math.max(2 * cfg.discoverEveryMin, 45) * 60000) {
       const missed = cfg.makerSeries.filter((x) => !(crawlSeen && crawlSeen.has(x)));
       const extra = missed.length ? await scanSeries(E, missed) : [];
@@ -165,7 +181,7 @@ function makeMakerDesk(cfg) {
       return;
     }
     if (!eligible) {
-      eligible = await maker.eligibleSeries(cfg.makerSeries);
+      eligible = await maker.eligibleSeries(cfg.makerSeries, { getJSON, sleep });
       const rejected = cfg.makerSeries.filter((s) => !eligible.includes(s));
       E.log('MAKR', 'OPS', null, `${eligible.length}/${cfg.makerSeries.length} candidate series charge makers nothing${rejected.length ? ` · excluded ${rejected.join(', ')}` : ''}`);
     }
@@ -191,7 +207,7 @@ function makeMakerDesk(cfg) {
           if (v < cfg.makerMinVol24) continue;
           // Do not be carrying inventory when the market settles: that is a 0-or-1 coin flip, not
           // a spread. Cheap to check here -- close_time is already in the listing we just fetched.
-          const days = maker.daysToEnd(m.ticker, m.close_time);
+          const days = maker.daysToEnd(m.ticker, m.close_time, clock());
           if (!(days >= cfg.makerMinDaysToClose)) continue;
           // top-of-book depth, free with this listing -- see marketStats
           const depth = ((parseFloat(m.yes_bid_size_fp) || 0) + (parseFloat(m.yes_ask_size_fp) || 0)) / 2;
@@ -227,7 +243,7 @@ function makeMakerDesk(cfg) {
       .filter((r) => r.tpd >= cfg.makerMinTradesPerDay)
       .sort((x, y) => y.tpd - x.tpd);
     universe = live.slice(0, cfg.makerMarkets);
-    lastUniverseAt = Date.now();
+    lastUniverseAt = clock();
     E.log('MAKR', 'SCAN', null, universe.length
       ? `quoting ${universe.length} of ${live.length} workable markets (${probe.length} probed, ${rows.length} passed the cheap filters) · ${universe.slice(0, 3).map((r) => `${r.ticker.split('-').slice(-2).join('-')} ${r.tpd.toFixed(0)}/day, queue ${Math.round(r.queue)} clears in ${r.clear < 1 ? `${(r.clear * 24).toFixed(1)}h` : `${r.clear.toFixed(1)}d`}`).join(' · ')}${universe.length > 3 ? '…' : ''}`
       : `no market meets the bar (spread >= ${c(cfg.makerMinSpread)}, >= ${cfg.makerMinTradesPerDay} trades/day)`);
@@ -293,7 +309,7 @@ function makeMakerDesk(cfg) {
     // again two seconds later, and again, each pass the full 38 listings and 80 probes against the
     // same rate limit that had just refused them. It is retried after EMPTY_RETRY_MS; in between
     // the round goes on, so pinned inventory is still worked off.
-    const sinceScan = Date.now() - lastScanAt;
+    const sinceScan = clock() - lastScanAt;
     if (!universe.length) {
       if (!lastScanAt || sinceScan >= EMPTY_RETRY_MS) { blocked = true; await refreshUniverse(E); }
     } else if (sinceScan >= SCAN_EVERY_MS && !refreshing) {
@@ -355,7 +371,7 @@ function makeMakerDesk(cfg) {
         S.realized = r2((S.realized || 0) + res.pnl);
         m.inv = res.inv; m.cost = res.cost; m.realized = res.realized;
         m.mid = yesPx; m.quotes = { bid: null, ask: null };
-        m.settledPx = yesPx; m.settledAt = Date.now();
+        m.settledPx = yesPx; m.settledAt = clock();
         settled++; settledQty += Math.abs(beforeInv); settledPnl = r2(settledPnl + res.pnl);
         E.journal(E, 'MAKER_SETTLE', {
           ticker: u.ticker, qty: beforeInv, cost: beforeCost, yesPx,
@@ -394,7 +410,7 @@ function makeMakerDesk(cfg) {
         // `pnl` is what THIS fill realised (zero when it opened or added to a position), so a
         // clicked trade on the dashboard can say whether it made or lost money on its own.
         // title/sub ride along so the page can name a market it no longer quotes, rather than print its ticker
-        S.lastFill = { ticker: u.ticker, title: m.title || u.title || '', sub: m.sub || u.sub || '', side: f.side, qty: f.qty, px: f.px, pnl: res.pnl, at: Date.now() };
+        S.lastFill = { ticker: u.ticker, title: m.title || u.title || '', sub: m.sub || u.sub || '', side: f.side, qty: f.qty, px: f.px, pnl: res.pnl, at: clock() };
         (S.recent = S.recent || []).unshift(S.lastFill);
         if (S.recent.length > 14) S.recent.length = 14;   // the floor shows ten; the journal keeps them all
         seen.add(f.id);
@@ -418,7 +434,7 @@ function makeMakerDesk(cfg) {
       // The run-over gate: a market whose touch keeps getting swept is withdrawn from entirely,
       // inventory included, for the cooling period. Said once per market per trip, and journalled,
       // because a market that is quietly not being quoted looks exactly like a quiet market.
-      const g = maker.toxicGate(m, cfg, Date.now());
+      const g = maker.toxicGate(m, cfg, clock());
       m.tox = g.tox; m.cooledUntil = g.cooledUntil;
       if (g.tripped) {
         E.log('MAKR', 'OPS', null, `${u.ticker} cooled ${cfg.makerToxCooldownMin}m: ${(g.rate * 100).toFixed(0)}% of ${cfg.makerToxByContracts ? 'the contracts in ' : ''}its last ${m.fills < 30 ? m.fills : 30} fills were run over (limit ${(cfg.makerMaxRunOver * 100).toFixed(0)}%) · quotes withdrawn, ${Math.abs(m.inv)} held`);
@@ -470,7 +486,7 @@ function makeMakerDesk(cfg) {
     // rises, so the shape of the mark against it is the actual P&L story. Sampled once a minute and
     // capped at 5,000 minute samples (about 3.5 days). The former twelve-hour cutoff made the 24h
     // button and "All" axis claim a range the combined chart did not actually possess.
-    const nowMs = Date.now();
+    const nowMs = clock();
     S.hist = S.hist || [];
     const last = S.hist[S.hist.length - 1];
     if (!last || nowMs - last.t >= 60000) {
@@ -500,7 +516,7 @@ function makeMakerDesk(cfg) {
       if (!m.inv) continue;
       let px = m.mid ?? 0.5;
       try {
-        const bk = await ks.fetchBook(ticker);
+        const bk = await fetchBook(ticker);
         px = m.inv > 0 ? (bk.yesBids[0] ? bk.yesBids[0].price : px) : (bk.yesAsks[0] ? bk.yesAsks[0].price : px);
       } catch { /* fall back to the last mark */ }
       const fee = ks.fee(Math.abs(m.inv), px, cfg.ksFeeRate, ticker);
@@ -571,4 +587,4 @@ function makeMakerDesk(cfg) {
   return { step, flatten, resume, snapshot, noteCrawl, blockedOnScan: () => blocked };
 }
 
-module.exports = { makeMakerDesk };
+module.exports = { makeMakerDesk, EMPTY_RETRY_MS, SCAN_EVERY_MS };
