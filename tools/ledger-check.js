@@ -194,19 +194,20 @@ async function checkVenues(events, log) {
         if (yes == null) { out.unknown.push(`${e.label}: Kalshi has not settled ${ticker || o.ref}`); continue; }
         expect = e.side === 'yes' ? yes : 1 - yes;
       } else {
-        // an older journal names the leg only by its token (OPEN.ref); Gamma can find the market by it
-        let m, idx = +tok || 0;
-        if (pmId) m = await pmMarket(pmId);
+        // The pair id names the market and the pair's YES token; the leg's side then says which
+        // way it pays. An older journal names the leg only by the token it HELD (OPEN.ref: the NO
+        // token for a NO leg), and Gamma can find the market by it -- but only among closed markets
+        // when asked for them -- and that token's own price is then what the leg was paid.
+        let m, expectOf;
+        if (pmId) { m = await pmMarket(pmId); expectOf = (prices) => (e.side === 'yes' ? prices[+tok || 0] : 1 - prices[+tok || 0]); }
         else if (o.ref) {
-          // Gamma answers a token-id lookup only for the markets it is asked about: closed ones, here
           const list = await get(`https://gamma-api.polymarket.com/markets?clob_token_ids=${o.ref}&closed=true`); await sleep(120);
           m = Array.isArray(list) ? list[0] : null;
-          if (m) idx = Math.max(0, JSON.parse(m.clobTokenIds || '[]').indexOf(String(o.ref)));
+          if (m) { const held = Math.max(0, JSON.parse(m.clobTokenIds || '[]').indexOf(String(o.ref))); expectOf = (prices) => prices[held]; }
         }
         if (!m) { out.unknown.push(`${e.label}: no Polymarket market id on the line`); continue; }
         if (!m.closed || m.umaResolutionStatus !== 'resolved') { out.unknown.push(`${e.label}: Polymarket ${m.id} not resolved`); continue; }
-        const yes = JSON.parse(m.outcomePrices || '[]').map(Number)[idx];
-        expect = e.side === 'yes' ? yes : 1 - yes;
+        expect = expectOf(JSON.parse(m.outcomePrices || '[]').map(Number));
       }
       out.checked++;
       if (Math.abs(expect - e.exit) <= 0.0011) out.agree++;
