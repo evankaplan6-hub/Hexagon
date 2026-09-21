@@ -60,7 +60,7 @@ src/tape.js       maker market data     src/kalshi-ws.js Kalshi trade socket (re
 src/makertape.js  records the maker's book, prints and quotes into the ticks-*.jsonl tape (RECORD_MAKER=0 off)
 src/whales.js     whale watch: top wallets' big bets on Polymarket's sports/politics/economics/crypto/culture/tech/finance boards (advisory, never trades; WHALE_WATCH=0 off)
 src/ask.js        the dashboard Ask panel: read-only Claude tool loop (src/ask-tools.js), ASK_DAILY_USD ceiling; needs ANTHROPIC_API_KEY
-tools/            edge-scan, replay, maker-replay, maker-rank, pm-maker-scan, maker-report, fillcheck, ufc-scan (prices a
+tools/            edge-scan, replay, maker-replay, maker-rank, pm-maker-scan, maker-report, fillcheck (files only: replays the maker's own tape against its journal, and says what each missed fill was), ufc-scan (prices a
                   fight card on both venues, cross-venue and within Kalshi, net of fees; read-only),
                   history-scan, golden, api, lab-fetch + lab (strategy tournament on settled markets),
                   whale-fetch + whale-lab (does copying top sports wallets pay? no, out of sample),
@@ -75,7 +75,7 @@ tools/            edge-scan, replay, maker-replay, maker-rank, pm-maker-scan, ma
                   ledger-check (does the ledger add up: rebuilds both books from the journals and compares them with
                   state.json line by line; --box checks the Fly box, --venues checks every settlement against the venues),
                   fly-pull (copies the box's finished days to data/fly/archive, verifies, then trims old box tapes)
-                  tests: test.js (npm test) + decide/probe/watchdog/maker/makerdesk/broker/fees/matcher/match-any/rules/discovery/anymarket/stream/engine/brain/lab/stock-lab/chains/whale/http/disk/ask/askui-test.js
+                  tests: test.js (npm test) + decide/probe/watchdog/maker/makerdesk/broker/fees/matcher/match-any/rules/discovery/anymarket/stream/engine/brain/lab/stock-lab/chains/whale/http/disk/ask/askui/fillcheck-test.js
 data/fly/         gitignored: journals, state and tick tapes copied down from the Fly box, plus
                   kstrades.jsonl (the trade history maker-replay scores against) and
                   rank-listing.json + rank-trades.jsonl (the 440-market pool maker-rank scores).

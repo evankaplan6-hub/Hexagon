@@ -69,4 +69,4 @@ else
 fi
 echo "logs:      $HEXDIR/data/desk.log"
 echo "dashboard: http://localhost:8787"
-echo "check on it later with:  node tools/fillcheck.js 24"
+echo "check on it later with:  node tools/maker-report.js"
