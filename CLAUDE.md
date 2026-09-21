@@ -72,6 +72,8 @@ tools/            edge-scan, replay, maker-replay, maker-rank, pm-maker-scan, ma
                   weather-fetch + weather-lab (Kalshi daily-high-temperature markets vs the public forecast; no edge, out of sample),
                   favorites-check (one preset rule on older settled markets from lab-fetch --historical; the non-Sports favourite lead did not replicate),
                   pnl-report (one-screen realised P&L per book from data/fly/archive journals; --marks prices held maker inventory),
+                  ledger-check (does the ledger add up: rebuilds both books from the journals and compares them with
+                  state.json line by line; --box checks the Fly box, --venues checks every settlement against the venues),
                   fly-pull (copies the box's finished days to data/fly/archive, verifies, then trims old box tapes)
                   tests: test.js (npm test) + decide/probe/watchdog/maker/broker/fees/matcher/match-any/rules/discovery/anymarket/stream/engine/brain/lab/stock-lab/chains/whale/http/disk/ask/askui-test.js
 data/fly/         gitignored: journals, state and tick tapes copied down from the Fly box, plus
