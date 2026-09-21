@@ -111,7 +111,9 @@ function makeMakerDesk(cfg, deps = {}) {
   let stream = null, streamTried = false, streamRetryAt = 0;
   // The quotes in the ledger were resting when the desk last ran, not since. They are withdrawn on
   // the first round after a start and re-posted at its end, so no print is filled against them.
-  let firstRound = true;
+  // The same is true of the first round after a halt, which withdrew them itself. Either way the
+  // tape is told (`fresh`), so it does not page back over prints that had nothing to fill.
+  let nothingResting = true;
 
   // The trade socket, opened once, on the first cycle rather than at construction so that building
   // a desk never opens a connection. Kalshi signs the handshake, so without a key there is nothing
@@ -274,6 +276,7 @@ function makeMakerDesk(cfg, deps = {}) {
     // fresh resting quote.
     const withdraw = (extra) => {
       for (const m of Object.values(S.markets)) m.quotes = { bid: null, ask: null };
+      nothingResting = true;
       E.touch('MAKR', 'quotes withdrawn');
       // tell the tape: without this it would show the last quote resting straight through the halt
       recordTape(E, { markets: S.markets, gap: 'halt', ...extra });
@@ -336,7 +339,7 @@ function makeMakerDesk(cfg, deps = {}) {
     const tickers = work.map((u) => u.ticker);
     let tapeRes, bookRes;
     try {
-      [tapeRes, bookRes] = await Promise.all([tape.since(tickers), tape.books(tickers)]);
+      [tapeRes, bookRes] = await Promise.all([tape.since(tickers, { fresh: nothingResting }), tape.books(tickers)]);
     } catch (e) {
       E.log('MAKR', 'OPS', null, `market data failed (${String(e.message).slice(0, 80)}) · quotes left as they are`);
       recordTape(E, { markets: S.markets, gap: 'data-failure' });
@@ -381,11 +384,13 @@ function makeMakerDesk(cfg, deps = {}) {
       }
       const trades = byTicker.get(u.ticker) || [];        // already oldest-first
       const bk = bookRes.books.get(u.ticker);
+      // Nothing of ours was resting (the first round after a start): the saved quote goes before
+      // anything can be matched against it -- and before the no-book exit below, or a market whose
+      // book failed to load on that one round kept its saved quote and filled against it on the next.
+      if (nothingResting) m.quotes = { bid: null, ask: null };
       if (!bk) continue;                                   // no book this round: leave the quote alone
 
-      // 1) fill the quotes we were ALREADY resting, against trades that have since arrived --
-      //    unless this is the first round after a start, when nothing of ours was resting
-      if (firstRound) m.quotes = { bid: null, ask: null };
+      // 1) fill the quotes we were ALREADY resting, against trades that have since arrived
       const seen = new Set(m.seen);
       const { fills, queue } = maker.fillsFrom(trades, m.quotes, m.inv, cfg, seen, m.queue);
       m.queue = queue;                                     // what is still ahead of us, carried forward
@@ -460,7 +465,7 @@ function makeMakerDesk(cfg, deps = {}) {
       m.why = g.cooled ? `cooled until ${new Date(g.cooledUntil).toISOString().slice(11, 16)}Z · run-over ${(g.rate * 100).toFixed(0)}%` : (q.why || null);
     }
 
-    firstRound = false;
+    nothingResting = false;
 
     // A market the desk is neither quoting nor holding is out of the loop above. Its last quote
     // must not go on resting in the ledger -- the maker tape (src/makertape.js) would show it

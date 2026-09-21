@@ -79,7 +79,15 @@ function makeTape({ maxPages = 5, stream = null, from = 0 } = {}) {
   // back to (or past) the last trade it already returned. The cap is the only case that still
   // counts as a gap: five pages is 5000 prints, about thirty seconds of the whole exchange at its
   // usual rate, and a poll that far behind has a bigger problem than pagination.
-  async function since(tickers) {
+  //
+  // `fresh`: the caller had nothing resting before this call (the first round after a start, the
+  // first after a halt), so no print older than the newest page could have filled anything, and
+  // there is nothing to page back FOR. Without it the first poll after a boot chased five pages
+  // back toward the boot time -- the universe scan blocks that round for ~22 seconds, about 3,500
+  // prints -- gave up at the cap, and counted a gap: five front-of-the-line calls, a "some fills
+  // were not seen" line in the log and a tape-gap marker in the maker tape, on every restart, for
+  // a window in which the desk had no quote to fill. One page, and no gap, because none was missed.
+  async function since(tickers, { fresh: nothingResting = false } = {}) {
     const want = tickers instanceof Set ? tickers : new Set(tickers);
     const byId = new Map();
 
@@ -110,7 +118,7 @@ function makeTape({ maxPages = 5, stream = null, from = 0 } = {}) {
       for (const t of batch) if (!byId.has(t.trade_id)) byId.set(t.trade_id, t);
       for (const t of batch) if (t._t < oldest) oldest = t._t;
       // reached overlap, an empty page, or the end of the tape: nothing older is missing
-      if (!batch.length || lastNewest === 0 || oldest <= lastNewest || !d.cursor) break;
+      if (!batch.length || nothingResting || lastNewest === 0 || oldest <= lastNewest || !d.cursor) break;
       cursor = d.cursor;
       capped = page === maxPages - 1;
     }

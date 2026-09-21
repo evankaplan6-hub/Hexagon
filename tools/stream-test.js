@@ -178,6 +178,23 @@ group('the tape reads the socket when it can vouch for the interval, and polls w
     r = await tape3.since(['A']);
     ok('prints from before the desk was up are not returned', r.trades.map((t) => t.trade_id).join() === 'd', r.trades.map((t) => t.trade_id));
     ok('...and the poll does not page back past them', calls.length === 1 && r.gap === false, calls);
+
+    // The box is busier than that: its scan blocks the first round for ~22 seconds, about 3,500
+    // prints, so the first poll chased five pages back toward the boot time, hit the cap and
+    // counted a gap on every restart -- for a window in which the desk had no quote to fill.
+    const deep = { first: { trades: [T('z', 99)], next: 'p2' }, p2: { trades: [T('y', 98)], next: 'p3' }, p3: { trades: [T('x', 97)], next: 'p4' }, p4: { trades: [T('w', 96)], next: 'p5' }, p5: { trades: [T('v', 95)], next: 'p6' } };
+    const tape4 = makeTape({ maxPages: 5, from: 1000000000000 + 12500 });
+    calls = serve(deep);
+    r = await tape4.since(['A'], { fresh: true });
+    ok('a caller with nothing resting reads one page and counts no gap', calls.length === 1 && r.gap === false && tape4.stats().gaps === 0, { calls: calls.length, gap: r.gap });
+    ok('...and still gets the prints on that page', r.trades.map((t) => t.trade_id).join() === 'z', r.trades.map((t) => t.trade_id));
+    calls = serve({ first: { trades: [T('zb', 101), T('za', 100), T('z', 99)], next: 'p2' } });
+    r = await tape4.since(['A']);
+    ok('the next poll picks up from there, one page, nothing twice', calls.length === 1 && r.trades.map((t) => t.trade_id).join() === 'za,zb' && r.gap === false, r.trades.map((t) => t.trade_id));
+    const tape5 = makeTape({ maxPages: 5, from: 1000000000000 + 12500 });
+    calls = serve(deep);
+    r = await tape5.since(['A']);
+    ok('a caller WITH quotes resting still pages back, and a poll that cannot reach is still a gap', calls.length === 5 && r.gap === true, { calls: calls.length, gap: r.gap });
   };
 
   // ---- the real client against nothing: no key file, then a refused port
