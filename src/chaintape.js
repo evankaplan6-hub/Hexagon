@@ -74,8 +74,10 @@ function summarize(text, { now = Date.now() } = {}) {
     if (!s) bySym.set(r.sym, (s = { sym: r.sym, spot: r.spot, sb: r.sb, sa: r.sa, at: r.t, qt: r.qt, h: r.h, expiries: [], contracts: 0 }));
     s.expiries.push({ exp: r.exp, dte: r.dte, c: (r.c || []).length, p: (r.p || []).length });
     s.contracts += (r.c || []).length + (r.p || []).length;
-    // nearest expiry wins the atm strip; rows arrive newest-first but in no expiry order
-    if (!s._atmDte || (Number.isFinite(r.dte) && r.dte < s._atmDte)) {
+    // Nearest expiry wins the atm strip; rows arrive newest-first but in no expiry order.
+    // `== null` rather than falsy: a dte of 0 is an expiry that settles TODAY -- the nearest one
+    // there is -- and testing it for truthiness threw it away in favour of whatever came next.
+    if (s._atmDte == null || (Number.isFinite(r.dte) && r.dte < s._atmDte)) {
       const near = pickAtm(r);
       if (near) { s.atm = near; s._atmDte = r.dte; }
     }
@@ -111,7 +113,11 @@ function read(dir, { io = fs, maxBytes = TAIL_BYTES, now = Date.now } = {}) {
   let bytes = 0;
   try { bytes = io.statSync(file).size; } catch { /* reported as 0 */ }
   const out = summarize(tail(file, { io, maxBytes }), { now: now() });
-  return { ok: !!out.symbols.length, day: f.day, file: f.name, dir, bytes, ...out };
+  // A tape that exists and holds no rows yet is not a broken one: the recorder writes the header
+  // when it creates the day's file and the first snapshot lands after it. Saying "could not be
+  // read" there sends someone looking for a corrupt file that is fine.
+  const why = out.symbols.length ? '' : 'no snapshots in the tape yet';
+  return { ok: !!out.symbols.length, ...(why ? { why } : {}), day: f.day, file: f.name, dir, bytes, ...out };
 }
 
 module.exports = { read, summarize, latestFile, tail, pickAtm, FILE, TAIL_BYTES };

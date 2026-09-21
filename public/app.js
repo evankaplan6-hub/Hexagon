@@ -3122,11 +3122,13 @@
       meta = `${syms.length} symbols · ${c.snapshots} snapshot${c.snapshots === 1 ? '' : 's'} in view · ${(c.bytes / 1048576).toFixed(1)} MB · ${esc(c.file || '')}`;
       body = view === 'stocks' ? stocksBody(syms) : optionsBody(syms, c);
     }
+    // before the early return: a quiet poll returns identical html (the recorder skips an
+    // unchanged chain), and the indicator would stick on "reading…" for as long as that lasts
+    $('asset-meta').textContent = chains.busy ? 'reading…' : '';
     const html = `<div class="ameta">${meta}</div>${body}`;
     if (html === assetHtml) return;
     assetHtml = html;
     $('asset-body').innerHTML = html;
-    $('asset-meta').textContent = chains.busy ? 'reading…' : '';
   }
 
   // Stocks: the six underlyings the tape follows, as the tape last saw them. Not a trading screen —
@@ -3199,7 +3201,15 @@
   });
 
   // ------------------------------------------------------------ wiring
-  function render() { frameSeq++; renderHeader(); renderThemeBar(); renderMobileSummary(); ingest(); renderAsk(); if (!bigChart.hidden) drawChart($('chartbig-pnl'), true); }
+  function render() {
+    frameSeq++; renderHeader(); renderThemeBar(); renderMobileSummary(); ingest(); renderAsk();
+    if (!bigChart.hidden) drawChart($('chartbig-pnl'), true);
+    // An open Stocks or Options tab rides the same frame clock as everything else. loadChains has
+    // its own freshness window so this is a no-op most frames, and renderAsset re-runs so the
+    // "recorded N min ago" ages in place -- a panel whose whole job is saying how stale a quote is
+    // must not freeze that number the moment it is drawn.
+    if (view !== 'floor') { loadChains(); renderAsset(); }
+  }
   function connect() {
     const es = new EventSource('/api/stream');
     es.onmessage = (ev) => { try { S = JSON.parse(ev.data); S._rx = S.now; S._rxPerf = performance.now(); lastFrameAt = Date.now(); render(); } catch (e) { console.error(e); } };

@@ -243,6 +243,42 @@ group('summarize: newest line per symbol-expiry wins');
   ok('the nearest expiry wins the atm strip', s0.atm && s0.atm.exp === '2026-09-25', s0.atm);
 }
 
+group('an expiry that settles today is the nearest one, not an unset one');
+{
+  // The bug this pins: `!s._atmDte` reads a days-to-expiry of 0 as "nothing chosen yet", so the
+  // 0-dte expiry -- the one that matters most on an expiration day -- lost to whatever came next.
+  const row = (t, exp, dte) => JSON.stringify({ t, sym: 'AAA', spot: 100, exp, dte,
+    c: [[100, 1, 5, 1.1, 5, 1, 0.2, 0.5, 0, 0, 0, 0, 0, 7, 3, null]], p: [] });
+  // newest snapshot carries only the same-day expiry; an older one in the same tail carries a later
+  // one, so the 0-dte row is the FIRST the backwards walk sees
+  const r = summarize([
+    row('2026-09-21T14:00:00.000Z', '2026-09-25', 4),
+    row('2026-09-21T20:00:00.000Z', '2026-09-21', 0),
+  ].join('\n'), { now: NOW });
+  ok('the 0-dte expiry wins the atm strip', r.symbols[0].atm.dte === 0, r.symbols[0].atm);
+  ok('and it is the right expiry', r.symbols[0].atm.exp === '2026-09-21', r.symbols[0].atm.exp);
+  // the ordinary way round still works: a nearer expiry seen later still takes it
+  const r2 = summarize([
+    row('2026-09-21T20:00:00.000Z', '2026-09-21', 0),
+    row('2026-09-21T20:00:00.000Z', '2026-09-25', 4),
+  ].join('\n'), { now: NOW });
+  ok('a nearer expiry still wins when seen second', r2.symbols[0].atm.dte === 0, r2.symbols[0].atm);
+}
+
+group('a tape with no rows yet is empty, not broken');
+{
+  const dir = tmp();
+  // the recorder writes the header when it creates the day's file; the first snapshot lands after
+  fs.writeFileSync(path.join(dir, 'chains-2026-09-21.jsonl'), JSON.stringify(headerLine({ at: NOW, band: 0.3, maxDte: 70, symbols: ['AAA'] })) + '\n');
+  const r = readTape(dir, { now: () => NOW });
+  ok('it is not ok, because there is nothing to show', r.ok === false);
+  ok('but it says the tape is empty, not unreadable', /no snapshots/.test(r.why || ''), r.why);
+  ok('and it still names the file it found', /chains-2026-09-21/.test(r.file || ''), r.file);
+  // a missing directory keeps its own, different wording
+  ok('a missing tape still says so', readTape(path.join(dir, 'nope')).why === 'no tape yet');
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 group('pickAtm: the strike a person actually reads');
 {
   const mk = (k, bid) => [k, bid, 5, bid + 0.1, 5, bid, 0.2, 0.5, 0, 0, 0, 0, 0, 11, 2, null];
