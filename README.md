@@ -956,6 +956,7 @@ tools/test.js          every suite in one command (npm test)
 tools/decide-test.js   assertions for the taker decision core
 tools/probe-test.js    assertions for the thin-market probe (stubbed venues, frozen clock)
 tools/maker-test.js    assertions for the maker core: quoting, queue, fills, realised P&L
+tools/makerdesk-test.js  assertions for the maker's loop: restart, empty universe, settlement, reduce-only, gain lock, cooling
 tools/broker-test.js   assertions for fills, incl. the live Kalshi order path (no network)
 tools/fees-test.js     assertions for what each venue charges: Polymarket per market, Kalshi per series
 tools/match-any-test.js  assertions for any-market matching on real venue text, every near-miss included

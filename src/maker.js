@@ -316,15 +316,16 @@ function drawdownFrom(equity, peak, initialBalance) {
 // ---------------------------------------------------------------- universe
 // Only plain-`quadratic` series: anything with maker fees hands most of the spread back. Cached,
 // because fee_type does not change intraday.
-async function eligibleSeries(candidates) {
+// `getJSON` and `sleep` are makerdesk's own (its test seam); the defaults are what this always used.
+async function eligibleSeries(candidates, { getJSON = http.getJSON, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
   const ok = [];
   for (const s of candidates) {
     try {
-      const d = await http.getJSON(`${ks.BASE}/series/${s}`);
+      const d = await getJSON(`${ks.BASE}/series/${s}`);
       const x = d.series || {};
       if (x.fee_type === 'quadratic') ok.push(s);
     } catch { /* leave it out: unknown fee structure is not tradeable */ }
-    await new Promise((r) => setTimeout(r, 120));  // this runs once per process; pace it
+    await sleep(120);  // this runs once per process; pace it
   }
   return ok;
 }
