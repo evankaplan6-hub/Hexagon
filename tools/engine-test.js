@@ -754,6 +754,18 @@ const position = (over = {}) => ({
     ok('an older ledger without the key still starts', legacy.cooldown.size === 0, [...legacy.cooldown]);
   }
 
+  group('the once-per-interval timers do not pile up');
+  {
+    const E = engine();
+    const now = Date.now();
+    E.timers = { 'exit-book-longgone': now - 2 * 86400000, 'pin-current': now - 30000 };
+    ok('a name asked about again inside its interval is still not due', E.due('pin-current', 60) === false);
+    ok('a name untouched for a day is dropped; one in use is kept', !('exit-book-longgone' in E.timers) && 'pin-current' in E.timers, Object.keys(E.timers));
+    E.timers['exit-book-another'] = now - 2 * 86400000;
+    E.due('pin-current', 60);
+    ok('the sweep itself runs once an hour, not on every question', 'exit-book-another' in E.timers, Object.keys(E.timers));
+  }
+
   for (const d of dirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch {} }
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

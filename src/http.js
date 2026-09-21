@@ -105,6 +105,10 @@ async function getJSON(url, { timeout = 15000, priority = false, sleep = (ms) =>
     try {
       const r = await fetch(url, { signal: ctl.signal, headers: { accept: 'application/json', 'user-agent': 'the-hexagon/1.0' } });
       if (!r.ok) {
+        // A refusal still has a body, and nothing here reads it. Left unread it holds its connection
+        // until the garbage collector gets to it -- and a 429 is answered by calling the same host
+        // again half a second later, which is when a free connection is wanted. Let it go now.
+        try { if (r.body && typeof r.body.cancel === 'function') await r.body.cancel(); } catch { /* it was only ever being thrown away */ }
         const err = new Error(`HTTP ${r.status} ${url.slice(0, 90)}`);
         err.status = r.status;
         if (r.status === 429 && attempt === 0) {
