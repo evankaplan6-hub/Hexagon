@@ -27,6 +27,7 @@ const SUITES = [
   ['makertape', "the maker's tape: book on change, prints once, our own quote, and a bad disk never reaches the desk"],
   ['whale', 'whale watch: what counts as a bet, said once across a restart, what copying pays'],
   ['http', "the Kalshi pacer: calls spaced apart, the maker's calls first, nothing else waits"],
+  ['env', 'the .env reader: comments, quotes, and a # inside a password is part of the password'],
   ['disk', 'the box disk: pull copies and verifies before any delete, the brake only trims old tapes'],
   ['ask', 'the Ask panel: the tool loop, append-only chats, limits and budget, route locks, no secrets'],
   ['askui', "the Ask drawer's page code: the answer escaped before it is formatted, and when a chat is over"],

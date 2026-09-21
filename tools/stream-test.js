@@ -125,6 +125,16 @@ group('the tape reads the socket when it can vouch for the interval, and polls w
     r = await tape.since(['A']);
     ok('a print older than the last one returned is dropped', r.trades.map((t) => t.trade_id).join() === 'f', r.trades.map((t) => t.trade_id));
 
+    // round 3b: a DIFFERENT print stamped the same millisecond as the newest one returned. The
+    // exchange runs ~160 prints a second, so this is ordinary; judged on the stamp alone it read
+    // as a repeat and a quote it would have filled never was.
+    s.feed([W('f', 15), W('f2', 15)], true);
+    r = await tape.since(['A']);
+    ok('a second print in the same millisecond is new, the repeat is not', r.trades.map((t) => t.trade_id).join() === 'f2', r.trades.map((t) => t.trade_id));
+    s.feed([W('f2', 15)], true);
+    r = await tape.since(['A']);
+    ok('...and it is not returned twice either', r.trades.length === 0, r.trades.map((t) => t.trade_id));
+
     // round 4: a sequence gap -> poll, and the poll pages back to f (t=15), so g and h are found
     // even though the socket only delivered h
     s.feed([W('h', 17)], false);

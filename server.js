@@ -5,19 +5,11 @@ const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
 
-loadEnv(path.join(__dirname, '.env'));
+require('./src/env').loadEnv(path.join(__dirname, '.env'));
 const cfg = require('./src/config');
 const { Engine } = require('./src/engine');
 const { actionRefusal, rebindRefusal, routeAsk } = require('./src/ask');
 const chaintape = require('./src/chaintape');
-
-function loadEnv(file) {
-  if (!fs.existsSync(file)) return;
-  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
-    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*(#.*)?$/);
-    if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '');
-  }
-}
 
 if (cfg.mode === 'live') {
   const problems = [];

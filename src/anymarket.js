@@ -67,6 +67,7 @@ function makeAnyMarket(cfg, deps = {}) {
   const file = path.join(cfg.dataDir, 'pairs-any.json');
 
   let candidates = [];                 // matched candidates, best first, capped at anyMaxPairs
+  let adoptSeq = 0;                    // bumps whenever `candidates` is replaced
   let rejectedCount = 0, differentCount = 0;
   const ksCache = new Map();           // ticker -> KS market record with `at`
   const pmCache = new Map();           // id -> PM market record with `at`
@@ -94,6 +95,7 @@ function makeAnyMarket(cfg, deps = {}) {
     }
     scored.sort((a, b) => ((b.v.verdict === 'same') - (a.v.verdict === 'same')) || (b.vol - a.vol));
     candidates = scored.slice(0, cfg.anyMaxPairs).map((x) => x.c);
+    adoptSeq++;
     lastRefresh = 0;   // new pairs are priced on the next cycle, not up to ANY_REFRESH_SEC later
     for (const c of candidates) {
       if (!ksCache.has(c.ks.ticker)) ksCache.set(c.ks.ticker, { ...c.ks, at });
@@ -198,7 +200,9 @@ function makeAnyMarket(cfg, deps = {}) {
           else ksCache.set(m.ticker, { ...prev, yesBid: m.yesBid, yesAsk: m.yesAsk, status: m.status, at: prev.at });
           continue;
         }
-        ksCache.set(m.ticker, { ...prev, ...m, rulesPrimary: prev.rulesPrimary, rulesSecondary: prev.rulesSecondary, rulesHash: prev.rulesHash, seriesTicker: prev.seriesTicker, category: prev.category, eventTitle: prev.eventTitle, at: now });
+        // `url` is discovery's, from the event's series ticker; normalize's first-segment guess is
+        // the wrong page for a hyphenated series (src/discovery.js says so) and must not replace it
+        ksCache.set(m.ticker, { ...prev, ...m, rulesPrimary: prev.rulesPrimary, rulesSecondary: prev.rulesSecondary, rulesHash: prev.rulesHash, seriesTicker: prev.seriesTicker, category: prev.category, eventTitle: prev.eventTitle, url: prev.url || m.url, at: now });
       }
     } else if (E.due('any-ks-refresh', 300)) {
       E.log('TESS', 'OPS', null, `any-market Kalshi reprice failed: ${String(kr.reason && kr.reason.message).slice(0, 100)} · those pairs go stale until it recovers`);
@@ -275,7 +279,14 @@ function makeAnyMarket(cfg, deps = {}) {
     }
   }
 
+  // Remembered until the candidates or the judge's cache change: snapshot() asks for this on every
+  // two-second frame, and a verdict is the denylist, the allowlist and ~20 feature regexes over both
+  // rules texts -- for three hundred pairs, every frame, to produce three counts that only move
+  // when a crawl adopts new pairs or Claude answers about one.
+  let summaryMemo = null;
   function summary() {
+    const key = `${adoptSeq}|${judge && typeof judge.snapshot === 'function' ? judge.snapshot().cached : 0}`;
+    if (summaryMemo && summaryMemo.key === key) return summaryMemo.value;
     const byCat = {};
     let same = 0, unclear = 0;
     for (const c of candidates) {
@@ -285,7 +296,9 @@ function makeAnyMarket(cfg, deps = {}) {
       if (v === 'same') same++; else if (v === 'unclear') unclear++;
     }
     const byCategoryText = Object.entries(byCat).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k, n]) => `${n} ${k.toLowerCase()}`).join(', ') || 'none';
-    return { total: candidates.length, same, unclear, byCategory: byCat, byCategoryText };
+    const value = { total: candidates.length, same, unclear, byCategory: byCat, byCategoryText };
+    summaryMemo = { key, value };
+    return value;
   }
 
   function start(E) {

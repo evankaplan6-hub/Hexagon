@@ -31,7 +31,7 @@ const ROLES = { HOLT: 'scanner: matches markets across venues', ILSA: 'sentiment
 const LOG_KINDS = ['OPS', 'SCAN', 'RESEARCH', 'PASS', 'FILL', 'SETTLE', 'HALT', 'WHALE'];
 const VEN = { PM: 'Polymarket', KS: 'Kalshi' };
 
-const ET_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' });
+const { ET_DAY } = require('./recorder');   // the Eastern day, one definition for every file that names one
 const ET_TIME = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 
 // ---------------------------------------------------------------- formatting

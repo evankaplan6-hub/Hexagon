@@ -150,7 +150,7 @@ function staticVerdict(c) {
 const API_URL = 'https://api.anthropic.com/v1/messages';
 const PRICE = { 'claude-opus-5': { input: 5 / 1e6, output: 25 / 1e6 }, 'claude-sonnet-5': { input: 2 / 1e6, output: 10 / 1e6 } };
 const priceOf = (m) => PRICE[m] || PRICE['claude-opus-5'];
-const ET_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' });
+const { ET_DAY } = require('./recorder');   // the Eastern day, one definition for every file that names one
 const MAX_TOKENS = 2000;
 
 const SYSTEM = `You compare the resolution rules of two prediction-market contracts, one on Polymarket and one on Kalshi, that a matcher believes are the same outcome. A trading desk will buy YES on one and NO on the other as a "locked" arbitrage, which only works if EVERY possible real-world outcome settles both contracts the same way.

@@ -43,6 +43,17 @@ async function getWithBackoff(url, tries = 3) {
 
 function makeTape({ maxPages = 5, stream = null } = {}) {
   let lastNewest = 0;      // newest trade timestamp we have already returned
+  // ...and the ids of the prints AT that timestamp. The exchange runs ~160 prints a second, so one
+  // millisecond holds several, and a drain can land between two of them: judged on the stamp alone
+  // the second was "already returned" and a quote it would have filled never was.
+  let atNewest = new Set();
+  const isNew = (t) => t._t > lastNewest || (t._t === lastNewest && !atNewest.has(t.trade_id));
+  const advance = (trades) => {
+    for (const t of trades) {
+      if (t._t > lastNewest) { lastNewest = t._t; atNewest = new Set([t.trade_id]); }
+      else if (t._t === lastNewest) atNewest.add(t.trade_id);
+    }
+  };
   let gaps = 0, pages = 0, streamed = 0, polled = 0;
 
   // The socket can be attached after construction: the desk opens it lazily, on its first cycle,
@@ -74,14 +85,9 @@ function makeTape({ maxPages = 5, stream = null } = {}) {
       const d = stream.drain();
       if (d.healthy) {
         streamed++;
-        const fresh = [];
-        let newest = lastNewest;
-        for (const t of d.trades) {
-          if (t._t <= lastNewest) continue;
-          if (t._t > newest) newest = t._t;
-          if (want.has(t.ticker)) fresh.push(t);
-        }
-        lastNewest = newest;
+        const news = d.trades.filter(isNew);
+        const fresh = news.filter((t) => want.has(t.ticker));
+        advance(news);
         fresh.sort((a, b) => a._t - b._t);
         return { trades: fresh, gap: false, gaps, scanned: d.trades.length, source: 'stream' };
       }
@@ -108,8 +114,8 @@ function makeTape({ maxPages = 5, stream = null } = {}) {
     // the gap test is about what the POLL reached back to, so it reads the page, not the union
     const gap = capped && oldest > lastNewest;
     if (gap) gaps++;
-    const fresh = all.filter((t) => t._t > lastNewest && want.has(t.ticker));
-    lastNewest = Math.max(lastNewest, all[all.length - 1]._t);
+    const fresh = all.filter((t) => isNew(t) && want.has(t.ticker));
+    advance(all);
     return { trades: fresh, gap, gaps, scanned: all.length, source: 'poll' };
   }
 

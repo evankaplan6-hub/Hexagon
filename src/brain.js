@@ -45,8 +45,6 @@
 //
 // Zero dependencies, per CLAUDE.md -- this calls the Messages API over Node 20's built-in fetch
 // rather than @anthropic-ai/sdk. That is a deliberate project constraint, not an oversight.
-const http = require('./http');
-
 const API_URL = 'https://api.anthropic.com/v1/messages';
 const API_VERSION = '2023-06-01';
 
@@ -64,7 +62,7 @@ const priceFor = (m) => PRICES[m] || PRICES['claude-opus-5'];
 
 // Eastern, matching TESS's drawdown day. A UTC rollover would reset the budget at 8pm ET, in the
 // middle of the evening slate this desk mostly trades.
-const ET_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' });
+const { ET_DAY } = require('./recorder');   // the Eastern day, one definition for every file that names one
 
 const r4 = (x) => Math.round(x * 10000) / 10000;
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
@@ -204,7 +202,10 @@ class Brain {
     this.stats.errors++;
     const a = this._agentStats(agent); a.errors++;
     this.lastError = `${agent}: ${String(e && e.message || e).slice(0, 120)}`;
-    http.noteError(e);
+    // Not counted toward TESS's API-error halt (http.noteError): that rail is about the VENUES,
+    // and a dead Anthropic key or a wall of its 429s used to push the desk toward a trading halt
+    // blamed on Polymarket and Kalshi. The minds' failures live in this file's own stats and
+    // lastError, which the dashboard shows.
     // A 429 or a wall of 5xx is about the account, not this agent, so the pause is global.
     // Everything else backs off just the desk that failed, via the same counter.
     const status = e && e.status;

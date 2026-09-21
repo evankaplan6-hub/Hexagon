@@ -66,7 +66,7 @@ const MAX_HISTORY_CHARS = 300000;
 // The same guard inside a question: the history plus everything this question's lookups pulled in.
 const MAX_PROMPT_CHARS = 400000;
 const BODY_BYTES = 8192;               // POST /api/ask body cap
-const ET_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' });
+const { ET_DAY } = require('./recorder');   // the Eastern day, one definition for every file that names one
 const r2 = (x) => Math.round(x * 100) / 100;
 const r4 = (x) => Math.round(x * 10000) / 10000;
 

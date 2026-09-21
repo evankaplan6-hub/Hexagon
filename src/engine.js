@@ -324,8 +324,9 @@ class Engine {
     }
     return groups;
   }
-  pnlScorecard() {
-    const groups = this.arbScorecard();
+  // `groups` and `maker` may be passed in by a caller that has just computed them (snapshot does,
+  // every two seconds); left out, they are computed here.
+  pnlScorecard(groups = this.arbScorecard(), maker = (this.maker && this.maker.snapshot ? this.maker.snapshot(this) : {})) {
     const arbLiquidation = r2(groups.reduce((a, g) => a + g.liquidationPnl, 0));
     const arbLocked = r2(groups.reduce((a, g) => a + (g.lockedPnl || 0), 0));
     // A group this scorecard cannot vouch for (any integrity other than 'valid') has no settlement
@@ -336,7 +337,6 @@ class Engine {
     const arbUnvouched = r2(groups.filter((g) => g.lockedPnl == null).reduce((a, g) => a + g.liquidationPnl, 0));
     const convergenceUnrealized = r2(this.state.positions.filter((p) => p.strategy !== 'arb')
       .reduce((a, p) => a + p.qty * (p.mark ?? p.entry) - p.cost, 0));
-    const maker = this.maker && this.maker.snapshot ? this.maker.snapshot(this) : {};
     const makerNet = Number.isFinite(maker.equity) && Number.isFinite(maker.initial) ? r2(maker.equity - maker.initial) : null;
     return {
       realized: this.state.stats.realized, convergenceUnrealized, arbLocked, arbUnvouched, arbLiquidation, makerNet,
@@ -578,20 +578,26 @@ class Engine {
     // past the reach of the orphan retry because the position object was already gone. open() has
     // always sized from fill.filled (`qty: fill.filled`); the exit path never learned to. Paper
     // never partial-fills, so this could only ever bite in live mode.
+    //
+    // ...but only a fill short of what was ASKED for is stuck. The gain lock (decide.gainLockIntent)
+    // asks for part of a position on purpose, to keep the rest as a runner; measured against
+    // `pos.qty` that sale read as a stuck exit, and RIGO's orphan branch sold the runner at mark on
+    // the very next cycle -- the feature never once kept a runner.
     if (fill.filled < pos.qty) {
       const sold = fill.filled;
+      const stuck = sold < qty;
       const costShare = r2(pos.cost * (sold / pos.qty));
       const pnl = r2(fill.proceeds - costShare);
       const before = pos.qty;
       pos.qty -= sold;
       pos.cost = r2(pos.cost - costShare);
-      pos.orphan = true;                                   // RIGO retries the remainder every cycle
+      if (stuck) pos.orphan = true;                        // RIGO retries the remainder every cycle
       pos.partialPnl = r2((pos.partialPnl || 0) + pnl);     // carried into the group score on final close
       this.state.cash = r2(this.state.cash + fill.proceeds);
       this.state.stats.fees = r2(this.state.stats.fees + fill.fee);
       this.state.stats.realized = r2(this.state.stats.realized + pnl);
-      this.journal(this, 'CLOSE_PARTIAL', { id: pos.id, group: pos.group, label: pos.label, venue: pos.venue, side: pos.side, sold, remaining: pos.qty, entry: pos.entry, exit: fill.avg, fee: fill.fee, proceeds: fill.proceeds, pnl, reason, attempt: pos.exitSeq, cash: this.state.cash });
-      this.log('RIGO', 'SETTLE', pnl, `${pos.label} \u00b7 sold ${sold} of ${before} ${pos.side.toUpperCase()} @ ${pos.venue === 'PM' ? 'Polymarket' : 'Kalshi'} ${fill.avg.toFixed(3)} \u00b7 ${pos.qty} left unsold, flagged stuck and retried \u00b7 ${reason}`);
+      this.journal(this, 'CLOSE_PARTIAL', { id: pos.id, group: pos.group, label: pos.label, venue: pos.venue, side: pos.side, sold, remaining: pos.qty, stuck, entry: pos.entry, exit: fill.avg, fee: fill.fee, proceeds: fill.proceeds, pnl, reason, attempt: pos.exitSeq, cash: this.state.cash });
+      this.log('RIGO', 'SETTLE', pnl, `${pos.label} \u00b7 sold ${sold} of ${before} ${pos.side.toUpperCase()} @ ${pos.venue === 'PM' ? 'Polymarket' : 'Kalshi'} ${fill.avg.toFixed(3)} \u00b7 ${pos.qty} ${stuck ? 'left unsold, flagged stuck and retried' : 'kept'} \u00b7 ${reason}`);
       this.dirty = true;
       return;
     }
@@ -922,8 +928,10 @@ class Engine {
     const now = Date.now();
     const s = this.state;
     const equity = this.equity();
-    const pnl = this.pnlScorecard();
+    // each computed once: the scorecard, the maker's book and the P&L that reads both
     const arbGroups = this.arbScorecard();
+    const maker = this.maker.snapshot(this);
+    const pnl = this.pnlScorecard(arbGroups, maker);
     const unrealized = r2(s.positions.reduce((a, p) => a + (p.qty * (p.mark ?? p.entry) - p.cost), 0));
     const deployed = r2(s.positions.reduce((a, p) => a + p.qty * (p.mark ?? p.entry), 0));
     let hist = s.balanceHistory;
@@ -956,7 +964,6 @@ class Engine {
     takerFills.sort((a, b) => b.at - a.at);
     // The maker's own book and fill ring, themed the same way. Its markets carry a series and no
     // category, which is exactly the case themeFor's series-index lookup exists for.
-    const maker = this.maker.snapshot(this);
     maker.markets = (maker.markets || []).map((m) => ({ ...m, theme: this.themeFor(m) }));
     maker.recent = (maker.recent || []).map((f) => ({ ...f, theme: this.themeFor(f) }));
     // The theme bar the dashboard draws. Counted over EVERY pair, not the forty widest gaps sent

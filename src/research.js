@@ -22,7 +22,7 @@ const { priceFor } = require('./brain');
 const WEB_SEARCH_USD = 0.01;      // $10 per 1,000 searches
 const MAX_CONTINUATIONS = 4;      // pause_turn resumes when the server-side search loop runs long
 const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
-const ET_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' });
+const { ET_DAY } = require('./recorder');   // the Eastern day, one definition for every file that names one
 const r2 = (x) => Math.round(x * 100) / 100;
 const r4 = (x) => Math.round(x * 10000) / 10000;
 const iso = (t) => (t ? new Date(t).toISOString() : null);
