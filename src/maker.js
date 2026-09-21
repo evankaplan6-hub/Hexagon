@@ -192,10 +192,17 @@ function settlePosition(pos, yesPx) {
 // +/-100 contracts each and lost $314 of the maker's $396. The date in the ticker is the honest
 // clock; null when the ticker has none (year-end and month-only tickers like -26DEC31 or -27JAN-28
 // are fine: far away, or no day).
+//
+// The day may be followed by anything: a hyphen (KXTRUMPMENTION-26SEP16-AI), the players
+// (KXITFMATCH-26SEP21REJSIM-REJ) or the start time (KXMLBGAME-26SEP081905COLNYY). It used to have to
+// be followed by a hyphen or the end, so every match and game ticker read as undated, fell back to a
+// close_time weeks out, and was quoted hours before the event: the maker held tennis matches into
+// play and through their settlement, -$421 of its first -$636 (KXITFMATCH and KXWTASETWINNER, 85-88%
+// of contracts run over), for the same reason the Trump-mention markets lost $314 the week before.
 const MONTHS = { JAN: 0, FEB: 1, MAR: 2, APR: 3, MAY: 4, JUN: 5, JUL: 6, AUG: 7, SEP: 8, OCT: 9, NOV: 10, DEC: 11 };
 function tickerEventDays(ticker, now = Date.now()) {
-  const m = /-(\d{2})([A-Z]{3})(\d{2})(?:-|$)/.exec(String(ticker || ''));
-  if (!m || !(m[2] in MONTHS)) return null;
+  const m = /-(\d{2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\d{2})/.exec(String(ticker || ''));
+  if (!m || Number(m[3]) < 1 || Number(m[3]) > 31) return null;
   const end = Date.UTC(2000 + Number(m[1]), MONTHS[m[2]], Number(m[3]), 23, 59, 59);
   return (end - now) / 86400000;
 }
