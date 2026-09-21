@@ -45,10 +45,10 @@ const listed = (ticker, over = {}) => ({ ticker, seriesTicker: 'KXTEST', yesBid:
 function rig({ over = {}, markets = {}, crawl = [], state = {} } = {}) {
   const at = { now: T0 };
   const tape = {
-    trades: [], bk: new Map(), mk: new Map(), asked: [], failed: 0, gap: false, broken: null,
-    async since(tickers) {
+    trades: [], bk: new Map(), mk: new Map(), asked: [], fresh: [], failed: 0, gap: false, broken: null,
+    async since(tickers, opts = {}) {
       if (tape.broken) throw new Error(tape.broken);
-      tape.asked.push([...tickers]);
+      tape.asked.push([...tickers]); tape.fresh.push(!!opts.fresh);
       const want = new Set(tickers), out = tape.trades.filter((t) => want.has(t.ticker));
       tape.trades = [];
       return { trades: out, gap: tape.gap, gaps: 0 };
@@ -108,8 +108,21 @@ const scans = (E) => E.logs.filter((l) => l.kind === 'SCAN' && /^(quoting|no mar
     ok('...journalled as one MAKER_FILL with the inventory it left', r.E.journalled.length === 1 && r.E.journalled[0].kind === 'MAKER_FILL' && r.E.journalled[0].inv === 40 && r.E.journalled[0].runOver === false, r.E.journalled);
     ok('equity is cash plus the inventory at the mid', r.S.equity === r2(9982.4 + 40 * 0.445), r.S.equity);
     ok('the round hands the tape writer the books and prints it already fetched', r.taped.length === 2 && r.taped[1].books.has('KXTEST-A') && r.taped[1].trades.get('KXTEST-A').length === 1);
+    ok('the tape is told the first poll has nothing to page back for, and the second that it has', r.tape.fresh.join() === 'true,false', r.tape.fresh);
     const snap = r.desk.snapshot(r.E).markets[0];
     ok('the dashboard row has the quote and the queue but not the dedupe list', snap.bid === 0.44 && snap.qBid === 0 && snap.quoting === true && !('seen' in snap), snap);
+  }
+
+  group('a saved quote whose book fails to load on the first round is still withdrawn');
+  {
+    const r = rig({ crawl: [listed('KXTEST-A')], markets: { 'KXTEST-A': held({ quotes: { bid: 0.44, ask: 0.45 }, queue: { bid: 0, ask: 0 } }) } });
+    await r.round();                                 // no book for it this round
+    const m = r.S.markets['KXTEST-A'];
+    ok('it does not go on resting in the ledger', m.quotes.bid === null && m.quotes.ask === null, m.quotes);
+    r.tape.bk.set('KXTEST-A', book(0.44, 100, 0.45, 100));
+    r.tape.trades = [print('KXTEST-A', 0.44, 500, 'ask')];
+    await r.round();
+    ok('...so the next round\'s prints fill nothing against it', m.inv === 0 && r.S.cash === 10000 && m.quotes.bid === 0.44, { inv: m.inv, quotes: m.quotes });
   }
 
   group('an empty universe is retried every two minutes, not every round');
@@ -247,11 +260,14 @@ const scans = (E) => E.logs.filter((l) => l.kind === 'SCAN' && /^(quoting|no mar
     ok('an operator halt withdraws every quote without asking the exchange anything', m.quotes.bid === null && m.quotes.ask === null && r.tape.asked.length === asked && r.taped[r.taped.length - 1].gap === 'halt', m.quotes);
     ok('...and holds the inventory', m.inv === 20);
     r.E.operatorHalt = false;
+    const polls = r.tape.fresh.length;
     r.S.peak = 10000; r.S.equity = 8990;
     await r.round();
     ok('10.1% off the high-water mark halts the maker on its own rail', /drawdown 10\.1% from a peak of \$10000\.00/.test(r.S.halted || '') && r.E.journalled.some((j) => j.kind === 'MAKER_HALT') && m.quotes.bid === null, r.S.halted);
     r.desk.resume(r.E); r.S.equity = 10000;
     await r.round();
+    await r.round();
+    ok('the first poll after a halt has nothing to page back for either; the one after it does', r.tape.fresh.slice(polls).join() === 'true,false', r.tape.fresh.slice(polls));
     ok('resumed, it quotes again', r.S.halted === null && m.quotes.bid === 0.44 && m.quotes.ask === 0.45, m.quotes);
   }
 
