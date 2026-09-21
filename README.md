@@ -835,6 +835,66 @@ so `tools/stock-fetch.js` asks for an explicit `period1`/`period2` window instea
 to every request on a **reused connection** while serving fresh ones immediately, which looks exactly
 like a rate limit and is not; the fetcher sends `connection: close`.
 
+## Options: writing down a history that nobody sells
+
+The lab above has a hole it names itself: no real options. Free historical option chains do not
+exist — not cheaply, not anywhere — which is why an options-income strategy had to be stood in for
+by Cboe's BXM and PUT indexes, two canned rules with one parameter setting each. Live chains, on the
+other hand, are free. So the only way to ever run an honest options backtest is to start writing the
+data down, and every day nobody does is a day that cannot be bought back later.
+
+```bash
+node tools/chain-record.js                  # one snapshot of the six ETFs → data/chains/
+node tools/chain-record.js --every 30       # ... and again every 30 minutes
+node tools/chain-record.js --only SPY --dte 45 --band 0.2
+bash ops/install-chains.sh                  # record it daily, unattended (undo: uninstall-chains.sh)
+```
+
+READ-ONLY. No broker, no account, no key, no order path — the same standing as `tools/stock-fetch.js`.
+This collects data. It decides nothing and trades nothing.
+
+**The source is Cboe, not Yahoo**, and that was not the first choice. Yahoo's option endpoint now
+demands a cookie-and-crumb handshake, and every request for a crumb from Node — `fetch`, `node:https`
+and `node:http2` alike, with the cookie or without it, with browser headers or none — comes back 429
+`Too Many Requests`, while `curl` from the same machine and IP at the same moment is served normally.
+That is a TLS-fingerprint block, not a rate limit, and Node cannot talk its way past one without a
+native TLS library, which would mean a dependency. Cboe's delayed feed needs no handshake, comes from
+the same CDN this repo already pulls BXM and PUT from, and is better data besides: it is the exchange
+rather than a scrape of it, every expiry arrives in **one** request instead of one call per expiry,
+and each contract carries bid and ask **size** and the **greeks**, none of which Yahoo gives at all.
+The cost is a ~15-minute delay, which matters not at all for testing daily rules.
+
+**The universe is fixed in `tools/chain-record.js`**, before any result was seen, for the same reason
+the ETF universe is: SPY, QQQ, IWM, DIA, TLT and GLD — six heavily optioned broad ETFs, each of which
+already has daily bars in `data/stocks/bars/`, so a chain and its underlying's history join on the
+date with nothing left to reconcile.
+
+**What it keeps.** One JSON line per symbol per expiry per snapshot, after a header line naming the
+column order, the filters and the source, so a file read years from now explains itself. Per contract:
+strike, bid, bid size, ask, ask size, last, implied vol, delta, gamma, vega, theta, rho, Cboe's
+theoretical value, open interest, volume, and the last trade's timestamp. A `null` is Cboe declining
+to quote; a `0` bid is a real quote, and collapsing the two would be unrecoverable.
+
+**What it deliberately throws away.** Strikes outside ±30% of spot and expiries beyond 70 days. One
+SPY response is 12,312 contracts across 31 expiries and 1.2 MB; filtered it is 5,060 across 15 and
+493 KB. Covered calls, put-writing, the wheel — anything BXM-shaped — live near the money inside two
+months, and LEAPs five years out would quadruple a year of tape for rows no such rule reads. Both
+limits are knobs and both are written into the header, so a reader knows what was filtered rather
+than guessing at a gap. The whole universe is ~1.8 MB a snapshot: about 0.5 GB a year, recorded daily.
+
+**Freshness is judged by content, not by a clock.** Cboe's `timestamp` is when it last rebuilt that
+file, not when the market last moved — on one Saturday fetch SPY read 21:19 and IWM read the previous
+evening, and neither had a live quote behind it. So each symbol's filtered chain is hashed, the hash
+is kept in `data/chains/.seen.json`, and an unchanged chain is skipped. A weekend, a holiday, a
+stalled feed and a market that genuinely has not moved all collapse to the same honest answer —
+nothing new — instead of filling the tape with copies of Friday that a reader would have to detect
+and drop later.
+
+**There is nothing to conclude from this yet, and that is the point.** It is a year of patience
+before it can answer anything. What it will eventually be able to answer is the question the ETF lab
+could only gesture at with two Cboe indexes: whether any rule for selling options beats simply owning
+the underlying, after real spreads, on months it never saw.
+
 ## Operating it
 
 The dashboard is read-only. Two control endpoints exist, both POST, both requiring `FLATTEN_TOKEN`

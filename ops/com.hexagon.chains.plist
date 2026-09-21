@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.hexagon.chains</string>
+
+  <!-- Through ops/run-chains.sh rather than node directly: launchd's PATH has no nvm node, and a
+       job that cannot find one exits 127 without anyone noticing. No WorkingDirectory on purpose:
+       run-chains.sh cds itself, so a checkout that has moved fails with a readable "No such file"
+       in the log below instead of launchd refusing to start. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__HEXDIR__/ops/run-chains.sh</string>
+  </array>
+
+  <!-- LOCAL time, which this Mac keeps on US Eastern -- the same calendar the tape's filenames and
+       days-to-expiry use. 16:25 is just after the 16:00 close plus Cboe's ~15-minute delay, which
+       is the snapshot a daily rule actually wants: the closing chain. 20:00 is the same-day retry
+       for an afternoon the Mac slept through, and 09:45 catches the morning after a machine that
+       was switched off. Extra runs cost nothing: an unchanged chain is skipped by content hash,
+       so a quiet market or a weekend writes nothing at all rather than a copy of Friday. -->
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict>
+      <key>Hour</key>
+      <integer>16</integer>
+      <key>Minute</key>
+      <integer>25</integer>
+    </dict>
+    <dict>
+      <key>Hour</key>
+      <integer>20</integer>
+      <key>Minute</key>
+      <integer>0</integer>
+    </dict>
+    <dict>
+      <key>Hour</key>
+      <integer>9</integer>
+      <key>Minute</key>
+      <integer>45</integer>
+    </dict>
+  </array>
+
+  <!-- Not at login, and not kept alive: this is a daily chore, not a server. -->
+  <key>RunAtLoad</key>
+  <false/>
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <!-- ~/Library/Logs always exists. launchd will not create a log's folder, and a log path inside
+       the checkout would stop the job from starting at all -- silently -- the day that folder is
+       moved. data/chains/chains.log still gets one summary line per run. -->
+  <key>StandardOutPath</key>
+  <string>__HOME__/Library/Logs/hexagon-chains.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/Library/Logs/hexagon-chains.log</string>
+</dict>
+</plist>

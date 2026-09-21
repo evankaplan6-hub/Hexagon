@@ -66,11 +66,14 @@ tools/            edge-scan, replay, maker-replay, maker-rank, pm-maker-scan, ma
                   whale-fetch + whale-lab (does copying top sports wallets pay? no, out of sample),
                   stock-fetch + stock-lab (ETF strategy tournament on Yahoo daily bars, walk-forward vs SPY;
                   research only, no broker code -- nothing beat buy-and-hold),
+                  chain-record (writes the option-chain tape to data/chains/ from Cboe's free delayed feed;
+                  read-only, no broker -- free historical chains do not exist, so the history has to be collected daily;
+                  ops/install-chains.sh schedules it),
                   weather-fetch + weather-lab (Kalshi daily-high-temperature markets vs the public forecast; no edge, out of sample),
                   favorites-check (one preset rule on older settled markets from lab-fetch --historical; the non-Sports favourite lead did not replicate),
                   pnl-report (one-screen realised P&L per book from data/fly/archive journals; --marks prices held maker inventory),
                   fly-pull (copies the box's finished days to data/fly/archive, verifies, then trims old box tapes)
-                  tests: test.js (npm test) + decide/probe/watchdog/maker/broker/fees/matcher/match-any/rules/discovery/anymarket/stream/engine/brain/lab/stock-lab/whale/http/disk/ask/askui-test.js
+                  tests: test.js (npm test) + decide/probe/watchdog/maker/broker/fees/matcher/match-any/rules/discovery/anymarket/stream/engine/brain/lab/stock-lab/chains/whale/http/disk/ask/askui-test.js
 data/fly/         gitignored: journals, state and tick tapes copied down from the Fly box, plus
                   kstrades.jsonl (the trade history maker-replay scores against) and
                   rank-listing.json + rank-trades.jsonl (the 440-market pool maker-rank scores).
@@ -82,6 +85,8 @@ data/lab/         gitignored: series-busy.json + universe.json (cached listings)
                   for tools/lab.js; markets-volume-picked.jsonl is the biased first sample, kept as the counterexample
 data/lab/whales/  gitignored: pool, fills, conditions, markets for tools/whale-lab.js
 data/stocks/bars/ gitignored: one Yahoo daily-bar file per ETF/index (tools/stock-fetch.js) for tools/stock-lab.js
+data/chains/      gitignored: the option-chain tape, chains-YYYY-MM-DD.jsonl + .seen.json (tools/chain-record.js).
+                  IRREPLACEABLE: nobody sells historical chains, so a lost day cannot be re-fetched -- back it up
 data/whales-*.jsonl  gitignored: every bet whale watch announced, for scoring once they settle
 ```
 
