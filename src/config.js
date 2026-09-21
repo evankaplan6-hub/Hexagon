@@ -251,6 +251,13 @@ module.exports = {
   maxApiErrors: Math.min(200, num('MAX_API_ERRORS', 25)),
 
   // strategy
+  // The convergence book: unhedged bets that two venues will agree again. Off, no NEW convergence
+  // position is opened by the scanner or proposed by a mind; open ones are still marked and taken
+  // to their exit, and the locked-arb book and the maker are untouched. The knob exists because the
+  // verdict is in: from 2026-09-10 to 09-21 the box closed 72 convergence bets and won 3, for
+  // -$637 (-$293 of it fees), and every gate added since only made it lose more slowly. The tape
+  // still prices and records every pair as before, so the book can be re-scored without trading.
+  convergeEnabled: env('CONVERGE', '1') !== '0',
   minArbEdge: num('MIN_ARB_EDGE', 0.01),
   minGap: num('MIN_GAP', 0.03),
   // Required profit per contract on a convergence trade, NET of the spread paid on the way

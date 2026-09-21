@@ -73,6 +73,13 @@ primary_region = "iad"          # Ashburn, Virginia — close to the exchange, a
   # tied up -- widened to give the book more room before the next one binds.
   MAX_LONG_ARB_GROUPS = "6"
   MAX_ARB_GROUPS = "20"
+  # The convergence book is off on the box since 2026-09-21. The verdict from the journals,
+  # 2026-09-10 to 09-21: 72 convergence bets closed, 3 winners, -$637 (-$293 of it fees), and the
+  # gates added on the 18th and 19th only slowed the bleeding (-$10, -$61, -$10 a day). Open
+  # positions are still marked and taken to their exits; the locked-arb book and the maker keep
+  # trading; every pair is still priced and written to the tape, so the book can be re-scored
+  # from the tape without paying for another week of it. Set to "1" to turn it back on.
+  CONVERGE = "0"
 
 # The stall watchdog (src/watchdog.js, WATCHDOG_SEC) ends the process when the desk's loops stop
 # finishing rounds, and this is what brings it back. Fly's default is on-failure with ten retries,
