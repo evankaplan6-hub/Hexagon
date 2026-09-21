@@ -13,7 +13,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { makeSession, parseChain, parseOsi, daysToExpiry, CHAIN_COLS } = require('../src/venues/cboe');
-const { chainHash, tapeLines, headerLine, appendLines, readSeen, writeSeen, snapshot, etDay, SEEN, SYMBOLS } = require('./chain-record');
+const { chainHash, tapeLines, headerLine, appendLines, readSeen, writeSeen, snapshot, etDay, SEEN, SYMBOLS, DIR } = require('./chain-record');
 const { read: readTape, summarize, latestFile, tail, pickAtm } = require('../src/chaintape');
 
 let pass = 0, fail = 0;
@@ -156,6 +156,37 @@ group('tapeLines: one line per expiry');
   ok('no line carries a negative dte', lines.every((l) => l.dte >= 0));
   ok('the hash prefix is on every line of the snapshot', lines.every((l) => l.h === h.slice(0, 12)), lines.map((l) => l.h));
   ok('calls and puts ride as c and p', Array.isArray(lines[0].c) && Array.isArray(lines[0].p));
+}
+
+group('a line the band could not be applied to says so');
+{
+  // With no spot there is nothing to measure a band from, so every strike is kept while the file
+  // header still records the band that was asked for. The line has to carry the difference: the
+  // tape cannot be re-collected, and "the wings were filtered out" must not be confusable with
+  // "the wings were never there".
+  const asked = parseChain(fixture(), { band: 0.15 });
+  ok('a band that applied is reported as applied', asked.bandApplied === true && asked.bandAsked === 0.15, [asked.bandAsked, asked.bandApplied]);
+  const cant = parseChain(fixture({ spot: null }), { band: 0.15 });
+  ok('a band that could not be measured is reported as asked but not applied', cant.bandAsked === 0.15 && cant.bandApplied === false, [cant.bandAsked, cant.bandApplied]);
+  ok('and every strike really is kept', cant.byExpiry.get('2026-09-25').calls.length === 7, cant.kept);
+
+  const okLine = tapeLines(asked, { at: NOW, hash: chainHash(asked) })[0];
+  const nbLine = tapeLines(cant, { at: NOW, hash: chainHash(cant) })[0];
+  ok('a filtered line carries no marker', okLine.nb === undefined, okLine.nb);
+  ok('an unfiltered line is marked nb', nbLine.nb === true, nbLine.nb);
+  // asking for no band at all is not the same as asking and failing
+  const noBand = parseChain(fixture({ spot: null }), { band: 0 });
+  ok('no band asked means no marker', tapeLines(noBand, { at: NOW, hash: chainHash(noBand) })[0].nb === undefined);
+  ok('the header explains the marker, so the file reads itself', /nb=true/.test(headerLine({ at: NOW, band: 0.3, maxDte: 70, symbols: ['A'] }).note));
+}
+
+group('the default tape directory does not depend on where the command was run');
+{
+  // `data` on its own resolved against the CURRENT directory, so a run started from anywhere but
+  // the repo wrote a day of irreplaceable chains where the dashboard never looks, and said it had
+  // succeeded. It has to be the same absolute path server.js reads.
+  ok('the default directory is absolute', path.isAbsolute(DIR), DIR);
+  ok('and it is the repo’s own data/chains', DIR === path.join(__dirname, '..', 'data', 'chains'), DIR);
 }
 
 group('the file: Eastern day, header once');
@@ -371,6 +402,21 @@ async function resilience() {
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+async function seenUnwritable() {
+  group('a seen file that cannot be written is named, not disguised as a failed snapshot');
+  const dir = tmp();
+  const session = { chain: async (sym, o) => parseChain(fixture({ symbol: sym }), o) };
+  const io = { ...fs, writeFileSync: () => { throw new Error('EACCES'); } };
+  let threw = null, r = null;
+  try { r = await snapshot(session, { symbols: ['AAA'], dir, band: 0, maxDte: 70, now: () => NOW, log: () => {}, io }); }
+  catch (e) { threw = e.message; }
+  ok('the snapshot does not throw: the tape was written', threw === null, threw);
+  ok('the tape really is on disk', r && r.lines === 2 && fs.existsSync(r.file), r && r.file);
+  ok('and the one file at fault is named', r && /EACCES/.test(r.seenError || ''), r && r.seenError);
+  ok('a healthy run carries no such warning', !(await snapshot(session, { symbols: ['BBB'], dir, band: 0, maxDte: 70, now: () => NOW, log: () => {} })).seenError);
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 async function crashSafety() {
   group('snapshot: the seen file must never run ahead of the tape');
   const dir = tmp();
@@ -413,6 +459,7 @@ async function network() {
   await dedupe();
   await resilience();
   await crashSafety();
+  await seenUnwritable();
   await network();
   // exactly this shape: tools/test.js parses the last line, and treats a suite that exits 0
   // without it as having stopped early rather than as having passed

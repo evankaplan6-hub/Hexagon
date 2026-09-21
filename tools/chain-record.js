@@ -58,7 +58,13 @@ const { ET_DAY } = require('../src/recorder');
 const SYMBOLS = ['SPY', 'QQQ', 'IWM', 'DIA', 'TLT', 'GLD'];
 // Under DATA_DIR when the desk sets one, so the server's /api/chains reads what this writes
 // (server.js joins cfg.dataDir with 'chains'). Overridden per run by --dir.
-const DIR = path.join(process.env.DATA_DIR || 'data', 'chains');
+//
+// Resolved against the REPO, not the current directory, and deliberately: `data` on its own sent a
+// run started from anywhere else -- a one-off catch-up from a home directory, say -- to
+// <cwd>/data/chains, where it reported success, printed a byte count, and left a day of chains
+// nobody would look in while the dashboard went on saying the tape was empty. This matches how
+// src/config.js computes the same default.
+const DIR = path.join(process.env.DATA_DIR || path.join(__dirname, '..', 'data'), 'chains');
 const SEEN = '.seen.json';
 const BAND = 0.30;
 const MAX_DTE = 70;
@@ -94,6 +100,10 @@ function tapeLines(chain, { at, hash }) {
       t: iso(at), sym: chain.symbol, spot: chain.spot,
       sb: chain.spotBid, sa: chain.spotAsk, sbz: chain.spotBidSz, saz: chain.spotAskSz,
       qt: chain.quoteAt, exp, dte: daysToExpiry(exp, today), h: hash.slice(0, 12),
+      // The band was wanted and could not be measured (no spot in the response), so this line holds
+      // EVERY strike while the header says otherwise. Marked rather than dropped: the quotes are
+      // real and unrepeatable, and a reader has to be able to tell this line from a filtered one.
+      ...(chain.bandAsked > 0 && !chain.bandApplied ? { nb: true } : {}),
       c: e.calls, p: e.puts,
     });
   }
@@ -105,6 +115,7 @@ function headerLine({ at, band, maxDte, symbols }) {
     v: 1, cols: CHAIN_COLS, startedAt: iso(at), source: 'cboe-delayed-quotes', symbols, band, maxDte,
     note: 'one line per symbol per expiry per snapshot; c=calls p=puts, each contract an array in `cols` order; '
       + 'null means Cboe did not quote it, a 0 bid is a real quote; t=fetched at, qt=Cboe file stamp, h=content hash; '
+      + 'nb=true means this line could NOT be band-filtered (no spot in the response) and holds every strike; '
       + `strikes outside ±${Math.round(band * 100)}% of spot and expiries beyond ${maxDte} days were not recorded; `
       + 'quotes are delayed ~15 minutes',
   };
@@ -161,10 +172,14 @@ async function snapshot(session, { symbols, dir, band, maxDte, again = false, dr
   // the tape nor the seen file, so it cannot make the next real run skip a snapshot as "unchanged".
   if (dryRun) return { at, lines: lines.length, contracts, recorded, skipped, file: null, bytes: 0, fresh: false, dryRun: true };
   const w = appendLines(dir, at, lines, { io, header: headerLine({ at, band, maxDte, symbols }) });
-  // written only after the tape is safely on disk: a crash between the two must re-record, never
-  // skip a snapshot it did not actually keep
-  writeSeen(dir, seen, { io });
-  return { at, lines: lines.length, contracts, recorded, skipped, ...w };
+  // Written only after the tape is safely on disk: a crash between the two must re-record, never
+  // skip a snapshot it did not actually keep. Caught, because the tape IS written by this point --
+  // letting it throw reports a failed snapshot for a successful one, and hides which file is at
+  // fault while every later run silently appends a duplicate of this same snapshot.
+  let seenError = '';
+  try { writeSeen(dir, seen, { io }); }
+  catch (e) { seenError = String(e && e.message).slice(0, 120); }
+  return { at, lines: lines.length, contracts, recorded, skipped, ...w, ...(seenError ? { seenError } : {}) };
 }
 
 module.exports = { SYMBOLS, DIR, BAND, MAX_DTE, SEEN, chainHash, tapeLines, headerLine, appendLines, readSeen, writeSeen, snapshot, etDay };
@@ -174,12 +189,25 @@ if (require.main === module) {
     const args = process.argv.slice(2);
     const flag = (n, d) => { const i = args.indexOf(`--${n}`); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : d; };
     const symbols = flag('only') ? flag('only').split(',').map((s) => s.trim().toUpperCase()).filter(Boolean) : SYMBOLS;
-    const band = Number(flag('band', BAND));
-    const maxDte = Number(flag('dte', MAX_DTE));
+    // A non-finite flag turns its filter OFF (`band > 0` is false for NaN) and writes the NaN into
+    // the header as null, with a note reading "outside +/-NaN% of spot". `--dte 45d` reads as
+    // valid and is not. The tape cannot be re-collected, so this refuses rather than guesses.
+    const numFlag = (name, d) => {
+      const raw = flag(name, null);
+      if (raw === null) return d;
+      const v = Number(raw);
+      if (!Number.isFinite(v) || v < 0) {
+        console.error(`--${name} must be a number, not ${JSON.stringify(raw)}. Nothing was recorded.`);
+        process.exit(2);
+      }
+      return v;
+    };
+    const band = numFlag('band', BAND);
+    const maxDte = numFlag('dte', MAX_DTE);
     const dir = flag('dir', DIR);
     const again = args.includes('--again');
     const dryRun = args.includes('--dry-run');
-    const every = Number(flag('every', 0));
+    const every = numFlag('every', 0);
     const session = makeSession();
     for (;;) {
       const t0 = Date.now();
@@ -190,6 +218,7 @@ if (require.main === module) {
         else if (r.lines) console.log(`  ${r.recorded.join(' ')} · ${r.lines} lines, ${r.contracts} contracts, ${(r.bytes / 1024).toFixed(0)} KB → ${r.file}${r.fresh ? ' (new file)' : ''}`);
         else console.log('  nothing new to record');
         if (r.skipped.length) console.log(`  skipped: ${r.skipped.join(', ')}`);
+        if (r.seenError) console.log(`  WARNING: the tape was written but ${SEEN} could not be: ${r.seenError}\n  every later run will re-record this same snapshot until that file is writable again`);
       } catch (e) {
         console.log(`  snapshot failed: ${e.message}`);
       }
