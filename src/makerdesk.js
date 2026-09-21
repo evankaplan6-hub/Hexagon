@@ -65,6 +65,8 @@ const r2 = (x) => Math.round(x * 100) / 100;
 const r4 = (x) => Math.round(x * 10000) / 10000;
 const c = (x) => `${(x * 100).toFixed(1)}c`;
 const money = (x) => `$${Math.abs(x).toFixed(2)}`;
+const SCAN_EVERY_MS = 15 * 60 * 1000;   // how often the universe is re-picked
+const EMPTY_RETRY_MS = 2 * 60 * 1000;   // ...and how soon after a scan that picked nothing
 
 // the exchange-wide tape grouped by ticker, oldest first as it arrived
 function bucket(trades) {
@@ -80,7 +82,8 @@ function makeMakerDesk(cfg) {
   const recordTape = makeMakerTape(cfg);
   let universe = [];         // tickers we are quoting
   let eligible = null;       // series that actually charge makers nothing
-  let lastUniverseAt = 0;
+  let lastUniverseAt = 0;    // when a scan last PICKED a universe (the dashboard's "last scan")
+  let lastScanAt = 0;        // when a scan last STARTED, whether or not it produced one
   // The wide universe: the any-market crawl hands its Kalshi markets over as it finishes, and they
   // are filtered to quotable rows THERE AND THEN. The crawl is ~41,000 records and is released the
   // moment it has been matched; what is kept here is the couple of hundred rows that pass.
@@ -143,6 +146,7 @@ function makeMakerDesk(cfg) {
 
   // Pick the most liquid mid-priced markets from the fee-free series.
   async function refreshUniverse(E) {
+    lastScanAt = Date.now();
     // The wide universe first, when the crawl is recent enough to price off. Older than two crawl
     // intervals means the scanner is off, stuck or failing, and a stale list of tickers is worse
     // than a fresh narrow one: prices move, and a market that has closed is not worth probing.
@@ -279,9 +283,16 @@ function makeMakerDesk(cfg) {
     // 15-second tick. Awaiting it made the whole desk skip ticks every fifteen minutes, taker side
     // included. The first one has to block (there is nothing to quote yet); after that it runs in
     // the background off the previous universe, guarded so it can never overlap itself.
-    const stale = Date.now() - lastUniverseAt > 15 * 60 * 1000;
-    if (!universe.length) { blocked = true; await refreshUniverse(E); }
-    else if (stale && !refreshing) {
+    //
+    // An EMPTY universe is not a reason to scan every round. One that came back empty -- nothing
+    // met the bar, or every listing was refused while Kalshi was throttling -- used to be scanned
+    // again two seconds later, and again, each pass the full 38 listings and 80 probes against the
+    // same rate limit that had just refused them. It is retried after EMPTY_RETRY_MS; in between
+    // the round goes on, so pinned inventory is still worked off.
+    const sinceScan = Date.now() - lastScanAt;
+    if (!universe.length) {
+      if (!lastScanAt || sinceScan >= EMPTY_RETRY_MS) { blocked = true; await refreshUniverse(E); }
+    } else if (sinceScan >= SCAN_EVERY_MS && !refreshing) {
       refreshing = refreshUniverse(E)
         .catch((e) => E.log('MAKR', 'OPS', null, `universe refresh failed (${String(e.message).slice(0, 80)}) · still quoting the previous ${universe.length}`))
         .finally(() => { refreshing = null; });
@@ -425,6 +436,19 @@ function makeMakerDesk(cfg) {
       m.mid = q.mid ?? m.mid;
       m.spread = q.spread ?? null;
       m.why = g.cooled ? `cooled until ${new Date(g.cooledUntil).toISOString().slice(11, 16)}Z · run-over ${(g.rate * 100).toFixed(0)}%` : (q.why || null);
+    }
+
+    // A market the desk is neither quoting nor holding is out of the loop above. Its last quote
+    // must not go on resting in the ledger -- the maker tape (src/makertape.js) would show it
+    // resting through rounds the desk never looked at -- and its 400-print dedupe list is dead
+    // weight: 339 such markets carried 81,608 ids in a 3.9 MB state.json written every ten seconds.
+    // The market's own P&L record stays, so a recap can still say what it made.
+    const working = new Set(tickers);
+    for (const [t, m] of Object.entries(S.markets)) {
+      if (working.has(t)) continue;
+      if (m.quotes && (m.quotes.bid != null || m.quotes.ask != null)) m.quotes = { bid: null, ask: null };
+      if (m.seen && m.seen.length) m.seen = [];
+      if (m.queue) delete m.queue;
     }
 
     // mark inventory at the current mid

@@ -26,7 +26,7 @@ const c = (x) => `${(x * 100).toFixed(1)}c`;
 // How long the probe may take nothing before it says so. One hour: long enough that a quiet
 // stretch is not chatter, short enough that a miscalibrated threshold is caught the same session.
 const DARK_SEC = 3600;
-const ET_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' });
+const { ET_DAY } = require('./recorder');   // the Eastern day, one definition for every file that names one
 
 // Contracts and dollars resting within `within` of the touch. This is the number that decides it:
 // a price with no size behind it is a display artifact, not an opportunity.

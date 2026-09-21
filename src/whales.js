@@ -18,7 +18,7 @@ const fs = require('fs');
 const path = require('path');
 const pm = require('./venues/polymarket');
 
-const ET_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' });
+const { ET_DAY } = require('./recorder');   // the Eastern day, one definition for every file that names one
 
 // Fills -> bets. A bet is the moment one wallet's BUYs on one outcome of one market, summed over
 // the trailing `windowSec`, first reach `minUsd`. One bet per wallet/market/outcome: a wallet

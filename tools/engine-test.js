@@ -163,6 +163,25 @@ const position = (over = {}) => ({
     ok('...recording what is left', (E.journalled || [])[0].data.remaining === 70, (E.journalled || [])[0].data);
   }
 
+  group("a gain lock's partial sale keeps the runner rather than flagging it stuck");
+  {
+    // RIGO asks for half on purpose (decide.gainLockIntent) and the broker fills exactly that.
+    // Measured against the position's size this read as a stuck exit, and the orphan branch sold
+    // the other half at mark on the next cycle -- the runner the feature exists to keep.
+    const E = engine();
+    E.broker = { sell: async ({ qty, px }) => ({ filled: qty, avg: px, fee: 0.45, proceeds: Math.round((qty * px - 0.45) * 100) / 100 }) };
+    const pos = position();
+    E.state.positions = [pos];
+    await E.close(pos, 0.66, 'gain lock: sold 50, retained 50 runner', false, 50);
+    ok('half is still held', E.state.positions.length === 1 && pos.qty === 50, pos.qty);
+    ok('and it is NOT flagged stuck', !pos.orphan, pos.orphan);
+    ok('the journal says the partial was intended', (E.journalled || []).some((j) => j.type === 'CLOSE_PARTIAL' && j.data.stuck === false), (E.journalled || []).map((j) => j.data));
+    // ...while a fill short of what was asked is still stuck, exactly as before
+    E.broker = { sell: async ({ px }) => ({ filled: 10, avg: px, fee: 0.09, proceeds: 6.51 }) };
+    await E.close(pos, 0.66, 'test exit', false, 25);
+    ok('a fill short of the request is stuck', pos.orphan === true && pos.qty === 40, pos);
+  }
+
   group('a full fill still closes normally');
   {
     const E = engine();

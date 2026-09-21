@@ -23,7 +23,7 @@ const money = (x) => `$${Math.abs(x).toFixed(2)}`;
 const VEN = { PM: 'Polymarket', KS: 'Kalshi' };
 const other = (v) => (v === 'PM' ? 'KS' : 'PM');
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
-const ET_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' });
+const { ET_DAY } = require('./recorder');   // the Eastern day, one definition for every file that names one
 const ambiguousOrder = (e) => !!(e && (e.ambiguousOrder || e.code === 'KALSHI_ORDER_UNKNOWN'));
 
 // TESS updates E.halt once per cycle, but an operator flatten can arrive while KETT is awaiting a

@@ -9,7 +9,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const ET_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' });
+const { ET_DAY } = require('./recorder');   // the Eastern day, one definition for every file that names one
 
 function makeJournal(cfg) {
   let warnedAt = 0;
