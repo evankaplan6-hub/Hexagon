@@ -413,6 +413,11 @@ group('the wide universe: which crawled markets this desk may quote');
   ok('an event-day ticker beyond the guard still quotes', only([mk({ ticker: 'KXSOMETHING-26OCT30-X', closeTime: day(60) })]).length === 1);
   ok('year-end and month-only tickers are not read as event days', only([mk({ ticker: 'KXBTC50VS100-BTC-26DEC31' })]).length === 1 && only([mk({ ticker: 'KXBALANCEPOWERCOMBO-27FEB-RR' })]).length === 1);
   ok('tickerEventDays reads the date, or says there is none', Math.round(maker.tickerEventDays('KXTRUMPMENTION-26SEP16-AI', NOW)) === 1 && maker.tickerEventDays('SENATETX-26-D', NOW) === null && maker.tickerEventDays(null, NOW) === null);
+  // the tennis failure: the date is glued to the players' names, and the guard could not read it
+  ok('a match ticker with the date glued to the names is dated', Math.round(maker.tickerEventDays('KXITFMATCH-26SEP21REJSIM-REJ', NOW)) === 6 && Math.round(maker.tickerEventDays('KXWTASETWINNER-26SEP20RODBRU-1', NOW)) === 5, [maker.tickerEventDays('KXITFMATCH-26SEP21REJSIM-REJ', NOW), maker.tickerEventDays('KXWTASETWINNER-26SEP20RODBRU-1', NOW)]);
+  ok('...and so is a game ticker with the start time glued on', Math.round(maker.tickerEventDays('KXMLBGAME-26SEP081905COLNYY-NYY', NOW)) === -7);
+  ok('a match inside the guard is refused whatever its close time says', only([mk({ ticker: 'KXITFMATCH-26SEP21REJSIM-REJ', closeTime: day(14) })]).length === 0);
+  ok('a day that is not a day is not a date', maker.tickerEventDays('KXSOMETHING-26SEP00-X', NOW) === null && maker.tickerEventDays('KXSOMETHING-26SEP99-X', NOW) === null);
   ok('a market missing a quote is refused', only([mk({ yesAsk: null })]).length === 0);
   ok('an empty crawl gives an empty list, not a throw', only([]).length === 0 && maker.candidatesFrom(null, free, c, NOW).length === 0);
 
