@@ -183,6 +183,13 @@ class Engine {
   // ---------------------------------------------------------------- helpers
   due(name, sec) {
     const now = Date.now();
+    // Most names carry a position id (`exit-book-<id>`, `pin-<id>`) and nothing ever took one out, so
+    // the map grew by a few keys per position for the life of the process. The longest interval
+    // anything asks for is an hour; a name untouched for a day answers "due" either way.
+    if (now - (this.timersPrunedAt || 0) >= 3600 * 1000) {
+      this.timersPrunedAt = now;
+      for (const k of Object.keys(this.timers)) if (now - this.timers[k] >= 86400 * 1000) delete this.timers[k];
+    }
     if (!this.timers[name] || now - this.timers[name] >= sec * 1000) { this.timers[name] = now; return true; }
     return false;
   }
