@@ -456,6 +456,32 @@ group('applyFill: cash moves in the direction it should');
   ok('selling raises cash', s.cashDelta === 4, s);
 }
 
+// ---------------------------------------------------------------- gain lock
+group('the gain lock belongs to one position: a flat book or a change of side starts it over');
+{
+  const gc = cfg({ gainLockTriggerPct: 0.10, gainLockGivebackPct: 0.35 });
+  // long 20 @ 40c, mark rises to 50c: peak +$2 on a $8 basis, well past the 10% trigger
+  const up = maker.gainLock({ inv: 20, cost: 8, gainPeak: 0, gainSide: 1 }, 2, gc);
+  ok('a rising mark raises the peak', up.peak === 2 && up.side === 1, up);
+  ok('...and does not lock while it is still rising', !up.locked, up);
+  // it then gives back more than 35% of the basis ($2.80): mark P&L falls to -$1
+  const back = maker.gainLock({ inv: 20, cost: 8, gainPeak: 2, gainSide: 1 }, -1, gc);
+  ok('giving the gain back locks the growing side', back.locked && back.peak === 2, back);
+  // the position closes: the peak goes with it
+  const flat = maker.gainLock({ inv: 0, cost: 0, gainPeak: 2, gainSide: 1 }, 0, gc);
+  ok('a flat book has no peak and no lock', flat.peak === 0 && flat.side === 0 && !flat.locked, flat);
+  // the next position in the same market is judged on its own: this is the box's 49 markets
+  const next = maker.gainLock({ inv: -16, cost: -5.92, gainPeak: 6.08, gainSide: 0 }, 0, gc);
+  ok('a new position after a flat book starts from its own mark', next.peak === 0 && next.side === -1, next);
+  ok('...and is not locked by the old peak', !next.locked, next);
+  // a ledger from before `gainSide` existed carries a stale peak with no side: treated as new
+  const old = maker.gainLock({ inv: 47, cost: 4.23, gainPeak: 8.15 }, -0.71, gc);
+  ok('an old ledger entry sheds the peak it inherited', old.peak === -0.71 && !old.locked, old);
+  // flipping from long to short in one round is a different position too
+  const flip = maker.gainLock({ inv: -5, cost: -2, gainPeak: 3, gainSide: 1 }, 0.1, gc);
+  ok('a change of side starts the peak over', flip.peak === 0.1 && flip.side === -1 && !flip.locked, flip);
+}
+
 // ---------------------------------------------------------------- tape pagination
 group('the tape poller pages back until it overlaps what it already returned');
 {
