@@ -61,7 +61,7 @@
     if (!mobileInfo) return '';
     let title = '', note = '', rows = [];
     if (mobileInfo === 'quoting') {
-      let markets = (M.markets || []).filter((m) => m.quoting);
+      let markets = (M.markets || []).filter((m) => m.quoting && inTheme(m));
       if (mobileSort === 'name') markets.sort((a, b) => String(OUTCOME(a) || QUESTION(a) || a.ticker).localeCompare(String(OUTCOME(b) || QUESTION(b) || b.ticker)));
       else markets.sort((a, b) => (b.tpd || 0) - (a.tpd || 0));
       title = `Quoting ${markets.length} market${markets.length === 1 ? '' : 's'}`;
@@ -74,14 +74,14 @@
           `<span>${px}${m.tpd != null ? `<small>${m.tpd.toLocaleString()}/day</small>` : ''}</span></li>`;
       });
     } else if (mobileInfo === 'holding') {
-      let markets = (M.markets || []).filter((m) => m.inv);
+      let markets = (M.markets || []).filter((m) => m.inv && inTheme(m));
       if (mobileSort === 'name') markets.sort((a, b) => String(OUTCOME(a) || QUESTION(a) || a.ticker).localeCompare(String(OUTCOME(b) || QUESTION(b) || b.ticker)));
       else if (mobileSort === 'pnl') markets.sort((a, b) => ((b.mark || 0) - (b.cost || 0)) - ((a.mark || 0) - (a.cost || 0)));
       else if (mobileSort === 'value') markets.sort((a, b) => Math.abs(b.mark || 0) - Math.abs(a.mark || 0));
       else if (mobileSort === 'loss') markets.sort((a, b) => ((a.mark || 0) - (a.cost || 0)) - ((b.mark || 0) - (b.cost || 0)));
       else markets.sort((a, b) => Math.abs(b.inv) - Math.abs(a.inv));
       title = `Holding ${markets.length} market${markets.length === 1 ? '' : 's'}`;
-      note = `${(+M.inv || 0).toLocaleString()} contracts in the book right now.`;
+      note = `${markets.reduce((a, m) => a + Math.abs(m.inv || 0), 0).toLocaleString()} contracts in the book right now${theme ? ` on ${themeName()}` : ''}.`;
       rows = markets.map((m) => {
         const pl = r2((m.mark || 0) - (m.cost || 0));
         return `<li><div><b>${esc(OUTCOME(m) || QUESTION(m) || m.ticker)}</b>` +
@@ -113,7 +113,10 @@
     const makerNet = Number.isFinite(M.equity) && Number.isFinite(M.initial) ? M.equity - M.initial : null;
     const pairNet = Number.isFinite(S.equity) && Number.isFinite(S.initial) ? S.equity - S.initial : null;
     const net = makerNet == null || pairNet == null ? null : r2(makerNet + pairNet);
-    const held = (M.markets || []).filter((m) => m.inv).length;
+    const mk = (M.markets || []).filter(inTheme);
+    const held = mk.filter((m) => m.inv).length;
+    const quoting = theme ? mk.filter((m) => m.quoting).length : (M.quoting || 0);
+    const inv = theme ? mk.reduce((a, m) => a + Math.abs(m.inv || 0), 0) : (+M.inv || 0);
     const lf = recentFills(M)[0] || null;
     const agents = (S.agents || []).filter((a) => a.key !== 'MAKR').map((a) => {
       const on = isActive(a);
@@ -128,8 +131,8 @@
       `<small>${net == null ? 'Waiting for a mark' : `Maker ${signed(makerNet)} · Cross-venue ${signed(pairNet)}`}</small></div>` +
       `<span class="m-state ${cls}"><i></i>${esc(state)}<small>${S.mode === 'live' ? 'REAL MONEY' : 'PAPER'}</small></span></div>` +
       `<div class="m-stats">` +
-      `<button type="button" data-mobile-info="quoting" aria-expanded="${mobileInfo === 'quoting'}" aria-controls="mobile-detail" class="${mobileInfo === 'quoting' ? 'on' : ''}"><span>Quoting</span><b>${M.quoting || 0}</b><small>markets</small><i>›</i></button>` +
-      `<button type="button" data-mobile-info="holding" aria-expanded="${mobileInfo === 'holding'}" aria-controls="mobile-detail" class="${mobileInfo === 'holding' ? 'on' : ''}"><span>Maker held</span><b>${(+M.inv || 0).toLocaleString()}</b><small>in ${held}</small><i>›</i></button>` +
+      `<button type="button" data-mobile-info="quoting" aria-expanded="${mobileInfo === 'quoting'}" aria-controls="mobile-detail" class="${mobileInfo === 'quoting' ? 'on' : ''}"><span>Quoting</span><b>${quoting}</b><small>markets</small><i>›</i></button>` +
+      `<button type="button" data-mobile-info="holding" aria-expanded="${mobileInfo === 'holding'}" aria-controls="mobile-detail" class="${mobileInfo === 'holding' ? 'on' : ''}"><span>Maker held</span><b>${inv.toLocaleString()}</b><small>in ${held}</small><i>›</i></button>` +
       `<button type="button" data-mobile-info="fills" aria-expanded="${mobileInfo === 'fills'}" aria-controls="mobile-detail" class="${mobileInfo === 'fills' ? 'on' : ''}"><span>Recent fills</span><b>${recentFills(M).length.toLocaleString()}</b><small>shown</small><i>›</i></button></div>` +
       mobileInfoPanel(M) + `<div id="mobile-chart" class="pnl m-chart" aria-label="Mobile P&amp;L chart"></div>` + latest + `<div class="m-agents"><span class="m-label">Desks</span><div>${agents}</div></div>`;
     // This card is rebuilt on every frame, but a chart is not: the first one built stays, and each
@@ -649,6 +652,174 @@
     }
   }
 
+  // ------------------------------------------------------------ themes: one subject at a time
+  // "Show me the baseball." The desk watches three hundred markets across every subject both venues
+  // list, and from a chair that is one undifferentiated board. A theme is the word a person would
+  // use for a market -- MLB, UFC, Elections, Weather -- worked out on the server (src/themes.js)
+  // from the Kalshi series and category, and stamped onto every pair, position, fill and quote the
+  // page receives. Pick one and everything on this panel that is about a single market narrows to
+  // it; pick All and nothing is hidden.
+  //
+  // The bar itself is never written here. It is built from `S.themes`, which the server counts over
+  // EVERY pair rather than the forty widest gaps it sends, so a theme with no markets simply does
+  // not appear and a count is never a guess.
+
+  // The pick is remembered as the key AND the word for it, because the word can outlive the
+  // markets: reopen the page on a Monday with the fight card settled, and the desk still has to be
+  // able to say which filter is on.
+  const THEME_KEY = 'hex-theme';
+  const savedTheme = (() => { try { return JSON.parse(localStorage.getItem(THEME_KEY) || 'null') || {}; } catch { return {}; } })();
+  let theme = typeof savedTheme.key === 'string' ? savedTheme.key : '';
+  let themeBarHtml = '';
+  // A thing belongs to the view when no theme is picked, or when its own theme is the picked one.
+  // Anything the server could not stamp stays visible under All and only there: a market with an
+  // unknown subject is still a market, and hiding it everywhere would be a quiet lie.
+  const inTheme = (x) => !theme || (x && x.theme) === theme;
+  const themeRow = () => (S.themes || []).find((t) => t.key === theme) || null;
+  // A theme's name and glyph outlive its markets. The fight card settles and UFC leaves the bar
+  // entirely; without this the page would be left filtering by a word it can no longer spell, and
+  // the chip saying so would vanish along with the way back.
+  const themeSeen = new Map(theme && savedTheme.name ? [[theme, { name: savedTheme.name, glyph: savedTheme.glyph || '' }]] : []);
+  const themeName = () => (themeSeen.get(theme) || { name: theme }).name;
+
+  function renderThemeBar() {
+    const bar = $('themebar'), rows = (S && S.themes) || [];
+    // Nothing to sort by yet -- the first frame before the first crawl. An empty bar is better than
+    // a row of zeroes that will be wrong in four seconds.
+    if (!rows.length) { if (themeBarHtml) { bar.innerHTML = ''; themeBarHtml = ''; } return; }
+    const sum = (f) => rows.reduce((a, t) => a + f(t), 0);
+    // The number on a chip is everything that chip opens: the markets matched on both venues plus
+    // the maker's own Kalshi book. Counting only the first put a "0" on a theme the maker was
+    // quoting two dozen markets in.
+    const chip = (key, glyph, name, t) => {
+      const why = [t.watching ? `${t.watching} on both venues` : '', t.making ? `${t.making} quoted by the maker` : '', t.held ? `${t.held} held` : ''].filter(Boolean).join(' · ');
+      return `<button type="button" class="th${theme === key ? ' on' : ''}" data-theme="${esc(key)}" aria-pressed="${theme === key}" ` +
+        `title="${esc(name)}${why ? ` — ${esc(why)}` : ''}">` +
+        `${glyph ? `<i aria-hidden="true">${glyph}</i>` : ''}<span>${esc(name)}</span><b>${t.n}</b>${t.held ? `<em title="held">${t.held}</em>` : ''}</button>`;
+    };
+    for (const t of rows) themeSeen.set(t.key, { name: t.name, glyph: t.glyph });
+    // A theme whose last market has gone still gets its chip, showing the zero: it is the picked
+    // one, and a filter you cannot see is a filter you cannot turn off.
+    const gone = theme && !rows.some((t) => t.key === theme) ? (themeSeen.get(theme) || { name: theme, glyph: '' }) : null;
+    const html = chip('', '', 'All', { n: sum((x) => x.n), watching: sum((x) => x.watching), making: sum((x) => x.making), held: sum((x) => x.held) }) +
+      rows.map((t) => chip(t.key, t.glyph, t.name, t)).join('') +
+      (gone ? chip(theme, gone.glyph, gone.name, { n: 0, watching: 0, making: 0, held: 0 }) : '');
+    if (html === themeBarHtml) return;
+    themeBarHtml = html;
+    bar.innerHTML = html;
+  }
+
+  // Everything the boards cache is keyed off the frame counter, so a filter change has to look like
+  // new data or the page would keep showing the old cut until the next fill moved something.
+  function setTheme(key) {
+    if (key === theme) return;
+    theme = key;
+    const seen = themeSeen.get(key) || {};
+    try { localStorage.setItem(THEME_KEY, JSON.stringify({ key, name: seen.name || key, glyph: seen.glyph || '' })); } catch { /* private window */ }
+    themeBarHtml = ''; statusHtml = ''; wallKey = ''; tapeKey = ''; tapeHtml = ''; feedHead = '';
+    frameSeq++;
+    markets.want = null; marketHtml = '';      // the open list is about the wrong theme now
+    if (S) { renderThemeBar(); renderMobileSummary(); ingest(); }
+    loadMarkets();
+  }
+  $('themebar').addEventListener('click', (ev) => {
+    const b = ev.target.closest('button[data-theme]');
+    if (b) setTheme(b.dataset.theme);
+  });
+
+  // ---- the market list ---------------------------------------------------------------------
+  // What the desk is watching on one subject, priced on both venues. This is the one thing on the
+  // page the state stream cannot answer: it carries the forty widest gaps, which is the right cut
+  // for a status board and the wrong one for a theme button -- the reason to press "MLB" is
+  // precisely to see the games that cut leaves out. So the list is fetched, on demand, from
+  // /api/markets, and only while its tab is open.
+  const markets = { tab: 'feed', want: null, got: null, list: [], total: 0, pairs: 0, making: 0, at: 0, busy: false, err: '' };
+  let marketHtml = '';
+  const MARKETS_FRESH_MS = 12000;
+  function loadMarkets(force = false) {
+    if (markets.tab !== 'markets') return;
+    const want = theme || 'all';
+    if (markets.busy) return;
+    if (!force && markets.got === want && Date.now() - markets.at < MARKETS_FRESH_MS) return;
+    markets.busy = true; markets.want = want;
+    fetch(`/api/markets?theme=${encodeURIComponent(want)}`, { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((d) => {
+        // the answer to a theme the user has since moved off is thrown away, not painted
+        if (markets.want !== want) return;
+        markets.got = want; markets.list = d.markets || []; markets.total = d.total || 0;
+        markets.pairs = d.pairs || 0; markets.making = d.making || 0; markets.at = Date.now(); markets.err = '';
+      })
+      .catch((e) => { markets.err = String(e.message).slice(0, 80); })
+      .finally(() => { markets.busy = false; renderMarkets(); });
+    renderMarkets();
+  }
+  function renderMarkets() {
+    const el = $('marketlist');
+    if (markets.tab !== 'markets') return;
+    const want = theme || 'all';
+    const note = (h) => { if (h !== marketHtml) { marketHtml = h; el.innerHTML = h; } };
+    if (markets.err) return note(`<p class="mnone">Could not read the market list · ${esc(markets.err)}</p>`);
+    if (markets.got !== want) return note(`<p class="mnone">Reading the board…</p>`);
+    if (!markets.list.length) {
+      return note(`<p class="mnone">The desk is not on anything in ${esc(theme ? themeName() : 'this board')} right now. ` +
+        `A market appears here once the same outcome is found on Polymarket <em>and</em> Kalshi, or once the maker quotes it.</p>`);
+    }
+    // A pair that cannot trade however wide it sits is the commonest thing on this list, and the
+    // list would be a lie without saying so: its two venues' rules have not been shown to match,
+    // so the desk watches it and never buys it (src/rules.js).
+    const row = (m) => {
+      const { outcome, question } = splitLabel(m.label);
+      const { head, tail } = lead(outcome, question);
+      const tags = [
+        m.held ? `<em class="hold">held${m.inv ? ` ${Math.abs(m.inv)}` : ''}</em>` : '',
+        m.inPlay ? '<em class="live">in play</em>' : '',
+        m.kind === 'maker' ? `<em class="mk" title="The maker's own book: quoted on Kalshi alone, so there is no second venue to compare it with">${m.quoting ? 'quoting' : 'maker'}</em>` : '',
+        m.watchOnly ? '<em class="watch" title="The two venues’ resolution rules have not been shown to match, so the desk watches this and never trades it">watch only</em>' : '',
+      ].filter(Boolean).join('');
+      // A maker market has one venue, so it has no gap to show and says so rather than printing a
+      // dash that would read as "the gap is nothing".
+      const gap = m.kind === 'maker' ? '<span class="g none">one venue</span>'
+        : m.gap == null ? '<span class="g none">no price</span>'
+        : `<span class="g ${Math.abs(m.gap) >= (S.cfg && S.cfg.minGap || 0.03) ? 'wide' : ''}">${move((m.gap * 100).toFixed(1))}</span>`;
+      return `<li><span class="nm fitw"><span>${esc(unellipsis(head))}</span>${tail ? `<i> · ${esc(unellipsis(tail))}</i>` : ''}${tags}</span>` +
+        `<span class="v pm">${m.pmMid == null ? '—' : cc(m.pmMid)}</span>` +
+        `<span class="v ks">${m.ksMid == null ? '—' : cc(m.ksMid)}</span>${gap}` +
+        `<span class="lk">${m.pmUrl ? `<a href="${esc(m.pmUrl)}" target="_blank" rel="noopener" title="Open on Polymarket">PM</a>` : ''}` +
+        `${m.ksUrl ? `<a href="${esc(m.ksUrl)}" target="_blank" rel="noopener" title="Open on Kalshi">KS</a>` : ''}</span></li>`;
+    };
+    const more = markets.total - markets.list.length;
+    const mix = [markets.pairs ? `<b>${markets.pairs}</b> on both venues` : '', markets.making ? `<b>${markets.making}</b> quoted by the maker` : ''].filter(Boolean).join(' · ');
+    const html = `<div class="mcols"><span>Market</span><span class="v">Polymarket</span><span class="v">Kalshi</span><span class="g">Gap</span><span class="lk"></span></div>` +
+      `<ol class="mlist">${markets.list.map(row).join('')}</ol>` +
+      `<p class="mnone">${mix}${more > 0 ? ` · ${more} more not shown` : ''}</p>`;
+    if (html === marketHtml) return;
+    // Three hundred markets is a list somebody scrolls, and it reprices every few seconds. Throwing
+    // it back to the top each time would make anything past the first screen unreadable.
+    const top = el.scrollTop;
+    marketHtml = html;
+    el.innerHTML = html;
+    el.scrollTop = top;
+    fitAll(el);
+  }
+
+  $('feed').addEventListener('click', (ev) => {
+    const b = ev.target.closest('button[data-tab]');
+    if (!b || b.dataset.tab === markets.tab) return;
+    markets.tab = b.dataset.tab;
+    for (const t of $('feed').querySelectorAll('.ftab')) {
+      const on = t.dataset.tab === markets.tab;
+      t.classList.toggle('on', on);
+      t.setAttribute('aria-selected', String(on));
+    }
+    $('feedlist').hidden = markets.tab !== 'feed';
+    $('marketlist').hidden = markets.tab !== 'markets';
+    if (markets.tab === 'markets') { renderMarkets(); loadMarkets(); }
+  });
+  // While the tab is open the prices behind it keep moving, so it re-reads on the same rhythm the
+  // rest of the page does. Nothing is fetched while it is shut.
+  setInterval(() => loadMarkets(), MARKETS_FRESH_MS);
+
   // ------------------------------------------------------------ notices: what the desk is doing, in words
   // The bots move when their desk runs; these say WHY, in sentences a person can read from a chair.
   // Everything here is HTML laid over the canvas: bubbles above the bots, the feed on the ledge, and
@@ -713,7 +884,7 @@
   function recentFills(M) {
     const making = (M.recent || []).map((f) => ({ ...f, source: 'maker', action: f.side === 'buy' ? 'Bought' : 'Sold', label: marketName(f.ticker, f) }));
     const crossing = (S.takerFills || []).map((f) => ({ ...f, source: 'taker', side: f.pnl == null || f.pnl >= 0 ? 'buy' : 'sell' }));
-    return [...making, ...crossing].sort((a, b) => b.at - a.at);
+    return [...making, ...crossing].filter(inTheme).sort((a, b) => b.at - a.at);
   }
 
   // One log entry -> { text, sub, level }. level: trade (money moved), warn (needs a look),
@@ -816,7 +987,7 @@
     const log = S.log || [];
     const keys = new Set(log.map(logKey));
     if (seenKeys) {
-      const fresh = log.filter((e) => !seenKeys.has(logKey(e))).reverse();   // oldest first
+      const fresh = log.filter((e) => !seenKeys.has(logKey(e)) && feedKeeps(e)).reverse();   // oldest first
       for (const e of fresh) {
         const s = say(e), cur = said[e.agent], loud = s.level !== 'quiet';
         if (!loud && shape(s.text) === lastSaid[e.agent]) continue;          // same routine line again
@@ -960,15 +1131,26 @@
 
   // the name of a position a log line is about (a bot's note carries them as `refs`)
   const refName = (r) => { const t = lead(splitLabel(r.label).outcome, splitLabel(r.label).question); return t.head + (t.tail ? ` · ${t.tail}` : ''); };
+  // A log line is stamped with its subject by the desk itself, when the line is written
+  // (src/engine.js lineTheme) -- one classifier, on the side that has the markets. Most lines are
+  // about the whole desk and carry nothing, and those are never hidden: "All clear", "Checked 305
+  // pairs" and every warning the desk raises belong on the board whatever the filter says.
+  const feedKeeps = (e) => !theme || !e.theme || e.theme === theme;
+
   function renderFeed(log) {
     const rows = [], last = {};
+    let hidden = 0;
     for (const e of log) {
+      if (!feedKeeps(e)) { hidden++; continue; }
       const s = say(e), k = shape(s.text);
       if (last[e.agent] === k) continue;           // collapse the same routine line said every cycle
       last[e.agent] = k;
       rows.push({ e, s });
       if (rows.length >= 40) break;
     }
+    // Say what the filter took out, rather than leaving a shorter log looking like a quieter desk.
+    const note = $('feednote');
+    note.textContent = theme ? `${themeName()} only${hidden ? ` · ${hidden} other line${hidden === 1 ? '' : 's'} hidden` : ''}` : '';
     const list = $('feedlist'), top = list.scrollTop;
     list.innerHTML = rows.map(({ e, s }) => {
       const pl = e.kind === 'SETTLE' && e.pnl != null ? `<span class="fp ${e.pnl >= 0 ? 'pos' : 'neg'}">${signed(e.pnl)}</span>` : '';
@@ -1111,11 +1293,32 @@
     // always the same answer: the widest gap on the board is under the bar. Say which market is
     // closest and by how much -- and when something HAS cleared the bar, say that instead.
     const cfg = S.cfg || {}, bar = cfg.minGap || 0.03;
-    const ready = (S.signals || []).length;
+    const ready = (S.signals || []).filter(inTheme).length;
     // watch-only pairs cannot trade however wide they sit: their resolution rules are unchecked
-    const closest = (S.pairs || []).filter((p) => !p.watchOnly && Number.isFinite(p.gap))
-      .reduce((b, p) => (!b || Math.abs(p.gap) > Math.abs(b.gap) ? p : b), null);
+    //
+    // With a theme picked, the widest gap has to be the widest in THAT theme, and `S.pairs` holds
+    // only the forty widest on the whole board -- on a quiet subject that cut can be empty. The
+    // market list has the theme's every pair, so it answers when it is loaded and current, and
+    // the forty are the fallback.
+    // With a theme picked the answer has to come from that whole subject, and `S.pairs` is the
+    // forty widest gaps on the WHOLE board -- a quiet subject can have none of them. So the server
+    // counts each theme's own widest gap and priced total, and the notice reads them rather than
+    // guessing from a cut that does not contain the theme.
+    const tr = theme ? themeRow() : null;
+    const gapRows = tr ? (tr.best ? [tr.best] : [])
+      : (S.pairs || []).filter((p) => Number.isFinite(p.gap)).map((p) => ({ gap: p.gap, label: p.label, tradeable: !p.watchOnly }));
+    const widestOf = (f) => gapRows.filter(f).reduce((b, p) => (!b || Math.abs(p.gap) > Math.abs(b.gap) ? p : b), null);
+    const closest = widestOf((p) => p.tradeable);
     const cl = closest ? splitLabel(closest.label) : null;
+    // A board can be full of prices and still have no candidate on it. A pair whose two venues'
+    // resolution rules have not been shown to match is watched and never traded (src/rules.js),
+    // and on a whole board -- the fight card, every night it is listed -- that is every pair.
+    // "Nothing is priced on both venues" there is flatly contradicted by the prices underneath it,
+    // so the watched-but-unverified case gets its own sentence.
+    const priced = tr ? tr.priced : gapRows.length;
+    const widest = closest || widestOf(() => true);
+    // the second line of the notice: which market the number above is about
+    const namedLine = (m) => { const x = splitLabel(m.label); return `<span class="nn fitw"><span>${esc(unellipsis(x.outcome || m.label))}</span>${x.question ? `<i> · ${esc(unellipsis(x.question))}</i>` : ''}</span>`; };
     // A wide gap is not the same as a trade: the gap has to survive both venues' fees, the book
     // has to be deep enough, and an in-play game is skipped whatever it shows. So a board where
     // the widest gap already clears the bar says the checks are what is holding it, rather than
@@ -1131,7 +1334,7 @@
     const used = (n, cap, label) => cap ? `<span class="${n >= cap ? 'full' : ''}"><b>${n}</b>/${cap} ${label}</span>` : '';
     const roomBars = [used(arbs, cfg.maxArbGroups, 'arbs'), used(longArbs, cfg.maxLongArbGroups, `over ${cfg.longDays || 30}d`), used(bets, cfg.maxOpenPositions, 'bets')].filter(Boolean).join('');
     // What resolves soonest, and what it pays when it does
-    const soon = (S.arbGroups || []).filter((g) => Number.isFinite(g.settlesAt) && g.settlesAt > S.now)
+    const soon = (S.arbGroups || []).filter((g) => Number.isFinite(g.settlesAt) && g.settlesAt > S.now && inTheme(g))
       .sort((a, b) => a.settlesAt - b.settlesAt)[0];
     const until = (ms) => { const d = ms / 86400000; return d >= 2 ? `in ${Math.round(d)}d` : ms >= 36e5 ? `in ${Math.round(ms / 36e5)}h` : `in ${Math.max(1, Math.round(ms / 6e4))}m`; };
     const soonParts = soon ? splitLabel(soon.label || '') : null;
@@ -1154,9 +1357,11 @@
       ? `<span class="nx good"><b>${ready}</b> over the bar</span>` +
         (why ? `<span class="nn">${esc(cap(why))}</span>` : `<span class="nn">waiting on room to trade</span>`)
       : cl
-        ? `<span class="nx"><b>${cc(wide)}</b> widest gap · ${wide >= bar ? `none clear the fee and liquidity checks` : `needs ${cc(bar)}`}</span>` +
-          `<span class="nn fitw"><span>${esc(unellipsis(cl.outcome || closest.label))}</span>${cl.question ? `<i> · ${esc(unellipsis(cl.question))}</i>` : ''}</span>`
-        : `<span class="nx">nothing priced on both venues yet</span>`;
+        ? `<span class="nx"><b>${cc(wide)}</b> widest gap${theme ? ` on ${esc(themeName())}` : ''} · ${wide >= bar ? `none clear the fee and liquidity checks` : `needs ${cc(bar)}`}</span>` +
+          namedLine(closest)
+        : widest
+          ? `<span class="nx"><b>${priced}</b> priced${theme ? ` on ${esc(themeName())}` : ''} · none tradeable: their venues' rules are unverified</span>` + namedLine(widest)
+          : `<span class="nx">${theme ? `nothing on ${esc(themeName())} is priced on both venues` : 'nothing priced on both venues yet'}</span>`;
     const html = `<div class="st ${cls}"><i></i>${state}<em class="${live ? 'real' : ''}">${live ? 'LIVE' : 'PAPER'}</em></div>` +
       (gone || halted ? `<p class="alarm">${esc(gone ? 'The desk stopped answering' : `Trading stopped: ${halted}`)}</p>` : '') +
       `<div class="tiles">` +
@@ -1172,7 +1377,9 @@
       (nextUp ? `<div class="next extra"><span class="lh">Settles next</span><span class="nx"><b>${esc(nextUp.when)}</b>${nextUp.pays ? ` · pays ${nextUp.pays}` : ''}</span>` +
         `<span class="nn fitw"><span>${esc(unellipsis(nextUp.head))}</span>${nextUp.tail ? `<i> · ${esc(unellipsis(nextUp.tail))}</i>` : ''}</span></div>` : '') +
       // the taker's reach: markets matched on both venues, across every category
-      (am ? `<div class="pairs extra"><span class="lh">Both venues</span><span><b>${S.pairCount || 0}</b> matched · <b>${am.rulesVerified || 0}</b> tradeable</span></div>` : '') +
+      (am ? `<div class="pairs extra"><span class="lh">Both venues</span><span>${theme && themeRow()
+        ? `<b>${themeRow().watching}</b> on ${esc(themeName())} · <b>${themeRow().tradeable}</b> tradeable`
+        : `<b>${S.pairCount || 0}</b> matched · <b>${am.rulesVerified || 0}</b> tradeable`}</span></div>` : '') +
       // Which commit the box is running, and how long this PROCESS has been up. `Up` above is the
       // ACCOUNT's age and survives restarts, so on its own it cannot answer "did the box pick up
       // that deploy?" -- on 2026-09-20 it read 248h through a deploy that had just restarted it.
@@ -2103,7 +2310,7 @@
       legs.sort((a, b) => (a.venue === 'PM' ? -1 : 1) - (b.venue === 'PM' ? -1 : 1));
       const worth = (p) => p.qty * (p.mark ?? p.entry);
       const { head, tail } = (({ outcome, question }) => lead(outcome, question))(splitLabel(legs[0].label));
-      return { arb: legs, key: legs[0].group || legs[0].id, name: head, question: tail, label: String(legs[0].label || ''), type: cap(String(legs[0].strategy || 'taker')),
+      return { arb: legs, key: legs[0].group || legs[0].id, name: head, question: tail, label: String(legs[0].label || ''), theme: legs[0].theme, type: cap(String(legs[0].strategy || 'taker')),
         side: legs.length > 1 ? 'both' : legs[0].side, qty: legs[0].qty, value: r2(legs.reduce((a, p) => a + worth(p), 0)), pl: r2(legs.reduce((a, p) => a + (p.pnl || 0), 0)),
         // under the name, the profit: first what a hedged arb is sure to make at settlement (a narrow
         // board cuts the end of the line, so the number that matters most goes first), then what each
@@ -2129,7 +2336,7 @@
     const opened = curve.filter((p) => p.t <= midnight.getTime()).pop();
     const today = curve.length && opened ? r2(curve[curve.length - 1].v - opened.v) : null;
     const stat = (label, v, cls) => `<div class="${cls || ''}"><dt>${label}</dt><dd class="${v >= 0 ? 'pos' : 'neg'}">${signed(v)}</dd></div>`;
-    const held = sortHeld((M.markets || []).filter((m) => m.inv).map((m) => ({ m, name: nameOf(m), tail: lead(OUTCOME(m), QUESTION(m)).tail, type: 'Maker', side: m.inv > 0 ? 'long' : 'short', qty: Math.abs(m.inv), value: Math.abs(m.mark), pl: m.mark - m.cost })).concat(takerRows()));
+    const held = sortHeld((M.markets || []).filter((m) => m.inv && inTheme(m)).map((m) => ({ m, name: nameOf(m), tail: lead(OUTCOME(m), QUESTION(m)).tail, type: 'Maker', side: m.inv > 0 ? 'long' : 'short', qty: Math.abs(m.inv), value: Math.abs(m.mark), pl: m.mark - m.cost })).concat(takerRows().filter(inTheme)));
     const up = held.filter((x) => x.pl > 0).length, down = held.filter((x) => x.pl < 0).length;
     const rows = held;
     // A number, what it means, and the two standing facts as labelled figures. They used to run
@@ -2147,9 +2354,16 @@
       `${stat('Open', r2(net - banked), 'x')}` +
       `${Number.isFinite(P.arbLocked) ? stat('Locked in', P.arbLocked, 'x') : ''}</dl>`;
     const tally = held.length ? `${up ? `<b class="pos">▲${up}</b>` : ''}${down ? `<b class="neg">▼${down}</b>` : ''}` : '';
-    let h = `<div class="wh"><span>Paper account</span><span>${tally}${held.length ? `${held.length} held · ` : ''}${M.quoting || 0} quoted</span></div>`;
+    // With a theme picked the book shows that subject alone, so the counts beside it have to be
+    // that subject's too -- a header reading "2 held · 347 quoted" over two rows would be the
+    // whole desk's quoting figure standing next to one theme's positions.
+    const quoting = theme ? (M.markets || []).filter((m) => m.quoting && inTheme(m)).length : (M.quoting || 0);
+    let h = `<div class="wh"><span>Paper account${theme ? ` · ${esc(themeName())}` : ''}</span><span>${tally}${held.length ? `${held.length} held · ` : ''}${quoting} quoted</span></div>`;
     if (!held.length) {
-      h += num + `<p class="wempty">Nothing held. Quoting ${M.quoting || 0} markets.</p>`;
+      // The account's own number stays whole -- it is the account's, not this theme's -- and the
+      // line under it says which board came back empty, so an empty panel is never mistaken for
+      // an empty desk.
+      h += num + `<p class="wempty">${theme ? `Nothing held on ${esc(themeName())}.` : 'Nothing held.'} Quoting ${quoting} market${quoting === 1 ? '' : 's'}${theme ? ' here' : ''}.</p>`;
       return h;
     }
     // The header row is the sort control -- click a column, click it again to flip the arrow.
@@ -2845,7 +3059,7 @@
   askSave();
 
   // ------------------------------------------------------------ wiring
-  function render() { frameSeq++; renderHeader(); renderMobileSummary(); ingest(); renderAsk(); if (!bigChart.hidden) drawChart($('chartbig-pnl'), true); }
+  function render() { frameSeq++; renderHeader(); renderThemeBar(); renderMobileSummary(); ingest(); renderAsk(); if (!bigChart.hidden) drawChart($('chartbig-pnl'), true); }
   function connect() {
     const es = new EventSource('/api/stream');
     es.onmessage = (ev) => { try { S = JSON.parse(ev.data); S._rx = S.now; S._rxPerf = performance.now(); lastFrameAt = Date.now(); render(); } catch (e) { console.error(e); } };
