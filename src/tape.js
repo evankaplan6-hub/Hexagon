@@ -41,8 +41,14 @@ async function getWithBackoff(url, tries = 3) {
   }
 }
 
-function makeTape({ maxPages = 5, stream = null } = {}) {
-  let lastNewest = 0;      // newest trade timestamp we have already returned
+// `from`: prints stamped before it are never returned. The desk passes its boot time, because the
+// first poll after a restart used to return the newest page whole -- prints from before the desk
+// was up -- and the maker matched them against the quotes saved before it went down, quotes that
+// were not resting while it was. Over 128 restarts that was 250 fills and 2,362 contracts the
+// paper book could not have had, 132 of them "run over". (Not named `since`: that is the method
+// below, and a declaration of the same name would shadow the option.)
+function makeTape({ maxPages = 5, stream = null, from = 0 } = {}) {
+  let lastNewest = from;   // newest trade timestamp we have already returned
   // ...and the ids of the prints AT that timestamp. The exchange runs ~160 prints a second, so one
   // millisecond holds several, and a drain can land between two of them: judged on the stamp alone
   // the second was "already returned" and a quote it would have filled never was.

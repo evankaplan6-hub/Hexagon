@@ -10,6 +10,12 @@
   const r2 = (x) => Math.round(x * 100) / 100;
   const cents = (x) => `${(Math.abs(x) * 100).toFixed(1)}c`;
   const hhmm = (t) => { const d = new Date(t); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+  // the last midnight in New York before `t`: the desk's day starts there, whatever this browser's clock says
+  const ET_CLOCK = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  const etMidnight = (t) => {
+    const p = Object.fromEntries(ET_CLOCK.formatToParts(new Date(t)).map((x) => [x.type, +x.value]));
+    return t - (((p.hour || 0) % 24) * 3600 + (p.minute || 0) * 60 + (p.second || 0)) * 1000;
+  };
   const dur = (ms) => { const h = Math.floor(ms / 3.6e6), m = Math.floor((ms % 3.6e6) / 6e4); return `${h}h ${String(m).padStart(2, '0')}m`; };
   // "nothing is happening" and "something happened four minutes ago" look identical unless the
   // page can say which.
@@ -2330,11 +2336,11 @@
     const pairNet = r2((S.equity ?? S.initial ?? 0) - (S.initial ?? 0));
     const net = r2(makerNet + pairNet);
     const P = S.pnl || {}, banked = r2((S.realized || 0) + (M.realized || 0));
-    // Today, specifically: the account's own curve since local midnight. Day 10 and an all-time
-    // number said nothing about whether this morning went well.
-    const midnight = new Date(S.now); midnight.setHours(0, 0, 0, 0);
+    // Today, specifically: the account's own curve since midnight EASTERN -- the desk's own day,
+    // the one TESS's drawdown limit and every journal file roll on -- not the browser's. Day 10 and
+    // an all-time number said nothing about whether this morning went well.
     const curve = combinePnlHistory(S.balanceHistory, M.hist, S.initial ?? 0, M.historyValidFrom || 0);
-    const opened = curve.filter((p) => p.t <= midnight.getTime()).pop();
+    const opened = curve.filter((p) => p.t <= etMidnight(S.now)).pop();
     const today = curve.length && opened ? r2(curve[curve.length - 1].v - opened.v) : null;
     const stat = (label, v, cls) => `<div class="${cls || ''}"><dt>${label}</dt><dd class="${v >= 0 ? 'pos' : 'neg'}">${signed(v)}</dd></div>`;
     const held = sortHeld((M.markets || []).filter((m) => m.inv && inTheme(m)).map((m) => ({ m, name: nameOf(m), tail: lead(OUTCOME(m), QUESTION(m)).tail, type: 'Maker', side: m.inv > 0 ? 'long' : 'short', qty: Math.abs(m.inv), value: Math.abs(m.mark), pl: m.mark - m.cost })).concat(takerRows().filter(inTheme)));

@@ -204,11 +204,48 @@ const position = (over = {}) => ({
     ok('sellGroup reports the halt rather than a retry', sold.ok === false && sold.remaining === 1 && /inactive/.test(sold.error), sold);
     // a market that IS taking orders, and a settlement, still go through
     E.quotes.ks.set('KXHALTED', { ticker: 'KXHALTED', status: 'active', yesBid: 0.66, yesAsk: 0.70 });
+    E.book = async () => ({ asks: [{ price: 0.70, size: 1000 }], yesBid: 0.30, yesAsk: 0.34 });
     await E.close(ks, 0.30, 'operator: sell');
     ok('an active market sells', asked === 1 && !E.state.positions.some((p) => p.id === 'k'), asked);
     E.quotes.pm.set('m9', { id: 'm9', closed: true, bestBid: 0.4, bestAsk: 0.5 });
     await E.close(pmPos, 0.5, 'resolved 50-50', true);
     ok('a settlement never goes to the broker, halted or not', asked === 1 && E.state.positions.length === 0, E.state.positions.length);
+  }
+
+  group('a paper sale walks the bids that are actually there');
+  {
+    // The paper broker filled any size at the mark: unlimited depth at the bid. A sale now walks
+    // the other side's asks (this side's bids, mirrored) down to the slip limit, like a buy walks
+    // up to its limit, and what does not fill is a stuck partial, retried -- not a full exit at a
+    // price nobody was bidding for that many.
+    const E = engine();                                   // the real paper broker
+    const pos = position({ id: 'w', group: 'gw', ref: 'KXDEEP', qty: 100, entry: 0.20, mark: 0.28, cost: 20.50 });
+    E.state.positions = [pos];
+    E.quotes.ks.set('KXDEEP', { ticker: 'KXDEEP', status: 'active', yesBid: 0.28, yesAsk: 0.30 });
+    // NO asks at 72c and 75c are YES bids at 28c (50 of them) and 25c (500)
+    E.book = async (venue, pair, side) => ({ asks: side === 'no' ? [{ price: 0.72, size: 50 }, { price: 0.75, size: 500 }] : [], yesBid: 0.28, yesAsk: 0.30 });
+    await E.close(pos, 0.28, 'test exit');
+    ok('only the 50 bid at 28c fills inside a 1c slip', pos.qty === 50 && pos.orphan === true, [pos.qty, pos.orphan]);
+    const part = (E.journalled || []).find((j) => j.type === 'CLOSE_PARTIAL');
+    ok('at the bid, for what was bid', part && Math.abs(part.data.exit - 0.28) < 1e-9 && part.data.sold === 50, part && part.data);
+    // the 28c bids are gone; at a 26c mark the 25c level is inside the limit
+    E.book = async () => ({ asks: [{ price: 0.75, size: 500 }], yesBid: 0.25, yesAsk: 0.30 });
+    await E.close(pos, 0.26, 'retry');
+    ok('the rest goes at 25c once the limit reaches it', E.state.positions.length === 0 && Math.abs(E.state.closed[0].exit - 0.25) < 1e-9, E.state.closed[0]);
+    // no bids inside the limit at all: nothing sells, the leg is stuck, nothing is booked
+    const E3 = engine();
+    const p3 = position({ id: 'y', group: 'gy', ref: 'KXTHIN' });
+    E3.state.positions = [p3];
+    E3.quotes.ks.set('KXTHIN', { ticker: 'KXTHIN', status: 'active', yesBid: 0.50, yesAsk: 0.70 });
+    E3.book = async () => ({ asks: [{ price: 0.60, size: 400 }], yesBid: 0.40, yesAsk: 0.70 });   // a 40c bid against a 62c mark
+    await E3.close(p3, 0.62, 'test exit');
+    ok('no bid inside the limit: stuck, unsold, unbooked', E3.state.positions.length === 1 && p3.orphan === true && E3.state.closed.length === 0 && E3.state.cash === 10000, [p3.orphan, E3.state.cash]);
+    // a market the desk has no listing for is sold at the mark in full, as before
+    const E2 = engine();
+    const p2 = position({ id: 'x', group: 'gx', ref: 'KXNOLIST' });
+    E2.state.positions = [p2];
+    await E2.close(p2, 0.62, 'test exit');
+    ok('no listing, no ladder: filled at the mark in full', E2.state.positions.length === 0 && E2.state.closed[0].exit === 0.62, E2.state.closed);
   }
 
   group('a full fill still closes normally');
@@ -606,6 +643,7 @@ const position = (over = {}) => ({
   {
     const E = engine();
     E.quotes.ks.set('KA', { yesBid: 0.30, yesAsk: 0.32 });
+    E.book = async () => ({ asks: [{ price: 0.70, size: 1000 }], yesBid: 0.30, yesAsk: 0.32 });   // 1000 bid at 30c
     E.state.positions = [
       position({ id: 'a1', group: 'ga', venue: 'KS', ref: 'KA', side: 'yes', qty: 10, cost: 2.7, strategy: 'arb' }),
       position({ id: 'b1', group: 'gb', venue: 'KS', ref: 'KA', side: 'yes', qty: 5, cost: 1.5, strategy: 'arb' }),

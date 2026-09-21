@@ -172,7 +172,7 @@ function handle(req, res) {
   if (p === '/api/flatten') {
     if (req.method !== 'POST') { res.writeHead(405); return res.end('POST only'); }
     if (!cfg.flattenToken) { res.writeHead(503); return res.end('flatten disabled: set FLATTEN_TOKEN in .env'); }
-    if (req.headers['x-flatten-token'] !== cfg.flattenToken) { res.writeHead(403); return res.end('bad token'); }
+    if (!timingEq(req.headers['x-flatten-token'] || '', cfg.flattenToken)) { res.writeHead(403); return res.end('bad token'); }
     return engine.flattenAll(url.searchParams.get('reason') || 'manual')
       .then((r) => json(res, r))
       .catch((e) => { res.writeHead(500); res.end(String(e.message).slice(0, 200)); });
@@ -180,7 +180,7 @@ function handle(req, res) {
   if (p === '/api/resume') {
     if (req.method !== 'POST') { res.writeHead(405); return res.end('POST only'); }
     if (!cfg.flattenToken) { res.writeHead(503); return res.end('disabled: set FLATTEN_TOKEN in .env'); }
-    if (req.headers['x-flatten-token'] !== cfg.flattenToken) { res.writeHead(403); return res.end('bad token'); }
+    if (!timingEq(req.headers['x-flatten-token'] || '', cfg.flattenToken)) { res.writeHead(403); return res.end('bad token'); }
     return json(res, engine.resume());
   }
   // Alert actions from the dashboard: research a position, or sell it.
@@ -202,7 +202,7 @@ function handle(req, res) {
     const local = cfg.mode === 'paper' && LOOPBACK.includes(cfg.bindHost);
     if (!local) {
       if (!cfg.flattenToken) { res.writeHead(503); return res.end('selling from the dashboard needs FLATTEN_TOKEN in .env on a live or remote desk'); }
-      if (req.headers['x-flatten-token'] !== cfg.flattenToken) { res.writeHead(403); return res.end('bad token'); }
+      if (!timingEq(req.headers['x-flatten-token'] || '', cfg.flattenToken)) { res.writeHead(403); return res.end('bad token'); }
     }
     return engine.sellGroup(groupId, 'sold from the dashboard alert')
       .then((r) => json(res, r))
