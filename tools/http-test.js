@@ -166,6 +166,16 @@ async function retryTests() {
     await http.getJSON(`${KS}/markets`, { sleep: noSleep.fn });
     ok('a long Retry-After is capped at 2 seconds', noSleep.slept[0] === 2000, noSleep.slept);
 
+    const bodies = [];
+    const withBody = (status, extra = {}) => { const b = { cancelled: 0, cancel: async () => { b.cancelled++; } }; bodies.push(b); return { ...answer(status, { ok: 1 }), body: b, ...extra }; };
+    replies = [withBody(429), withBody(200)]; n = 0;
+    await http.getJSON(`${KS}/markets`, { sleep: noSleep.fn });
+    ok('the refusal\'s unread body is let go before the retry, and the answer\'s is left to be read', bodies[0].cancelled === 1 && bodies[1].cancelled === 0, bodies);
+    replies = [withBody(503, { body: { cancel: async () => { throw new Error('already closed'); } } })]; n = 0;
+    let t503 = null;
+    try { await http.getJSON(`${KS}/markets`, { sleep: noSleep.fn }); } catch (e) { t503 = e; }
+    ok('a body that will not cancel does not hide the error it came with', t503 && /HTTP 503/.test(t503.message), t503 && t503.message);
+
     replies = [answer(500)]; n = 0;
     const b5 = http.recentErrors();
     try { await http.getJSON(`${KS}/markets`, { sleep: noSleep.fn }); } catch { /* expected */ }
