@@ -9,6 +9,7 @@ loadEnv(path.join(__dirname, '.env'));
 const cfg = require('./src/config');
 const { Engine } = require('./src/engine');
 const { actionRefusal, rebindRefusal, routeAsk } = require('./src/ask');
+const chaintape = require('./src/chaintape');
 
 function loadEnv(file) {
   if (!fs.existsSync(file)) return;
@@ -265,6 +266,14 @@ const server = http.createServer((req, res) => {
   }
   if (p === '/api/trades') return json(res, engine.state.closed);
   if (p === '/api/volume') return json(res, engine.volume.entries());
+  // The Stocks and Options tabs. Read-only, off the tape on disk rather than the engine: the desk
+  // does not trade these and nothing here touches a position. It reads only the tail of the newest
+  // file (src/chaintape.js), so it stays cheap as the tape grows, and it answers with ok:false
+  // rather than throwing when no tape exists yet -- a dashboard panel must never take the desk down.
+  if (p === '/api/chains') {
+    try { return json(res, chaintape.read(path.join(cfg.dataDir, 'chains'))); }
+    catch (e) { return json(res, { ok: false, why: String(e && e.message).slice(0, 120), symbols: [], snapshots: 0 }); }
+  }
   if (p === '/api/positions') return json(res, engine.state.positions);
   if (p === '/api/log') return json(res, engine.state.log);
   if (p === '/api/stream') {

@@ -115,6 +115,11 @@ function parseChain(json, { band = 0, maxDte = 0, today = null } = {}) {
   return {
     symbol: d.symbol || json.symbol || null,
     spot,
+    // Whether the band was ASKED for and whether it could be APPLIED are different facts, and the
+    // gap between them is silent: with no spot there is nothing to measure from, so every strike
+    // is kept while the file header still says the band was used. tools/chain-record.js marks such
+    // a line, because a tape that cannot be re-collected must not leave that ambiguous.
+    bandAsked: band, bandApplied: banded,
     // The underlying's own quote and depth, alongside the chain that was priced off it.
     spotBid: num(d.bid), spotAsk: num(d.ask), spotBidSz: num(d.bid_size), spotAskSz: num(d.ask_size),
     // Cboe's OWN timestamp for this file, not the moment this ran. The two differ by the feed's

@@ -3058,8 +3058,158 @@
   }
   askSave();
 
+  // ------------------------------------------------------------ the other two views
+  // Stocks and Options do not come off the desk's state stream, because the desk does not trade
+  // them: they are read back from the option-chain tape on disk (/api/chains, src/chaintape.js).
+  // So they are fetched on demand, only while their tab is open, and they are never allowed to
+  // stall the floor -- a failed fetch prints a line and the room keeps running.
+  //
+  // Both tabs are READ-ONLY and say so. There is no order path behind any of this.
+  const VIEW_KEY = 'hex-view';
+  const CHAINS_FRESH_MS = 60000;   // the tape moves a few times a day; a minute is generous
+  let view = 'floor';
+  try { const v = localStorage.getItem(VIEW_KEY); if (v === 'stocks' || v === 'options') view = v; } catch { /* private window */ }
+  const chains = { got: null, at: 0, busy: false, err: '' };
+  let assetHtml = '';
+
+  const n2 = (x) => (Number.isFinite(x) ? x.toFixed(2) : '–');
+  const pct1 = (x) => (Number.isFinite(x) ? (x * 100).toFixed(1) + '%' : '–');
+  // "3 minutes ago" for the tape, whose whole point is saying how stale it is. Separate from the
+  // desk's own `ago`: that one measures against the stream's clock (S.now) and answers "never"
+  // without it, and these tabs have to read correctly when the stream is down.
+  function tapeAgo(iso) {
+    const t = Date.parse(iso);
+    if (!Number.isFinite(t)) return '';
+    const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+    if (s < 90) return `${s}s ago`;
+    if (s < 5400) return `${Math.round(s / 60)} min ago`;
+    if (s < 172800) return `${Math.round(s / 3600)}h ago`;
+    return `${Math.round(s / 86400)}d ago`;
+  }
+
+  function loadChains(force = false) {
+    if (view === 'floor') return;
+    if (chains.busy) return;
+    if (!force && chains.got && Date.now() - chains.at < CHAINS_FRESH_MS) return;
+    chains.busy = true;
+    fetch('/api/chains').then((r) => r.json()).then((j) => {
+      chains.got = j; chains.at = Date.now(); chains.err = '';
+    }).catch((e) => { chains.err = String(e && e.message || e).slice(0, 120); })
+      .finally(() => { chains.busy = false; assetHtml = ''; renderAsset(); });
+  }
+
+  // The empty and broken states are written out properly rather than left blank: before tomorrow's
+  // open this tab is the only thing that explains why it is empty, and "nothing here" with no
+  // reason reads as a bug.
+  function assetEmpty(msg, sub) {
+    return `<div class="anone"><p>${esc(msg)}</p>${sub ? `<p class="asub">${esc(sub)}</p>` : ''}</div>`;
+  }
+
+  function renderAsset() {
+    const panel = $('assetview');
+    if (!panel || view === 'floor') return;
+    $('asset-title').textContent = view === 'stocks' ? 'Stocks' : 'Options';
+    const c = chains.got;
+    let meta = '', body = '';
+    if (chains.err) body = assetEmpty('The tape could not be read.', chains.err);
+    else if (!c) body = assetEmpty('Reading the tape…');
+    else if (!c.ok) {
+      body = assetEmpty(
+        c.why === 'no tape yet' ? 'No chains recorded yet.' : `The tape could not be read: ${c.why || 'unknown'}`,
+        'The recorder writes at 16:25, 20:00 and 09:45 Eastern, and skips a chain that has not changed — so a quiet weekend records nothing at all.');
+    } else {
+      const syms = c.symbols || [];
+      meta = `${syms.length} symbols · ${c.snapshots} snapshot${c.snapshots === 1 ? '' : 's'} in view · ${(c.bytes / 1048576).toFixed(1)} MB · ${esc(c.file || '')}`;
+      body = view === 'stocks' ? stocksBody(syms) : optionsBody(syms, c);
+    }
+    // before the early return: a quiet poll returns identical html (the recorder skips an
+    // unchanged chain), and the indicator would stick on "reading…" for as long as that lasts
+    $('asset-meta').textContent = chains.busy ? 'reading…' : '';
+    const html = `<div class="ameta">${meta}</div>${body}`;
+    if (html === assetHtml) return;
+    assetHtml = html;
+    $('asset-body').innerHTML = html;
+  }
+
+  // Stocks: the six underlyings the tape follows, as the tape last saw them. Not a trading screen —
+  // the desk holds none of these — so it shows the quote and, more importantly, how old it is.
+  function stocksBody(syms) {
+    if (!syms.length) return assetEmpty('No symbols in the tape yet.');
+    const row = (s) => {
+      const spread = Number.isFinite(s.sa) && Number.isFinite(s.sb) ? s.sa - s.sb : null;
+      return `<li>
+        <span class="asym">${esc(s.sym)}</span>
+        <span class="aspot">${n2(s.spot)}</span>
+        <span class="aq">${n2(s.sb)} <em>×</em> ${n2(s.sa)}</span>
+        <span class="aspr">${spread === null ? '' : `${spread.toFixed(2)} wide`}</span>
+        <span class="aage" title="${esc(s.qt || '')}">${esc(tapeAgo(s.at))}</span>
+      </li>`;
+    };
+    return `<ul class="alist stk">
+      <li class="ahead"><span>Symbol</span><span>Last</span><span>Bid × Ask</span><span>Spread</span><span>Recorded</span></li>
+      ${syms.map(row).join('')}
+    </ul>
+    <p class="afoot">Quotes are Cboe's free delayed feed, about 15 minutes behind, recorded at each snapshot rather than streamed. The desk holds no position in any of these and has no way to trade them.</p>`;
+  }
+
+  // Options: the strike nearest spot on the nearest expiry, which is the line a person actually
+  // reads off a chain, plus how much chain sits behind it.
+  function optionsBody(syms, c) {
+    if (!syms.length) return assetEmpty('No chains in the tape yet.');
+    const side = (x) => (x ? `${n2(x.bid)} <em>×</em> ${n2(x.ask)}` : '<span class="adim">not quoted</span>');
+    const iv = (x) => (x && Number.isFinite(x.iv) ? pct1(x.iv) : '–');
+    const card = (s) => {
+      const a = s.atm;
+      const exps = (s.expiries || []).slice(0, 10);
+      return `<li class="acard">
+        <div class="ahd"><span class="asym">${esc(s.sym)}</span><span class="aspot">${n2(s.spot)}</span>
+          <span class="aage">${esc(tapeAgo(s.at))}</span></div>
+        ${a ? `<div class="aatm">
+          <div class="aexp">${esc(a.exp)} · ${a.dte}d · strike ${n2(a.k)}</div>
+          <div class="aleg"><b>Call</b> ${side(a.call)} <span class="aiv">iv ${iv(a.call)}</span>${a.call && Number.isFinite(a.call.oi) ? `<span class="aoi">oi ${a.call.oi.toLocaleString()}</span>` : ''}</div>
+          <div class="aleg"><b>Put</b> ${side(a.put)} <span class="aiv">iv ${iv(a.put)}</span>${a.put && Number.isFinite(a.put.oi) ? `<span class="aoi">oi ${a.put.oi.toLocaleString()}</span>` : ''}</div>
+        </div>` : '<div class="aatm adim">no strike near spot in the recorded band</div>'}
+        <div class="aexps">${exps.map((e) => `<span class="ae" title="${e.c} calls · ${e.p} puts">${esc(e.exp.slice(5))}<b>${e.dte}d</b></span>`).join('')}${(s.expiries || []).length > exps.length ? `<span class="ae adim">+${s.expiries.length - exps.length}</span>` : ''}</div>
+        <div class="acount">${s.contracts.toLocaleString()} contracts across ${s.expiries.length} expiries</div>
+      </li>`;
+    };
+    const h = c.header || {};
+    return `<ul class="alist opt">${syms.map(card).join('')}</ul>
+    <p class="afoot">The strike nearest spot on the nearest expiry. Recorded${Number.isFinite(h.band) ? ` within ±${Math.round(h.band * 100)}% of spot` : ''}${Number.isFinite(h.maxDte) ? ` and out to ${h.maxDte} days` : ''}; anything further out was deliberately not kept. Delayed about 15 minutes. Read-only — the desk does not trade options and there is no order path behind this page.</p>`;
+  }
+
+  function setView(v) {
+    if (v === view) return;
+    view = v;
+    try { localStorage.setItem(VIEW_KEY, v); } catch { /* private window */ }
+    for (const b of document.querySelectorAll('#viewtabs .vt')) {
+      const on = b.dataset.view === v;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
+    const floor = $('floor'), asset = $('assetview');
+    floor.hidden = v !== 'floor';
+    asset.hidden = v === 'floor';
+    if (v === 'floor') { frameSeq++; if (S) { renderThemeBar(); renderMobileSummary(); ingest(); } return; }
+    assetHtml = '';
+    renderAsset();
+    loadChains();
+  }
+  $('viewtabs').addEventListener('click', (ev) => {
+    const b = ev.target.closest('button[data-view]');
+    if (b) setView(b.dataset.view);
+  });
+
   // ------------------------------------------------------------ wiring
-  function render() { frameSeq++; renderHeader(); renderThemeBar(); renderMobileSummary(); ingest(); renderAsk(); if (!bigChart.hidden) drawChart($('chartbig-pnl'), true); }
+  function render() {
+    frameSeq++; renderHeader(); renderThemeBar(); renderMobileSummary(); ingest(); renderAsk();
+    if (!bigChart.hidden) drawChart($('chartbig-pnl'), true);
+    // An open Stocks or Options tab rides the same frame clock as everything else. loadChains has
+    // its own freshness window so this is a no-op most frames, and renderAsset re-runs so the
+    // "recorded N min ago" ages in place -- a panel whose whole job is saying how stale a quote is
+    // must not freeze that number the moment it is drawn.
+    if (view !== 'floor') { loadChains(); renderAsset(); }
+  }
   function connect() {
     const es = new EventSource('/api/stream');
     es.onmessage = (ev) => { try { S = JSON.parse(ev.data); S._rx = S.now; S._rxPerf = performance.now(); lastFrameAt = Date.now(); render(); } catch (e) { console.error(e); } };
@@ -3068,5 +3218,8 @@
   wireFloor();
   connect();
   renderAsk();
+  // A saved tab is restored after the wiring, so the floor is fully built before it is hidden --
+  // the canvas takes its size from its container and a hidden container measures zero.
+  if (view !== 'floor') { const want = view; view = 'floor'; setView(want); }
   
 })();
