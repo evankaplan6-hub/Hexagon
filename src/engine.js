@@ -429,6 +429,26 @@ class Engine {
     if (pos.venue === 'PM') return pos.side === 'yes' ? q.pmBid : r3(1 - q.pmAsk);
     return pos.side === 'yes' ? q.ksBid : r3(1 - q.ksAsk);
   }
+  // The ladder a sale of this leg would walk: the OTHER side's asks, which are this side's bids
+  // mirrored (buy NO at p == sell YES at 1-p; engine.book). Null when there is nothing to fetch it
+  // against -- a market the desk has no listing for, a demo pair with no quote, a fetch that
+  // failed -- and the sale then fills at the mark in full, as every sale did before. The paper
+  // broker used to do that for every exit, which is unlimited depth at the bid; buys have always
+  // walked the fetched book (KETT), and the two halves of a round trip should be equally honest.
+  async exitLadder(pos) {
+    const listed = pos.venue === 'KS' ? this.quotes.ks.has(pos.ref) : this.quotes.pm.has(pos.pmId);
+    if (!listed) return null;
+    const pair = this.pairs.find((p) => p.id === pos.pairId) || { pm: { id: pos.pmId, tokenIndex: pos.tokenIndex }, ks: { ticker: pos.ref }, q: null };
+    if (this.cfg.demo && !pair.q) return null;
+    try {
+      const b = await this.book(pos.venue, pair, pos.side === 'yes' ? 'no' : 'yes');
+      return Array.isArray(b && b.asks) ? b.asks : null;
+    } catch (e) {
+      if (this.due(`exit-book-${pos.id}`, 300)) this.log('RIGO', 'OPS', null, `${pos.label}: could not read the book to sell into (${String(e.message).slice(0, 60)}) · filling at the mark`);
+      return null;
+    }
+  }
+
   // Is this position's market taking orders? Why not, in words, or null when it is (or when the
   // desk has no listing to say). Kalshi halts a market it is about to settle ("inactive": a
   // cancelled Davis Cup match, 2026-09-21), and Polymarket closes one awaiting resolution. A sell
@@ -565,10 +585,14 @@ class Engine {
         if (this.due(`exit-halted-${pos.id}`, 300)) this.log('RIGO', 'PASS', null, `${pos.label}: ${halted} · no sale possible, waiting for settlement`);
         return { sold: false, why: `${halted}: no sale possible until it settles` };
       }
+      // What is actually bid where this leg would sell (exitLadder), so the paper fill is the size
+      // the book had rather than the size the desk wanted: a partial is then a partial, stuck and
+      // retried, not a full exit at a price nobody was bidding for that many.
+      const book = await this.exitLadder(pos);
       // A position whose exit does not fill is STUCK, not closed. Flag it so RIGO keeps trying
       // every cycle instead of leaving naked directional risk sitting in the book unattended.
       pos.exitSeq = (pos.exitSeq || 0) + 1;
-      try { fill = await this.broker.sell({ venue: pos.venue, ref: pos.ref, side: pos.side, qty, px, feeRate: pos.feeRate, key: `${pos.id}-out-${pos.exitSeq}` }); }
+      try { fill = await this.broker.sell({ venue: pos.venue, ref: pos.ref, side: pos.side, qty, px, feeRate: pos.feeRate, book, key: `${pos.id}-out-${pos.exitSeq}` }); }
       catch (e) {
         if (ambiguousOrder(e)) {
           // The broker has already durably recorded the order intent. Keep the same local marker

@@ -90,8 +90,12 @@ function makeMakerDesk(cfg) {
   let crawled = null, crawledAt = 0, crawlSeen = null;
   let refreshing = null;     // in-flight refresh, so the scan never runs twice or blocks the tick
   let blocked = false;       // did the last step wait on a scan? (the engine's slow-round warning asks)
-  const tape = makeTape({ maxPages: cfg.makerTapePages });   // batched exchange-wide trades + per-series books
+  // batched exchange-wide trades + per-series books; nothing printed before this desk was up counts
+  const tape = makeTape({ maxPages: cfg.makerTapePages, from: Date.now() });
   let stream = null, streamTried = false, streamRetryAt = 0;
+  // The quotes in the ledger were resting when the desk last ran, not since. They are withdrawn on
+  // the first round after a start and re-posted at its end, so no print is filled against them.
+  let firstRound = true;
 
   // The trade socket, opened once, on the first cycle rather than at construction so that building
   // a desk never opens a connection. Kalshi signs the handshake, so without a key there is nothing
@@ -363,7 +367,9 @@ function makeMakerDesk(cfg) {
       const bk = bookRes.books.get(u.ticker);
       if (!bk) continue;                                   // no book this round: leave the quote alone
 
-      // 1) fill the quotes we were ALREADY resting, against trades that have since arrived
+      // 1) fill the quotes we were ALREADY resting, against trades that have since arrived --
+      //    unless this is the first round after a start, when nothing of ours was resting
+      if (firstRound) m.quotes = { bid: null, ask: null };
       const seen = new Set(m.seen);
       const { fills, queue } = maker.fillsFrom(trades, m.quotes, m.inv, cfg, seen, m.queue);
       m.queue = queue;                                     // what is still ahead of us, carried forward
@@ -437,6 +443,8 @@ function makeMakerDesk(cfg) {
       m.spread = q.spread ?? null;
       m.why = g.cooled ? `cooled until ${new Date(g.cooledUntil).toISOString().slice(11, 16)}Z · run-over ${(g.rate * 100).toFixed(0)}%` : (q.why || null);
     }
+
+    firstRound = false;
 
     // A market the desk is neither quoting nor holding is out of the loop above. Its last quote
     // must not go on resting in the ledger -- the maker tape (src/makertape.js) would show it

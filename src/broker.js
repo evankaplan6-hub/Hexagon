@@ -53,9 +53,20 @@ class PaperBroker {
     const fee = this.feeFor(venue, filled, avg, ref, feeRate);
     return { filled, avg: r4(avg), fee, cost: r2(filled * avg + fee) };
   }
-  async sell({ venue, ref, qty, px, feeRate }) {
-    const fee = this.feeFor(venue, qty, px, ref, feeRate);
-    return { filled: qty, avg: r4(px), fee, proceeds: r2(qty * px - fee) };
+  // `book`, when the engine could fetch one, is the OTHER side's ask ladder (engine.exitLadder):
+  // selling YES at p is buying NO at 1-p, so those asks are this side's bids, mirrored. Walked
+  // down to `px - slipLimit`, exactly as a buy walks up to its limit. Without a ladder the sale
+  // fills at `px` in full, which is what every sale did before: unlimited depth at the bid, a
+  // 207-lot exit priced like a 5-lot. The live broker never sees this; the exchange has the book.
+  async sell({ venue, ref, qty, px, feeRate, book }) {
+    let filled = qty, avg = px;
+    if (Array.isArray(book)) {
+      const w = walk(book, qty, 1 - (px - this.cfg.slipLimit));
+      if (w.filled < 1) return { filled: 0, reason: 'no bids inside limit' };
+      filled = w.filled; avg = 1 - w.avg;
+    }
+    const fee = this.feeFor(venue, filled, avg, ref, feeRate);
+    return { filled, avg: r4(avg), fee, proceeds: r2(filled * avg - fee) };
   }
 }
 

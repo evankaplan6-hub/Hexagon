@@ -169,6 +169,15 @@ group('the tape reads the socket when it can vouch for the interval, and polls w
     r = await tape2.since(['A']);
     ok('setStream attaches a socket to a tape already polling', calls.length === 0 && r.trades.map((t) => t.trade_id).join() === 'b', r.trades);
     ok('stats count both sources', tape2.stats().polled === 1 && tape2.stats().streamed === 1, tape2.stats());
+
+    // a tape started at `since` never returns a print from before it: the first poll after a
+    // restart used to hand the maker the newest page whole, prints from before the desk was up,
+    // and they were filled against quotes that had not been resting
+    const tape3 = makeTape({ maxPages: 5, from: 1000000000000 + 12500 });
+    calls = serve({ first: { trades: [T('d', 13), T('c', 12), T('b', 11), T('a', 10)], next: 'more' } });
+    r = await tape3.since(['A']);
+    ok('prints from before the desk was up are not returned', r.trades.map((t) => t.trade_id).join() === 'd', r.trades.map((t) => t.trade_id));
+    ok('...and the poll does not page back past them', calls.length === 1 && r.gap === false, calls);
   };
 
   // ---- the real client against nothing: no key file, then a refused port
@@ -196,7 +205,7 @@ group('the tape reads the socket when it can vouch for the interval, and polls w
     fs.rmSync(path.dirname(keyPath), { recursive: true, force: true });
   };
 
-  run().catch((e) => { fail++; console.log(`  FAIL  tape+stream threw: ${e.message}`); })
+  run().catch((e) => { fail++; console.log(`  FAIL  tape+stream threw: `); })
     .finally(() => { http.getJSON = real; })
     .then(clientRun)
     .catch((e) => { fail++; console.log(`  FAIL  client threw: ${e.message}`); })
