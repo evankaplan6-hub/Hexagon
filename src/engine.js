@@ -740,14 +740,22 @@ class Engine {
 
   // ---------------------------------------------------------------- data
   async refreshQuotes() {
-    const [pmRes, ksRes] = await Promise.allSettled([pm.fetchUniverse(this.cfg.pmUniverse), ks.fetchAll(this.cfg.ksSeries)]);
+    // Polymarket's listing is fetched every PM_LIST_EVERY_SEC, not every cycle (src/config.js says
+    // why). In between, the map is rebuilt from the last listing -- the same objects, so pinned and
+    // injected markets are re-added exactly as before -- and refreshPairPrices reprices every
+    // paired market from the CLOB. A failed listing is retried on the next cycle.
+    const listDue = !this.pmList || Date.now() - this.pmList.at >= this.cfg.pmListEverySec * 1000;
+    const [pmRes, ksRes] = await Promise.allSettled([listDue ? pm.fetchUniverse(this.cfg.pmUniverse) : null, ks.fetchAll(this.cfg.ksSeries)]);
     // Stamp each market with when IT was fetched. lastQuoteAt only advances when BOTH venues
     // succeed, so it cannot tell "everything is fresh" from "this one market stopped updating" \u2014
     // and quote() carries a pair's last good quote forward indefinitely when it cannot reprice.
+    // A reused listing keeps its own `at`: only a CLOB price that actually arrived moves it.
     const at = Date.now();
-    if (pmRes.status === 'fulfilled') this.quotes.pm = new Map(pmRes.value.map((m) => [m.id, Object.assign(m, { at })]));
+    const pmOk = !listDue || pmRes.status === 'fulfilled';
+    if (listDue && pmRes.status === 'fulfilled') this.pmList = { at, markets: pmRes.value.map((m) => Object.assign(m, { at })) };
+    if (pmOk && this.pmList) this.quotes.pm = new Map(this.pmList.markets.map((m) => [m.id, m]));
     if (ksRes.status === 'fulfilled') this.quotes.ks = new Map(ksRes.value.map((m) => [m.ticker, Object.assign(m, { at })]));
-    if (pmRes.status === 'fulfilled' && ksRes.status === 'fulfilled') this.lastQuoteAt = Date.now();
+    if (pmOk && ksRes.status === 'fulfilled') this.lastQuoteAt = Date.now();
     else if (this.due('quote-err', 60)) {
       const why = [pmRes, ksRes].filter((r) => r.status === 'rejected').map((r) => r.reason && r.reason.message).join(' | ');
       this.log('TESS', 'OPS', null, `quote refresh failed: ${String(why).slice(0, 140)}`);
@@ -784,18 +792,22 @@ class Engine {
     for (const id of [...this.pinned.keys()]) if (!this.state.positions.some((p) => p.id === id)) this.pinned.delete(id);
   }
 
-  // The Gamma listing can lag the CLOB by minutes; overwrite pair quotes with live CLOB top-of-book.
+  // The Gamma listing can lag the CLOB by minutes, and is only re-read every PM_LIST_EVERY_SEC;
+  // overwrite pair quotes with live CLOB top-of-book, and stamp the market with when that price
+  // arrived. A market the CLOB did not answer for keeps its old stamp and goes stale on its own.
   async refreshPairPrices() {
     const toks = [...new Set(this.pairs.map((p) => p.pm.tokenId).filter(Boolean))];
     if (!toks.length) return;
     let prices;
     try { prices = await pm.fetchPrices(toks); }
     catch (e) { if (this.due('clob-err', 120)) this.log('TESS', 'OPS', null, `CLOB price refresh failed: ${String(e.message).slice(0, 100)} · falling back to listing quotes`); return; }
+    const at = Date.now();
     for (const p of this.pairs) {
       const live = prices.get(p.pm.tokenId), m = this.quotes.pm.get(p.pm.id);
       if (!live || !m) continue;
       if (p.pm.tokenIndex === 0) { m.bestBid = live.bid; m.bestAsk = live.ask; }
       else { m.bestBid = 1 - live.ask; m.bestAsk = 1 - live.bid; }
+      m.at = at;
     }
   }
   perturbDemo() {

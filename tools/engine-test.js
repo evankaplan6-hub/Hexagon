@@ -766,6 +766,69 @@ const position = (over = {}) => ({
     ok('the sweep itself runs once an hour, not on every question', 'exit-book-another' in E.timers, Object.keys(E.timers));
   }
 
+  group('the Polymarket listing is re-read every PM_LIST_EVERY_SEC, and a pair is only as fresh as its CLOB price');
+  {
+    const pmv = require('../src/venues/polymarket'), ksv = require('../src/venues/kalshi');
+    const saved = { fu: pmv.fetchUniverse, fp: pmv.fetchPrices, fa: ksv.fetchAll };
+    let lists = 0, listFails = false, clob = new Map(), clobFails = false;
+    pmv.fetchUniverse = async () => {
+      lists++;
+      if (listFails) throw new Error('gamma down');
+      return [{ id: 'm1', tokenIds: ['t0', 't1'], bestBid: 0.40, bestAsk: 0.42, vol24: 1000 }];
+    };
+    pmv.fetchPrices = async () => { if (clobFails) throw new Error('clob down'); return clob; };
+    ksv.fetchAll = async () => [{ ticker: 'KXA', yesBid: 0.4, yesAsk: 0.42, vol24: 10 }];
+    try {
+      const E = engine({ pmListEverySec: 120 });
+      await E.refreshQuotes();
+      const first = E.quotes.pm.get('m1'), listedAt = first.at;
+      ok('the first cycle reads the listing', lists === 1 && first && E.lastQuoteAt > 0, lists);
+      E.quotes.pm.set('pinned', { id: 'pinned' });            // what pinPositions / any.inject add
+      await E.refreshQuotes();
+      ok('the next cycle inside the interval does not', lists === 1, lists);
+      ok('...and rebuilds the map from the same listed objects, dropping last cycle\'s additions',
+        E.quotes.pm.get('m1') === first && !E.quotes.pm.has('pinned'), [...E.quotes.pm.keys()]);
+      ok('a reused listing keeps the time it was fetched', E.quotes.pm.get('m1').at === listedAt);
+      const before = E.lastQuoteAt; await sleep(5); await E.refreshQuotes();
+      ok('a reused listing is not a failure: the desk-wide data age still advances', E.lastQuoteAt > before);
+
+      E.pairs = [{ id: 'pA', pm: { id: 'm1', tokenId: 't1', tokenIndex: 1 }, ks: { ticker: 'KXA' } }];
+      clob = new Map([['t1', { bid: 0.57, ask: 0.59 }]]);
+      await sleep(5); await E.refreshPairPrices();
+      const m = E.quotes.pm.get('m1');
+      ok('a CLOB price on token 1 is written back in token-0 terms', Math.abs(m.bestBid - 0.41) < 1e-9 && Math.abs(m.bestAsk - 0.43) < 1e-9, m);
+      ok('...and stamps the market with when that price arrived', m.at > listedAt, m.at - listedAt);
+      const stamped = m.at;
+      clob = new Map();
+      await sleep(5); await E.refreshPairPrices();
+      ok('a token the CLOB did not answer for keeps its old stamp', m.at === stamped);
+      clobFails = true;
+      await E.refreshPairPrices();
+      ok('a failed CLOB call moves no stamp either', m.at === stamped);
+      clobFails = false;
+
+      E.pmList.at -= 121 * 1000;
+      listFails = true;
+      const kept = E.quotes.pm, lastBefore = E.lastQuoteAt;
+      await E.refreshQuotes();
+      ok('a due listing is read; a failed one leaves the map alone and does not advance the data age',
+        lists === 2 && E.quotes.pm === kept && E.lastQuoteAt === lastBefore, { lists });
+      await E.refreshQuotes();
+      ok('...and is tried again on the very next cycle', lists === 3, lists);
+      listFails = false;
+      await E.refreshQuotes();
+      ok('a successful re-read replaces the listing with new objects stamped now',
+        lists === 4 && E.quotes.pm.get('m1') !== first && E.quotes.pm.get('m1').at >= E.pmList.at, lists);
+
+      const every = engine({ pmListEverySec: 0 });
+      lists = 0;
+      await every.refreshQuotes(); await every.refreshQuotes();
+      ok('PM_LIST_EVERY_SEC=0 reads it every cycle, as before', lists === 2, lists);
+    } finally {
+      pmv.fetchUniverse = saved.fu; pmv.fetchPrices = saved.fp; ksv.fetchAll = saved.fa;
+    }
+  }
+
   for (const d of dirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch {} }
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

@@ -493,6 +493,14 @@ module.exports = {
   rulesDailyUsd: num('RULES_DAILY_USD', 1),
   rulesTimeoutMs: num('RULES_TIMEOUT_MS', 120000),
   pmUniverse: num('PM_UNIVERSE', 300),
+  // How often the taker re-reads that listing, in seconds. It was every cycle (15s), and on
+  // 2026-09-22 it was 40% of every byte the desk read -- 14 MB a minute of Gamma market rows at
+  // PM_UNIVERSE=500 -- on a Fly box pinned at its CPU cap. The listing's prices were never what
+  // the desk traded on: refreshPairPrices reprices every paired market from the CLOB each cycle,
+  // which is 1.7 MB in ten minutes. What the listing adds is WHICH markets exist, their volume,
+  // start times and fee rates, and none of that moves in two minutes. A new game is paired up to
+  // this much later; a game is untradeable two minutes before start regardless. 0 = every cycle.
+  pmListEverySec: Math.max(0, num('PM_LIST_EVERY_SEC', 120)),
   ksSeries: env('KS_SERIES', 'KXFEDDECISION,KXATPMATCH,KXWTAMATCH,KXMLBGAME,KXNFLGAME,KXNBAGAME,KXNCAAFGAME,KXMLSGAME,KXEPLGAME,KXUCLGAME,KXLALIGAGAME').split(',').map((s) => s.trim()).filter(Boolean),
 
   // live

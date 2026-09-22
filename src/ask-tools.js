@@ -461,6 +461,7 @@ const SETTINGS = [
   ['priceEvery', 'PRICE_EVERY_SEC', 'seconds between taker cycles'],
   ['reentryCooldownMs', 'REENTRY_COOLDOWN_MIN', 'wait after an exit before re-entering a pair (milliseconds here)'],
   ['pmUniverse', 'PM_UNIVERSE', 'Polymarket markets scanned, by volume'],
+  ['pmListEverySec', 'PM_LIST_EVERY_SEC', 'seconds between re-reads of that Polymarket listing (paired markets are repriced from the order book every cycle regardless)'],
   ['ksSeries', 'KS_SERIES', 'Kalshi series scanned by the fast matcher (games and the Fed)'],
   ['anyMarkets', 'ANY_MARKETS', 'any-market scanner on or off (every category on both venues)'],
   ['anyMaxPairs', 'ANY_MAX_PAIRS', 'most any-market pairs kept and repriced each cycle'],
