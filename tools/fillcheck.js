@@ -1,94 +1,316 @@
 'use strict';
-// Does the live desk fill the way the model says it should?
+// Does the paper maker fill the way its own tape says it should, and where does it lose the rest?
 //
-// This is the one question a week of paper trading exists to answer. The model claims a certain
-// number of fills per hour given the queue ahead of us; if the live desk fills much slower, the
-// backtest is still too optimistic and the strategy is worth less than it measures. If it fills
-// much faster, the queue model is too harsh and the strategy is worth more.
+//   node tools/fillcheck.js                       the newest closed day in data/fly/archive
+//   node tools/fillcheck.js --days 3              ...the newest three
+//   node tools/fillcheck.js --day 2026-09-20      a named ET day (repeatable)
+//   node tools/fillcheck.js --dir /data --day 2026-09-21      on the box, against its own files
+//   flags: --markets (the per-market table)   --makerParticipation 0.1 (or any maker tunable)
 //
-// Method: take the markets the desk is quoting, pull the trade tape for the same wall-clock window
-// the desk was running, replay it through the desk's OWN fill logic with each market's real
-// measured queue, and compare against what the journal says actually happened.
+// Reads files and nothing else: no network, no box, no clock. One ET day is 50-100 MB of tape and
+// is streamed, so this is safe on the 512 MB box too -- but the Mac's pulled copy costs the box nothing.
+//
+// WHAT THIS REPLACES, AND WHY. The first version asked Kalshi for each held market's last 1,000
+// prints and replayed them against the touch AS IT STOOD WHEN THE TOOL RAN, as if that quote had
+// rested on both sides of all ~120 markets for the whole 24 hours, with the queue ahead of it
+// worked off once and never rejoined. The desk quotes 24 markets at a time, works the rest off on
+// one side only, rejoins the back of the queue every time its price moves, and pulls a side at the
+// cap, on a gain lock and while cooled. So "live is 39% of model" (2026-09-21) compared the desk
+// with a desk that cannot exist, and its window -- "this build" -- was never that: `startedAt` in
+// the state is the ledger's first day, so it was always 24 hours across every restart. The number
+// could not be read either way, and it was the number MAKER_PARTICIPATION was going to be judged on.
+//
+// Since 2026-09-19 the maker writes down what it actually saw and did (src/makertape.js): the top
+// of every book it looked at with sizes, every print on those markets, and its own resting quote
+// and inventory. That is everything the fill logic reads. So three numbers, on the same prints:
+//
+//   JOURNAL  what the paper book booked (MAKER_FILL lines).
+//   TAPE     the desk's RECORDED quotes replayed against the recorded prints with the recorded depth
+//            as the queue, through the desk's own maker.fillsFrom. If the ledger is honest this
+//            reproduces the journal; where it does not, the difference is the finding.
+//   ALWAYS   the same prints against a desk that never stops: both sides at the recorded touch
+//            (maker.desiredQuotes on the recorded book, its own inventory, the real queue), in every
+//            market for as long as the desk was looking at it. Not a target -- most of what it fills
+//            and the desk does not is a rail doing its job -- but every fill it has that the tape
+//            replay lacks is put down to what the desk's recorded quote was doing at that print:
+//            pulled by a rail, not at the touch, further back in the queue, or not up yet after a
+//            restart. The rails are the price of the risk limits; the rest is operational loss, and
+//            that share is what a restart-free day should shrink.
+//
+// File order is the order the desk saw things in, and the replay keeps it: within a round the tape
+// holds the books, then the prints, then the quote that round ended on, so a print is matched
+// against the quote from the round BEFORE it, as it was live. The always-on desk requotes off a
+// book only once that round's prints are past, or it would be quoting with a book it had not seen.
 const fs = require('fs');
 const path = require('path');
-const cfg = require('../src/config');
-const api = require('./api');
-const ks = require('../src/venues/kalshi');
-const maker = require('../src/maker');
+const readline = require('readline');
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const HOURS = parseFloat(process.argv[2]) || 24;
-const r2h = (x) => Math.round(x * 100) / 100;
+const r2 = (x) => Math.round(x * 100) / 100;
+const pct = (a, b) => (b ? `${(100 * a / b).toFixed(0)}%` : '-');
 
-function journalFills(sinceMs) {
-  const out = [];
-  for (const f of fs.readdirSync(cfg.dataDir).filter((x) => /^journal-.*\.jsonl$/.test(x))) {
-    for (const line of fs.readFileSync(path.join(cfg.dataDir, f), 'utf8').split('\n')) {
-      if (!line) continue;
-      let j; try { j = JSON.parse(line); } catch { continue; }
-      if (j.kind !== 'MAKER_FILL') continue;
-      const t = Date.parse(j.t);
-      if (t >= sinceMs) out.push({ ...j, at: t });
+// why the always-on desk filled a print and the recorded quote did not, in the order they are tested
+const REASONS = [
+  ['restart', 'not up yet after a restart: the saved quote is withdrawn until the first round ends', 'ops'],
+  ['cooled', 'cooled by the run-over gate (MAKER_COOL in the journal): both sides withdrawn for the cooldown', 'rail'],
+  ['entire', 'both sides withdrawn for another reason: halted, or a book the desk would not quote', 'rail'],
+  ['growing', 'the growing side withdrawn: a rotated-out market worked off one-sided, the cap, or the gain lock', 'rail'],
+  ['side', 'that side withdrawn while flat or reducing', 'rail'],
+  ['price', 'quoted, but not at the price the always-on desk had: a round behind the book', 'ops'],
+  ['queue', 'quoted at that price, but further back in the queue: it had rejoined the back more recently', 'ops'],
+];
+
+// ---------------------------------------------------------------- the replay (pure)
+// Feed it tape rows in file order; ask for result() at the end. `maker` is src/maker.js.
+// `cools` is ticker -> [[fromMs, untilMs]] from the journal's MAKER_COOL lines, so a quote the run-over
+// gate pulled is told apart from one pulled by a halt.
+function makeFillCheck(cfg, maker, cools = new Map()) {
+  const cooledAt = (k, t) => (cools.get(k) || []).some(([a, b]) => t >= a && t < b);
+  const M = new Map();
+  const st = (k) => {
+    let s = M.get(k);
+    if (!s) {
+      s = { book: null, seenBook: null, rq: { bid: null, ask: null }, rqueue: { bid: 0, ask: 0 }, rinv: 0, down: false,
+        mq: { bid: null, ask: null }, mqueue: { bid: 0, ask: 0 }, minv: null, seen: new Set(),
+        tape: { fills: 0, qty: 0, ro: 0 }, always: { fills: 0, qty: 0 }, prints: 0 };
+      M.set(k, s);
     }
+    return s;
+  };
+  const pending = new Map();      // ticker -> the book this round showed, not yet quoted off by the always-on desk
+  const dirty = new Set();        // tickers whose always-on inventory moved: the cap may have changed its quote
+  const marks = {};               // g lines by reason
+  const lost = Object.fromEntries(REASONS.map(([k]) => [k, { fills: 0, qty: 0, ro: 0 }]));
+  const both = { fills: 0, tapeQty: 0, alwaysQty: 0 };
+  const tapeOnly = { fills: 0, qty: 0 };
+  let lastKind = null, lastBookT = null, prints = 0, rows = 0;
+  // Warm-up: the day before is fed through first with counting off. A quote that has not changed since
+  // yesterday has no line today until it does, and its place in the queue was earned yesterday.
+  let counting = true, warmed = false, firstT = null, lastT = null, exact = 0, inferred = 0;
+  const bump = (o, k, n) => { if (counting) o[k] += n; };
+
+  const depthOf = (bk, side) => { const l = bk && (side === 'bid' ? bk.yesBids[0] : bk.yesAsks[0]); return l ? l.size : 0; };
+  // moving to a new price joins the back of what is resting there; staying put keeps the place (makerdesk)
+  const requeue = (prev, prevQ, next, bk) => ({
+    bid: next.bid == null ? 0 : (next.bid === prev.bid ? prevQ.bid : depthOf(bk, 'bid')),
+    ask: next.ask == null ? 0 : (next.ask === prev.ask ? prevQ.ask : depthOf(bk, 'ask')),
+  });
+  const requoteAlways = (s) => {
+    if (!s.book) return;
+    const q = maker.desiredQuotes(s.book, s.minv || 0, cfg);
+    const next = { bid: q.bid ?? null, ask: q.ask ?? null };
+    s.mqueue = requeue(s.mq, s.mqueue, next, s.book);
+    s.mq = next;
+  };
+  const flush = () => {
+    for (const [k, bk] of pending) { const s = st(k); s.book = bk; requoteAlways(s); dirty.delete(k); }
+    pending.clear();
+    for (const k of dirty) requoteAlways(st(k));
+    dirty.clear();
+  };
+
+  function feed(row) {
+    if (!counting) warmed = true;
+    if (counting) { rows++; if (row.mk !== 'p' && Number.isFinite(row.t)) { if (firstT == null) firstT = row.t; lastT = row.t; } }
+    const kind = row.mk;
+    if (kind === 'g') {
+      flush();
+      if (counting) marks[row.why] = (marks[row.why] || 0) + 1;
+      // A new process (src/makertape.js writes this once, on its first line). The quotes saved in the
+      // ledger are withdrawn for the whole first round and re-posted at its end (src/makerdesk.js),
+      // so until a market's next quote line nothing of ours is resting there.
+      if (row.why === 'start') for (const s of M.values()) { s.rq = { bid: null, ask: null }; s.rqueue = { bid: 0, ask: 0 }; s.down = true; }
+    } else if (kind === 'b') {
+      // a new round: the books come first, and all of one round's books carry the same read time
+      if (lastKind === 'p' || lastKind === 'q' || (lastBookT != null && row.t !== lastBookT)) flush();
+      lastBookT = row.t;
+      const bk = { yesBids: [{ price: row.b, size: row.bs || 0 }], yesAsks: [{ price: row.a, size: row.as || 0 }] };
+      st(row.k).seenBook = bk;             // the recorded quote that ends THIS round rejoins this depth
+      pending.set(row.k, bk);              // the always-on desk quotes off it once this round's prints are past
+    } else if (kind === 'p') {
+      const s = st(row.k);
+      if (s.seen.has(row.id)) { lastKind = kind; return; }   // a restart can write the same print twice; the ledger's own dedupe spans it
+      s.seen.add(row.id); if (counting) { s.prints++; prints++; }
+      const t = { trade_id: row.id, yes_price_dollars: String(row.p), count_fp: String(row.n), taker_book_side: row.s === 'b' ? 'bid' : 'ask', is_block_trade: !!row.blk };
+      const a = maker.fillsFrom([t], s.rq, s.rinv, cfg, new Set(), s.rqueue);
+      const m = maker.fillsFrom([t], s.mq, s.minv || 0, cfg, new Set(), s.mqueue);
+      s.rqueue = a.queue; s.mqueue = m.queue;
+      const fa = a.fills[0], fm = m.fills[0];
+      if (fa) { s.rinv += fa.side === 'buy' ? fa.qty : -fa.qty; bump(s.tape, 'fills', 1); bump(s.tape, 'qty', fa.qty); if (fa.runOver) bump(s.tape, 'ro', fa.qty); }
+      if (fm) { s.minv = (s.minv || 0) + (fm.side === 'buy' ? fm.qty : -fm.qty); bump(s.always, 'fills', 1); bump(s.always, 'qty', fm.qty); dirty.add(row.k); }
+      if (!counting) { /* state only */ }
+      else if (fa && fm) { both.fills++; both.tapeQty += fa.qty; both.alwaysQty += fm.qty; }
+      else if (fa) { tapeOnly.fills++; tapeOnly.qty += fa.qty; }
+      else if (fm) {
+        const have = fm.side === 'buy' ? s.rq.bid : s.rq.ask, other = fm.side === 'buy' ? s.rq.ask : s.rq.bid;
+        const growing = (fm.side === 'buy' && s.rinv > 0) || (fm.side === 'sell' && s.rinv < 0);
+        const crosses = have != null && (fm.side === 'buy' ? have >= row.p : have <= row.p);
+        const why = s.down ? 'restart' : have == null && other == null ? (cooledAt(row.k, row.t) ? 'cooled' : 'entire') : have == null ? (growing ? 'growing' : 'side') : crosses ? 'queue' : 'price';
+        lost[why].fills++; lost[why].qty += fm.qty; if (fm.runOver) lost[why].ro += fm.qty;
+      }
+    } else if (kind === 'q') {
+      const s = st(row.k);
+      const next = { bid: row.b ?? null, ask: row.a ?? null };
+      // The desk's own number where the tape has it (qb/qa, since the evening of 2026-09-21). An older tape has only
+      // the depth at the touch, so a quote first seen is assumed to have just joined the back of it.
+      if (Number.isFinite(row.qb) && Number.isFinite(row.qa)) { s.rqueue = { bid: row.qb, ask: row.qa }; if (counting) exact++; }
+      else { s.rqueue = requeue(s.rq, s.rqueue, next, s.seenBook); if (counting) inferred++; }
+      s.rq = next; s.down = false;
+      s.rinv = row.i || 0;                 // the ledger's own inventory: the replay never drifts from it for long
+      if (s.minv == null) s.minv = s.rinv; // the always-on desk starts from the position the real one had
+    }
+    lastKind = kind;
   }
-  return out;
+
+  function result() {
+    flush();
+    const sum = (f) => [...M.values()].reduce((a, s) => a + f(s), 0);
+    return {
+      rows, prints, markets: [...M.values()].filter((s) => s.prints).length, marks, firstT, lastT,
+      // is the queue in this replay the desk's own, or this tool's guess?
+      exactQueue: exact > 0 && exact >= inferred * 20, warmed,
+      tape: { fills: sum((s) => s.tape.fills), qty: sum((s) => s.tape.qty), ro: sum((s) => s.tape.ro) },
+      always: { fills: sum((s) => s.always.fills), qty: sum((s) => s.always.qty) },
+      both, tapeOnly, lost,
+      byMarket: new Map([...M].map(([k, s]) => [k, { prints: s.prints, tape: s.tape, always: s.always }])),
+    };
+  }
+  return { feed, result, counting: (on) => { counting = !!on; } };
 }
 
-(async () => {
-  const st = await api.state();
-  const S = st.maker || {};
-  // Only count fills this PROCESS produced. The journal spans every build of the day, and the
-  // builds before the queue model filled a completely different way -- mixing them in was the
-  // first thing this tool got wrong, and it flattered the result by counting fills taken at
-  // prices where 15,000 orders were resting.
-  const since = Math.max(Date.now() - HOURS * 3600 * 1000, st.startedAt || 0);
-  const upH = (Date.now() - since) / 3600000;
-  // Same trap as maker-report: `markets` is a shaped ARRAY now, and Object.keys on an array gives
-  // "0", "1", "2". This tool went looking for a market called "0", matched nothing, and reported
-  // "live 0 fills" on the same line as "17 live fills journalled" -- a contradiction it printed
-  // without noticing, which is exactly the failure mode it exists to catch elsewhere.
-  const tickers = Array.isArray(S.markets) ? S.markets.map((m) => m.ticker) : Object.keys(S.markets || {});
-  if (!tickers.length) return console.log('the desk has no book yet');
+// MAKER_FILL lines, per market: what the paper book booked. And MAKER_COOL, as windows per market.
+function journalFills(lines, { from = -Infinity, to = Infinity } = {}) {
+  const by = new Map(), cools = new Map();
+  let fills = 0, qty = 0, ro = 0;
+  for (const line of lines) {
+    if (!line || line.indexOf('"MAKER_') < 0) continue;
+    let j; try { j = JSON.parse(line); } catch { continue; }
+    if (j.kind === 'MAKER_COOL') {
+      const a = Date.parse(j.t), b = Date.parse(j.until);
+      if (Number.isFinite(a) && Number.isFinite(b)) { if (!cools.has(j.ticker)) cools.set(j.ticker, []); cools.get(j.ticker).push([a, b]); }
+      continue;
+    }
+    if (j.kind !== 'MAKER_FILL') continue;
+    const at = Date.parse(j.t);
+    if (!(at >= from && at <= to)) continue;       // only while the tape was being written
+    const m = by.get(j.ticker) || { fills: 0, qty: 0 };
+    m.fills++; m.qty += j.qty || 0; by.set(j.ticker, m);
+    fills++; qty += j.qty || 0; if (j.runOver) ro += j.qty || 0;
+  }
+  return { fills, qty, ro, by, cools };
+}
 
-  const live = journalFills(since);
-  const liveBy = new Map();
-  for (const f of live) liveBy.set(f.ticker, (liveBy.get(f.ticker) || 0) + 1);
+// How far the tape replay may sit from the journal, market by market, before it is a problem and not
+// rounding. The two can differ honestly: a print the poll returned in one ET day and the desk booked
+// in the next, a tape line lost to a failed write, a round where a book failed to load. Measured:
+// 2026-09-20, warmed up on the 19th, 8,817 contracts replayed against 8,826 journalled and 0.1% apart
+// market by market. The 19th itself, the tape's first day with nothing to warm up on, is 11% apart by
+// market while its totals sit 4% apart -- misses cancelling -- so a cold replay is reported, not judged.
+const AGREE = 0.05;
+function verdict(res, jr) {
+  // by market, so a day where one market over-fills and another under-fills does not read as agreement
+  let off = 0;
+  for (const k of new Set([...res.byMarket.keys(), ...jr.by.keys()])) off += Math.abs(((res.byMarket.get(k) || {}).tape || { qty: 0 }).qty - (jr.by.get(k) || { qty: 0 }).qty);
+  const apart = jr.qty ? off / jr.qty : (res.tape.qty ? 1 : 0);
+  const ops = ['restart', 'price', 'queue'].reduce((a, k) => a + res.lost[k].qty, 0);
+  const rails = ['cooled', 'entire', 'growing', 'side'].reduce((a, k) => a + res.lost[k].qty, 0);
+  // judged when the replay knows where each quote stood: the desk's own queue numbers, or a day of warm-up
+  return { apart, agrees: apart <= AGREE, exact: !!(res.exactQueue || res.warmed), ops, rails, coverage: res.always.qty ? res.tape.qty / res.always.qty : null, opsShare: res.always.qty ? ops / res.always.qty : null };
+}
 
-  console.log(`comparing ${upH.toFixed(1)}h of THIS build · ${tickers.length} markets in the book · ${live.length} live fills journalled\n`);
-  if (upH < 1) console.log(`  (only ${(upH * 60).toFixed(0)} minutes so far — too short to conclude anything; run this again tomorrow)\n`);
+module.exports = { makeFillCheck, journalFills, verdict, REASONS, AGREE };
 
-  let mf = 0, mc = 0, lf = 0, lc = 0;
-  console.log('  ticker                              live fills   model fills   queue');
-  for (const t of tickers) {
-    let d, bk;
+// ---------------------------------------------------------------- the script
+if (require.main === module) {
+  const args = process.argv.slice(2);
+  const all = (name) => args.flatMap((a, i) => (a === `--${name}` ? [args[i + 1]] : []));
+  const flag = (name) => all(name)[0];
+  const root = path.join(__dirname, '..');
+  // The tape comes from the box, so the replay runs on the box's settings: fly.toml's MAKER_* where
+  // this shell has not set its own. (On the box they are already in the environment.)
+  try {
+    for (const m of fs.readFileSync(path.join(root, 'fly.toml'), 'utf8').matchAll(/^\s*(MAKER_[A-Z0-9_]+)\s*=\s*"([^"]*)"/gm)) if (process.env[m[1]] === undefined) process.env[m[1]] = m[2];
+  } catch { /* no fly.toml: the defaults */ }
+  const cfg = { ...require('../src/config') };
+  for (let i = 0; i < args.length; i++) {
+    const k = args[i].replace(/^--/, '');
+    if (args[i].startsWith('--maker') && k in cfg && Number.isFinite(parseFloat(args[i + 1]))) cfg[k] = parseFloat(args[i + 1]);
+  }
+  const maker = require('../src/maker');
+  const dir = path.resolve(flag('dir') || path.join(root, 'data', 'fly', 'archive'));
+  if (!fs.existsSync(dir)) { console.error(`no such folder: ${dir}`); process.exit(1); }
+  const have = fs.readdirSync(dir).map((f) => (/^ticks-(\d{4}-\d{2}-\d{2})\.jsonl$/.exec(f) || [])[1]).filter(Boolean).sort();
+  const days = all('day').length ? all('day') : have.slice(-(parseInt(flag('days'), 10) || 1));
+  if (!days.length) { console.error(`no ticks-YYYY-MM-DD.jsonl in ${dir} (the pull copies closed days: node tools/fly-pull.js)`); process.exit(1); }
+
+  (async () => {
+    // the journals first: the replay wants to know when a market was cooled. A cooldown that began
+    // the day before is read too, or the first hours of the window would call it a halt.
+    const jl = [];
+    const dayBefore = new Date(Date.parse(`${days[0]}T12:00:00Z`) - 86400000).toISOString().slice(0, 10);
+    const earlier = path.join(dir, `journal-${dayBefore}.jsonl`);
+    const priorCools = fs.existsSync(earlier) ? journalFills(fs.readFileSync(earlier, 'utf8').split('\n')).cools : new Map();
+    for (const d of days) { const jf = path.join(dir, `journal-${d}.jsonl`); if (fs.existsSync(jf)) jl.push(...fs.readFileSync(jf, 'utf8').split('\n')); }
+    const jr = journalFills(jl);
+    for (const [k, w] of priorCools) jr.cools.set(k, [...w, ...(jr.cools.get(k) || [])]);
+    const check = makeFillCheck(cfg, maker, jr.cools);
+    const read = async (tf) => {
+      const rl = readline.createInterface({ input: fs.createReadStream(tf), crlfDelay: Infinity });
+      for await (const line of rl) {
+        if (!line.startsWith('{"mk"')) continue;         // the pair recorder shares the file
+        let row; try { row = JSON.parse(line); } catch { continue; }
+        check.feed(row);
+      }
+    };
+    const warm = path.join(dir, `ticks-${dayBefore}.jsonl`);
+    if (fs.existsSync(warm)) { check.counting(false); await read(warm); check.counting(true); }
+    for (const d of days) {
+      const tf = path.join(dir, `ticks-${d}.jsonl`);
+      if (!fs.existsSync(tf)) { console.error(`no tape for ${d} in ${dir}`); process.exit(1); }
+      await read(tf);
+    }
+    const res = check.result();
+    // the journal only over the stretch the tape covers: the recorder was switched on partway through 2026-09-19
+    const jw = journalFills(jl, { from: res.firstT == null ? -Infinity : res.firstT - 5000, to: res.lastT == null ? Infinity : res.lastT + 5000 });
+    jr.fills = jw.fills; jr.qty = jw.qty; jr.ro = jw.ro; jr.by = jw.by;
+    const v = verdict(res, jr);
+    if (!res.rows) { console.log(`${days.join(', ')}: the tape holds no maker lines (RECORD_MAKER=0, or the maker was off)`); return; }
+
+    const line = (name, x, extra = '') => console.log(`  ${name.padEnd(9)}${String(x.fills).padStart(6)} fills ${String(Math.round(x.qty)).padStart(7)} contracts${extra}`);
+    console.log(`${days[0]}${days.length > 1 ? ` → ${days[days.length - 1]}` : ''} (ET) · ${res.markets} markets looked at · ${res.prints} prints on them · cap ${cfg.makerCap}, soft cap ${cfg.makerSoftCap}, participation ${cfg.makerParticipation}`);
+    const mk = Object.entries(res.marks).map(([k, n]) => `${n} ${k}`).join(' · ');
+    console.log(`holes in the tape: ${mk || 'none'}${res.marks.start === undefined ? ' · (no start markers: a tape from before restarts were written down, so a restart reads as nothing here)' : ''}\n`);
+    line('JOURNAL', jr, ` · ${pct(jr.ro, jr.qty)} run over`);
+    line('TAPE', res.tape, ` · ${pct(res.tape.ro, res.tape.qty)} run over   the recorded quotes, replayed`);
+    line('ALWAYS', res.always, '                 both sides at the touch, never down');
+
+    console.log(`\n1. Does the ledger fill the way its own tape says?`);
+    const problem = v.exact && !v.agrees;
+    console.log(!v.exact
+      ? `   not judged: a cold start. There is no tape for the day before to warm up on and no recorded queue positions (qb/qa,\n   2026-09-21 on), so every quote already resting is assumed to have just joined the back. Market by market the replay is\n   ${(v.apart * 100).toFixed(1)}% of the journal's contracts away; the totals above are closer than that only because the misses cancel.`
+      : v.agrees
+        ? `   yes: market by market the replay is within ${(v.apart * 100).toFixed(1)}% of the journal's contracts (the bar is ${AGREE * 100}%)`
+        : `   PROBLEM: market by market the replay is ${(v.apart * 100).toFixed(0)}% of the journal's contracts away (the bar is ${AGREE * 100}%) · furthest apart:`);
+    if (problem || args.includes('--markets')) {
+      const rowsBy = [...new Set([...res.byMarket.keys(), ...jr.by.keys()])].map((k) => {
+        const t = (res.byMarket.get(k) || { tape: { fills: 0, qty: 0 }, always: { fills: 0, qty: 0 }, prints: 0 }), j = jr.by.get(k) || { fills: 0, qty: 0 };
+        return { k, j, t: t.tape, a: t.always, prints: t.prints, d: Math.abs(t.tape.qty - j.qty) };
+      }).filter((r) => r.j.qty || r.t.qty || r.a.qty).sort((x, y) => y.d - x.d);
+      console.log('   market                                      prints   journal      tape    always   (contracts)');
+      for (const r of rowsBy.slice(0, args.includes('--markets') ? 1000 : 8)) console.log(`   ${r.k.slice(0, 42).padEnd(42)}${String(r.prints).padStart(8)}${String(r.j.qty).padStart(10)}${String(r.t.qty).padStart(10)}${String(r.a.qty).padStart(10)}`);
+    }
+
+    console.log(`\n2. What did a desk that never stops fill, and the recorded quotes did not? (${pct(res.tape.qty, res.always.qty)} coverage by contracts)`);
+    console.log(`   filled by both                     ${String(res.both.fills).padStart(6)} fills ${String(Math.round(res.both.alwaysQty)).padStart(7)} contracts (${Math.round(res.both.tapeQty)} on the tape: a different place in the queue)`);
+    for (const [k, words, sort] of REASONS) if (res.lost[k].fills) console.log(`   ${sort === 'rail' ? 'rail' : 'OPS '} ${String(res.lost[k].fills).padStart(6)} fills ${String(Math.round(res.lost[k].qty)).padStart(7)} contracts ${pct(res.lost[k].ro, res.lost[k].qty).padStart(4)} run over  ${words}`);
+    if (res.tapeOnly.fills) console.log(`   (and ${res.tapeOnly.fills} fills, ${Math.round(res.tapeOnly.qty)} contracts, only the recorded quotes had: the always-on desk was at its cap or a price away)`);
+    console.log(`\n   rails ${pct(v.rails, res.always.qty)} of the always-on contracts · operations ${pct(v.ops, res.always.qty)}`);
+    console.log('   The rails are what the risk limits cost and are meant to. The operations share is what restarts,');
+    console.log('   a round\'s delay and queue resets cost: that is the number a quiet day should bring down.');
+
+    // one reading per run, so a week of them accumulates beside the tape they came from
     try {
-      d = await (await fetch(`${ks.BASE}/markets/trades?ticker=${t}&limit=1000`)).json();
-      bk = await ks.fetchBook(t);
-    } catch { continue; }
-    const tr = (d.trades || []).filter((x) => Date.parse(x.created_time) >= since).reverse();
-    const bid = bk.yesBids[0], ask = bk.yesAsks[0];
-    if (!bid || !ask || !tr.length) { await sleep(110); continue; }
-    // the desk's own logic, the desk's own config, this market's real queue
-    const { fills } = maker.fillsFrom(tr, { bid: bid.price, ask: ask.price }, 0, cfg, new Set(), { bid: bid.size, ask: ask.size });
-    const l = liveBy.get(t) || 0;
-    const lqty = live.filter((f) => f.ticker === t).reduce((a, f) => a + f.qty, 0);
-    mf += fills.length; mc += fills.reduce((a, f) => a + f.qty, 0); lf += l; lc += lqty;
-    if (l || fills.length) console.log('  ' + t.padEnd(34) + String(l).padStart(8) + String(fills.length).padStart(14) + String(Math.round((bid.size + ask.size) / 2)).padStart(9));
-    await sleep(110);
-  }
-  if (live.length && !lf) {
-    console.log(`\n  WARNING: the journal has ${live.length} fills in this window but none matched a market in`);
-    console.log('  the book. That is a bug in this tool, not a result -- do not read anything into it.');
-  }
-  const ratio = mf ? lf / mf : null;
-  console.log(`\n  live   ${lf} fills, ${lc} contracts`);
-  console.log(`  model  ${mf} fills, ${mc} contracts`);
-  console.log(ratio == null ? '\n  model predicts nothing in this window; no comparison possible'
-    : `\n  live is running at ${(ratio * 100).toFixed(0)}% of the modelled fill rate`);
-  console.log(`\n  Under 50% would mean the backtest is STILL too optimistic and the strategy is worth`);
-  console.log(`  less than it measures. Over 150% would mean the queue model is too harsh. Between`);
-  console.log(`  those, the +$144 held-out figure stands as written.`);
-  // append the reading so a week of these accumulates on its own
-  fs.appendFileSync(path.join(cfg.dataDir, 'fillcheck.jsonl'),
-    JSON.stringify({ t: new Date().toISOString(), hours: r2h(upH), liveFills: lf, liveQty: lc, modelFills: mf, modelQty: mc, ratio }) + '\n');
-})().catch((e) => { console.error(e.message); process.exit(1); });
+      fs.appendFileSync(path.join(dir, 'fillcheck.jsonl'), JSON.stringify({ t: new Date().toISOString(), days, journal: { fills: jr.fills, qty: jr.qty }, tape: res.tape, always: res.always, apart: r2(v.apart), exactQueue: v.exact, coverage: v.coverage == null ? null : r2(v.coverage), ops: v.ops, rails: v.rails, marks: res.marks }) + '\n');
+    } catch { /* a read-only folder is not a reason to fail the check */ }
+    process.exit(problem ? 1 : 0);
+  })().catch((e) => { console.error(e.stack || e.message); process.exit(1); });
+}

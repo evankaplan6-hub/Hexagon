@@ -516,6 +516,42 @@ through our level does not care who was ahead of us and an at-touch fill does. N
 collapsed to a quarter -- so the default is 0, where the number the desk is losing money on is the
 one that matches.
 
+### The fill check, rebuilt on the desk's own tape
+
+`tools/fillcheck.js` used to fetch each held market's last 1,000 prints and replay them against the
+touch as it stood when the tool ran, as if that quote had rested on both sides of all ~120 markets
+for 24 hours with its queue worked off once. It read 41% and then 39% on 2026-09-21, under its own
+50% bar, and the number meant nothing: the desk quotes 24 markets at a time, works the rest off
+one-sided, and rejoins the back of the queue whenever its price moves. Its "this build" window was
+never that either (`startedAt` is the ledger's first day).
+
+It now reads files only. Since 2026-09-19 the maker's tape holds every book it looked at, every
+print on those markets and its own quote and inventory (`src/makertape.js`), which is everything the
+fill logic reads. Three numbers on the same prints:
+
+```bash
+node tools/fillcheck.js                  # the newest closed day in data/fly/archive
+node tools/fillcheck.js --days 3 --markets
+```
+
+- **JOURNAL** -- what the paper book booked.
+- **TAPE** -- the recorded quotes replayed against the recorded prints and depth through
+  `maker.fillsFrom`. On 2026-09-20, warmed up on the day before: 1,217 fills and 8,817 contracts
+  against the journal's 1,220 and 8,826, 0.1% apart market by market. The ledger fills the way its
+  own tape says. (Cold, on the tape's first day, it is 11% apart by market: a quote that had rested
+  for days replays as if it had just joined the back. A cold replay is reported, not judged.)
+- **ALWAYS** -- both sides at the recorded touch in every market the desk was looking at, never
+  down. 29,984 contracts that day against the desk's 8,817, and every fill the desk did not have is
+  put down to what its recorded quote was doing at that print: **55% of the always-on contracts were
+  in markets cooled by the run-over gate** (16,475, 64% of them run over -- the same share as the
+  fills the desk did take), 14% were the growing side pulled on a held market, and **4% was
+  operational** (further back in the queue). So the old tool's missing 60% was the rails, not
+  restarts and not the fill model, and `MAKER_PARTICIPATION` is not what it measures.
+
+The tape gained two things for this, from the evening of 2026-09-21: a `start` line when a process
+begins (a restart used to be invisible in it) and `qb`/`qa` on each quote line, the contracts the
+queue model still has ahead of each side.
+
 ### The ranking, re-scored walk-forward
 
 The clear-time rule above was scored with each market's measured depth on a fixed set of markets, once.
@@ -927,7 +963,7 @@ settlement agrees with the venues); what each book has realised (`tools/pnl-repo
 times the watchdog restarted the desk yesterday and today; and whether the box is starved
 (`/proc/pressure/cpu`), which commit it runs and how much of `/data` is free. First run,
 2026-09-21: 159 settlements, 159 agree; 29 restarts on the 20th, 7 on the 21st. The exit code is the
-number of steps that flagged something.
+number of steps that flagged something. It also runs `tools/fillcheck.js` on the newest pulled day.
 
 ## Honest notes
 - Paper results are not predictive. Cross-venue gaps on liquid pre-game and macro markets are usually 0 to 1c, so expect the desk to spend most of its time researching and to trade rarely. That is correct behavior, not a bug.
@@ -970,6 +1006,7 @@ tools/test.js          every suite in one command (npm test)
 tools/decide-test.js   assertions for the taker decision core
 tools/probe-test.js    assertions for the thin-market probe (stubbed venues, frozen clock)
 tools/maker-test.js    assertions for the maker core: quoting, queue, fills, realised P&L
+tools/fillcheck-test.js  assertions for the fill check's replay: round order, the queue, restarts, the warm-up day, the reasons
 tools/makerdesk-test.js  assertions for the maker's loop: restart, empty universe, settlement, reduce-only, gain lock, cooling
 tools/broker-test.js   assertions for fills, incl. the live Kalshi order path (no network)
 tools/fees-test.js     assertions for what each venue charges: Polymarket per market, Kalshi per series

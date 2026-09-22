@@ -90,7 +90,7 @@ Works on a $5 VPS, a Raspberry Pi, or anything that runs Docker. Keep the region
 
 ```bash
 fly logs                        # live
-fly ssh console -C "node tools/fillcheck.js 24"    # the one number that matters
+node tools/fillcheck.js         # on the Mac, from the pulled tape: does the ledger fill the way its tape says, and where the rest goes
 fly ssh console -C "node tools/maker-report.js"
 ```
 

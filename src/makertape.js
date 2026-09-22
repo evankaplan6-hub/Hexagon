@@ -13,8 +13,9 @@
 //
 //   {"mk":"b","t":ms,"k":ticker,"b":0.44,"bs":120,"a":0.45,"as":300}       top of book, on change
 //   {"mk":"p","t":ms,"k":ticker,"id":trade_id,"p":0.45,"n":12,"s":"b"|"a"}  a print (taker on the bid / ask book side)
-//   {"mk":"q","t":ms,"k":ticker,"b":0.44,"a":0.45,"i":-12}                   OUR resting quote and inventory, on change
-//   {"mk":"g","t":ms,"why":"halt"|"data-failure"|"tape-gap"|"write-failed"|"resume"}   a hole in what was observed
+//   {"mk":"q","t":ms,"k":ticker,"b":0.44,"a":0.45,"i":-12,"qb":310,"qa":0}   OUR resting quote and inventory, on change,
+//                                                                           and how much is still ahead of each side
+//   {"mk":"g","t":ms,"why":"start"|"halt"|"data-failure"|"tape-gap"|"write-failed"|"resume"}   a hole in what was observed
 //
 // `g` says the tape is NOT a record of quiet here. While the desk is halted it withdraws every quote
 // and looks at nothing, and a replay that read only b/p/q would see the last quote rest straight
@@ -22,6 +23,15 @@
 // `q` line with null prices for every withdrawn market, and "resume" on the first round after, which
 // also rewrites every book. "tape-gap" is a round where the exchange traded more than the poll could
 // page back over. "write-failed" is the first line after a failed append, so lost lines read as a hole.
+//
+// "start" is the first line a new process writes. Without it a restart was invisible here: the last
+// quote before it read as resting straight through the outage and through the first round after,
+// when the desk has withdrawn everything it had saved (src/makerdesk.js). `qb`/`qa` are the queue
+// model's contracts still ahead of our bid and ask when the line was written. The tape had the depth
+// at the touch but not our PLACE in it, so a replay had to assume every quote it first saw had just
+// joined the back -- and a quote that had rested for days (CONTROLH-2026-R bid 10c, 103 contracts
+// filled on 2026-09-19) replayed to nothing behind a queue the desk had long since worked through.
+// tools/fillcheck.js reads both.
 //
 // Book lines are written when the price or size changes, and otherwise once a minute so a flat market
 // and a gap in the tape stay apart (`hb:1`). `t` on a print is the exchange's own timestamp; on a
@@ -41,6 +51,7 @@ function makeMakerTape(cfg, { io = fs, clock = Date.now } = {}) {
   const seen = new Set();        // print ids already written; a poll can return the same print twice
   let inGap = null;              // why the desk is not looking, or null
   let lost = false;              // the last append failed: say so on the next one that works
+  let started = false;           // has this process put its "start" line on disk yet
   // `books`/`trades`/`markets` as fetched this round; `at` is when the books arrived (not when this ran);
   // `gap` says the desk is not looking this round and why; `missed` says the poll skipped prints.
   return (E, { books, trades, markets, at, gap, missed } = {}) => {
@@ -51,6 +62,7 @@ function makeMakerTape(cfg, { io = fs, clock = Date.now } = {}) {
     const pendBook = new Map(), pendQuote = new Map(), pendSeen = [];
     const marker = (why, extra) => lines.push(JSON.stringify({ mk: 'g', t: now, why, ...extra }));
     let nextGap = inGap, resnapshot = false;
+    if (!started) marker('start');
     if (lost) marker('write-failed');
     if (gap) { if (inGap !== gap) marker(gap); nextGap = gap; }
     else if (inGap) { marker('resume', { after: inGap }); nextGap = null; resnapshot = true; }
@@ -81,7 +93,9 @@ function makeMakerTape(cfg, { io = fs, clock = Date.now } = {}) {
       const key = `${q.bid ?? ''}|${q.ask ?? ''}|${m.inv || 0}`;
       if (lastQuote.get(ticker) === key) continue;
       pendQuote.set(ticker, key);
-      lines.push(JSON.stringify({ mk: 'q', t: now, k: ticker, b: q.bid == null ? null : r4(q.bid), a: q.ask == null ? null : r4(q.ask), i: m.inv || 0 }));
+      const ahead = m.queue || {};
+      lines.push(JSON.stringify({ mk: 'q', t: now, k: ticker, b: q.bid == null ? null : r4(q.bid), a: q.ask == null ? null : r4(q.ask), i: m.inv || 0,
+        qb: q.bid == null ? 0 : Math.round(ahead.bid || 0), qa: q.ask == null ? 0 : Math.round(ahead.ask || 0) }));
     }
     if (!lines.length) { inGap = nextGap; return; }
     try {
@@ -93,7 +107,7 @@ function makeMakerTape(cfg, { io = fs, clock = Date.now } = {}) {
       if (now - warnedAt > 300000) { warnedAt = now; try { E.log('MAKR', 'OPS', null, `maker tape write failed: ${String(e.message).slice(0, 120)}`); } catch { /* nothing left to tell */ } }
       return;
     }
-    lost = false; inGap = nextGap;
+    lost = false; started = true; inGap = nextGap;
     if (resnapshot) lastBook.clear();
     for (const [k, v] of pendBook) lastBook.set(k, v);
     for (const [k, v] of pendQuote) lastQuote.set(k, v);

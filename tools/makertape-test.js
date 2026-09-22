@@ -15,7 +15,10 @@ const group = (n) => console.log(`\n${n}`);
 // a fake disk that keeps what was appended, and can be told to fail
 const disk = () => {
   const d = { files: {}, fail: false, appendFileSync(p, s) { if (d.fail) throw new Error('ENOSPC: no space left on device'); d.files[p] = (d.files[p] || '') + s; }, mkdirSync() {} };
-  d.lines = () => Object.values(d.files).join('').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  d.raw = () => Object.values(d.files).join('').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  // every process opens its tape with one "start" line (asserted on its own below); the rest of the
+  // suite reads what comes after it
+  d.lines = () => d.raw().filter((l) => l.why !== 'start');
   return d;
 };
 const T0 = Date.parse('2026-09-19T15:00:00Z');
@@ -37,6 +40,22 @@ group('a book line is written on change, not on every look');
   now += 61000; rec(e, { books: new Map([['A', book(0.44, 90, 0.45, 300)]]) });
   const hb = io.lines().pop();
   ok('a flat market still leaves a heartbeat every minute, marked as one', hb.hb === 1 && hb.bs === 90, hb);
+}
+
+group('a new process says so, once, and a quote line says how much is ahead of it');
+{
+  const io = disk(); let now = T0; const rec = makeMakerTape(cfg(), { io, clock: () => now });
+  rec(E(), { markets: { A: { quotes: { bid: 0.44, ask: null }, inv: 3, queue: { bid: 310.4, ask: 55 } } } });
+  now += 2000; rec(E(), { markets: { A: { quotes: { bid: 0.44, ask: 0.45 }, inv: 3 } } });
+  const L = io.raw();
+  ok('the first line of a process is a start marker, and there is only one', L[0].mk === 'g' && L[0].why === 'start' && L.filter((l) => l.why === 'start').length === 1, L);
+  ok('a quote line carries the queue ahead of each side, and none for a side with no quote', L[1].qb === 310 && L[1].qa === 0, L[1]);
+  ok('a ledger with no queue yet reads as nothing ahead', L[2].qb === 0 && L[2].qa === 0, L[2]);
+  const bad = disk(); bad.fail = true; const rec2 = makeMakerTape(cfg(), { io: bad, clock: () => T0 });
+  rec2(E(), { markets: { A: { quotes: { bid: 0.44, ask: null }, inv: 0 } } });
+  bad.fail = false;
+  rec2(E(), { markets: { A: { quotes: { bid: 0.44, ask: null }, inv: 0 } } });
+  ok('a start line lost to a failed write is written by the next one that works', bad.raw()[0].why === 'start' && bad.raw().filter((l) => l.why === 'start').length === 1, bad.raw());
 }
 
 group('prints');
