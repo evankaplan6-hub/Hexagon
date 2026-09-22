@@ -41,7 +41,8 @@ fly open                                                    # browser prompts: u
 You need the password you generated, so either pick your own instead of `openssl rand`, or run
 the `openssl` line on its own first and copy the output.
 
-Roughly $2–4/month for a shared-cpu-1x with a 1GB volume.
+Roughly $4–5/month for a shared-cpu-2x with a 1GB volume. It was a shared-cpu-1x until 2026-09-22,
+when the desk was found pinned at that size's CPU cap (6.25% of a core); `fly.toml` has the numbers.
 
 ### Auto-deploy
 

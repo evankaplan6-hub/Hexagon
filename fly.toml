@@ -59,9 +59,8 @@ primary_region = "iad"          # Ashburn, Virginia — close to the exchange, a
   # 22.5k x 9.7k crawl, so making it yield would fix nothing. The crawl also roughly doubled that
   # day (22,524 -> 42,573 Kalshi markets) when #82 dropped its volume floor. 45 min puts the duty
   # cycle near 19%. These pairs are Oscars 2027 and September unemployment; they do not move in 20
-  # minutes, and src/anymarket.js restores the last crawl's pairs across a restart. If the box is
-  # still starved, the next things to turn off are WHALE_WATCH (advisory, never trades) and
-  # RECORD_MAKER (the tape writes 57-97 MB a day) -- and only then buy a bigger machine.
+  # minutes, and src/anymarket.js restores the last crawl's pairs across a restart. The starvation
+  # itself turned out to be Fly's CPU cap, not the crawl: see [[vm]] below (2026-09-22).
   DISCOVER_EVERY_MIN = "45"
   # Raised from the 3% default (src/config.js) on 2026-09-17: the desk hit 3% intraday and TESS
   # correctly halted new risk, but 3% of a $10k paper account is $300 -- tight enough that one bad
@@ -101,6 +100,17 @@ primary_region = "iad"          # Ashburn, Virginia — close to the exchange, a
   auto_start_machines = false
   min_machines_running = 1
 
+# shared-cpu-2x since 2026-09-22. Fly caps a shared vCPU at 5ms of CPU per 80ms -- 6.25% of a core --
+# and lets it run faster only on credit saved while idle (fly.io/docs/machines/cpu-performance). On
+# shared-cpu-1x the desk wanted a little more than that all day, so it never saved any: a 60s sample
+# of /proc/stat read the desk at ~7.6% and "steal" (Fly holding it back) at ~50%, and the PSI
+# "some ~58%" above is that throttling, not demand. The loops still finished 3.2-3.7 of 4 taker
+# cycles a minute, so the desk was only modestly over the cap, and any extra work (a crawl, a burst
+# of fills) pushed a loop past the 300s watchdog: 5 restarts on 2026-09-22. The crawl is not the
+# steady load -- a local run with this env spent 36 MB/min of JSON with no crawl in it, 40% of it
+# the Gamma top-500 listing every 15s and 25% the maker's trade poll every 2s. 2x doubles the cap
+# to 12.5% for about $0.72 a month more. If the box is still held back, the next step is fetching
+# that Gamma listing less often, not turning off WHALE_WATCH or RECORD_MAKER (~5% between them).
 [[vm]]
-  size = "shared-cpu-1x"
+  size = "shared-cpu-2x"
   memory = "512mb"              # the tick recorder and journals are the only real consumers

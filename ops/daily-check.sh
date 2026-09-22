@@ -12,8 +12,11 @@
 #                                         29 on 2026-09-20 and 5 on 2026-09-21; a restart is a
 #                                         cancel-and-repost, so a day with many of them is a day the
 #                                         maker's fills (tools/fillcheck.js) cannot be compared with its model
-#   5. is the box starved?                /proc/pressure/cpu (shared-cpu-1x: `some avg300` over ~20 is
-#                                         when the hourly restarts began), the commit it runs, /data free
+#   5. is the box starved?                /proc/stat since boot: the desk's share of the CPU, and "steal",
+#                                         the time Fly held it back for being over its cap (5ms per 80ms per
+#                                         shared vCPU). Steal is the number to read: ~50% on shared-cpu-1x on
+#                                         2026-09-22, the day of 5 restarts. Then /proc/pressure/cpu, which
+#                                         counts that same throttling as waiting, the commit it runs, /data free
 #
 # Nothing on the box is changed and nothing is deleted anywhere. What it writes on the Mac: step 2
 # copies the box's state.json and today's journal down into data/fly/archive (ledger-check --box),
@@ -58,7 +61,7 @@ TODAY="$(TZ=America/New_York date +%F)"
 YDAY="$(TZ=America/New_York date -v-1d +%F)"
 # one ssh session for all of it, and nothing heavier than grep: the box has one shared CPU.
 # (the dots stand for the quotes in "kind":"WATCHDOG", which would not survive three shells)
-"$FLY" ssh console -a "$APP" -C "sh -c 'echo commit \$GIT_SHA; for d in $YDAY $TODAY; do echo \"watchdog restarts \$d: \$(n=\$(grep -c kind.:.WATCHDOG., /data/journal-\$d.jsonl 2>/dev/null); echo \${n:-0})\"; done; cat /proc/pressure/cpu; df -m /data | tail -1'" 2>&1 | grep -v '^Connecting to' || bad=$((bad + 1))
+"$FLY" ssh console -a "$APP" -C "sh -c 'echo commit \$GIT_SHA; for d in $YDAY $TODAY; do echo \"watchdog restarts \$d: \$(n=\$(grep -c kind.:.WATCHDOG., /data/journal-\$d.jsonl 2>/dev/null); echo \${n:-0})\"; done; set -- \$(head -1 /proc/stat); t=\$((\$2+\$3+\$4+\$5+\$6+\$7+\$8+\$9)); echo \"cpu since boot: desk \$(((\$2+\$4)*100/t))%, held back by Fly (steal) \$((\$9*100/t))%\"; cat /proc/pressure/cpu; df -m /data | tail -1'" 2>&1 | grep -v '^Connecting to' || bad=$((bad + 1))
 
 printf '\n%s\n' "$([ "$bad" = 0 ] && echo 'all five answered, nothing flagged' || echo "$bad step(s) flagged a problem: read up")"
 exit "$bad"
