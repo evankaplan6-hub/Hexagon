@@ -14,7 +14,7 @@ Copy `.env.example` to `.env` to change anything. State persists in `data/state.
 
 ## What it actually does
 
-Every 15 seconds the engine pulls the top 300 Polymarket markets by volume and every open market in 11 Kalshi series (Fed decisions, ATP/WTA, MLB, NFL, NBA, NCAAF, MLS, EPL, UCL, La Liga), then runs the desks in order:
+Every 15 seconds the engine pulls every open market in 11 Kalshi series (Fed decisions, ATP/WTA, MLB, NFL, NBA, NCAAF, MLS, EPL, UCL, La Liga) and live order-book prices for every paired Polymarket market, then runs the desks in order below. (The list of the top 300 Polymarket markets by volume, `PM_UNIVERSE`, which is what pairs are matched from, is re-read every two minutes, `PM_LIST_EVERY_SEC`: it was 40% of everything the desk downloaded, and none of its prices were ever traded on.)
 
 | # | Agent | Desk | Job |
 |---|-------|------|-----|
