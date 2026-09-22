@@ -56,6 +56,9 @@ group('a restart');
   ok('between the start line and the next quote line nothing of ours is resting', r.lost.restart.fills === 1 && r.lost.restart.qty === 10, r.lost);
   ok('...and the re-posted quote is at the back: 250 ahead, a tenth of the last 50', r.tape.fills === 1 && r.tape.qty === 5, r.tape);
   ok('the always-on desk never went down: it filled both', r.always.fills === 2 && r.marks.start === 1, r.always);
+  // a market the restarted desk quotes for the first time is down until its first quote line too
+  const fresh = run([g(0, 'start'), b(0, 0.44, 0, 0.46, 0, 'N'), b(2000, 0.44, 0, 0.46, 0, 'N'), p(1500, 0.44, 100, 'a', 'N'), q(2001, 0.44, 0.46, 0, 'N')]);
+  ok('a market first seen after a start is "restart", not a rail, until it is quoted', fresh.lost.restart.fills === 1 && fresh.lost.entire.fills === 0, fresh.lost);
 }
 
 group('what a missed fill is put down to');
@@ -103,6 +106,9 @@ group('a fill is marked against the mid minutes later');
   const t = r.marked.tape;
   ok('per contract, at each horizon: +4c, then -4c', Math.abs(t[5].perContract - 0.04) < 1e-9 && Math.abs(t[30].perContract + 0.04) < 1e-9 && t[5].qty === 10, t);
   ok('a horizon the tape does not reach is not marked', t[120].qty === 0 && t[120].perContract === null, t[120]);
+  // the market is dropped after the fill and re-quoted three hours on: the 30-minute mark has no book near it
+  const gap = run([b(0, 0.44, 0, 0.46, 0), q(1, 0.44, 0.46), p(1000, 0.44, 100, 'a'), b(5 * M + 1000, 0.47, 0, 0.49, 0), b(180 * M, 0.30, 0, 0.32, 0)]);
+  ok('a horizon that falls in a gap between book lines is not marked against the stale one', gap.marked.tape[5].qty === 10 && gap.marked.tape[30].qty === 0, gap.marked.tape);
   // sold 10 at 46c into a lift; the mid then falls to 40c: a good sale
   const sell = run([b(0, 0.44, 0, 0.46, 0), q(1, 0.44, 0.46), p(1000, 0.46, 100, 'b'), b(5 * M + 1000, 0.39, 0, 0.41, 0)]);
   ok('a sale is marked the other way round', Math.abs(sell.marked.tape[5].perContract - 0.06) < 1e-9, sell.marked.tape[5]);
@@ -123,7 +129,9 @@ group('the journal side, and the verdict');
   const res = (a, bq, warmed = true) => ({ warmed, exactQueue: false, tape: { qty: a + bq }, always: { qty: 100 }, lost: Object.fromEntries(['restart', 'cooled', 'entire', 'growing', 'side', 'price', 'queue'].map((k) => [k, { qty: 0 }])), byMarket: new Map([['A', { tape: { qty: a } }], ['B', { tape: { qty: bq } }]]) });
   ok('the same contracts market by market agree', verdict(res(10, 5), jr).agrees === true);
   ok('misses that cancel in the total are still misses: 15 against 15, and 67% apart', verdict(res(15, 0), jr).agrees === false && Math.abs(verdict(res(15, 0), jr).apart - 10 / 15) < 1e-9, verdict(res(15, 0), jr));
-  ok('a cold replay is reported, not judged', verdict(res(15, 0, false), jr).exact === false);
+  ok('a replay on guessed queues is reported, not judged, warmed up or not', verdict(res(15, 0, false), jr).exact === false && verdict(res(15, 0, true), jr).exact === false);
+  ok('...and one on the desk\'s own queue numbers is judged', verdict({ ...res(15, 0, false), exactQueue: true }, jr).exact === true);
+  ok('within() re-cuts the same journal without re-reading it', jr.within(T0 + 1500, T0 + 10000).qty === 5 && jr.within(-Infinity, Infinity).qty === 22, jr.within(T0 + 1500, T0 + 10000));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

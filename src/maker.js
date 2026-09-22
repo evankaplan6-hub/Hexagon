@@ -104,6 +104,20 @@ function fillsFrom(trades, quotes, inv, cfg, seen, queue) {
   return { fills: out, queue: { bid: qb, ask: qa } };
 }
 
+// ---------------------------------------------------------------- queue position
+// Where a quote stands after a requote. Moving to a new price joins the back of whatever is resting
+// there; staying put keeps the place already worked down; a side not quoted has no place. Pure, and
+// shared: the desk (src/makerdesk.js) and the fill check that replays its tape (tools/fillcheck.js)
+// must apply the same rule, or the replay measures a desk that does not exist.
+function queueAfter(prevQuotes, prevQueue, next, book) {
+  const depth = (side) => { const l = book && (side === 'bid' ? book.yesBids[0] : book.yesAsks[0]); return l ? l.size : 0; };
+  const pq = prevQueue || { bid: 0, ask: 0 }, was = prevQuotes || {};
+  return {
+    bid: next.bid == null ? 0 : (next.bid === was.bid ? pq.bid : depth('bid')),
+    ask: next.ask == null ? 0 : (next.ask === was.ask ? pq.ask : depth('ask')),
+  };
+}
+
 // ---------------------------------------------------------------- accounting
 // What one fill does to a position. Pure: takes the position and the fill, returns the position
 // that results plus what was realised and what moved in cash. It lives here rather than inside
@@ -330,4 +344,4 @@ async function eligibleSeries(candidates, { getJSON = http.getJSON, sleep = (ms)
   return ok;
 }
 
-module.exports = { tickerEventDays, daysToEnd, desiredQuotes, fillsFrom, applyFill, settlePosition, gainLock, toxWindow, toxicGate, drawdownFrom, eligibleSeries, candidatesFrom };
+module.exports = { tickerEventDays, daysToEnd, desiredQuotes, queueAfter, fillsFrom, applyFill, settlePosition, gainLock, toxWindow, toxicGate, drawdownFrom, eligibleSeries, candidatesFrom };

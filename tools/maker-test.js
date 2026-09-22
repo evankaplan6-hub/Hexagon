@@ -24,6 +24,18 @@ const book = (bid, ask, bidSize = 5000, askSize = 5000) => ({
 });
 
 // ---------------------------------------------------------------- desiredQuotes
+group('queue position after a requote (queueAfter, shared with the fill check)');
+{
+  const bk = book(0.44, 0.45); bk.yesBids[0].size = 300; bk.yesAsks[0].size = 120;
+  const was = { bid: 0.44, ask: 0.45 }, had = { bid: 40, ask: 90 };
+  ok('staying at both prices keeps both places', JSON.stringify(maker.queueAfter(was, had, { bid: 0.44, ask: 0.45 }, bk)) === JSON.stringify({ bid: 40, ask: 90 }));
+  ok('moving one side joins the back of that side only', JSON.stringify(maker.queueAfter(was, had, { bid: 0.43, ask: 0.45 }, bk)) === JSON.stringify({ bid: 300, ask: 90 }));
+  ok('a side not quoted has no place', maker.queueAfter(was, had, { bid: null, ask: 0.45 }, bk).bid === 0);
+  ok('a side re-posted after being withdrawn joins the back', maker.queueAfter({ bid: null, ask: 0.45 }, { bid: 0, ask: 90 }, { bid: 0.44, ask: 0.45 }, bk).bid === 300);
+  ok('no previous quote or queue at all reads as joining the back', JSON.stringify(maker.queueAfter(undefined, undefined, { bid: 0.44, ask: 0.45 }, bk)) === JSON.stringify({ bid: 300, ask: 120 }));
+  ok('no book means nothing known ahead', maker.queueAfter(was, had, { bid: 0.43, ask: 0.45 }, null).bid === 0);
+}
+
 group('desiredQuotes rests at the touch, or explains why it will not');
 {
   const q = maker.desiredQuotes(book(0.44, 0.45), 0, cfg());

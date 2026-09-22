@@ -75,10 +75,13 @@ const REASONS = [
 function makeFillCheck(cfg, maker, cools = new Map()) {
   const cooledAt = (k, t) => (cools.get(k) || []).some(([a, b]) => t >= a && t < b);
   const M = new Map();
+  // A market first seen after a start marker is down like every other until its first quote line:
+  // the desk posts nothing in a market until the end of the round it first looks at it.
+  let sinceStart = false;
   const st = (k) => {
     let s = M.get(k);
     if (!s) {
-      s = { book: null, seenBook: null, rq: { bid: null, ask: null }, rqueue: { bid: 0, ask: 0 }, rinv: 0, down: false,
+      s = { book: null, seenBook: null, rq: { bid: null, ask: null }, rqueue: { bid: 0, ask: 0 }, rinv: 0, down: sinceStart,
         mq: { bid: null, ask: null }, mqueue: { bid: 0, ask: 0 }, minv: null, seen: new Set(),
         tape: { fills: 0, qty: 0, ro: 0 }, always: { fills: 0, qty: 0 }, prints: 0 };
       M.set(k, s);
@@ -100,12 +103,7 @@ function makeFillCheck(cfg, maker, cools = new Map()) {
   let counting = true, warmed = false, firstT = null, lastT = null, exact = 0, inferred = 0;
   const bump = (o, k, n) => { if (counting) o[k] += n; };
 
-  const depthOf = (bk, side) => { const l = bk && (side === 'bid' ? bk.yesBids[0] : bk.yesAsks[0]); return l ? l.size : 0; };
-  // moving to a new price joins the back of what is resting there; staying put keeps the place (makerdesk)
-  const requeue = (prev, prevQ, next, bk) => ({
-    bid: next.bid == null ? 0 : (next.bid === prev.bid ? prevQ.bid : depthOf(bk, 'bid')),
-    ask: next.ask == null ? 0 : (next.ask === prev.ask ? prevQ.ask : depthOf(bk, 'ask')),
-  });
+  const requeue = maker.queueAfter;   // the desk's own rule, so the replay cannot drift from it
   const requoteAlways = (s) => {
     if (!s.book) return;
     const q = maker.desiredQuotes(s.book, s.minv || 0, cfg);
@@ -130,7 +128,7 @@ function makeFillCheck(cfg, maker, cools = new Map()) {
       // A new process (src/makertape.js writes this once, on its first line). The quotes saved in the
       // ledger are withdrawn for the whole first round and re-posted at its end (src/makerdesk.js),
       // so until a market's next quote line nothing of ours is resting there.
-      if (row.why === 'start') for (const s of M.values()) { s.rq = { bid: null, ask: null }; s.rqueue = { bid: 0, ask: 0 }; s.down = true; }
+      if (row.why === 'start') { sinceStart = true; for (const s of M.values()) { s.rq = { bid: null, ask: null }; s.rqueue = { bid: 0, ask: 0 }; s.down = true; } }
     } else if (kind === 'b') {
       // a new round: the books come first, and all of one round's books carry the same read time
       if (lastKind === 'p' || lastKind === 'q' || (lastBookT != null && row.t !== lastBookT)) flush();
@@ -175,14 +173,16 @@ function makeFillCheck(cfg, maker, cools = new Map()) {
     lastKind = kind;
   }
 
-  // the recorded mid at or before `t`; null when the tape has none yet, or does not reach `t` at all
-  // (a fill in the last hour of a day is not marked at two hours against the day's last book)
+  // the recorded mid at `t`: the last book line at or before it, and only if that line is recent. The
+  // book is written at least once a minute while the desk looks at a market, so a line older than
+  // that means the tape was not looking then -- the end of the day, a halt, a market dropped and
+  // later re-quoted -- and a mark against it would be against a price hours old.
+  const MID_STALE_MS = 90000;
   const midAt = (k, t) => {
     const a = mids.get(k) || [];
-    if (!a.length || t > a[a.length - 1][0] + 60000) return null;   // the book is written at least once a minute
     let lo = 0, hi = a.length - 1, best = null;
-    while (lo <= hi) { const m = (lo + hi) >> 1; if (a[m][0] <= t) { best = a[m][1]; lo = m + 1; } else hi = m - 1; }
-    return best;
+    while (lo <= hi) { const m = (lo + hi) >> 1; if (a[m][0] <= t) { best = a[m]; lo = m + 1; } else hi = m - 1; }
+    return best && t - best[0] <= MID_STALE_MS ? best[1] : null;
   };
   // per bucket and horizon: contracts that could be marked, and what they made per contract
   function markFills() {
@@ -216,9 +216,10 @@ function makeFillCheck(cfg, maker, cools = new Map()) {
 }
 
 // MAKER_FILL lines, per market: what the paper book booked. And MAKER_COOL, as windows per market.
+// `within(from, to)` gives the same totals over only the fills in that window (the stretch the tape
+// covers), without reading the journal again.
 function journalFills(lines, { from = -Infinity, to = Infinity } = {}) {
-  const by = new Map(), cools = new Map();
-  let fills = 0, qty = 0, ro = 0;
+  const cools = new Map(), all = [];
   for (const line of lines) {
     if (!line || line.indexOf('"MAKER_') < 0) continue;
     let j; try { j = JSON.parse(line); } catch { continue; }
@@ -228,13 +229,20 @@ function journalFills(lines, { from = -Infinity, to = Infinity } = {}) {
       continue;
     }
     if (j.kind !== 'MAKER_FILL') continue;
-    const at = Date.parse(j.t);
-    if (!(at >= from && at <= to)) continue;       // only while the tape was being written
-    const m = by.get(j.ticker) || { fills: 0, qty: 0 };
-    m.fills++; m.qty += j.qty || 0; by.set(j.ticker, m);
-    fills++; qty += j.qty || 0; if (j.runOver) ro += j.qty || 0;
+    all.push({ at: Date.parse(j.t), ticker: j.ticker, qty: j.qty || 0, ro: !!j.runOver });
   }
-  return { fills, qty, ro, by, cools };
+  const within = (a, b) => {
+    const by = new Map();
+    let fills = 0, qty = 0, ro = 0;
+    for (const f of all) {
+      if (!(f.at >= a && f.at <= b)) continue;
+      const m = by.get(f.ticker) || { fills: 0, qty: 0 };
+      m.fills++; m.qty += f.qty; by.set(f.ticker, m);
+      fills++; qty += f.qty; if (f.ro) ro += f.qty;
+    }
+    return { fills, qty, ro, by, cools, within };
+  };
+  return within(from, to);
 }
 
 // How far the tape replay may sit from the journal, market by market, before it is a problem and not
@@ -251,8 +259,10 @@ function verdict(res, jr) {
   const apart = jr.qty ? off / jr.qty : (res.tape.qty ? 1 : 0);
   const ops = ['restart', 'price', 'queue'].reduce((a, k) => a + res.lost[k].qty, 0);
   const rails = ['cooled', 'entire', 'growing', 'side'].reduce((a, k) => a + res.lost[k].qty, 0);
-  // judged when the replay knows where each quote stood: the desk's own queue numbers, or a day of warm-up
-  return { apart, agrees: apart <= AGREE, exact: !!(res.exactQueue || res.warmed), ops, rails, coverage: res.always.qty ? res.tape.qty / res.always.qty : null, opsShare: res.always.qty ? ops / res.always.qty : null };
+  // judged only when the replay knows where each quote stood: the desk's own queue numbers on the tape.
+  // A warm-up day helps a guessed queue (the 19th cold was 11% by market, the 20th warmed 0.1%) but
+  // it is still a guess, and a guess must not fail the daily check.
+  return { apart, agrees: apart <= AGREE, exact: !!res.exactQueue, ops, rails, coverage: res.always.qty ? res.tape.qty / res.always.qty : null, opsShare: res.always.qty ? ops / res.always.qty : null };
 }
 
 module.exports = { makeFillCheck, journalFills, verdict, REASONS, AGREE, HORIZONS };
@@ -283,14 +293,10 @@ if (require.main === module) {
   (async () => {
     // the journals first: the replay wants to know when a market was cooled. A cooldown that began
     // the day before is read too, or the first hours of the window would call it a halt.
-    const jl = [];
     const dayBefore = new Date(Date.parse(`${days[0]}T12:00:00Z`) - 86400000).toISOString().slice(0, 10);
-    const earlier = path.join(dir, `journal-${dayBefore}.jsonl`);
-    const priorCools = fs.existsSync(earlier) ? journalFills(fs.readFileSync(earlier, 'utf8').split('\n')).cools : new Map();
-    for (const d of days) { const jf = path.join(dir, `journal-${d}.jsonl`); if (fs.existsSync(jf)) jl.push(...fs.readFileSync(jf, 'utf8').split('\n')); }
-    const jr = journalFills(jl);
-    for (const [k, w] of priorCools) jr.cools.set(k, [...w, ...(jr.cools.get(k) || [])]);
-    const check = makeFillCheck(cfg, maker, jr.cools);
+    const lines = (d) => { const f = path.join(dir, `journal-${d}.jsonl`); return fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n') : []; };
+    const jall = journalFills([...lines(dayBefore), ...days.flatMap(lines)]);   // one pass: cooldowns and every fill with its time
+    const check = makeFillCheck(cfg, maker, jall.cools);
     const read = async (tf) => {
       const rl = readline.createInterface({ input: fs.createReadStream(tf), crlfDelay: Infinity });
       for await (const line of rl) {
@@ -308,8 +314,7 @@ if (require.main === module) {
     }
     const res = check.result();
     // the journal only over the stretch the tape covers: the recorder was switched on partway through 2026-09-19
-    const jw = journalFills(jl, { from: res.firstT == null ? -Infinity : res.firstT - 5000, to: res.lastT == null ? Infinity : res.lastT + 5000 });
-    jr.fills = jw.fills; jr.qty = jw.qty; jr.ro = jw.ro; jr.by = jw.by;
+    const jr = jall.within(res.firstT == null ? -Infinity : res.firstT - 5000, res.lastT == null ? Infinity : res.lastT + 5000);
     const v = verdict(res, jr);
     if (!res.rows) { console.log(`${days.join(', ')}: the tape holds no maker lines (RECORD_MAKER=0, or the maker was off)`); return; }
 
@@ -324,7 +329,7 @@ if (require.main === module) {
     console.log(`\n1. Does the ledger fill the way its own tape says?`);
     const problem = v.exact && !v.agrees;
     console.log(!v.exact
-      ? `   not judged: a cold start. There is no tape for the day before to warm up on and no recorded queue positions (qb/qa,\n   2026-09-21 on), so every quote already resting is assumed to have just joined the back. Market by market the replay is\n   ${(v.apart * 100).toFixed(1)}% of the journal's contracts away; the totals above are closer than that only because the misses cancel.`
+      ? `   not judged: this tape has no recorded queue positions (qb/qa, from the evening of 2026-09-21), so where each quote stood\n   is this tool's guess${res.warmed ? ', warmed up on the day before' : ', cold: no tape for the day before to warm up on'}. Market by market the replay is ${(v.apart * 100).toFixed(1)}% of the journal's contracts away.`
       : v.agrees
         ? `   yes: market by market the replay is within ${(v.apart * 100).toFixed(1)}% of the journal's contracts (the bar is ${AGREE * 100}%)`
         : `   PROBLEM: market by market the replay is ${(v.apart * 100).toFixed(0)}% of the journal's contracts away (the bar is ${AGREE * 100}%) · furthest apart:`);
