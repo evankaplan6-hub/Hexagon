@@ -583,6 +583,29 @@ group('the tape poller pages back until it overlaps what it already returned');
     r = await tape.since(['A']);
     ok('an empty page returns nothing and no gap', r.trades.length === 0 && r.gap === false, r);
 
+    // min_ts: ask only for the prints since the last one returned, not the newest thousand again
+    tape = makeTape({ maxPages: 5 });
+    calls = serve({ first: { trades: [T('m', 30)], next: '' } });
+    await tape.since(['A']);
+    ok('with nothing seen and no boot time, the first poll has no min_ts', !/min_ts=/.test(calls[0]), calls);
+    const ms = (secs) => 1000000000000 + secs * 1000;
+    const sib = (id, secs, extraMs) => ({ ...T(id, secs), created_time: new Date(ms(secs) + extraMs).toISOString() });
+    calls = serve({ first: { trades: [T('o', 32), sib('n', 30, 400), T('m', 30)], next: '' } });
+    r = await tape.since(['A']);
+    ok('the next poll asks from the second of the newest print it returned', /min_ts=1000000030(&|$)/.test(calls[0]), calls);
+    ok('...and a print later in that same second is still new; the one already returned is not', r.trades.map((t) => t.trade_id).join() === 'n,o', r.trades);
+    const booted = makeTape({ maxPages: 5, from: ms(40) + 700 });
+    calls = serve({ first: { trades: [T('p', 41)], next: '' } });
+    await booted.since(['A'], { fresh: true });
+    ok('a desk just started asks from its boot second, never for prints before it', /min_ts=1000000040(&|$)/.test(calls[0]), calls);
+    calls = serve({
+      first: { trades: [T('s', 44), T('r', 43)], next: 'w2' },
+      w2: { trades: [T('q', 42), T('p', 41)], next: '' },
+    });
+    r = await booted.since(['A']);
+    ok('a window wider than a page still pages back by cursor, with min_ts on every page',
+      calls.length === 2 && calls.every((u) => /min_ts=1000000041/.test(u)) && r.trades.map((t) => t.trade_id).join() === 'q,r,s', { calls, got: r.trades.map((t) => t.trade_id) });
+
     // The batched top-of-book response is also the maker settlement feed. A finalized market's
     // 0/1 quote is an empty placeholder, not a midpoint at which the position is worth 50c.
     http.getJSON = async () => ({ markets: [
