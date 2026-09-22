@@ -37,6 +37,14 @@
 //            restart. The rails are the price of the risk limits; the rest is operational loss, and
 //            that share is what a restart-free day should shrink.
 //
+// And the question under all of it: is a fill worth having? Each one is marked against the recorded
+// mid HORIZONS minutes later, per contract, for the fills the desk took and for each bucket of fills
+// it did not. Half a spread is what a fill pays; what the price does next is what it costs. The
+// run-over share never answered this -- on 2026-09-20 the gate's refused fills were run over as
+// often as the desk's own (64%) yet marked half a cent worse thirty minutes on, and the desk's own
+// fills marked about -1c per contract at every horizon on both days measured, which is the maker's
+// whole P&L question in one number: the spread on these markets does not cover the drift after a fill.
+//
 // File order is the order the desk saw things in, and the replay keeps it: within a round the tape
 // holds the books, then the prints, then the quote that round ended on, so a print is matched
 // against the quote from the round BEFORE it, as it was live. The always-on desk requotes off a
@@ -46,6 +54,7 @@ const path = require('path');
 const readline = require('readline');
 
 const r2 = (x) => Math.round(x * 100) / 100;
+const HORIZONS = [5, 30, 120];   // minutes after a fill that it is marked at
 const pct = (a, b) => (b ? `${(100 * a / b).toFixed(0)}%` : '-');
 
 // why the always-on desk filled a print and the recorded quote did not, in the order they are tested
@@ -81,6 +90,9 @@ function makeFillCheck(cfg, maker, cools = new Map()) {
   const marks = {};               // g lines by reason
   const lost = Object.fromEntries(REASONS.map(([k]) => [k, { fills: 0, qty: 0, ro: 0 }]));
   const both = { fills: 0, tapeQty: 0, alwaysQty: 0 };
+  const mids = new Map();         // ticker -> [[t, mid]] in file order, for the marks
+  const fills = [];               // every counted fill: { bucket, k, t, side, px, qty } -- marked at the end
+  const note = (bucket, k, t, f) => { if (counting) fills.push({ bucket, k, t, side: f.side, px: f.px, qty: f.qty }); };
   const tapeOnly = { fills: 0, qty: 0 };
   let lastKind = null, lastBookT = null, prints = 0, rows = 0;
   // Warm-up: the day before is fed through first with counting off. A quote that has not changed since
@@ -125,6 +137,7 @@ function makeFillCheck(cfg, maker, cools = new Map()) {
       lastBookT = row.t;
       const bk = { yesBids: [{ price: row.b, size: row.bs || 0 }], yesAsks: [{ price: row.a, size: row.as || 0 }] };
       st(row.k).seenBook = bk;             // the recorded quote that ends THIS round rejoins this depth
+      if (Number.isFinite(row.b) && Number.isFinite(row.a)) (mids.get(row.k) || mids.set(row.k, []).get(row.k)).push([row.t, (row.b + row.a) / 2]);
       pending.set(row.k, bk);              // the always-on desk quotes off it once this round's prints are past
     } else if (kind === 'p') {
       const s = st(row.k);
@@ -135,7 +148,7 @@ function makeFillCheck(cfg, maker, cools = new Map()) {
       const m = maker.fillsFrom([t], s.mq, s.minv || 0, cfg, new Set(), s.mqueue);
       s.rqueue = a.queue; s.mqueue = m.queue;
       const fa = a.fills[0], fm = m.fills[0];
-      if (fa) { s.rinv += fa.side === 'buy' ? fa.qty : -fa.qty; bump(s.tape, 'fills', 1); bump(s.tape, 'qty', fa.qty); if (fa.runOver) bump(s.tape, 'ro', fa.qty); }
+      if (fa) { s.rinv += fa.side === 'buy' ? fa.qty : -fa.qty; bump(s.tape, 'fills', 1); bump(s.tape, 'qty', fa.qty); if (fa.runOver) bump(s.tape, 'ro', fa.qty); note('tape', row.k, row.t, fa); }
       if (fm) { s.minv = (s.minv || 0) + (fm.side === 'buy' ? fm.qty : -fm.qty); bump(s.always, 'fills', 1); bump(s.always, 'qty', fm.qty); dirty.add(row.k); }
       if (!counting) { /* state only */ }
       else if (fa && fm) { both.fills++; both.tapeQty += fa.qty; both.alwaysQty += fm.qty; }
@@ -146,6 +159,7 @@ function makeFillCheck(cfg, maker, cools = new Map()) {
         const crosses = have != null && (fm.side === 'buy' ? have >= row.p : have <= row.p);
         const why = s.down ? 'restart' : have == null && other == null ? (cooledAt(row.k, row.t) ? 'cooled' : 'entire') : have == null ? (growing ? 'growing' : 'side') : crosses ? 'queue' : 'price';
         lost[why].fills++; lost[why].qty += fm.qty; if (fm.runOver) lost[why].ro += fm.qty;
+        note(why, row.k, row.t, fm);
       }
     } else if (kind === 'q') {
       const s = st(row.k);
@@ -161,6 +175,30 @@ function makeFillCheck(cfg, maker, cools = new Map()) {
     lastKind = kind;
   }
 
+  // the recorded mid at or before `t`; null when the tape has none yet, or does not reach `t` at all
+  // (a fill in the last hour of a day is not marked at two hours against the day's last book)
+  const midAt = (k, t) => {
+    const a = mids.get(k) || [];
+    if (!a.length || t > a[a.length - 1][0] + 60000) return null;   // the book is written at least once a minute
+    let lo = 0, hi = a.length - 1, best = null;
+    while (lo <= hi) { const m = (lo + hi) >> 1; if (a[m][0] <= t) { best = a[m][1]; lo = m + 1; } else hi = m - 1; }
+    return best;
+  };
+  // per bucket and horizon: contracts that could be marked, and what they made per contract
+  function markFills() {
+    const out = {};
+    for (const f of fills) {
+      const b = out[f.bucket] || (out[f.bucket] = Object.fromEntries(HORIZONS.map((h) => [h, { qty: 0, pnl: 0 }])));
+      for (const h of HORIZONS) {
+        const m = midAt(f.k, f.t + h * 60000);
+        if (m == null) continue;
+        b[h].qty += f.qty; b[h].pnl += f.qty * (f.side === 'buy' ? m - f.px : f.px - m);
+      }
+    }
+    for (const b of Object.values(out)) for (const h of HORIZONS) b[h].perContract = b[h].qty ? b[h].pnl / b[h].qty : null;
+    return out;
+  }
+
   function result() {
     flush();
     const sum = (f) => [...M.values()].reduce((a, s) => a + f(s), 0);
@@ -170,7 +208,7 @@ function makeFillCheck(cfg, maker, cools = new Map()) {
       exactQueue: exact > 0 && exact >= inferred * 20, warmed,
       tape: { fills: sum((s) => s.tape.fills), qty: sum((s) => s.tape.qty), ro: sum((s) => s.tape.ro) },
       always: { fills: sum((s) => s.always.fills), qty: sum((s) => s.always.qty) },
-      both, tapeOnly, lost,
+      both, tapeOnly, lost, marked: markFills(),
       byMarket: new Map([...M].map(([k, s]) => [k, { prints: s.prints, tape: s.tape, always: s.always }])),
     };
   }
@@ -217,7 +255,7 @@ function verdict(res, jr) {
   return { apart, agrees: apart <= AGREE, exact: !!(res.exactQueue || res.warmed), ops, rails, coverage: res.always.qty ? res.tape.qty / res.always.qty : null, opsShare: res.always.qty ? ops / res.always.qty : null };
 }
 
-module.exports = { makeFillCheck, journalFills, verdict, REASONS, AGREE };
+module.exports = { makeFillCheck, journalFills, verdict, REASONS, AGREE, HORIZONS };
 
 // ---------------------------------------------------------------- the script
 if (require.main === module) {
@@ -307,9 +345,22 @@ if (require.main === module) {
     console.log('   The rails are what the risk limits cost and are meant to. The operations share is what restarts,');
     console.log('   a round\'s delay and queue resets cost: that is the number a quiet day should bring down.');
 
+    console.log(`\n3. Was a fill worth having? Marked against the recorded mid ${HORIZONS.join(', ')} minutes later, per contract`);
+    console.log(`   (a fill pays half the spread; what the price does next is what it costs)`);
+    const cents = (x) => (x == null ? '     -' : `${x >= 0 ? '+' : '-'}${Math.abs(x * 100).toFixed(2)}c`.padStart(6));
+    const rowOf = (name, b) => b && console.log(`   ${name.padEnd(34)}${HORIZONS.map((h) => cents(b[h].perContract)).join('  ')}   ${String(Math.round(b[HORIZONS[0]].qty)).padStart(6)} contracts`);
+    console.log(`   ${''.padEnd(34)}${HORIZONS.map((h) => `${h}m`.padStart(6)).join('  ')}`);
+    rowOf('the desk\'s own fills', res.marked.tape);
+    for (const [k, , sort] of REASONS) rowOf(`refused: ${k}${sort === 'rail' ? ' (rail)' : ''}`, res.marked[k]);
+    const own = res.marked.tape && res.marked.tape[30].perContract;
+    if (own != null) console.log(own < 0
+      ? `   The desk's own fills lose ${Math.abs(own * 100).toFixed(2)}c a contract within half an hour: the spread is not covering the drift after a fill.`
+      : `   The desk's own fills are still ahead ${(own * 100).toFixed(2)}c a contract half an hour on.`);
+
     // one reading per run, so a week of them accumulates beside the tape they came from
     try {
-      fs.appendFileSync(path.join(dir, 'fillcheck.jsonl'), JSON.stringify({ t: new Date().toISOString(), days, journal: { fills: jr.fills, qty: jr.qty }, tape: res.tape, always: res.always, apart: r2(v.apart), exactQueue: v.exact, coverage: v.coverage == null ? null : r2(v.coverage), ops: v.ops, rails: v.rails, marks: res.marks }) + '\n');
+      fs.appendFileSync(path.join(dir, 'fillcheck.jsonl'), JSON.stringify({ t: new Date().toISOString(), days, journal: { fills: jr.fills, qty: jr.qty }, tape: res.tape, always: res.always, apart: r2(v.apart), exactQueue: v.exact, coverage: v.coverage == null ? null : r2(v.coverage), ops: v.ops, rails: v.rails, marks: res.marks,
+        marked: Object.fromEntries(Object.entries(res.marked).map(([b, hs]) => [b, Object.fromEntries(HORIZONS.map((h) => [h, hs[h].perContract == null ? null : Math.round(hs[h].perContract * 10000) / 10000]))])) }) + '\n');
     } catch { /* a read-only folder is not a reason to fail the check */ }
     process.exit(problem ? 1 : 0);
   })().catch((e) => { console.error(e.stack || e.message); process.exit(1); });

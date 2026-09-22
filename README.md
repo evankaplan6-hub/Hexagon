@@ -548,6 +548,14 @@ node tools/fillcheck.js --days 3 --markets
   operational** (further back in the queue). So the old tool's missing 60% was the rails, not
   restarts and not the fill model, and `MAKER_PARTICIPATION` is not what it measures.
 
+And the question under all of it, **was a fill worth having**: every fill, taken or refused, is
+marked against the recorded mid 5, 30 and 120 minutes later, per contract. On 2026-09-20 the desk's
+own fills marked **-0.7c a contract** at every horizon (8,645 contracts), the fills the gate refused
+-1.0c to -2.4c, and the growing side it withheld -1.9c to -2.5c. So the rails refuse worse fills
+than the desk takes, and the desk's own fills still lose: a one-tick spread pays half a cent and the
+price moves more than that against the desk after each fill. That is the maker's whole P&L question
+in one number, and it is the one to watch before deciding whether the maker stays on.
+
 The tape gained two things for this, from the evening of 2026-09-21: a `start` line when a process
 begins (a restart used to be invisible in it) and `qb`/`qa` on each quote line, the contracts the
 queue model still has ahead of each side.
