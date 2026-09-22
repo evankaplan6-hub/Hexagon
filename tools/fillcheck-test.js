@@ -95,6 +95,23 @@ group('the day before warms the replay up and is not counted');
   ok('a replay with no day before says so', run([b(0, 0.44, 0, 0.46, 0)]).warmed === false);
 }
 
+group('a fill is marked against the mid minutes later');
+{
+  const M = 60000;
+  // bought 10 at 44c; the mid is 45c at the fill, 48c five minutes on, 40c at half an hour, and the tape ends before two hours
+  const r = run([b(0, 0.44, 0, 0.46, 0), q(1, 0.44, 0.46), p(1000, 0.44, 100, 'a'), b(5 * M + 1000, 0.47, 0, 0.49, 0), b(30 * M + 1000, 0.39, 0, 0.41, 0)]);
+  const t = r.marked.tape;
+  ok('per contract, at each horizon: +4c, then -4c', Math.abs(t[5].perContract - 0.04) < 1e-9 && Math.abs(t[30].perContract + 0.04) < 1e-9 && t[5].qty === 10, t);
+  ok('a horizon the tape does not reach is not marked', t[120].qty === 0 && t[120].perContract === null, t[120]);
+  // sold 10 at 46c into a lift; the mid then falls to 40c: a good sale
+  const sell = run([b(0, 0.44, 0, 0.46, 0), q(1, 0.44, 0.46), p(1000, 0.46, 100, 'b'), b(5 * M + 1000, 0.39, 0, 0.41, 0)]);
+  ok('a sale is marked the other way round', Math.abs(sell.marked.tape[5].perContract - 0.06) < 1e-9, sell.marked.tape[5]);
+  // a refused fill is marked under its reason
+  const cools = new Map([['A', [[T0, T0 + 9000]]]]);
+  const ref = run([b(0, 0.44, 0, 0.46, 0), q(1, null, null), b(4000, 0.44, 0, 0.46, 0), p(6000, 0.44, 100, 'a'), b(5 * M + 6000, 0.34, 0, 0.36, 0)], cools);
+  ok('the fills the gate refused are marked under "cooled", and here it was right to', ref.marked.cooled && Math.abs(ref.marked.cooled[5].perContract + 0.09) < 1e-9 && !ref.marked.tape, ref.marked);
+}
+
 group('the journal side, and the verdict');
 {
   const J = (t, kind, o) => JSON.stringify({ t: new Date(T0 + t).toISOString(), kind, ...o });
