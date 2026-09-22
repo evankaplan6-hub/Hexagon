@@ -15,8 +15,11 @@
 #   5. is the box starved?                /proc/pressure/cpu (shared-cpu-1x: `some avg300` over ~20 is
 #                                         when the hourly restarts began), the commit it runs, /data free
 #
-# Read-only: it copies nothing, deletes nothing, reads no secret and cannot place an order. The pull
-# itself stays with its own job (ops/install-pull.sh); this only says whether that job is alive.
+# Nothing on the box is changed and nothing is deleted anywhere. What it writes on the Mac: step 2
+# copies the box's state.json and today's journal down into data/fly/archive (ledger-check --box),
+# and step 3b appends one line to data/fly/archive/fillcheck.jsonl. It reads no secret and cannot
+# place an order. The pull itself stays with its own job (ops/install-pull.sh); this only says
+# whether that job is alive.
 # Every step runs even if an earlier one fails, and the exit code is how many did.
 set -uo pipefail
 HEXDIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -55,7 +58,7 @@ TODAY="$(TZ=America/New_York date +%F)"
 YDAY="$(TZ=America/New_York date -v-1d +%F)"
 # one ssh session for all of it, and nothing heavier than grep: the box has one shared CPU.
 # (the dots stand for the quotes in "kind":"WATCHDOG", which would not survive three shells)
-"$FLY" ssh console -a "$APP" -C "sh -c 'echo commit \$GIT_SHA; for d in $YDAY $TODAY; do echo \"watchdog restarts \$d: \$(grep -c kind.:.WATCHDOG., /data/journal-\$d.jsonl 2>/dev/null || true)\"; done; cat /proc/pressure/cpu; df -m /data | tail -1'" 2>&1 | grep -v '^Connecting to' || bad=$((bad + 1))
+"$FLY" ssh console -a "$APP" -C "sh -c 'echo commit \$GIT_SHA; for d in $YDAY $TODAY; do echo \"watchdog restarts \$d: \$(n=\$(grep -c kind.:.WATCHDOG., /data/journal-\$d.jsonl 2>/dev/null); echo \${n:-0})\"; done; cat /proc/pressure/cpu; df -m /data | tail -1'" 2>&1 | grep -v '^Connecting to' || bad=$((bad + 1))
 
 printf '\n%s\n' "$([ "$bad" = 0 ] && echo 'all five answered, nothing flagged' || echo "$bad step(s) flagged a problem: read up")"
 exit "$bad"

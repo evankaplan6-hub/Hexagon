@@ -450,15 +450,10 @@ function makeMakerDesk(cfg, deps = {}) {
         : u.reduceOnly ? { bid: m.inv < 0 ? q.bid : null, ask: m.inv > 0 ? q.ask : null }
         : gainLocked ? { bid: m.inv < 0 ? q.bid : null, ask: m.inv > 0 ? q.ask : null }
         : { bid: q.bid, ask: q.ask };
-      // Queue position. Moving to a new price puts us at the back of whatever is resting there;
-      // staying put keeps the position we have already worked down. A cancel-replace at the same
-      // price would lose it, which is a reason not to churn quotes that are still at the touch.
-      const depth = (side) => { const l = side === 'bid' ? bk.yesBids[0] : bk.yesAsks[0]; return l ? l.size : 0; };
-      const prev = m.queue || { bid: 0, ask: 0 };
-      m.queue = {
-        bid: next.bid == null ? 0 : (next.bid === (m.quotes && m.quotes.bid) ? prev.bid : depth('bid')),
-        ask: next.ask == null ? 0 : (next.ask === (m.quotes && m.quotes.ask) ? prev.ask : depth('ask')),
-      };
+      // Queue position (maker.queueAfter): moving to a new price puts us at the back of whatever is
+      // resting there; staying put keeps the position we have already worked down. A cancel-replace
+      // at the same price would lose it, which is a reason not to churn quotes still at the touch.
+      m.queue = maker.queueAfter(m.quotes, m.queue, next, bk);
       m.quotes = next;
       m.mid = q.mid ?? m.mid;
       m.spread = q.spread ?? null;
