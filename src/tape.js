@@ -17,7 +17,8 @@
 //                                     a full orderbook call reports, to the hundredth, so one call
 //                                     replaces every per-market book fetch.
 //
-// 48 calls per 30 seconds becomes 2 calls per 5 seconds.
+// 48 calls per 30 seconds becomes 2 calls per 5 seconds. And the trades call asks only for prints
+// since the last one seen (`min_ts`), rather than the newest thousand every time.
 //
 // And then, where a Kalshi key is present, the trades poll goes away almost entirely: the same
 // prints arrive over the exchange's WebSocket trade channel as they happen (src/kalshi-ws.js), each
@@ -108,9 +109,17 @@ function makeTape({ maxPages = 5, stream = null, from = 0 } = {}) {
       for (const t of d.trades) if (!byId.has(t.trade_id)) byId.set(t.trade_id, t);
     }
     polled++;
+    // Only the prints since the last one returned. Without it every poll was the newest 1000 prints
+    // exchange-wide -- about five seconds of the tape, read every two -- so most of each page was
+    // prints already seen: a quarter of every byte the desk downloaded on 2026-09-22, on a box
+    // pinned at its CPU cap. `min_ts` is whole seconds and inclusive (checked against the live
+    // endpoint: a page from a second holds every print stamped in it), so the print at `lastNewest`
+    // and its siblings in that second come back and are dropped by isNew, as an overlapping page's
+    // were. The cursor still pages back inside the window, and the last page's cursor is empty.
+    const minTs = lastNewest > 0 ? `&min_ts=${Math.floor(lastNewest / 1000)}` : '';
     let cursor = '', oldest = Infinity, capped = false;
     for (let page = 0; page < maxPages; page++) {
-      const d = await getWithBackoff(`${ks.BASE}/markets/trades?limit=1000${cursor ? `&cursor=${cursor}` : ''}`);
+      const d = await getWithBackoff(`${ks.BASE}/markets/trades?limit=1000${minTs}${cursor ? `&cursor=${cursor}` : ''}`);
       pages++;
       const batch = (d.trades || [])
         .map((t) => ({ ...t, _t: Date.parse(t.created_time) }))
