@@ -24,8 +24,12 @@
 // The chain tape's bid/ask spreads are what say how much that flatters a rule; the two histories
 // name contracts the same way (OSI symbols) so they join.
 //
-// The subscription is a trial to 2026-10-07. This pulls what it can before then and is resumable:
-// an expiry whose file exists is skipped, so it can be run again after a stop or a failure.
+// The subscription is a trial to 2026-10-07, AND THE TRIAL CAPS REQUESTS: on 2026-09-23 the key was
+// refused (HTTP 406, "maximum number of requests in trial mode") after roughly 800 calls, one
+// expiry into a run that needs ~60,000. The run stops there rather than failing every remaining
+// expiry, and is resumable: an expiry whose file exists is skipped, so it picks up where it stopped
+// once the key answers again -- a paid plan removes the cap; whether it also resets daily is not
+// documented and will be known by the next run.
 //
 // WHAT IT KEEPS. For each underlying and each MONTHLY expiry (the third Friday, or the Thursday
 // before when that Friday is a holiday -- Good Friday 2025 listed nothing), every call and put whose
@@ -187,7 +191,7 @@ async function contractBars(session, c, window, expiry) {
   let last = null;
   for (const start of startLadder(window)) {
     try { return { bars: await session.optionBars(c.cx, { start, until: expiry }) }; }
-    catch (e) { if (!(e.status >= 500)) throw e; last = e; }
+    catch (e) { if (e.quota || !(e.status >= 500)) throw e; last = e; }
   }
   return { bars: [], err: last ? last.message : 'no answer' };
 }
@@ -213,6 +217,7 @@ async function pullExpiry(session, { symbol, friday, bars, band, windowDays, dry
       if (err) missing++;
       contracts.push({ ...c, bars: b, ...(err ? { err } : {}) });
     } catch (e) {
+      if (e.quota) throw e;   // the run's problem, not this expiry's: archive() stops on it
       return { symbol, expiry, status: 'failed', why: `${c.osi}: ${e.message}`, listed: listed.length, kept: kept.length, done: contracts.length };
     }
   }
@@ -251,7 +256,10 @@ async function archive(session, { symbols = SYMBOLS, from = FROM, to = null, dir
   for (const symbol of symbols) {
     let bars;
     try { bars = await underlyingBars(session, symbol, { dir, until: fridays[fridays.length - 1] || today, at, io, refresh }); }
-    catch (e) { out.failed.push({ symbol, expiry: '*', why: `underlying: ${e.message}` }); log(`${symbol}  underlying bars: ${e.message}`); continue; }
+    catch (e) {
+      if (e.quota) { out.stopped = `${symbol} underlying: ${e.message}`; out.calls = session.stats.calls - out.calls0; return out; }
+      out.failed.push({ symbol, expiry: '*', why: `underlying: ${e.message}` }); log(`${symbol}  underlying bars: ${e.message}`); continue;
+    }
     for (const friday of fridays) {
       const file = fileFor(dir, symbol, friday);
       // the Thursday spelling of a holiday-shifted expiry is checked too, so it is not pulled twice
@@ -259,7 +267,9 @@ async function archive(session, { symbols = SYMBOLS, from = FROM, to = null, dir
       if (already && !refresh) {
         out.existing++;
         if (repair && !dryRun) {
-          const r = await repairFile(session, already, io);
+          let r;
+          try { r = await repairFile(session, already, io); }
+          catch (e) { if (e.quota) { out.stopped = `${symbol} repair: ${e.message}`; out.calls = session.stats.calls - out.calls0; return out; } throw e; }
           if (r.missing) { out.repaired += r.fixed; out.missing += r.missing - r.fixed; log(`${symbol} ${path.basename(already, '.json').slice(-10)}  repaired ${r.fixed} of ${r.missing} missing contracts`); }
         }
         continue;
@@ -267,7 +277,12 @@ async function archive(session, { symbols = SYMBOLS, from = FROM, to = null, dir
       const t0 = Date.now();
       let r;
       try { r = await pullExpiry(session, { symbol, friday, bars, band, windowDays, dryRun, at, log }); }
-      catch (e) { r = { symbol, expiry: friday, status: 'failed', why: e.message }; }
+      catch (e) {
+        // The trial's request cap: every call from here on is refused, so the run stops here
+        // rather than reporting each remaining expiry as its own failure. What is on disk stays.
+        if (e.quota) { out.stopped = `${symbol} ${friday}: ${e.message}`; out.calls = session.stats.calls - out.calls0; return out; }
+        r = { symbol, expiry: friday, status: 'failed', why: e.message };
+      }
       const took = ((Date.now() - t0) / 1000).toFixed(0);
       if (r.status === 'pulled') {
         const text = JSON.stringify(r.file);
@@ -320,6 +335,7 @@ if (require.main === module) {
       if (r.missing) console.log(`${r.missing} contracts the source would not serve are marked err in their files; run again with --repair to ask for them`);
       if (r.skipped.length) console.log(`skipped ${r.skipped.length}: ${r.skipped.map((s) => `${s.symbol} ${s.expiry} (${s.why})`).join(', ')}`);
       if (r.failed.length) console.log(`FAILED ${r.failed.length}, run again to retry: ${r.failed.map((s) => `${s.symbol} ${s.expiry} (${s.why})`).join(', ')}`);
+      if (r.stopped) { console.log(`\nSTOPPED at ${r.stopped}\nThe trial's request cap. What was pulled is on disk; run again once the key answers (a paid plan, or tomorrow if the cap is daily) and it resumes from here.`); process.exit(3); }
       process.exit(r.failed.length ? 1 : 0);
     } catch (e) {
       console.error(`stopped: ${e.message}`);

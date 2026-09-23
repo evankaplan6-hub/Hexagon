@@ -10,6 +10,9 @@
 // down while the key lasts. The subscription is a 14-day Tier 3 trial to 2026-10-07 (.env says so),
 // which is why everything here is a tool or an Ask-panel lookup and nothing in the trading loop
 // depends on it: the desk trades prediction markets and must run exactly the same without this key.
+// The trial also caps requests: after some hundreds of calls in a day (the number is not published;
+// the cap landed on 2026-09-23 around the 800th) every call answers 406 "maximum number of requests
+// in trial mode" until the subscription is paid for. The full option history is ~60,000 calls.
 //
 // THE KEY RIDES IN THE QUERY STRING, and that shapes two rules. First, the API's own paginated
 // responses echo the request URL back as `next` and `previous` -- key included -- so nothing here
@@ -149,15 +152,18 @@ function makeSession({ fetchImpl = fetch, apiKey = key(), pace = 250, retryMs = 
         }
         // A 4xx other than 429 is a bad symbol, a bad parameter or a bad key, and asking again
         // does not change it; the API's own words are kept because they say which ("Invalid
-        // symbol: ", "Invalid value: ").
+        // symbol: ", "Invalid value: "). A 406 is the trial's request cap ("You have reached the
+        // maximum number of requests in trial mode"): every call after it is refused too, so it
+        // is flagged `quota` for callers to stop on rather than fail one item at a time.
         if (status >= 400 && status < 500 && status !== 429) {
           let why = '';
           try { const j = JSON.parse(text); why = Array.isArray(j) ? j.join('; ') : (j && (j.detail || j.error || j.message)) || ''; } catch { /* html or nothing */ }
-          throw Object.assign(new Error(`HTTP ${status}${why ? `: ${String(why).slice(0, 120)}` : ''}`), { status, final: true });
+          const quota = status === 406 || /maximum number of requests/i.test(why);
+          throw Object.assign(new Error(`HTTP ${status}${why ? `: ${String(why).slice(0, 120)}` : ''}`), { status, final: true, ...(quota ? { quota: true } : {}) });
         }
         throw Object.assign(new Error(`HTTP ${status}`), { status });
       } catch (e) {
-        if (e.final || i + 1 >= tries) throw Object.assign(new Error(scrub(e.message, apiKey)), { status: e.status || status || 0 });
+        if (e.final || i + 1 >= tries) throw Object.assign(new Error(scrub(e.message, apiKey)), { status: e.status || status || 0, ...(e.quota ? { quota: true } : {}) });
         stats.retries++;
         await sleep((status === 429 ? retryMs * 5 : retryMs) * (i + 1));   // a refusal gets a long breath
       }

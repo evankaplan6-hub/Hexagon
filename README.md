@@ -1005,7 +1005,7 @@ the column order; each contract under the same OSI name the chain tape uses, its
 arrays. Beside them, the underlying's own daily closes from the same source: split-adjusted, *not*
 dividend-adjusted, which is the right series to compare a strike against. About 200 contracts a
 monthly expiry on SPY, ~60,000 fetches for the whole set, one call each, a few hours at the default
-pace; the pull is resumable and skips what is on disk.
+pace on a key that allows it; the pull is resumable and skips what is on disk.
 
 **Two ways the source lies, and what is done about each.** A `start` before its history begins is
 answered with a server error, not an empty list — for every contract however new — and the same
@@ -1022,11 +1022,21 @@ on a quiet strike the last print may be days old. The tape's bid/ask sizes are w
 that flatters a rule, and they only exist from the day recording started. The history says what
 five years of a rule *would roughly* have done; the tape will say what it costs to actually do it.
 
+**The trial caps requests, and the cap is the whole story.** On the first day the key was refused
+after roughly 800 calls — one expiry into a pull that needs ~60,000 — with HTTP 406, "maximum number
+of requests in trial mode", and every call after it, a single quote included, got the same answer.
+The number is not published; whether it resets daily is not either, and the next run will say. The
+pull stops the moment it sees the cap, keeps what it has, and resumes from there when the key
+answers again. So the history is not on disk. What is on disk is one SPY expiry (July 2021, 216
+contracts, 5 of them the source would not serve), and the choice this leaves is the honest one:
+`Skip Trial` at $89.65 a month buys the uncapped key that a few hours of pulling needs, and the
+month can then be cancelled; or the trial's daily allowance, if it is daily, pulls a few expiries a
+day for a fortnight and gets nowhere near five years.
+
 **What ChartExchange is not, here.** Its dividend history stops in mid-2021 (SPY's last entry is
 June 2021), so its bars cannot be dividend-adjusted and `tools/stock-fetch.js` keeps Yahoo for the
 ETF lab's total-return series. Its stock quotes are 30 minutes delayed on this plan. And the
-subscription renews at $89.65 a month unless cancelled before 2026-10-07 — the history is on disk by
-then either way, which is the point of pulling it now.
+subscription renews at $89.65 a month unless cancelled before 2026-10-07.
 
 ## Operating it
 

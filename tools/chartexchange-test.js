@@ -98,6 +98,10 @@ async function part2() {
     const s5 = cx.makeSession({ apiKey: KEY, pace: 0, retryMs: 1, tries: 2, fetchImpl: fakeFetch({ '/feed/stocks/quote/': () => { n5++; return { __status: 429, body: '' }; } }) });
     try { await s5.quote('SPY'); } catch (e) { msg = e.message; }
     ok('a 429 is retried, then given up with its status', n5 === 2 && /HTTP 429/.test(msg), [n5, msg]);
+    let n7 = 0, q7 = null;
+    const s7 = cx.makeSession({ apiKey: KEY, pace: 0, retryMs: 1, tries: 3, fetchImpl: fakeFetch({ '/feed/stocks/quote/': () => { n7++; return { __status: 406, body: '{"detail":"You have reached the maximum number of requests in trial mode. To continue, click \'Skip Trial\'."}' }; } }) });
+    try { await s7.quote('SPY'); } catch (e) { q7 = e; }
+    ok('the trial cap (406) is not retried and is flagged quota', n7 === 1 && q7 && q7.quota === true && q7.status === 406 && /maximum number of requests/.test(q7.message), [n7, q7 && q7.message]);
     const s6 = cx.makeSession({ apiKey: KEY, pace: 0, tries: 1, fetchImpl: async () => ({ status: 200, text: async () => '<html>' }) });
     try { await s6.quote('SPY'); } catch (e) { msg = e.message; }
     ok('a 200 that is not JSON is an error, not a quote', /not JSON/.test(msg), msg);
@@ -181,7 +185,7 @@ async function part3() {
   // underlying's bars, and a contract whose bars endpoint fails on demand.
   const underlying = [];
   for (let i = 0; i < 600; i++) underlying.push({ timestamp: day('2024-01-01') + i * 86400, open: '100', high: '101', low: '99', close: `${100 + (i % 5)}`, volume: '1' });
-  let failOn = null, badOn = null;
+  let failOn = null, badOn = null, capAfter = Infinity;
   const urls = [];
   const routes = {
     '/data/stocks/bars/': (p) => underlying.filter((b) => b.timestamp >= Number(p.start)).slice(0, 500),
@@ -194,6 +198,7 @@ async function part3() {
       return { count: results.length, next: null, previous: null, results };
     },
     '/data/options/bars/': (p) => {
+      if (urls.length > capAfter) return { __status: 406, body: '{"detail":"You have reached the maximum number of requests in trial mode."}' };
       // the source answers 500 to any start before its history begins, so the archiver must never ask
       if (Number(p.start) < Math.floor(Date.parse('2021-06-01T00:00:00Z') / 1000)) return { __status: 500, body: 'too early' };
       if (failOn && p.symbol === failOn) return { __status: 500, body: 'boom' };
@@ -241,6 +246,16 @@ async function part3() {
   const f4b = JSON.parse(fs.readFileSync(oh.fileFor(dir, 'SPY', '2025-04-17'), 'utf8'));
   ok('--repair asks for the marked contract only and clears the mark', r4b.repaired === 1 && r4b.missing === 0 && f4b.missing === 0 && !f4b.contracts.some((c) => c.err) && f4b.contracts.find((c) => c.osi === 'SPY250417P00100000').bars.length === 2 && f4b.repairedAt, [r4b, f4b.missing]);
   ok('the ladder is not used for starts already after the floor', oh.startLadder({ from: '2021-06-15' }).length === 2 && oh.startLadder({ from: '2021-07-10' }).length === 3);
+
+  // the trial's request cap: the run stops there, what was pulled stays, nothing half-written
+  fs.rmSync(path.join(dir, 'SPY'), { recursive: true });
+  capAfter = urls.length + 4;   // the underlying, the listing, and two contracts' bars are served; then the cap
+  const logs6 = [];
+  const r6c = await oh.archive(session, { symbols: ['SPY'], from: '2025-04', to: '2025-05', dir, now: () => Date.UTC(2025, 5, 1, 16), log: (l) => logs6.push(l) });
+  ok('the cap stops the run and names where', r6c.stopped && /^SPY 2025-04-18: HTTP 406: You have reached the maximum/.test(r6c.stopped) && r6c.pulled.length === 0 && r6c.failed.length === 0, r6c);
+  ok('nothing half-written, no file for the cut-off expiry', !fs.existsSync(oh.fileFor(dir, 'SPY', '2025-04-17')) && !fs.existsSync(`${oh.fileFor(dir, 'SPY', '2025-04-17')}.tmp`) && fs.existsSync(oh.underlyingFile(dir, 'SPY')));
+  ok('and the remaining expiry was not even asked for', !urls.slice(-3).some((u) => u.includes('2025-05-16')), urls.slice(-3).map((u) => u.replace(KEY, 'KEY')));
+  capAfter = Infinity;
 
   // this side's own mistake (a 4xx) fails the expiry, writes nothing, and the run goes on
   fs.rmSync(path.join(dir, 'SPY'), { recursive: true });
