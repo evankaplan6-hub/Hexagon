@@ -60,7 +60,8 @@ src/tape.js       maker market data     src/kalshi-ws.js Kalshi trade socket (re
 src/makertape.js  records the maker's book, prints and quotes into the ticks-*.jsonl tape (RECORD_MAKER=0 off)
 src/whales.js     whale watch: top wallets' big bets on Polymarket's sports/politics/economics/crypto/culture/tech/finance boards (advisory, never trades; WHALE_WATCH=0 off)
 src/ask.js        the dashboard Ask panel: read-only Claude tool loop (src/ask-tools.js), ASK_DAILY_USD ceiling; needs ANTHROPIC_API_KEY
-tools/            edge-scan, replay, maker-replay, maker-rank, pm-maker-scan, maker-report, fillcheck (files only: replays the maker's own tape against its journal, and says what each missed fill was), ufc-scan (prices a
+tools/            edge-scan, replay, maker-replay, maker-rank, pm-maker-scan, maker-report, fillcheck (files only: replays the maker's own tape against its journal, and says what each missed fill was),
+                  maker-slice (the same replay cut by market/side/run-over/price/hour, plus a stand-aside rail scored on it; the four-day verdict is in its header), ufc-scan (prices a
                   fight card on both venues, cross-venue and within Kalshi, net of fees; read-only),
                   history-scan, golden, api, lab-fetch + lab (strategy tournament on settled markets),
                   whale-fetch + whale-lab (does copying top sports wallets pay? no, out of sample),
