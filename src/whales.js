@@ -247,6 +247,7 @@ function makeWhaleWatch(cfg) {
     wallets.clear();
     for (const [k, v] of next) wallets.set(k, v);
     order = [...wallets.keys()];
+    for (const w of [...held.keys()]) if (!wallets.has(w)) held.delete(w);   // off every board: forget its fills
     cursor %= order.length;
     boardAt = Date.now();
     if (first) {
@@ -265,10 +266,33 @@ function makeWhaleWatch(cfg) {
     } catch { /* the record is a convenience for later scoring; never take the desk down for it */ }
   }
 
+  // Each wallet's fills over the window, kept between reads, so a read only has to cover what may
+  // have changed since the last one. It used to re-read the whole six hours on every visit: ~1.5 MB
+  // a minute, on a box pinned at its CPU cap, to learn about the last three and a half minutes.
+  //
+  // A re-read REPLACES the stretch it covers rather than being de-duplicated into it, because a
+  // repeated row is not a repeat (see pm.fillKey: one tx can hold identical real fills), and it
+  // reaches back WHALE_REREAD_MIN before the last read, because the feed is late: it first serves a
+  // new fill half-indexed and the corrected copy a read later, and a fill can be indexed after its
+  // own timestamp. A page that comes back full may not reach back that far, so it is taken alone,
+  // exactly as every read was before; and a wallet read for the first time is read whole.
+  const held = new Map();           // wallet -> { fills, at }
+  const HELD_MAX = 5000;            // fills per wallet: the busiest top wallets trade a few thousand in six hours
+
   async function poll(E, wallet) {
     const now = Math.floor(Date.now() / 1000);
-    const fills = await pm.fetchActivity(wallet, { limit: 500, start: now - cfg.whaleWindowMin * 60 });
+    const winStart = now - cfg.whaleWindowMin * 60;
+    const prev = held.get(wallet);
+    const from = prev && prev.at > winStart ? Math.max(winStart, prev.at - (cfg.whaleRereadMin ?? 20) * 60) : winStart;
+    // one second early, so a fill stamped exactly `from` is read whether the feed's `start` is
+    // inclusive or not; the split below is on `from` itself
+    const page = await pm.fetchActivityPage(wallet, { limit: 500, start: from > winStart ? from - 1 : from });
     polls++;
+    let fills;
+    if (!prev || from === winStart || page.rows >= 500) fills = page.fills;
+    else fills = prev.fills.filter((f) => f.ts >= winStart && f.ts < from).concat(page.fills.filter((f) => f.ts >= from));
+    if (fills.length > HELD_MAX) fills = fills.sort((a, b) => a.ts - b.ts).slice(-HELD_MAX);
+    held.set(wallet, { fills, at: now });
     const w = wallets.get(wallet);
     const bar = w && Number.isFinite(w.minUsd) ? w.minUsd : cfg.whaleMinUsd;
     for (const bet of betsFrom(fills, { minUsd: bar, windowSec: cfg.whaleWindowMin * 60 })) {
