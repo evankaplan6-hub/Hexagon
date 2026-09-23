@@ -19,6 +19,12 @@ module.exports = {
   // The maker's book and prints go into the same tape (src/makertape.js). RECORD=0 turns both off; this
   // turns off only the maker's share, about 20 MB a day.
   makerRecord: env('RECORD_MAKER', '1') !== '0',
+  // The option-chain recorder on a schedule inside the desk (src/chainsched.js): the Mac runs
+  // tools/chain-record.js from launchd, a Fly box has nothing to run it from, so the desk does.
+  // Off by default -- on the Mac the launchd job is the recorder and two would write two tapes.
+  // The box keeps only the newest CHAINS_KEEP_DAYS days (its volume is 1 GB); the Mac keeps all.
+  chains: env('CHAINS', '0') === '1',
+  chainsKeepDays: num('CHAINS_KEEP_DAYS', 14),
   // Any-market pairs are recorded on change plus this heartbeat (src/recorder.js says why).
   recordHeartbeatMin: num('RECORD_HEARTBEAT_MIN', 15),
   // The tape's emergency brake (src/recorder.js). When free space under dataDir falls below this,

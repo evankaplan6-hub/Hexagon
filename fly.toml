@@ -87,6 +87,13 @@ primary_region = "iad"          # Ashburn, Virginia — close to the exchange, a
   # trading; every pair is still priced and written to the tape, so the book can be re-scored
   # from the tape without paying for another week of it. Set to "1" to turn it back on.
   CONVERGE = "0"
+  # The option-chain recorder runs inside the desk here (src/chainsched.js) since 2026-09-23: the
+  # box has no cron, so its Stocks and Options tabs had read an empty folder since they shipped.
+  # Same tool, same three Eastern times as the Mac's launchd job, weekdays only, as a child
+  # process. This copy is for the tabs, not the archive: the volume is 1 GB and a day of chains is
+  # up to ~5 MB, so only the newest CHAINS_KEEP_DAYS days are kept. The Mac's tape keeps every day.
+  CHAINS = "1"
+  CHAINS_KEEP_DAYS = "14"
 
 # The stall watchdog (src/watchdog.js, WATCHDOG_SEC) ends the process when the desk's loops stop
 # finishing rounds, and this is what brings it back. Fly's default is on-failure with ten retries,

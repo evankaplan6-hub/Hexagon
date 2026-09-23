@@ -25,6 +25,7 @@ const SUITES = [
   ['lab', 'the strategy lab: fees, fills, settlement, and no strategy seeing the answer'],
   ['stock-lab', 'the ETF lab: next-open fills, costs per side, metric arithmetic, no peeking, no test data in the pick'],
   ['chains', 'the chain tape: a 0 bid is not a missing one, adjusted roots, the band edges, and an unchanged chain is not news'],
+  ['chainsched', "the chain recorder's schedule on the box: three Eastern slots on weekdays, the DST switch, and the 14-day display copy"],
   ['makertape', "the maker's tape: book on change, prints once, our own quote, and a bad disk never reaches the desk"],
   ['whale', 'whale watch: what counts as a bet, said once across a restart, what copying pays'],
   ['http', "the Kalshi pacer: calls spaced apart, the maker's calls first, nothing else waits"],
