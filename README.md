@@ -146,7 +146,7 @@ Balance history with settlement bars, activity log with per-agent color and P&L,
 
 **Indicator panes.** The large P&L chart has an Indicators switch (on by default, remembered in the browser) that adds two panes under the price, on the same time axis and zoom. *Momentum* is MACD 12/26/9 on the P&L, counted in candles, so it follows the chosen candle size; it answers "is the last stretch running ahead of the last few hours", which the candles alone cannot. *Maker P&L not yet banked* is the maker's whole P&L less its realised P&L (`e - c` in `maker.hist`): the gain or loss on contracts still held, which goes away if the marks move before the desk gets out. (`m` in that history is the marked value of the inventory, not a profit.) The Fly box's realised total still carries a fixed error of about $7 from the bookkeeping bug fixed on 2026-09-12, so the page measures that gap from the live book (each market's mark less its cost) and takes it off every sample. The taker's positions are not in it. Both panes only describe the desk; nothing trades off them. The small floor chart and the phone card have no room for them.
 
-**Ask.** The Ask button opens a chat drawer beside the floor. Type a question ("why hasn't the desk traded today?", "did the Vikings win?") and Claude answers from the desk's own data: positions, trades, the activity log, journals, matched markets, the maker, whale bets, the settings and these docs, plus a couple of web searches when the real world matters. It is read-only: it cannot trade, sell, or change a setting, and says so if asked. It needs `ANTHROPIC_API_KEY`, has its own ceiling (`ASK_DAILY_USD`, $3 per Eastern day, which survives restarts because every charge is journalled as `ASK_SPEND`), and a typical answer costs $0.05–$0.15. On the Fly box only RIGO's mind is on (`BRAIN_AGENTS=RIGO`): it may close a convergence position early, only after the deterministic exits have said hold, and it never opens or sizes anything; it spends at most `BRAIN_DAILY_USD` ($1) a day. ILSA's mind, which can propose trades, is off. Adding the key turns on RIGO, Ask and Research together:
+**Ask.** The Ask button opens a chat drawer beside the floor. Type a question ("why hasn't the desk traded today?", "did the Vikings win?") and Claude answers from the desk's own data: positions, trades, the activity log, journals, matched markets, the maker, whale bets, the settings and these docs, a stock or crypto ticker on ChartExchange when that key is set (a quote, short volume, dark-pool prints or max pain, each answer saying how stale it is), plus a couple of web searches when the real world matters. It is read-only: it cannot trade, sell, or change a setting, and says so if asked. It needs `ANTHROPIC_API_KEY`, has its own ceiling (`ASK_DAILY_USD`, $3 per Eastern day, which survives restarts because every charge is journalled as `ASK_SPEND`), and a typical answer costs $0.05–$0.15. On the Fly box only RIGO's mind is on (`BRAIN_AGENTS=RIGO`): it may close a convergence position early, only after the deterministic exits have said hold, and it never opens or sizes anything; it spends at most `BRAIN_DAILY_USD` ($1) a day. ILSA's mind, which can propose trades, is off. Adding the key turns on RIGO, Ask and Research together:
 
 ```bash
 fly secrets set ANTHROPIC_API_KEY=...   # run it yourself; the box restarts with Ask on
@@ -975,6 +975,69 @@ before it can answer anything. What it will eventually be able to answer is the 
 could only gesture at with two Cboe indexes: whether any rule for selling options beats simply owning
 the underlying, after real spreads, on months it never saw.
 
+### The half that turned out to be for sale: ChartExchange
+
+The section above opens with "free historical option chains do not exist", and that stands. But on
+2026-09-23 a fortnight's trial of [ChartExchange](https://chartexchange.com)'s API (Tier 3, to
+2026-10-07; the key is `CHARTEXCHANGE_API_KEY` in `.env`, read-only, no account behind it) turned up
+the other half of the same data: **the daily bar and open interest of every listed option contract,
+expired ones included**, from the last week of May 2021. Not chains — no bid, no ask, no greeks, and a
+day the contract did not trade has no bar at all — but five years of real prints on the contracts
+that matter, which is the difference between waiting a year for the tape and asking the question now.
+
+```bash
+node tools/option-history.js                       # the six ETFs, every monthly expiry 2021-07 → the last one expired → data/options/history/
+node tools/option-history.js --only SPY --from 2024-01 --to 2024-06
+node tools/option-history.js --dry-run             # what would be pulled, and how many calls
+node tools/option-history.js --repair              # ask again for the contracts a run could not get
+```
+
+READ-ONLY, like everything else in this part of the repo: `src/venues/chartexchange.js` is a data
+client with a key, and nothing in the trading loop reads it. The desk runs identically without it.
+
+**What it keeps.** The same six underlyings as the chain tape, so the two join. For each monthly
+expiry (the third Friday, or the Thursday before it when that Friday is a holiday — Good Friday 2025
+listed nothing), every call and put whose strike sits within ±10% of *where the underlying closed
+over the 70 days before expiry* — the whole range, not one day's spot, so a contract that was at the
+money at any entry point in that window is in whatever the underlying did afterwards. One file per
+underlying per expiry, each with a header naming the source, the window, the strikes it implied and
+the column order; each contract under the same OSI name the chain tape uses, its daily bars as
+arrays. Beside them, the underlying's own daily closes from the same source: split-adjusted, *not*
+dividend-adjusted, which is the right series to compare a strike against. About 200 contracts a
+monthly expiry on SPY, ~60,000 fetches for the whole set, one call each, a few hours at the default
+pace on a key that allows it; the pull is resumable and skips what is on disk.
+
+**Two ways the source lies, and what is done about each.** A `start` before its history begins is
+answered with a server error, not an empty list — for every contract however new — and the same
+error comes back now and then for one contract at one start while two days later is served fine;
+the same query once answered empty and a minute later with the error. So every request starts at
+2021-06-01, a contract that errors is asked for again from a short ladder of later starts, and one
+the source still will not serve is **written into the file with `err` and no bars rather than
+dropped**: a strike missing from a file would read as "outside the band", and that would be a
+different lie. `missing` in the header counts them; `--repair` asks again.
+
+**Why the chain tape still matters.** A daily bar is the trades that happened. A backtest that
+"sells the close" on one is dealing at the last print, which was the bid, the ask, or neither, and
+on a quiet strike the last print may be days old. The tape's bid/ask sizes are what say how much
+that flatters a rule, and they only exist from the day recording started. The history says what
+five years of a rule *would roughly* have done; the tape will say what it costs to actually do it.
+
+**The trial caps requests, and the cap is the whole story.** On the first day the key was refused
+after roughly 800 calls — one expiry into a pull that needs ~60,000 — with HTTP 406, "maximum number
+of requests in trial mode", and every call after it, a single quote included, got the same answer.
+The number is not published; whether it resets daily is not either, and the next run will say. The
+pull stops the moment it sees the cap, keeps what it has, and resumes from there when the key
+answers again. So the history is not on disk. What is on disk is one SPY expiry (July 2021, 216
+contracts, 5 of them the source would not serve), and the choice this leaves is the honest one:
+`Skip Trial` at $89.65 a month buys the uncapped key that a few hours of pulling needs, and the
+month can then be cancelled; or the trial's daily allowance, if it is daily, pulls a few expiries a
+day for a fortnight and gets nowhere near five years.
+
+**What ChartExchange is not, here.** Its dividend history stops in mid-2021 (SPY's last entry is
+June 2021), so its bars cannot be dividend-adjusted and `tools/stock-fetch.js` keeps Yahoo for the
+ETF lab's total-return series. Its stock quotes are 30 minutes delayed on this plan. And the
+subscription renews at $89.65 a month unless cancelled before 2026-10-07.
+
 ## Operating it
 
 The dashboard is read-only. Two control endpoints exist, both POST, both requiring `FLATTEN_TOKEN`
@@ -1042,6 +1105,7 @@ tools/lab-fetch.js     settled Kalshi markets with hourly bid/ask history, for t
 tools/lab.js           the strategy lab: many strategies, tuned on older markets, scored on newer
 tools/whale-fetch.js   sports-leaderboard wallets' fills and how their markets settled, for the whale lab
 tools/whale-lab.js     would copying those wallets pay: picked on the first half, scored on the second
+tools/option-history.js  daily bars and open interest of expired option contracts from ChartExchange (needs CHARTEXCHANGE_API_KEY) → data/options/history/
 tools/stock-fetch.js   daily bars for a fixed list of 23 ETFs and three Cboe indexes, from Yahoo's public chart endpoint
 tools/stock-lab.js     the ETF lab: stock/ETF strategies tuned on older years, scored on newer ones against owning SPY
 tools/fly-pull.js      copy the Fly box's finished days to data/fly/archive, verify, then trim old box tapes (ops/DEPLOY.md)

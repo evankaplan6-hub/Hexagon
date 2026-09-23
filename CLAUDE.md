@@ -50,7 +50,9 @@ src/anymarket.js  any-market scanner: src/discovery.js crawls both venues (sport
 src/broker.js     paper broker + live Kalshi adapter
 src/makerdesk.js  the maker's loop: universe from the any-market crawl (MAKER_WIDEN, no extra calls),
                   trade-rate probe, run-over gate; src/maker.js holds the pure decisions
-src/venues/       Polymarket (Gamma + CLOB) and Kalshi public data
+src/venues/       Polymarket (Gamma + CLOB) and Kalshi public data; cboe.js (delayed option quotes for the chain tape);
+                  chartexchange.js (read-only market data behind CHARTEXCHANGE_API_KEY, a trial to 2026-10-07: quotes, short volume,
+                  dark pool, max pain, and the historical option bars; only the Ask panel and tools/ read it, never the trading loop)
 src/watchdog.js   stall watchdog: exits the desk when the taker or maker loop finishes no round (WATCHDOG_SEC)
 src/volume.js     the desk's own trading volume by the minute (fed by the journal, rebuilt from it; /api/volume) for the chart's bars
 src/recorder.js   tick tape writer      public/          dashboard (lookout.html: the same desk as one painted room, read-only)
@@ -72,6 +74,9 @@ tools/            edge-scan, replay, maker-replay, maker-rank, pm-maker-scan, ma
                   read-only, no broker -- free historical chains do not exist, so the history has to be collected daily;
                   ops/install-chains.sh schedules it on the Mac; on the box src/chainsched.js runs it inside the desk
                   (CHAINS=1 in fly.toml) and keeps only the newest 14 days there -- the Mac's tape is the archive),
+                  option-history (daily bars + open interest of EXPIRED option contracts from ChartExchange, the six chain-tape ETFs, monthly
+                  expiries from 2021-07, strikes ±10% of the 70-day close range → data/options/history/<SYM>/; resumable, --repair for
+                  contracts the source refused; gitignored and worth backing up once the trial key is gone),
                   weather-fetch + weather-lab (Kalshi daily-high-temperature markets vs the public forecast; no edge, out of sample),
                   favorites-check (one preset rule on older settled markets from lab-fetch --historical; the non-Sports favourite lead did not replicate),
                   pnl-report (one-screen realised P&L per book from data/fly/archive journals; --marks prices held maker inventory),
@@ -93,6 +98,7 @@ data/lab/whales/  gitignored: pool, fills, conditions, markets for tools/whale-l
 data/stocks/bars/ gitignored: one Yahoo daily-bar file per ETF/index (tools/stock-fetch.js) for tools/stock-lab.js
 data/chains/      gitignored: the option-chain tape, chains-YYYY-MM-DD.jsonl + .seen.json (tools/chain-record.js).
                   IRREPLACEABLE: nobody sells historical chains, so a lost day cannot be re-fetched -- back it up
+data/options/history/  gitignored: the ChartExchange option history (tools/option-history.js), one JSON per underlying per expiry
 data/whales-*.jsonl  gitignored: every bet whale watch announced, for scoring once they settle
 ```
 
