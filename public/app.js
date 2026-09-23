@@ -16,7 +16,11 @@
     const p = Object.fromEntries(ET_CLOCK.formatToParts(new Date(t)).map((x) => [x.type, +x.value]));
     return t - (((p.hour || 0) % 24) * 3600 + (p.minute || 0) * 60 + (p.second || 0)) * 1000;
   };
-  const dur = (ms) => { const h = Math.floor(ms / 3.6e6), m = Math.floor((ms % 3.6e6) / 6e4); return `${h}h ${String(m).padStart(2, '0')}m`; };
+  // "309h 06m" is a sum nobody does in their head; past two days it reads in days
+  const dur = (ms) => {
+    const h = Math.floor(ms / 3.6e6), m = Math.floor((ms % 3.6e6) / 6e4);
+    return h >= 48 ? `${Math.floor(h / 24)}d ${String(h % 24).padStart(2, '0')}h` : `${h}h ${String(m).padStart(2, '0')}m`;
+  };
   // "nothing is happening" and "something happened four minutes ago" look identical unless the
   // page can say which.
   const ago = (t) => {
@@ -24,7 +28,8 @@
     const d = Math.max(0, Math.round((S.now - t) / 1000));
     if (d < 60) return `${d}s ago`;
     if (d < 3600) return `${Math.floor(d / 60)}m ago`;
-    return `${Math.floor(d / 3600)}h ${Math.floor((d % 3600) / 60)}m ago`;
+    if (d < 172800) return `${Math.floor(d / 3600)}h ${Math.floor((d % 3600) / 60)}m ago`;
+    return `${Math.floor(d / 86400)}d ${Math.floor((d % 86400) / 3600)}h ago`;
   };
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const agentColor = (k) => (S && S.agents.find((a) => a.key === k) || {}).color || '#888';
@@ -53,9 +58,12 @@
     const fact = (k, v, c) => `<span>${k}<b class="${c || ''}">${v}</b></span>`;
     // `pairs` and `locked` were the status board's and the account column's own figures, printed a
     // second time up here. What is left is what no board says: which day this desk is on, and how
-    // many positions are open across both books.
+    // many positions are open across both books -- counted the way the book lists them (a hedged
+    // arb is one position, not two legs), so this agrees with the "146 held" beside the book. It
+    // used to count cross-venue legs alone, a number nothing else on the page showed.
+    const open = (M.markets || []).filter((m) => m.inv).length + new Set((S.positions || []).map((p) => p.group || p.id)).size;
     $('meta').innerHTML =
-      fact('day', day) + fact('open', S.positions.length) +
+      fact('day', day) + fact('open', open) +
       (P.integrityAlerts ? `<span class="alertfact">alerts<b>${P.integrityAlerts}</b></span>` : '');
   }
 
@@ -380,7 +388,8 @@
   // "Port of Mobile" read as two places.
   const QUESTION = (m) => {
     const sub = (m.sub || '').trim();
-    let t = String(m.title || '').replace(/\*\*/g, '').trim().replace(/\s+/g, ' ').replace(/\?$/, '');
+    // Kalshi's Senate series say "Will Democratics win..." in every state; the venue's typo, not a party
+    let t = String(m.title || '').replace(/\*\*/g, '').replace(/\bDemocratics\b/g, 'Democrats').trim().replace(/\s+/g, ' ').replace(/\?$/, '');
     // "What will be Aaron Rodgers's next team" and "Who will win" carry two question words
     t = t.replace(/^(Will|Which|Who|What|How many|How much|When)\s+(?:(will|would|does|did)\s+)?/i, '');
     if (sub) {
@@ -2419,7 +2428,7 @@
 
   // A clicked trade or position: what happened and whether it made money, in a few plain lines.
   // `fill` is the trade that was clicked, or the latest one in this market when a position was.
-  const minsAgo = (t) => { const m = Math.round((S.now - t) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : `${Math.floor(m / 60)}h ${m % 60}m ago`; };
+  const minsAgo = (t) => { const m = Math.round((S.now - t) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 2880 ? `${Math.floor(m / 60)}h ${m % 60}m ago` : `${Math.floor(m / 1440)}d ${Math.floor((m % 1440) / 60)}h ago`; };
   function wallRecap(ticker, at, M) {
     const m = byTicker(M, ticker);
     const fill = (M.recent || []).find((f) => f.ticker === ticker && (!at || f.at === at)) || null;
@@ -3143,6 +3152,16 @@
   // The empty and broken states are written out properly rather than left blank: before tomorrow's
   // open this tab is the only thing that explains why it is empty, and "nothing here" with no
   // reason reads as a bug.
+  // The schedule inside the desk (the box has no cron: src/chainsched.js) says what it last did
+  // and when it runs next. A day when Cboe's file never changes reads "nothing new" here rather
+  // than looking like a schedule that never fired. A Mac desk has no such note and says nothing.
+  const schedLine = (c) => {
+    const s = c && c.sched;
+    if (!s) return '';
+    const last = s.last && Number.isFinite(s.last.at) ? ` · last run ${tapeAgo(new Date(s.last.at).toISOString())}: ${s.last.result || 'ran'}` : '';
+    const next = s.next && s.next.label ? ` · next ${s.next.label}` : '';
+    return last + next;
+  };
   function assetEmpty(msg, sub) {
     return `<div class="anone"><p>${esc(msg)}</p>${sub ? `<p class="asub">${esc(sub)}</p>` : ''}</div>`;
   }
@@ -3158,10 +3177,10 @@
     else if (!c.ok) {
       body = assetEmpty(
         c.why === 'no tape yet' ? 'No chains recorded yet.' : `The tape could not be read: ${c.why || 'unknown'}`,
-        'The recorder writes at 16:25, 20:00 and 09:45 Eastern, and skips a chain that has not changed — so a quiet weekend records nothing at all.');
+        'The recorder writes at 16:25, 20:00 and 09:45 Eastern, and skips a chain that has not changed — so a quiet weekend records nothing at all.' + schedLine(c));
     } else {
       const syms = c.symbols || [];
-      meta = `${syms.length} symbols · ${c.snapshots} snapshot${c.snapshots === 1 ? '' : 's'} in view · ${(c.bytes / 1048576).toFixed(1)} MB · ${esc(c.file || '')}`;
+      meta = `${syms.length} symbols · ${c.snapshots} snapshot${c.snapshots === 1 ? '' : 's'} in view · ${(c.bytes / 1048576).toFixed(1)} MB · ${esc(c.file || '')}${esc(schedLine(c))}`;
       body = view === 'stocks' ? stocksBody(syms) : optionsBody(syms, c);
     }
     // before the early return: a quiet poll returns identical html (the recorder skips an

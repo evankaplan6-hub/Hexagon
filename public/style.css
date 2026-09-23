@@ -871,7 +871,9 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0
 
   .m-chart { height: 150px; margin-top: 9px; padding: 10px; border: 1px solid #1c2535; border-radius: 8px; background: rgba(255,255,255,.015); box-sizing: border-box; }
   .m-chart .ct { gap: 6px; }
-  .m-chart .ctitle { margin-right: auto; color: #9aa7bc; font: 700 9px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+  /* the card above already says "All paper trades"; the chart's own title would say it twice */
+  .m-chart .ctitle { display: none; }
+  .m-chart .ct { justify-content: flex-end; }
   .m-chart .seg button { min-height: 24px; }
   .m-chart .cplot { min-height: 58px; }
   .m-chart .cplot { touch-action: pan-y; cursor: default; }

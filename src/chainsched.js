@@ -84,22 +84,48 @@ function start({ dataDir, keepDays = 14, log = console.log, now = Date.now, setT
     for (const f of gone) { try { fs.unlinkSync(path.join(dir, f)); } catch { /* next run tries again */ } }
     return gone;
   };
+  // What the schedule last did and will do next, on disk beside the tape (STATUS), so the
+  // dashboard's tabs can say "last run 09:45 ET: nothing new · next 16:25 ET". Without it, a
+  // day when Cboe's file never changed (2026-09-23: rebuilt at 03:55Z and not again by 13:00 ET)
+  // looks exactly like a schedule that never fired, and the box's log buffer is 100 lines.
+  const status = { last: null, next: null };
+  const save = () => {
+    try { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, STATUS), JSON.stringify(status)); }
+    catch { /* the tape itself is what matters; the tabs just lose the line */ }
+  };
   const arm = () => {
     const next = nextRun(now());
     if (!next) return;
-    log(`chains: next snapshot ${next.day} ${String(next.hh).padStart(2, '0')}:${String(next.mm).padStart(2, '0')} ET`);
+    const label = `${next.day} ${String(next.hh).padStart(2, '0')}:${String(next.mm).padStart(2, '0')} ET`;
+    log(`chains: next snapshot ${label}`);
+    status.next = { at: next.at, label };
+    save();
     // one timer at a time, and it is re-armed only after the run finishes: a run that outlives
     // its slot on a starved box must not stack a second one on top of it
     setTimer(async () => {
-      try { log(`chains: ${await record()}`); }
-      catch (e) { log(`chains: snapshot failed: ${e && e.message}`); }
+      const at = now();
+      let result = '';
+      try { result = await record(); log(`chains: ${result}`); }
+      catch (e) { result = `snapshot failed: ${e && e.message}`; log(`chains: ${result}`); }
       const gone = trim();
       if (gone.length) log(`chains: dropped ${gone.length} old day${gone.length === 1 ? '' : 's'} (the box keeps ${keepDays}; the Mac keeps everything)`);
+      status.last = { at, result: summary(result), wrote: /\d+ lines/.test(result) && !/would be written/.test(result) };
       arm();
     }, Math.min(next.at - now(), 2 ** 31 - 1));
   };
   arm();
-  return { dir, nextRun: () => nextRun(now()), trim };
+  return { dir, nextRun: () => nextRun(now()), trim, status };
 }
 
-module.exports = { nextRun, prune, start, instant, wall, TIMES };
+const STATUS = '.sched.json';
+// The recorder's last lines, as one short phrase for the tabs: what it wrote, or why nothing.
+function summary(result) {
+  const s = String(result || '');
+  const wrote = s.match(/(\d+) lines, (\d+) contracts/);
+  if (wrote) return `${wrote[1]} lines, ${(+wrote[2]).toLocaleString()} contracts`;
+  if (/nothing new/.test(s)) return 'nothing new: the chains had not changed';
+  if (/snapshot failed|could not start/.test(s)) return s.replace(/^.*?(snapshot failed|could not start)/, '$1').slice(0, 120);
+  return s.split('|').pop().trim().slice(0, 120) || 'ran';
+}
+
+module.exports = { nextRun, prune, start, summary, instant, wall, TIMES, STATUS };

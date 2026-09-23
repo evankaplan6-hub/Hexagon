@@ -106,9 +106,19 @@ function pickAtm(r) {
 }
 
 // The whole read: newest tape file in `dir`, tail of it, summarized.
+// The schedule's own note (src/chainsched.js writes it beside the tape): when it last ran, what
+// that did, and when it runs next. Absent on a Mac, where launchd is the schedule.
+function schedule(dir, { io = fs } = {}) {
+  try {
+    const s = JSON.parse(io.readFileSync(path.join(dir, '.sched.json'), 'utf8'));
+    return s && typeof s === 'object' ? { last: s.last || null, next: s.next || null } : null;
+  } catch { return null; }
+}
+
 function read(dir, { io = fs, maxBytes = TAIL_BYTES, now = Date.now } = {}) {
   const f = latestFile(dir, { io });
-  if (!f) return { ok: false, why: 'no tape yet', dir, symbols: [], snapshots: 0 };
+  const sched = schedule(dir, { io });
+  if (!f) return { ok: false, why: 'no tape yet', dir, symbols: [], snapshots: 0, ...(sched ? { sched } : {}) };
   const file = path.join(dir, f.name);
   let bytes = 0;
   try { bytes = io.statSync(file).size; } catch { /* reported as 0 */ }
@@ -117,7 +127,7 @@ function read(dir, { io = fs, maxBytes = TAIL_BYTES, now = Date.now } = {}) {
   // when it creates the day's file and the first snapshot lands after it. Saying "could not be
   // read" there sends someone looking for a corrupt file that is fine.
   const why = out.symbols.length ? '' : 'no snapshots in the tape yet';
-  return { ok: !!out.symbols.length, ...(why ? { why } : {}), day: f.day, file: f.name, dir, bytes, ...out };
+  return { ok: !!out.symbols.length, ...(why ? { why } : {}), day: f.day, file: f.name, dir, bytes, ...out, ...(sched ? { sched } : {}) };
 }
 
-module.exports = { read, summarize, latestFile, tail, pickAtm, FILE, TAIL_BYTES };
+module.exports = { read, summarize, latestFile, tail, pickAtm, schedule, FILE, TAIL_BYTES };

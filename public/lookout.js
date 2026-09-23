@@ -34,7 +34,8 @@
 
     $('pnl').textContent = signed(net); tone($('pnl'), net);
     $('equity').textContent = signed(pairNet);
-    $('positions').textContent = (S.positions || []).length;
+    // positions, not legs: a hedged arb is one position on both venues
+    $('positions').textContent = new Set((S.positions || []).map((p) => p.group || p.id)).size;
     $('locked').textContent = signed(P.arbLocked);
     $('maker').textContent = signed(makerNet); tone($('maker'), makerNet);
     $('makerState').textContent = halted ? 'Stopped' : M.quoting > 0 ? 'Quoting' : 'Idle';
