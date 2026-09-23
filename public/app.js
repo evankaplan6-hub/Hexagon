@@ -34,13 +34,15 @@
   const isActive = (a) => { const dt = S.now - a.lastActive - (CYCLE[a.key] || 0) * 900; return dt >= 0 && dt < 3200; };
 
   // ------------------------------------------------------------ header + tiles
+  let shownGone = false;   // what the header last said about the stream: the loop repaints when it changes
   function renderHeader() {
     const day = Math.floor((S.now - S.startedAt) / 86400000) + 1;
     const M = S.maker || {}, P = S.pnl || {};
     const halted = S.halt || M.halted;
+    shownGone = stale();
     // The pill is the headline: one word for the state, then whose money is at risk. The counts
     // beside it are reference -- they are set to look like reference so the eye can skip them.
-    const [state, cls] = stale() ? ['No signal', 'bad'] : halted ? ['Stopped', 'bad']
+    const [state, cls] = shownGone ? ['No signal', 'bad'] : halted ? ['Stopped', 'bad']
       : M.quoting > 0 ? ['Working', 'good'] : ['Idle', 'warn'];
     const pill = $('deskstate');
     pill.className = `pill ${cls}`;
@@ -344,10 +346,12 @@
   // whole phrase is just a short whole phrase.
   const clip = (str, n) => {
     const t = String(str).trim();
-    const out = t.length <= n ? t : t.slice(0, n).replace(/\s+\S*$/, '');
     // never end on a comma, a bullet or an open bracket -- that reads as a sentence cut off,
-    // which is the thing a word-boundary cut was supposed to avoid
-    return out.replace(/[\s,;:·\-–(\[]+$/, '').trim();
+    // which is the thing a word-boundary cut was supposed to avoid. A cut also drops a connecting
+    // word left hanging at the end ("...by 11:59 PM ET on", "...Kevin Warsh before"): tidyEnd
+    // knows the list, and the fills board already uses it for the same reason.
+    if (t.length <= n) return t.replace(/[\s,;:·\-–(\[]+$/, '').trim();
+    return tidyEnd(t.slice(0, n).replace(/\s+\S*$/, ''));
   };
   // What the market actually IS.
   //
@@ -360,7 +364,7 @@
   // AND hold 51 or more seats in the Senate?"). Nothing on the floor truncates text any more, so a
   // name that long wraps to four lines; squeeze the prose instead: "Democrats 235+ House & 51+ Senate".
   const OUTCOME = (m) => {
-    const t = (m.sub || '').trim();
+    const t = (m.sub || '').replace(/\*\*/g, '').trim();   // Kalshi writes **bold** into some titles
     if (t.length <= 40) return t;
     return t.replace(/^Will\s+/i, '').replace(/\?$/, '')
       .replace(/\s+or more\b/gi, '+').replace(/\bseats in the\s+/gi, '').replace(/\b(hold|have|be)\s+/gi, '')
@@ -376,11 +380,13 @@
   // "Port of Mobile" read as two places.
   const QUESTION = (m) => {
     const sub = (m.sub || '').trim();
-    let t = String(m.title || '').trim().replace(/\s+/g, ' ').replace(/\?$/, '');
-    t = t.replace(/^(Will|Which|Who|What|How many|How much)\s+/i, '');
+    let t = String(m.title || '').replace(/\*\*/g, '').trim().replace(/\s+/g, ' ').replace(/\?$/, '');
+    // "What will be Aaron Rodgers's next team" and "Who will win" carry two question words
+    t = t.replace(/^(Will|Which|Who|What|How many|How much|When)\s+(?:(will|would|does|did)\s+)?/i, '');
     if (sub) {
       const esc = sub.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      t = t.replace(new RegExp(`\\b${esc}\\b`, 'i'), '');
+      // a possessive keeps its name: "Paramount's takeover" without Paramount is "'s takeover"
+      t = t.replace(new RegExp(`\\b${esc}\\b(?!'s)`, 'i'), '');
       // the threshold is already the headline; "≥80,000" and "80000" are the same number
       const n = sub.replace(/[^0-9]/g, '');
       if (n.length > 2) t = t.replace(new RegExp(`[≥>< ]*\\b${n}\\b`), '');
@@ -388,6 +394,8 @@
       t = t.replace(/\s+/g, ' ').trim();
     }
     t = t
+      // the threshold was the outcome, so "be above $4.60 by Dec 31" is now "be by Dec 31"
+      .replace(/\bbe\s+(?=(by|on|at|in|before|after|from|until)\b)/gi, '')
       .replace(/^(win|have|be|receive|reach|get)\s+/i, '')
       .replace(/\bpro football team\b/gi, '')
       .replace(/\bregular season\b/gi, '')
@@ -929,8 +937,19 @@
       }
       case 'ILSA RESEARCH': {
         const m = t.match(/^(.+?): PM ([−+-]?[\d.]+)c, KS ([−+-]?[\d.]+)c over \S+ · gap ([\d.]+)c (\w+)/);
-        if (m) return { text: `${m[1]}: price moved ${move(m[2])} on Polymarket, ${move(m[3])} on Kalshi`, sub: `venues ${+m[4]}¢ apart, ${m[5]}`, level: 'quiet' };
+        // "+0¢" is not a move; say the price held there
+        const mv = (x) => (+x === 0 ? 'held' : `moved ${move(x)}`);
+        if (m) return { text: `${unellipsis(m[1])}: price ${mv(m[2])} on Polymarket, ${mv(m[3])} on Kalshi`, sub: `venues ${+m[4]}¢ apart, ${m[5]}`, level: 'quiet' };
         break;
+      }
+      case 'ILSA OPS': {
+        // whale watch's feed errors quote the URL they hit, wallet address and all: a warning
+        // a person can read is the sentence, and the status code
+        if (/^whale watch could not reach/i.test(t)) {
+          const code = (t.match(/HTTP (\d+)/) || [])[1];
+          return { text: "Whale watch could not reach Polymarket's trade feed", sub: code ? `HTTP ${code} · it tries again on its next round` : t.replace(/^[^:]*:\s*/, '').replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim(), level: 'warn' };
+        }
+        return { text: cap(first), sub: rest, level: 'info' };
       }
       // whale watch (src/whales.js): "<who> bought $54K on <outcome> at 55c · <market> · #6 in sports… · Kalshi 57c now"
       case 'ILSA WHALE': {
@@ -939,6 +958,15 @@
       }
       case 'ILSA SCAN': return { text: cap(first), sub: rest, level: 'info' };
       case 'BRAM RESEARCH': {
+        // the widest gap on the board, as BRAM logs it: "venue gap 9.0c: Polymarket over Kalshi @
+        // <label> · PM 0.27/0.32 · KS 0.16/0.25 · 1 signal above threshold". It went through raw,
+        // bid/ask pairs and all; the name comes first here, split the way the book splits it.
+        const g = t.match(/^venue gap ([\d.]+)c: (\w+) over (\w+) @ (.+?) · PM ([\d.]+)\/([\d.]+) · KS ([\d.]+)\/([\d.]+)(?: · (.*))?$/);
+        if (g) {
+          const { outcome, question } = splitLabel(g[4]), { head, tail } = lead(outcome, question);
+          return { text: `Widest gap ${+g[1]}¢, ${g[2]} over ${g[3]}: ${unellipsis(head)}${tail ? ` · ${unellipsis(tail)}` : ''}`,
+            sub: `Polymarket ${cc(+g[5])}–${cc(+g[6])}, Kalshi ${cc(+g[7])}–${cc(+g[8])}${g[9] ? ` · ${g[9]}` : ''}`, level: 'info' };
+        }
         const n = (t.match(/over (\d+) pairs/) || [])[1], sig = (S.signals || []).length;
         if (n) return { text: sig ? `Checked ${n} pairs: ${sig} worth a closer look` : `Checked ${n} pairs: no price gap big enough to trade`, level: sig ? 'info' : 'quiet' };
         break;
@@ -2270,7 +2298,7 @@
   // (never below one word), and never end on a connecting word. The result is remembered per text
   // and width, since the board is rebuilt every couple of seconds with the same rows.
   const fitMemo = new Map();
-  const TRAIL = /(\s+(of|the|a|an|in|on|at|by|for|from|to|and|or|with|v|vs\.?|will|be|is|-|–|·))+$/i;
+  const TRAIL = /(\s+(of|the|a|an|in|on|at|by|for|from|to|and|or|with|v|vs\.?|will|be|is|before|after|following|during|until|since|than|reach|into|per|via|as|that|who|which|when|where|-|–|·))+$/i;
   const tidyEnd = (t) => t.replace(/[\s,;:·\-–(\[]+$/, '').replace(TRAIL, '').replace(/[\s,;:·\-–(\[]+$/, '');
   function fitWords(line) {
     const w = line.clientWidth;
@@ -2686,7 +2714,14 @@
     });
   }
 
-  function loop(ts) { drawFloor(ts / 1000); placeFx(); requestAnimationFrame(loop); }
+  // The header and the phone card are rebuilt on SSE frames, and a dead stream sends none: the
+  // pill stayed on "Working" for as long as the desk was gone. So the animation loop, which runs
+  // whatever the stream does, redraws them the moment the stale flag flips either way.
+  function loop(ts) {
+    drawFloor(ts / 1000); placeFx();
+    if (S && stale() !== shownGone) { renderHeader(); renderMobileSummary(); }
+    requestAnimationFrame(loop);
+  }
   requestAnimationFrame(loop);
 
   // ------------------------------------------------------------ Ask: questions about the desk, in plain words

@@ -517,7 +517,7 @@ async function KETT(E) {
       E.log('KETT', 'FILL', -totalCost, `${s.pair.label} · buy ${qty} ${leg.side.toUpperCase()} @ ${VEN[leg.venue]} ${f.avg.toFixed(3)} · fair ${fairSide.toFixed(3)} on live books (${VEN[other(leg.venue)]} mid ${(leg.venue === 'PM' ? q.ksMid : q.pmMid).toFixed(3)}) · edge ${c(s.edge)} · fee ${money(f.fee)}${sizeMult > E.cfg.baseSizeMult ? ' · sized up on ILSA flow' : ''}${s.origin ? ` · ${s.origin}'s call: ${s.thesis}` : ''}`);
     }
   }
-  E.touch('KETT', E.signals.length ? `${E.signals.length} signals` : 'no signals');
+  E.touch('KETT', E.signals.length ? `${E.signals.length} signal${E.signals.length === 1 ? '' : 's'}` : 'no signals');
 }
 
 module.exports = { HOLT, ILSA, TESS, RIGO, BRAM, KETT, mergeBrainSignals };
