@@ -1028,10 +1028,24 @@ of requests in trial mode", and every call after it, a single quote included, go
 The number is not published; whether it resets daily is not either, and the next run will say. The
 pull stops the moment it sees the cap, keeps what it has, and resumes from there when the key
 answers again. So the history is not on disk. What is on disk is one SPY expiry (July 2021, 216
-contracts, 5 of them the source would not serve), and the choice this leaves is the honest one:
-`Skip Trial` at $89.65 a month buys the uncapped key that a few hours of pulling needs, and the
-month can then be cancelled; or the trial's daily allowance, if it is daily, pulls a few expiries a
-day for a fortnight and gets nowhere near five years.
+contracts, 5 of them the source would not serve).
+
+**The fortnight plan.** The decision was to use the free trial and not pay, so the pull became a
+daily chore of the Mac's, like the chain tape:
+
+```bash
+bash ops/install-history.sh                # four runs a day until 2026-10-07 (undo: uninstall-history.sh)
+tail data/options/history/history.log      # one line per run
+```
+
+Each run pulls newest expiries first, strikes within ±5% of the 70-day range (half the contracts
+of ±10%, and the half a covered-call or put-write rule reads), and stops the moment the key is
+refused. A run on a capped key costs one call, so four a day meet the reset whenever it falls.
+If the cap resets daily at ~800 calls, that is five to eight SPY expiries a day and SPY's five
+years fit in the fortnight; if it does not reset, `history.log` will say `STOPPED` after 0 pulled
+on every run and the trial's whole yield is the one expiry above. Either way the files are the
+irreplaceable kind once the key is gone, so `data/options/history/` belongs in the same backup as
+`data/chains/`.
 
 **What ChartExchange is not, here.** Its dividend history stops in mid-2021 (SPY's last entry is
 June 2021), so its bars cannot be dividend-adjusted and `tools/stock-fetch.js` keeps Yahoo for the

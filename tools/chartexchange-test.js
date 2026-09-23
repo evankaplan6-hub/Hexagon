@@ -275,6 +275,8 @@ async function part3() {
   // expiries after "today" are not history yet
   const r6 = await oh.archive(session, { symbols: ['SPY'], from: '2025-04', to: '2025-05', dir, dryRun: true, now: () => Date.UTC(2025, 4, 1, 16) });
   ok('an expiry still ahead is left to the chain tape', r6.expiries === 1 && r6.pulled.join() === 'SPY 2025-04-17', r6);
+  const r7 = await oh.archive(session, { symbols: ['SPY'], from: '2025-04', to: '2025-05', dir, dryRun: true, newestFirst: true, now: () => Date.UTC(2025, 5, 1, 16) });
+  ok('--newest-first walks the expiries backwards', r7.pulled.join() === 'SPY 2025-05-16,SPY 2025-04-17', r7.pulled);
   ok('the six underlyings are the chain tape\'s six', oh.SYMBOLS.join() === 'SPY,QQQ,IWM,DIA,TLT,GLD');
   ok('the default run starts where the source\'s option history does', oh.FROM === '2021-07' && oh.OPTION_BARS_FROM === '2021-06-01' && /2021-06-01/.test(f.note), [oh.FROM, f.note]);
 }
