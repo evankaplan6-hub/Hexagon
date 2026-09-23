@@ -2,7 +2,7 @@
 // Assertions for src/chainsched.js: the chain recorder's schedule on the box.
 //
 //   node tools/chainsched-test.js
-const { nextRun, prune, start, instant, wall } = require('../src/chainsched');
+const { nextRun, prune, start, summary, instant, wall, STATUS } = require('../src/chainsched');
 
 let pass = 0, fail = 0;
 const ok = (name, cond, got) => {
@@ -46,11 +46,13 @@ group('the timer');
 {
   const logs = [], timers = [], unlinked = [];
   let clock = et('2026-09-23 16:00');
-  const fakeFs = { readdirSync: () => ['chains-2026-09-08.jsonl', 'chains-2026-09-22.jsonl', 'chains-2026-09-23.jsonl', '.seen.json'], unlinkSync: (p) => unlinked.push(p) };
+  const written = {};
+  const fakeFs = { readdirSync: () => ['chains-2026-09-08.jsonl', 'chains-2026-09-22.jsonl', 'chains-2026-09-23.jsonl', '.seen.json'], unlinkSync: (p) => unlinked.push(p), mkdirSync: () => {}, writeFileSync: (p, t) => { written[p] = JSON.parse(t); } };
   let runs = 0;
-  const s = start({ dataDir: '/tmp/x', keepDays: 2, log: (m) => logs.push(m), now: () => clock, setTimer: (fn, ms) => timers.push({ fn, ms }), run: async () => { runs++; return 'SPY QQQ · 83 lines'; }, fs: fakeFs });
+  const s = start({ dataDir: '/tmp/x', keepDays: 2, log: (m) => logs.push(m), now: () => clock, setTimer: (fn, ms) => timers.push({ fn, ms }), run: async () => { runs++; return 'SPY QQQ IWM DIA TLT GLD · 83 lines, 19072 contracts, 1845 KB → /tmp/x/chains/chains-2026-09-23.jsonl'; }, fs: fakeFs });
   ok('the first timer is armed for 16:25 today', timers.length === 1 && timers[0].ms === 25 * 60000, timers[0] && timers[0].ms);
   ok('the log says when', /2026-09-23 16:25 ET/.test(logs[0]), logs[0]);
+  eq('the status file says what is next before anything has run', written[`/tmp/x/chains/${STATUS}`], { last: null, next: { at: et('2026-09-23 16:25'), label: '2026-09-23 16:25 ET' } });
   clock = et('2026-09-23 16:25') + 1000;
   (async () => {
     await timers[0].fn();
@@ -58,12 +60,19 @@ group('the timer');
     ok('the recorder\'s last lines are logged', logs.some((l) => /83 lines/.test(l)), logs);
     eq('then the oldest tape beyond keepDays went', unlinked, ['/tmp/x/chains/chains-2026-09-08.jsonl']);
     ok('and the next timer is armed for 20:00', timers.length === 2 && Math.round(timers[1].ms / 60000) === 3 * 60 + 35 - 0, timers[1] && timers[1].ms);
+    const st = written[`/tmp/x/chains/${STATUS}`];
+    ok('the status file now says what the run did and what is next', st.last && st.last.result === '83 lines, 19,072 contracts' && st.last.wrote === true && st.next.label === '2026-09-23 20:00 ET', st);
     ok('a failing recorder is logged, not thrown, and the timer still re-arms', await (async () => {
       const t2 = [], l2 = [];
-      start({ dataDir: '/tmp/y', log: (m) => l2.push(m), now: () => clock, setTimer: (fn, ms) => t2.push({ fn, ms }), run: async () => { throw new Error('cboe down'); }, fs: { readdirSync: () => { throw new Error('no dir'); }, unlinkSync: () => {} } });
+      start({ dataDir: '/tmp/y', log: (m) => l2.push(m), now: () => clock, setTimer: (fn, ms) => t2.push({ fn, ms }), run: async () => { throw new Error('cboe down'); }, fs: { readdirSync: () => { throw new Error('no dir'); }, unlinkSync: () => {}, mkdirSync: () => { throw new Error('ro'); }, writeFileSync: () => {} } });
       await t2[0].fn();
       return t2.length === 2 && l2.some((l) => /snapshot failed: cboe down/.test(l));
     })());
+    group('the summary line');
+    eq('a write', summary('2026-09-23T17:19Z SPY QQQ | SPY QQQ IWM DIA TLT GLD · 83 lines, 19072 contracts, 1845 KB → /data/chains/x.jsonl (new file)'), '83 lines, 19,072 contracts');
+    eq('nothing new', summary('2026-09-23T13:45Z ... |   nothing new to record |   skipped: SPY (unchanged since ...)'), 'nothing new: the chains had not changed');
+    eq('a failure keeps its reason', summary('snapshot failed: cboe down'), 'snapshot failed: cboe down');
+    eq('a refused spawn keeps its reason', summary('could not start the recorder: ENOENT'), 'could not start the recorder: ENOENT');
     console.log(`\n${pass} passed, ${fail} failed`);
     process.exit(fail ? 1 : 0);
   })();
