@@ -60,6 +60,8 @@ function HOLT(E) {
   // always undefined. It used to be games-only, so a Fed pair stayed tradeable up to the minute
   // Kalshi closed it ahead of the statement.
   const now = Date.now();
+  // Game pairs Polymarket closed this cycle stay a while for the settlement snipe (decide.keepClosedGamePairs)
+  for (const p of decide.keepClosedGamePairs(prev, pairs, E.cfg, now)) pairs.push(p);
   for (const p of pairs) p.inPlay = decide.liveWindow(p, now, E.cfg);
   E.pairs = pairs;
   E.rejected = rejected;
@@ -292,7 +294,25 @@ function BRAM(E) {
   // Signals on any-market pairs must persist before they reach KETT (decide.persistFilter).
   const held = decide.persistFilter(sig, E.persist || new Map(), E.cfg);
   E.persist = held.counts;
-  E.signals = held.kept;
+  // The settlement snipe (decide.snipeSignal) runs on the in-play game pairs every other rule skips,
+  // and does not wait for persistence: the window is seconds. Its vetoes go on the pair for the tape.
+  const snipes = [];
+  if (E.cfg.snipe) {
+    const now = Date.now();
+    for (const p of E.pairs) {
+      const s = decide.snipeSignal(p, E.cfg, now);
+      if (!s) continue;
+      if (s.veto) {
+        p.veto = `snipe: ${s.veto}`;
+        if (E.due(`snipe-veto-${p.id}`, 300)) E.log('BRAM', 'RESEARCH', null, `${p.label}: Polymarket has settled, no snipe: ${s.veto}`);
+        continue;
+      }
+      p.best = { edge: s.edge, venue: 'KS', side: s.legs[0].side }; p.veto = null;
+      snipes.push(s);
+      if (E.due(`snipe-seen-${p.id}`, 300)) E.log('BRAM', 'RESEARCH', null, `${p.label}: Polymarket has settled ${s.won.toUpperCase()} · Kalshi still offers it at ${(s.legs[0].px * 100).toFixed(0)}c${s.size ? ` (${s.size} at the touch)` : ''} · ${c(s.edge)} net`);
+    }
+  }
+  E.signals = [...snipes, ...held.kept];
   E.touch('BRAM', widest ? `widest ${c(Math.abs(widest.gap))} ${widest.p.label}` : inPlayN ? `${inPlayN} pairs live or closing, none tradeable` : 'no pairs');
   if (staleN && E.due('bram-stale', 300)) E.log('BRAM', 'RESEARCH', null, `${staleN} pair${staleN > 1 ? 's' : ''} skipped on stale quotes (older than ${E.cfg.maxDataAgeSec}s) \u00b7 desk-wide data age is fine, these instruments individually are not`);
   // "Nothing traded" is this desk's normal output, so the useful thing to narrate is which rail
@@ -405,6 +425,17 @@ async function KETT(E) {
       }
       s.edge = live;
     }
+    if (s.type === 'snipe') {
+      // Re-priced from the live Kalshi book just fetched: the listing's ask is what said "edge", the
+      // book is what the order would hit.
+      const top = books[0] && books[0].asks && books[0].asks[0];
+      const liveEdge = top ? decide.snipeEdge(top.price, s.pair.ks.ticker, E.cfg) : null;
+      if (liveEdge == null || liveEdge < E.cfg.snipeMinEdge) {
+        E.log('KETT', 'PASS', null, `${s.pair.label}: Polymarket has settled ${s.won.toUpperCase()}, but Kalshi's live book ${top ? `offers ${c(liveEdge)} net at ${top.price.toFixed(2)}` : 'has nothing offered'}`);
+        continue;
+      }
+      s.edge = liveEdge; s.legs[0].px = top.price;
+    }
     if (s.type === 'converge') {
       const leg = s.legs[0];
       let far;
@@ -436,7 +467,8 @@ async function KETT(E) {
       }
       s.edge = edgeLive; s.fair = fairLive; s.gap = liveQ.ksMid - liveQ.pmMid; leg.px = pxLive;
     }
-    const { qty, capped } = decide.sizePlan(s, { budget, sizeMult, books, cfg: E.cfg });
+    let { qty, capped } = decide.sizePlan(s, { budget, sizeMult, books, cfg: E.cfg });
+    if (s.type === 'snipe') qty = Math.min(qty, E.cfg.snipeMaxQty);   // a settlement is a one-shot, sized like one
     // Say so when the risk limit -- not depth, not cash -- is what set the size. Silently clipping
     // a position back to the cap is how a rail stops being visible enough to argue with.
     if (capped && E.due(`kett-cap-${s.pair.id}`, 300)) E.log('KETT', 'OPS', null, `${s.pair.label}: sized to the ${(E.cfg.maxPositionPct * 100).toFixed(1)}% position cap, not to available depth`);
@@ -502,12 +534,15 @@ async function KETT(E) {
       if (s.type === 'arb') E.journal(E, 'ARB_UNWOUND', { group, label: s.pair.label, reason: failed, knownLegs: fills.length });
       continue;
     }
-    for (const { leg, f } of fills) E.open(s, leg, f, group, s.type === 'arb' ? 'locked arb leg' : `gap ${c(Math.abs(s.gap))}`);
+    for (const { leg, f } of fills) E.open(s, leg, f, group, s.type === 'arb' ? 'locked arb leg' : s.type === 'snipe' ? 'settlement snipe' : `gap ${c(Math.abs(s.gap))}`);
     if (s.type === 'arb') E.completeArbGroup(group);
     const totalCost = fills.reduce((a, x) => a + x.f.cost, 0);
     const q = s.pair.q;
     if (s.type === 'arb') {
       E.log('KETT', 'FILL', -totalCost, `${s.pair.label} · locked arb ${qty}x: ${fills.map(({ leg, f }) => `${leg.side.toUpperCase()} @ ${VEN[leg.venue]} ${f.avg.toFixed(3)}`).join(' + ')} · pays $1.00 at resolution, edge ${c(s.edge)}/contract`);
+    } else if (s.type === 'snipe') {
+      const leg = fills[0].leg, f = fills[0].f;
+      E.log('KETT', 'FILL', -totalCost, `${s.pair.label} · settlement snipe: Polymarket has settled ${leg.side.toUpperCase()}, bought ${qty} ${leg.side.toUpperCase()} @ Kalshi ${f.avg.toFixed(3)} · pays $1.00 at settlement, ${c(s.edge)} net of fee`);
     } else {
       const leg = fills[0].leg, f = fills[0].f;
       const fairSide = leg.side === 'yes' ? s.fair : 1 - s.fair;

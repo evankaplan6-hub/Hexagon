@@ -148,6 +148,13 @@ function makeRecorder(cfg, { io = fs, clock = Date.now } = {}) {
         pmBid: r3(q.pmBid), pmAsk: r3(q.pmAsk), pmVol: Math.round(q.pmVol || 0),
         ksBid: r3(q.ksBid), ksAsk: r3(q.ksAsk), ksVol: Math.round(q.ksVol || 0),
       };
+      // Polymarket closed this game and HOLT is keeping the pair (SNIPE_HOLD_SEC): the line's PM side is
+      // its last quote, the KS side is live. And Kalshi's top-of-book sizes on games, for the same study.
+      if (p.pmGone) row.pmGone = true;
+      if (p.kind === 'game') {
+        if (Number.isFinite(q.ksBidSize)) row.ksBidSize = Math.round(q.ksBidSize);
+        if (Number.isFinite(q.ksAskSize)) row.ksAskSize = Math.round(q.ksAskSize);
+      }
       // The Polymarket taker rate this line was priced at, so tools/replay.js charges the same fee.
       if (Number.isFinite(q.pmFeeRate)) row.pmFee = q.pmFeeRate;
       // present only when BRAM priced this pair this cycle (it skips in-play pairs entirely)

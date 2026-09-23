@@ -528,4 +528,51 @@ function arbEdgeLive(signal, books, cfg) {
   return 1 - cost;
 }
 
-module.exports = { fairValue, quoteFault, convEdge, pairSignals, scan, liveWindow, exitIntent, gainLockIntent, arbUnwind, arbReturn, arbEdgeLive, riskState, biasFor, standingGap, gapUnseen, bookFull, persistFilter, sizePlan, rankSignals, pmRate };
+// ---------------------------------------------------------------- the settlement snipe
+// Polymarket settles a game the moment it ends: its book goes to 99/100 on the winner (bids at 99c,
+// nothing offered) and the market closes seconds later. On the 2026-09-19 → 09-22 tape Kalshi's book
+// for the same game was still offering the winner 3c to 13c under par in ten of about 180 game pairs,
+// on quotes a second or two old, for at least the 15-30 seconds the desk could still see the pair
+// (tools/settle-lag.js). It is the one Kalshi-only edge the tape has shown, and the desk never took
+// it: in-play pairs are excluded from every other rule, and the pair was dropped the cycle Polymarket
+// closed. So: when Polymarket has settled, buy the winner on Kalshi at the ask -- if Kalshi already
+// agrees on the winner (a 44c book on a "settled" game is a mismatched pair, not an edge), the Kalshi
+// quote is fresh, and what is left after the fee clears the bar. Pure. Returns the signal, a { veto }
+// when Polymarket has settled and a gate said no, or null when there is nothing to say.
+function snipeEdge(px, ref, cfg) { return 1 - px - ks.feePerContract(px, cfg.ksFeeRate, ref); }
+function snipeSignal(pair, cfg, now) {
+  if (!cfg.snipe || !pair || pair.kind !== 'game' || !pair.inPlay || !pair.q) return null;
+  const q = pair.q;
+  const yesWon = q.pmBid >= cfg.snipePmBid - 1e-9 && q.pmAsk >= 0.999;
+  const noWon = q.pmBid <= 0.001 && q.pmAsk <= 1 - cfg.snipePmBid + 1e-9;
+  if (!yesWon && !noWon) return null;
+  const pmAge = now - (q.pmAt || q.t || 0);
+  if (!(pmAge <= cfg.snipeHoldSec * 1000)) return { veto: 'the settlement was seen too long ago' };
+  if (!Number.isFinite(q.ksAt) || now - q.ksAt > cfg.snipeMaxKsAgeSec * 1000) return { veto: 'kalshi quote stale' };
+  const side = yesWon ? 'yes' : 'no';
+  const px = yesWon ? q.ksAsk : 1 - q.ksBid;      // buy the winner: YES at the ask, NO at one minus the YES bid
+  const agree = yesWon ? q.ksBid : 1 - q.ksAsk;    // what Kalshi already pays for the winner
+  if (!(agree >= cfg.snipeMinKsPrice)) return { veto: `kalshi bids ${(agree * 100).toFixed(0)}c for the winner: not the same game, or not over` };
+  const edge = snipeEdge(px, pair.ks && pair.ks.ticker, cfg);
+  if (!(edge >= cfg.snipeMinEdge)) return { veto: `${(edge * 100).toFixed(1)}c net after the fee` };
+  const size = yesWon ? q.ksAskSize : q.ksBidSize;
+  return { type: 'snipe', pair, legs: [{ venue: 'KS', side, px }], edge, size: Number.isFinite(size) ? size : null, won: side };
+}
+// HOLT rebuilds the pair list from the venues' listings every cycle, and Polymarket's listing drops a
+// game the cycle it closes -- the cycle the snipe needs it. The in-play game pairs that just vanished
+// are kept for snipeHoldSec, flagged pmGone with when they went; engine.quote keeps their Kalshi side
+// live. Pure: prev is last cycle's pairs by id, pairs is this cycle's list.
+function keepClosedGamePairs(prev, pairs, cfg, now) {
+  if (!cfg.snipe) return [];
+  const have = new Set(pairs.map((p) => p.id));
+  const kept = [];
+  for (const [id, p] of prev) {
+    if (have.has(id) || !p || p.kind !== 'game' || !p.inPlay || !p.q) continue;
+    const goneAt = p.pmGoneAt || now;
+    if (now - goneAt > cfg.snipeHoldSec * 1000) continue;
+    kept.push({ ...p, pmGone: true, pmGoneAt: goneAt });
+  }
+  return kept;
+}
+
+module.exports = { fairValue, quoteFault, snipeEdge, snipeSignal, keepClosedGamePairs, convEdge, pairSignals, scan, liveWindow, exitIntent, gainLockIntent, arbUnwind, arbReturn, arbEdgeLive, riskState, biasFor, standingGap, gapUnseen, bookFull, persistFilter, sizePlan, rankSignals, pmRate };

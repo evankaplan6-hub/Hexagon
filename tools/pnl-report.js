@@ -32,10 +32,11 @@ function load(dir, since) {
 function summarize(events) {
   const day = (e) => e.t.slice(0, 10);
   const days = new Map();
-  const D = (k) => days.get(k) || days.set(k, { conv: { n: 0, w: 0, pnl: 0 }, arb: 0, maker: 0, makerFills: 0, makerQty: 0, runQty: 0 }).get(k);
+  const D = (k) => days.get(k) || days.set(k, { conv: { n: 0, w: 0, pnl: 0 }, arb: 0, snipe: 0, maker: 0, makerFills: 0, makerQty: 0, runQty: 0 }).get(k);
   const opens = new Map();
   const conv = { n: 0, w: 0, pnl: 0, fees: 0, mind: { n: 0, pnl: 0 }, rules: { n: 0, pnl: 0 }, byReason: new Map() };
   const arb = { n: 0, pnl: 0 };
+  const snipe = { n: 0, w: 0, pnl: 0, fees: 0 };   // the settlement snipe (README): bought on Kalshi after Polymarket settled, held to settlement
   const mk = { fills: 0, qty: 0, runQty: 0, realized: 0, settles: 0, settlePnl: 0 };
   const pos = {};
 
@@ -53,6 +54,11 @@ function summarize(events) {
       const why = isMind ? 'mind' : String(e.reason || 'other').replace(/[\d.]+/g, '#').replace(/, gap still.*|, held.*| \(.*|\bvs entry.*/, '').trim().slice(0, 34);
       const r = conv.byReason.get(why) || { n: 0, pnl: 0 };
       r.n++; r.pnl += pnl; conv.byReason.set(why, r);
+    } else if ((e.kind === 'CLOSE' || e.kind === 'SETTLE') && e.strategy === 'snipe') {
+      const pnl = e.pnl || 0;
+      snipe.n++; snipe.pnl += pnl; if (pnl > 0) snipe.w++;
+      snipe.fees += (e.fee || 0) + ((opens.get(e.id) || {}).fee || 0);
+      D(day(e)).snipe += pnl;
     } else if (e.kind === 'ARB_UNWOUND' || e.kind === 'ARB_SETTLED') {
       arb.n++; arb.pnl += e.pnl || 0; D(day(e)).arb += e.pnl || 0;
     } else if (e.kind === 'MAKER_FILL') {
@@ -67,7 +73,7 @@ function summarize(events) {
     }
   }
   const held = Object.entries(pos).filter(([, p]) => p.inv).map(([ticker, p]) => ({ ticker, inv: p.inv, cost: p.cost }));
-  return { days, conv, arb, mk, held };
+  return { days, conv, arb, snipe, mk, held };
 }
 
 // Public, unauthenticated, read-only. Returns ticker -> yes price to mark at.
@@ -88,6 +94,7 @@ async function marksFor(tickers) {
 function render(s, unreal) {
   const L = [];
   const { conv, arb, mk } = s;
+  const snipe = s.snipe || { n: 0, w: 0, pnl: 0, fees: 0 };
   L.push('CONVERGENCE  (any-market pairs, taker)');
   L.push(`  ${conv.n} closed · ${conv.w} winners · realized ${usd(r2(conv.pnl))} · fees paid ${usd(-r2(conv.fees))} of that`);
   for (const [why, r] of [...conv.byReason.entries()].sort((a, b) => a[1].pnl - b[1].pnl)) L.push(`    ${why.padEnd(36)} ${String(r.n).padStart(3)}  ${usd(r2(r.pnl)).padStart(10)}`);
@@ -96,19 +103,22 @@ function render(s, unreal) {
   L.push('LOCKED ARBS');
   L.push(`  ${arb.n} unwound or settled · ${usd(r2(arb.pnl))}`);
   L.push('');
+  L.push('SETTLEMENT SNIPE  (bought on Kalshi after Polymarket settled)');
+  L.push(`  ${snipe.n} settled or closed · ${snipe.w} winners · realized ${usd(r2(snipe.pnl))} · fees paid ${usd(-r2(snipe.fees))} of that`);
+  L.push('');
   L.push('MAKER');
   const runPct = mk.qty ? Math.round((mk.runQty / mk.qty) * 100) : 0;
   L.push(`  ${mk.fills} fills · ${Math.round(mk.qty)} contracts · ${runPct}% run over · realized ${usd(r2(mk.realized + mk.settlePnl))} (of which ${mk.settles} settlements ${usd(r2(mk.settlePnl))})`);
   const heldQty = s.held.reduce((a, h) => a + Math.abs(h.inv), 0);
   L.push(`  still holding ${Math.round(heldQty)} contracts in ${s.held.length} markets${unreal == null ? ' · run with --marks to price them' : ` · marked ${usd(r2(unreal))} (a MARK, not money)`}`);
-  const total = conv.pnl + arb.pnl + mk.realized + mk.settlePnl;
+  const total = conv.pnl + arb.pnl + snipe.pnl + mk.realized + mk.settlePnl;
   L.push('');
   L.push(`ALL-IN REALIZED ${usd(r2(total))}${unreal == null ? '' : ` · with marks ${usd(r2(total + unreal))}`}`);
   L.push('');
-  L.push('BY DAY            converge      arb    maker   maker run-over');
+  L.push('BY DAY            converge      arb    snipe    maker   maker run-over');
   for (const [k, d] of [...s.days.entries()].sort()) {
     const ro = d.makerQty ? `${Math.round((d.runQty / d.makerQty) * 100)}%` : '-';
-    L.push(`  ${k}  ${`${d.conv.n} · ${usd(r2(d.conv.pnl))}`.padStart(14)} ${usd(r2(d.arb)).padStart(8)} ${usd(r2(d.maker)).padStart(8)}   ${ro.padStart(6)}`);
+    L.push(`  ${k}  ${`${d.conv.n} · ${usd(r2(d.conv.pnl))}`.padStart(14)} ${usd(r2(d.arb)).padStart(8)} ${usd(r2(d.snipe || 0)).padStart(8)} ${usd(r2(d.maker)).padStart(8)}   ${ro.padStart(6)}`);
   }
   return L.join('\n');
 }

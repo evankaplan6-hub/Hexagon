@@ -12,6 +12,7 @@ const os = require('os');
 const path = require('path');
 const { Engine } = require('../src/engine');
 const { KETT, RIGO } = require('../src/agents');
+const decide = require('../src/decide');
 const base = require('../src/config');
 
 let pass = 0, fail = 0;
@@ -900,6 +901,39 @@ const position = (over = {}) => ({
   }
 
   for (const d of dirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch {} }
+  group('the settlement snipe goes through KETT as a one-leg Kalshi buy');
+  {
+    const E = engine({ snipe: true, snipeMaxQty: 100 });
+    E.halt = null;   // TESS has not run; the existing KETT cases clear this the same way
+    const now = Date.now();
+    const pair = { id: 'pm9:0|KXNFLGAME-T-MIN', label: 'NFL test · Vikings', kind: 'game', series: 'KXNFLGAME', inPlay: true, startsAt: now - 3 * 3600000,
+      pm: { id: 'pm9', tokenIndex: 0 }, ks: { ticker: 'KXNFLGAME-T-MIN' },
+      q: { pmBid: 0.99, pmAsk: 1, ksBid: 0.82, ksAsk: 0.86, pmMid: 0.995, ksMid: 0.84, pmVol: 1e6, ksVol: 1e6, pmFeeRate: 0.05, t: now, pmAt: now, ksAt: now, ksBidSize: 200, ksAskSize: 300 } };
+    E.pairs = [pair];
+    const s = decide.snipeSignal(pair, E.cfg, now);
+    E.signals = [s];
+    E.book = async () => ({ asks: [{ price: 0.86, size: 40 }, { price: 0.87, size: 500 }], yesBid: 0.82, yesAsk: 0.86 });
+    await KETT(E);
+    const pos = E.state.positions[0];
+    ok('a YES position opens on Kalshi, strategy snipe, capped at SNIPE_MAX_QTY', pos && pos.venue === 'KS' && pos.side === 'yes' && pos.strategy === 'snipe' && pos.qty === 100, pos);
+    ok('filled up the ask ladder: 40 at 86c and 60 at 87c', pos && Math.abs(pos.entry - (40 * 0.86 + 60 * 0.87) / 100) < 1e-6, pos && pos.entry);
+    ok('the journal names the strategy', (E.journalled || []).some((j) => j.type === 'OPEN' && j.data.strategy === 'snipe'));
+    // the live book has moved to par since the listing: no trade
+    const E2 = engine({ snipe: true });
+    E2.halt = null;
+    E2.pairs = [pair]; E2.signals = [decide.snipeSignal(pair, E2.cfg, now)];
+    E2.book = async () => ({ asks: [{ price: 0.99, size: 500 }], yesBid: 0.98, yesAsk: 0.99 });
+    await KETT(E2);
+    ok('a live book already at 99c: nothing bought', E2.state.positions.length === 0 && E2.state.cash === 10000, E2.state.positions);
+    // Polymarket then closes the market: HOLT-style, the pair is kept and quote() keeps its Kalshi side live
+    const E3 = engine({ snipe: true });
+    E3.quotes.ks.set('KXNFLGAME-T-MIN', { ticker: 'KXNFLGAME-T-MIN', status: 'active', yesBid: 0.85, yesAsk: 0.88, yesBidSize: 10, yesAskSize: 70, vol24: 1, at: now + 15000 });
+    const kept = decide.keepClosedGamePairs(new Map([[pair.id, pair]]), [], E3.cfg, now + 15000)[0];
+    const q = E3.quote(kept);
+    ok('the kept pair quotes: Polymarket\'s last 99/100, Kalshi\'s new 85/88, with Kalshi\'s own time and sizes', q && q.pmBid === 0.99 && q.pmAsk === 1 && q.ksBid === 0.85 && q.ksAsk === 0.88 && q.ksAt === now + 15000 && q.ksAskSize === 70 && q.pmAt === now, q);
+    ok('...and it still says snipe', (decide.snipeSignal({ ...kept, q }, E3.cfg, now + 15000) || {}).type === 'snipe');
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

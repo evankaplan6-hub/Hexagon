@@ -307,6 +307,23 @@ module.exports = {
   // hold. KXCPI closes 12:25Z for a 12:30Z print; the same shape. Close time is an ADDITIONAL rule
   // for games, never a replacement: Kalshi game markets close days after the game is played.
   closeGuardMin: num('CLOSE_GUARD_MIN', 60),
+
+  // ---- the settlement snipe (decide.snipeSignal, HOLT keeps the pair, KETT buys) ----
+  // Polymarket settles a game the moment it ends: its book goes to 99/100 on the winner and the market
+  // closes seconds later. On the 2026-09-19 → 09-22 tape Kalshi's book for the same game was still
+  // offering the winner 3c to 13c under par in ten of about 180 game pairs, on quotes a second or two
+  // old, for at least the 15-30 seconds the desk could still see the pair (tools/settle-lag.js; README
+  // "The settlement snipe"). The one Kalshi-only edge the tape has shown. Paper until it has had a
+  // Sunday of its own on the tape, which is also what says how long the window lasts and how deep it is.
+  snipe: env('SNIPE', '1') !== '0',
+  snipeMinEdge: num('SNIPE_MIN_EDGE', 0.02),          // per contract, net of Kalshi's fee
+  // Kalshi must already bid at least this for the winner. A 44c book on a "settled" game is a mismatched
+  // pair (the Yankees game on 2026-09-19 was a different game of the series), not an edge.
+  snipeMinKsPrice: num('SNIPE_MIN_KS_PRICE', 0.75),
+  snipePmBid: num('SNIPE_PM_BID', 0.99),              // Polymarket bidding this for the winner with nothing offered is a settlement
+  snipeMaxKsAgeSec: num('SNIPE_MAX_KS_AGE_SEC', 30),  // the Kalshi quote must be this fresh (they are repriced every cycle)
+  snipeHoldSec: num('SNIPE_HOLD_SEC', 300),           // how long HOLT keeps a game pair after Polymarket's listing drops it
+  snipeMaxQty: Math.max(1, Math.round(num('SNIPE_MAX_QTY', 100))),
   exitGap: num('EXIT_GAP', 0.01),
   stopLoss: num('STOP_LOSS', 0.06),
   // Paper positions also use a percentage stop so a cheap contract cannot lose nearly all of
