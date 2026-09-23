@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.hexagon.history</string>
+
+  <!-- Through ops/run-history.sh rather than node directly, for the reasons ops/com.hexagon.chains.plist
+       gives: launchd's PATH has no nvm node, and a checkout that has moved should fail readably. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__HEXDIR__/ops/run-history.sh</string>
+  </array>
+
+  <!-- Four times a day, six hours apart, LOCAL time. The trial key's request cap resets at an hour
+       nobody has published; a run on a capped key costs one call and stops, so the price of
+       looking often is nothing and the reward is the day's allowance spent within six hours of
+       arriving. Or on wake, if the Mac was asleep at the time. -->
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict>
+      <key>Hour</key>
+      <integer>0</integer>
+      <key>Minute</key>
+      <integer>40</integer>
+    </dict>
+    <dict>
+      <key>Hour</key>
+      <integer>6</integer>
+      <key>Minute</key>
+      <integer>40</integer>
+    </dict>
+    <dict>
+      <key>Hour</key>
+      <integer>12</integer>
+      <key>Minute</key>
+      <integer>40</integer>
+    </dict>
+    <dict>
+      <key>Hour</key>
+      <integer>18</integer>
+      <key>Minute</key>
+      <integer>40</integer>
+    </dict>
+  </array>
+
+  <key>RunAtLoad</key>
+  <false/>
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <key>StandardOutPath</key>
+  <string>__HOME__/Library/Logs/hexagon-history.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/Library/Logs/hexagon-history.log</string>
+</dict>
+</plist>

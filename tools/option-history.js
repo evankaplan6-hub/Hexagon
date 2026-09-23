@@ -6,6 +6,7 @@
 //   node tools/option-history.js --only SPY,QQQ --from 2024-01 --to 2024-06
 //   node tools/option-history.js --band 0.15 --window 90  # wider strike window (see below)
 //   node tools/option-history.js --pace 400               # slower: milliseconds between calls
+//   node tools/option-history.js --newest-first           # most recent expiries first, for a key that may not last
 //   node tools/option-history.js --repair                 # ask again for contracts an earlier run could not fetch (marked err)
 //   node tools/option-history.js --refresh                # re-pull expiries whose file already exists
 //   node tools/option-history.js --dry-run                # list what would be pulled, fetch no bars, write nothing
@@ -247,15 +248,18 @@ const cxOf = (symbol, expiry, c) => `US:${symbol}${expiry.replace(/-/g, '')}${c.
 // The whole run. `io` and `now` are injectable so tools/chartexchange-test.js drives it with a
 // fake session and a temp directory and no clock.
 async function archive(session, { symbols = SYMBOLS, from = FROM, to = null, dir = DIR, band = BAND, windowDays = WINDOW_DAYS,
-  refresh = false, repair = false, dryRun = false, io = fs, now = Date.now, log = () => {} } = {}) {
+  refresh = false, repair = false, dryRun = false, newestFirst = false, io = fs, now = Date.now, log = () => {} } = {}) {
   const at = now();
   const today = etDay(at);
   const toMonth = to || lastExpiredMonth(today);
+  // Newest first when the key is on a clock: if it dies halfway, the years a backtest wants most
+  // are the ones on disk. Skip-existing makes the order otherwise immaterial.
   const fridays = monthlyExpiries(from, toMonth).filter((d) => d < today);
+  if (newestFirst) fridays.reverse();
   const out = { at, from, to: toMonth, expiries: fridays.length, pulled: [], skipped: [], failed: [], existing: 0, contracts: 0, bars: 0, missing: 0, repaired: 0, bytes: 0, calls0: session.stats.calls };
   for (const symbol of symbols) {
     let bars;
-    try { bars = await underlyingBars(session, symbol, { dir, until: fridays[fridays.length - 1] || today, at, io, refresh }); }
+    try { bars = await underlyingBars(session, symbol, { dir, until: (newestFirst ? fridays[0] : fridays[fridays.length - 1]) || today, at, io, refresh }); }
     catch (e) {
       if (e.quota) { out.stopped = `${symbol} underlying: ${e.message}`; out.calls = session.stats.calls - out.calls0; return out; }
       out.failed.push({ symbol, expiry: '*', why: `underlying: ${e.message}` }); log(`${symbol}  underlying bars: ${e.message}`); continue;
@@ -322,14 +326,21 @@ if (require.main === module) {
     if (!enabled()) { console.error(`${KEY_ENV} is not set in .env; nothing was pulled.`); process.exit(2); }
     const symbols = flag('only') ? flag('only').split(',').map((s) => s.trim().toUpperCase()).filter(Boolean) : SYMBOLS;
     const opts = { symbols, from: flag('from', FROM), to: flag('to', null), dir: flag('dir', DIR), band: numFlag('band', BAND), windowDays: numFlag('window', WINDOW_DAYS),
-      refresh: args.includes('--refresh'), repair: args.includes('--repair'), dryRun: args.includes('--dry-run'), log: console.log };
+      refresh: args.includes('--refresh'), repair: args.includes('--repair'), dryRun: args.includes('--dry-run'), newestFirst: args.includes('--newest-first'), log: console.log };
     for (const m of [opts.from, opts.to]) if (m && !MONTH_RE.test(m)) { console.error(`--from and --to are months like 2024-01, not ${JSON.stringify(m)}`); process.exit(2); }
     const session = makeSession({ pace: numFlag('pace', 250), tries: 2, retryMs: 1000 });
     const t0 = Date.now();
     console.log(`${iso(t0)}  ${symbols.join(' ')}  monthly expiries ${opts.from} → ${opts.to || 'the last expired'}  strikes ±${Math.round(opts.band * 100)}% of ${opts.windowDays}-day closes  → ${opts.dir}${opts.dryRun ? '  (dry run)' : ''}\n`);
+    // One line per run in the history dir, whatever happens: the daily job (ops/run-history.sh) is
+    // read by this file, and a fortnight of "STOPPED after 0" is a fact worth having in one place.
+    const runLine = (text) => {
+      if (opts.dryRun) return;
+      try { fs.mkdirSync(opts.dir, { recursive: true }); fs.appendFileSync(path.join(opts.dir, 'history.log'), `${iso(Date.now())} ${text}\n`); } catch { /* the console line above still says it */ }
+    };
     try {
       const r = await archive(session, opts);
       const min = ((Date.now() - t0) / 60000).toFixed(1);
+      runLine(`pulled ${r.pulled.length} expiries · ${r.contracts} contracts · ${r.calls} calls · ${min} min${r.missing ? ` · ${r.missing} missing` : ''}${r.failed.length ? ` · ${r.failed.length} FAILED` : ''}${r.stopped ? ` · STOPPED (${r.stopped.slice(0, 80)})` : ''}`);
       console.log(`\n${opts.dryRun ? 'would pull' : 'pulled'} ${r.pulled.length} of ${r.expiries * symbols.length} expiries · ${r.contracts} contracts · ${r.bars} bars · ${(r.bytes / 1048576).toFixed(1)} MB · ${r.calls} API calls · ${min} min`
         + `${r.existing ? ` · ${r.existing} already on disk` : ''}${r.repaired ? ` · ${r.repaired} contracts repaired` : ''}`);
       if (r.missing) console.log(`${r.missing} contracts the source would not serve are marked err in their files; run again with --repair to ask for them`);
@@ -339,6 +350,7 @@ if (require.main === module) {
       process.exit(r.failed.length ? 1 : 0);
     } catch (e) {
       console.error(`stopped: ${e.message}`);
+      runLine(`PROBLEM ${e.message.slice(0, 160)}`);
       process.exit(1);
     }
   })();

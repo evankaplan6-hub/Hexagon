@@ -88,7 +88,9 @@ data/fly/         gitignored: journals, state and tick tapes copied down from th
                   kstrades.jsonl (the trade history maker-replay scores against) and
                   rank-listing.json + rank-trades.jsonl (the 440-market pool maker-rank scores).
                   That snapshot is frozen at 2026-09-12; new copies from the box go in data/fly/archive/
-ops/              Fly deploy, launchd desk autostart (not installed), and the daily tape pull (ops/install-pull.sh; installed on the Mac 2026-09-14).
+ops/              Fly deploy, launchd desk autostart (not installed), the daily tape pull (ops/install-pull.sh; installed on the Mac 2026-09-14),
+                  and the option-history pull (ops/install-history.sh: four runs a day on the trial key's allowance, installed 2026-09-23;
+                  uninstall after the trial ends 2026-10-07).
                   ops/daily-check.sh is the daily trust routine (read-only): pull alive, ledger-check --box --venues, pnl-report, restarts, CPU pressure.
                   The box also has a disk brake (TAPE_MIN_FREE_MB) that trims its oldest tapes if the pull stops
 data/             gitignored: state.json, journal-*.jsonl, ticks-*.jsonl, desk.log
