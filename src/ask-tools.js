@@ -463,6 +463,7 @@ const SETTINGS = [
   ['pmUniverse', 'PM_UNIVERSE', 'Polymarket markets scanned, by volume'],
   ['pmListEverySec', 'PM_LIST_EVERY_SEC', 'seconds between re-reads of that Polymarket listing (paired markets are repriced from the order book every cycle regardless)'],
   ['ksSeries', 'KS_SERIES', 'Kalshi series scanned by the fast matcher (games and the Fed)'],
+  ['ksListEverySec', 'KS_LIST_EVERY_SEC', 'seconds between re-reads of those Kalshi series (paired markets and open Kalshi legs are repriced by ticker every cycle regardless)'],
   ['anyMarkets', 'ANY_MARKETS', 'any-market scanner on or off (every category on both venues)'],
   ['anyMaxPairs', 'ANY_MAX_PAIRS', 'most any-market pairs kept and repriced each cycle'],
   ['discoverEveryMin', 'DISCOVER_EVERY_MIN', 'minutes between full any-market crawls'],

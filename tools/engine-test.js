@@ -769,7 +769,7 @@ const position = (over = {}) => ({
   group('the Polymarket listing is re-read every PM_LIST_EVERY_SEC, and a pair is only as fresh as its CLOB price');
   {
     const pmv = require('../src/venues/polymarket'), ksv = require('../src/venues/kalshi');
-    const saved = { fu: pmv.fetchUniverse, fp: pmv.fetchPrices, fa: ksv.fetchAll };
+    const saved = { fu: pmv.fetchUniverse, fp: pmv.fetchPrices, fa: ksv.fetchAll, ft: ksv.fetchMarketsByTickers };
     let lists = 0, listFails = false, clob = new Map(), clobFails = false;
     pmv.fetchUniverse = async () => {
       lists++;
@@ -778,6 +778,7 @@ const position = (over = {}) => ({
     };
     pmv.fetchPrices = async () => { if (clobFails) throw new Error('clob down'); return clob; };
     ksv.fetchAll = async () => [{ ticker: 'KXA', yesBid: 0.4, yesAsk: 0.42, vol24: 10 }];
+    ksv.fetchMarketsByTickers = async () => [];
     try {
       const E = engine({ pmListEverySec: 120 });
       await E.refreshQuotes();
@@ -825,7 +826,76 @@ const position = (over = {}) => ({
       await every.refreshQuotes(); await every.refreshQuotes();
       ok('PM_LIST_EVERY_SEC=0 reads it every cycle, as before', lists === 2, lists);
     } finally {
-      pmv.fetchUniverse = saved.fu; pmv.fetchPrices = saved.fp; ksv.fetchAll = saved.fa;
+      pmv.fetchUniverse = saved.fu; pmv.fetchPrices = saved.fp; ksv.fetchAll = saved.fa; ksv.fetchMarketsByTickers = saved.ft;
+    }
+  }
+
+  group('the Kalshi fast listing is re-read every KS_LIST_EVERY_SEC; the markets priced from it are repriced by ticker every cycle');
+  {
+    const pmv = require('../src/venues/polymarket'), ksv = require('../src/venues/kalshi');
+    const saved = { fu: pmv.fetchUniverse, fp: pmv.fetchPrices, fa: ksv.fetchAll, ft: ksv.fetchMarketsByTickers };
+    let lists = 0, asked = [], answer = [], tickFails = false;
+    pmv.fetchUniverse = async () => [];
+    pmv.fetchPrices = async () => new Map();
+    ksv.fetchAll = async () => {
+      lists++;
+      return ['KXA', 'KXB', 'KXC', 'KXIDLE'].map((ticker) => ({ ticker, status: 'active', yesBid: 0.40, yesAsk: 0.42, vol24: 10 }));
+    };
+    ksv.fetchMarketsByTickers = async (tickers) => { asked.push([...tickers].sort()); if (tickFails) throw new Error('kalshi down'); return answer; };
+    try {
+      const E = engine({ ksListEverySec: 120 });
+      await E.refreshQuotes();
+      const a = E.quotes.ks.get('KXA'), listedAt = a.at;
+      await E.refreshQuotes();
+      ok('the listing is read once inside the interval', lists === 1, lists);
+      ok('...and the map is rebuilt from the same objects', E.quotes.ks.get('KXA') === a && E.quotes.ks.size === 4, E.quotes.ks.size);
+
+      E.pairs = [
+        { id: 'p1', pm: { id: 'x' }, ks: { ticker: 'KXA' } },
+        { id: 'p2', pm: { id: 'y' }, ks: { ticker: 'KXB' } },
+        { id: 'p3', pm: { id: 'z' }, ks: { ticker: 'KXANY' } },   // an any-market pair: not in this listing
+      ];
+      E.state.positions = [{ id: 'l1', venue: 'KS', ref: 'KXC' }, { id: 'l2', venue: 'PM', pmId: 'x' }];
+      answer = [
+        { ticker: 'KXA', status: 'active', yesBid: 0.55, yesAsk: 0.57, vol24: 99 },
+        { ticker: 'KXB', status: 'determined', yesBid: 1, yesAsk: 1, vol24: 0 },
+        { ticker: 'KXC', status: 'active', yesBid: 0.2, yesAsk: 0.21, vol24: 5 },
+      ];
+      await sleep(5); await E.refreshPairPrices();
+      ok('it asks for the fast pairs and the open Kalshi legs, and nothing else', JSON.stringify(asked[0]) === JSON.stringify(['KXA', 'KXB', 'KXC']), asked);
+      ok('a repriced market takes the new price and volume, stamped now',
+        a.yesBid === 0.55 && a.yesAsk === 0.57 && a.vol24 === 99 && a.at > listedAt, a);
+      ok('...and so does an open leg with no pair', E.quotes.ks.get('KXC').yesBid === 0.2);
+      ok('a market no longer active leaves the map at once, and the listing with it',
+        !E.quotes.ks.has('KXB') && !E.ksList.tickers.has('KXB') && !E.ksList.markets.some((m) => m.ticker === 'KXB'));
+      ok('a listed market nobody prices is left alone', E.quotes.ks.get('KXIDLE').at === listedAt);
+      await E.refreshQuotes();
+      ok('...and stays gone when the map is rebuilt from the listing', !E.quotes.ks.has('KXB') && E.quotes.ks.has('KXA'));
+
+      const stamped = a.at;
+      answer = [];
+      await sleep(5); await E.refreshPairPrices();
+      ok('a ticker the call did not answer for keeps its old stamp', a.at === stamped);
+      tickFails = true;
+      await E.refreshPairPrices();
+      ok('a failed call moves no stamp and removes nothing', a.at === stamped && E.quotes.ks.has('KXA'));
+      tickFails = false;
+
+      E.pairs = [{ id: 'p3', pm: { id: 'z' }, ks: { ticker: 'KXANY' } }];
+      E.state.positions = [];
+      asked = [];
+      await E.refreshPairPrices();
+      ok('with nothing from this listing to price, no call is made', asked.length === 0, asked);
+
+      E.ksList.at -= 121 * 1000;
+      await E.refreshQuotes();
+      ok('a due listing is read again, with fresh objects', lists === 2 && E.quotes.ks.get('KXA') !== a && E.quotes.ks.has('KXB'), lists);
+      const every = engine({ ksListEverySec: 0 });
+      lists = 0;
+      await every.refreshQuotes(); await every.refreshQuotes();
+      ok('KS_LIST_EVERY_SEC=0 reads it every cycle, as before', lists === 2, lists);
+    } finally {
+      pmv.fetchUniverse = saved.fu; pmv.fetchPrices = saved.fp; ksv.fetchAll = saved.fa; ksv.fetchMarketsByTickers = saved.ft;
     }
   }
 

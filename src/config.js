@@ -502,6 +502,12 @@ module.exports = {
   // this much later; a game is untradeable two minutes before start regardless. 0 = every cycle.
   pmListEverySec: Math.max(0, num('PM_LIST_EVERY_SEC', 120)),
   ksSeries: env('KS_SERIES', 'KXFEDDECISION,KXATPMATCH,KXWTAMATCH,KXMLBGAME,KXNFLGAME,KXNBAGAME,KXNCAAFGAME,KXMLSGAME,KXEPLGAME,KXUCLGAME,KXLALIGAGAME').split(',').map((s) => s.trim()).filter(Boolean),
+  // The same for Kalshi's fast listing: every open market in KS_SERIES, read every cycle until
+  // 2026-09-22, when it was ~7 MB a minute and the biggest steady read left -- a single series
+  // (KXNCAAFGAME) is ~1 MB, because Kalshi lists the whole season's games. The markets the desk
+  // prices from it (the fast path's pairs and its open Kalshi legs) are repriced every cycle by
+  // ticker instead (Engine.refreshKsPairPrices). 0 = every cycle.
+  ksListEverySec: Math.max(0, num('KS_LIST_EVERY_SEC', 120)),
 
   // live
   kalshiKeyId: env('KALSHI_API_KEY_ID', ''),

@@ -740,22 +740,32 @@ class Engine {
 
   // ---------------------------------------------------------------- data
   async refreshQuotes() {
-    // Polymarket's listing is fetched every PM_LIST_EVERY_SEC, not every cycle (src/config.js says
-    // why). In between, the map is rebuilt from the last listing -- the same objects, so pinned and
-    // injected markets are re-added exactly as before -- and refreshPairPrices reprices every
-    // paired market from the CLOB. A failed listing is retried on the next cycle.
-    const listDue = !this.pmList || Date.now() - this.pmList.at >= this.cfg.pmListEverySec * 1000;
-    const [pmRes, ksRes] = await Promise.allSettled([listDue ? pm.fetchUniverse(this.cfg.pmUniverse) : null, ks.fetchAll(this.cfg.ksSeries)]);
+    // Both venues' fast listings are re-read every PM_LIST_EVERY_SEC / KS_LIST_EVERY_SEC, not every
+    // cycle (src/config.js says why). In between, each map is rebuilt from its last listing -- the
+    // same objects, so pinned and injected markets are re-added exactly as before -- and
+    // refreshPairPrices reprices the markets the desk is actually pricing: Polymarket's from the
+    // CLOB, Kalshi's by ticker. A failed listing is retried on the next cycle.
+    const now = Date.now();
+    const due = (list, sec) => !list || now - list.at >= sec * 1000;
+    const pmDue = due(this.pmList, this.cfg.pmListEverySec), ksDue = due(this.ksList, this.cfg.ksListEverySec);
+    const [pmRes, ksRes] = await Promise.allSettled([
+      pmDue ? pm.fetchUniverse(this.cfg.pmUniverse) : null,
+      ksDue ? ks.fetchAll(this.cfg.ksSeries) : null,
+    ]);
     // Stamp each market with when IT was fetched. lastQuoteAt only advances when BOTH venues
     // succeed, so it cannot tell "everything is fresh" from "this one market stopped updating" \u2014
     // and quote() carries a pair's last good quote forward indefinitely when it cannot reprice.
-    // A reused listing keeps its own `at`: only a CLOB price that actually arrived moves it.
+    // A reused listing keeps its own `at`: only a price that actually arrived moves it.
     const at = Date.now();
-    const pmOk = !listDue || pmRes.status === 'fulfilled';
-    if (listDue && pmRes.status === 'fulfilled') this.pmList = { at, markets: pmRes.value.map((m) => Object.assign(m, { at })) };
+    const pmOk = !pmDue || pmRes.status === 'fulfilled', ksOk = !ksDue || ksRes.status === 'fulfilled';
+    if (pmDue && pmRes.status === 'fulfilled') this.pmList = { at, markets: pmRes.value.map((m) => Object.assign(m, { at })) };
+    if (ksDue && ksRes.status === 'fulfilled') {
+      const markets = ksRes.value.map((m) => Object.assign(m, { at }));
+      this.ksList = { at, markets, tickers: new Set(markets.map((m) => m.ticker)) };
+    }
     if (pmOk && this.pmList) this.quotes.pm = new Map(this.pmList.markets.map((m) => [m.id, m]));
-    if (ksRes.status === 'fulfilled') this.quotes.ks = new Map(ksRes.value.map((m) => [m.ticker, Object.assign(m, { at })]));
-    if (pmOk && ksRes.status === 'fulfilled') this.lastQuoteAt = Date.now();
+    if (ksOk && this.ksList) this.quotes.ks = new Map(this.ksList.markets.map((m) => [m.ticker, m]));
+    if (pmOk && ksOk) this.lastQuoteAt = Date.now();
     else if (this.due('quote-err', 60)) {
       const why = [pmRes, ksRes].filter((r) => r.status === 'rejected').map((r) => r.reason && r.reason.message).join(' | ');
       this.log('TESS', 'OPS', null, `quote refresh failed: ${String(why).slice(0, 140)}`);
@@ -796,6 +806,9 @@ class Engine {
   // overwrite pair quotes with live CLOB top-of-book, and stamp the market with when that price
   // arrived. A market the CLOB did not answer for keeps its old stamp and goes stale on its own.
   async refreshPairPrices() {
+    await Promise.all([this.refreshPmPairPrices(), this.refreshKsPairPrices()]);
+  }
+  async refreshPmPairPrices() {
     const toks = [...new Set(this.pairs.map((p) => p.pm.tokenId).filter(Boolean))];
     if (!toks.length) return;
     let prices;
@@ -809,6 +822,34 @@ class Engine {
       else { m.bestBid = 1 - live.ask; m.bestAsk = 1 - live.bid; }
       m.at = at;
     }
+  }
+  // The Kalshi half. The fast listing (every open market in KS_SERIES) is only re-read every
+  // KS_LIST_EVERY_SEC, so the markets from it that the desk is actually pricing -- the fast path's
+  // pairs and its open Kalshi legs -- are repriced every cycle by ticker, one call per 200. The
+  // any-market pairs are not in that listing and keep their own reprice (ANY_REFRESH_SEC). A market
+  // no longer active, or with no two-sided book, leaves the map at once, as it used to by dropping
+  // out of the next listing, so resolution() takes over a leg held on it. A market the call did not
+  // answer for keeps its old stamp and goes stale on its own.
+  async refreshKsPairPrices() {
+    const listed = this.ksList && this.ksList.tickers;
+    if (!listed) return;
+    const want = new Set();
+    for (const p of this.pairs) if (listed.has(p.ks.ticker)) want.add(p.ks.ticker);
+    for (const pos of this.state.positions) if (pos.venue === 'KS' && listed.has(pos.ref)) want.add(pos.ref);
+    if (!want.size) return;
+    let fresh;
+    try { fresh = await ks.fetchMarketsByTickers([...want]); }
+    catch (e) { if (this.due('ks-reprice-err', 120)) this.log('TESS', 'OPS', null, `Kalshi price refresh failed: ${String(e.message).slice(0, 100)} \u00b7 those pairs go stale until it recovers`); return; }
+    const at = Date.now(), gone = [];
+    for (const f of fresh) {
+      const m = want.has(f.ticker) && this.quotes.ks.get(f.ticker);
+      if (!m) continue;
+      if (f.status !== 'active' || f.yesBid == null || f.yesAsk == null || !(f.yesAsk >= f.yesBid)) { gone.push(f.ticker); continue; }
+      Object.assign(m, f, { at });
+    }
+    if (!gone.length) return;
+    for (const t of gone) { this.quotes.ks.delete(t); listed.delete(t); }
+    this.ksList.markets = this.ksList.markets.filter((m) => listed.has(m.ticker));
   }
   perturbDemo() {
     for (const p of this.pairs) {
