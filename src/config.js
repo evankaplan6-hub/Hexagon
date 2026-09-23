@@ -422,6 +422,7 @@ module.exports = {
   whaleWindowMin: num('WHALE_WINDOW_MIN', 360),   // ...summed over this trailing window
   whaleFreshMin: num('WHALE_FRESH_MIN', 20),      // older bets are noted as seen, not announced
   whaleEverySec: num('WHALE_EVERY_SEC', 15),
+  whaleRereadMin: Math.max(1, num('WHALE_REREAD_MIN', 20)), // each visit re-reads this far back past the last one; older fills are kept from before (src/whales.js)
   whalePerPoll: Math.max(1, Math.round(num('WHALE_PER_POLL', 5))),  // wallets read per poll: 25 wallets every 75s
   whaleBoardMin: num('WHALE_BOARD_MIN', 30),      // leaderboard refresh
 

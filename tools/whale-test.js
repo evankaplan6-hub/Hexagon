@@ -217,12 +217,19 @@ const fill = (over) => ({ wallet: '0xw', name: 'whale', tx: 'x', ts: 0, side: 'B
 // whatever raw rows `feed` holds, through the real normalizeFill. Times are minutes before now, far
 // inside the 20-minute freshness and the 12-hour memory, so the wall clock cannot flip a result.
 async function watchTests() {
-  const real = { fetchLeaderboard: pm.fetchLeaderboard, fetchActivity: pm.fetchActivity };
+  const real = { fetchLeaderboard: pm.fetchLeaderboard, fetchActivity: pm.fetchActivity, fetchActivityPage: pm.fetchActivityPage };
   const dirs = [];
   const tmp = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'hexagon-whale-')); dirs.push(d); return d; };
   let feed = [];
   pm.fetchLeaderboard = async ({ offset = 0 } = {}) => (offset ? [] : [{ wallet: '0xw', name: 'whale', rank: 3, pnl: 500000, vol: 2e6 }]);
   pm.fetchActivity = async (wallet) => feed.filter((r) => r.proxyWallet === wallet).map(pm.normalizeFill).filter(Boolean);
+  // the watch reads pages: honour `start` as the feed does, and say how many raw rows came back
+  const reads = [];
+  pm.fetchActivityPage = async (wallet, { limit = 100, start } = {}) => {
+    reads.push({ wallet, start });
+    const rows = feed.filter((r) => r.proxyWallet === wallet && (start == null || r.timestamp >= start)).sort((a, b) => b.timestamp - a.timestamp).slice(0, limit);
+    return { fills: rows.map(pm.normalizeFill).filter(Boolean), rows: rows.length, oldestTs: rows.length ? Math.min(...rows.map((r) => r.timestamp)) : null };
+  };
   const now = Math.floor(Date.now() / 1000);
   const row = (over) => ({ proxyWallet: '0xw', name: 'whale', side: 'BUY', conditionId: 'C1', outcomeIndex: 1, outcome: 'Under', price: 0.52, size: 30000, usdcSize: 15600, timestamp: now - 600, title: 'Padres vs. Giants: O/U 7.5', slug: 'mlb-sd-sf-total-7pt5', eventSlug: 'mlb-sd-sf', transactionHash: '0xa', ...over });
   const desk = () => ({ logs: [], log(agent, kind, pnl, text) { this.logs.push({ agent, kind, text }); }, due: () => true, quotes: { pm: new Map() }, pairs: [] });
@@ -316,6 +323,38 @@ async function watchTests() {
       ok('...and is called once, when the corrected copy arrives', calls() === 2 && /Alejandro Moro Canas/.test(whaleLines(E)[1].text), whaleLines(E));
       ok('...with its link, which the half-indexed copy lacked', w.snapshot().recent[0]?.url === 'https://polymarket.com/event/atp-canas-blancan', w.snapshot().recent[0]);
       ok('the record holds two bets and no outcome 999', recordLines(cfg.dataDir).length === 2 && recordLines(cfg.dataDir).every((l) => JSON.parse(l).outcomeIndex !== 999), recordLines(cfg.dataDir));
+    }
+
+    // ---- each visit re-reads only the recent stretch, and keeps the rest from before
+    {
+      const cfg = config({ whaleRereadMin: 20 });
+      const E = desk(), w = makeWhaleWatch(cfg);
+      const calls = () => whaleLines(E).length;
+      reads.length = 0;
+      feed = [row({ transactionHash: '0xold', timestamp: now - 3 * 3600, usdcSize: 6000 })];      // $6K three hours ago: no bet yet
+      await w.step(E);
+      ok('a wallet read for the first time is read over the whole window', reads[0].start === now - 360 * 60 || Math.abs(reads[0].start - (now - 360 * 60)) <= 2, reads);
+      ok('...and $6K alone is no bet', calls() === 0, whaleLines(E));
+      feed.push(row({ transactionHash: '0xnew', timestamp: now - 60, usdcSize: 6000 }));           // $6K more, a minute ago
+      await w.step(E);
+      const back = now - reads[1].start;
+      ok('the next visit reads back only WHALE_REREAD_MIN past the last one', back >= 20 * 60 && back <= 20 * 60 + 5, back);
+      ok('...yet the fill it did not re-read still counts: $12K over six hours is called', calls() === 1 && /\$12K/.test(whaleLines(E)[0].text), whaleLines(E));
+
+      const E2 = desk(), w2 = makeWhaleWatch(config({ whaleRereadMin: 20 }));
+      feed = [row({ transactionHash: '0xd', timestamp: now - 120, usdcSize: 6000 })];
+      await w2.step(E2); await w2.step(E2); await w2.step(E2);
+      ok('a re-read replaces the stretch it covers: the same $6K read three times is still $6K, no bet', whaleLines(E2).length === 0, whaleLines(E2));
+      feed = [row({ transactionHash: '0xd', timestamp: now - 120, usdcSize: 6000 }), row({ transactionHash: '0xd', timestamp: now - 120, usdcSize: 6000 })];
+      await w2.step(E2);
+      ok('...while two identical rows in one read are two real fills: $12K, called', whaleLines(E2).length === 1, whaleLines(E2));
+
+      const E3 = desk(), w3 = makeWhaleWatch(config({ whaleRereadMin: 20 }));
+      feed = [row({ transactionHash: '0xfar', timestamp: now - 3 * 3600, usdcSize: 9000 })];
+      await w3.step(E3);
+      feed = Array.from({ length: 500 }, (_, k) => row({ transactionHash: `0xf${k}`, timestamp: now - 30 - k, usdcSize: 1 }));
+      await w3.step(E3);
+      ok('a full page is taken alone, as every read was before: the older $9K is not added to it', whaleLines(E3).length === 0, whaleLines(E3));
     }
 
     // ---- RECORD=0, and a data directory that is not there
