@@ -10,6 +10,7 @@
 //   node tools/maker-slice.js --day 2026-09-22              one ET day from data/fly/archive
 //   node tools/maker-slice.js --day 2026-09-22 --standaside  ...plus the stand-aside grid
 //   node tools/maker-slice.js --day 2026-09-22 --signals     ...plus the book-lean and flow-direction grids
+//   node tools/maker-slice.js --day 2026-09-22 --fair        ...plus the fills on paired markets, with or against Polymarket's mid
 //   node tools/maker-slice.js --day 2026-09-21 --no-tennis   leave out the live-match markets (KXWTA/KXATP/KXITF/KXDAVISCUP)
 //
 // What four days said (2026-09-19 → 09-22, 30-minute marks, the desk's own fills, per contract):
@@ -21,8 +22,14 @@
 //   book lean (refuse when our side of the touch is thin)   halves the volume; the kept fills still mark -0.2c to -2.0c,
 //                                                          and on 09-20 the kept fills are the WORSE half
 //   flow direction (refuse after one-way taker flow at us)  backwards: the fills it refuses mark better than the kept
+//   with or against Polymarket (paired markets only)      with: about -0.05c pooled, against: about -0.43c; the sign
+//                                                          held every day at two hours. The fair rail (maker.fairSide)
+//                                                          rests only the side that agrees with Polymarket
+//   curated series vs the crawl-widened universe          widened -0.66c to -1.82c, curated -0.34c to -0.64c, every
+//                                                          day; widened was two thirds of the contracts (MAKER_WIDEN off)
 // So the loss is not one market, one hour or one side, and neither the book nor the flow announces
-// the sweep in time; it is the sweep itself, and no rail here makes what is left positive.
+// the sweep in time; it is the sweep itself. The one signal that sorts the fills is Polymarket's price
+// for the same event, and that only reaches the paired markets. Nothing here makes the book positive.
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
@@ -128,7 +135,27 @@ function signals(res, own, books, prints, out = console.log) {
   out(`\nour side's share of the touch depth at the fill: run-over ${dist((f) => f.ro)} · in-rate ${dist((f) => !f.ro)}`);
 }
 
-module.exports = { slices, standAside, signals, TENNIS };
+// The fills on markets the pair scanner also priced, against Polymarket's mid from the last pair row
+// within 30 minutes before the fill: WITH means bought under it or sold over it. Marked at every horizon.
+function fair(res, own, pm, out = console.log) {
+  const lastBefore = (arr, t) => { let lo = 0, hi = arr.length - 1, best = -1; while (lo <= hi) { const m = (lo + hi) >> 1; if (arr[m][0] < t) { best = m; lo = m + 1; } else hi = m - 1; } return best; };
+  const rows = own.filter((f) => pm.has(f.k));
+  out(`\nfills on paired markets: ${rows.length} of ${own.length}, on ${new Set(rows.map((f) => f.k)).size} markets, against Polymarket's mid from the last pair row within 30 minutes`);
+  for (const h of HORIZONS) {
+    const m = new Map(); let none = 0;
+    for (const f of rows) {
+      const mid = res.midAt(f.k, f.t + h * 60000); if (mid == null) continue;
+      const a = pm.get(f.k), i = lastBefore(a, f.t);
+      if (i < 0 || f.t - a[i][0] > 30 * 60000) { none++; continue; }
+      const edge = f.side === 'buy' ? a[i][1] - f.px : f.px - a[i][1];
+      const k = edge > 0.005 ? 'with Polymarket' : edge < -0.005 ? 'against Polymarket' : 'at its mid';
+      const o = m.get(k) || { q: 0, p: 0, n: 0 }; o.q += f.qty; o.n++; o.p += f.qty * (f.side === 'buy' ? mid - f.px : f.px - mid); m.set(k, o);
+    }
+    out(`  ${String(h).padStart(3)}m:` + ['with Polymarket', 'at its mid', 'against Polymarket'].map((k) => { const o = m.get(k); return o ? `  ${k} ${(100 * o.p / o.q).toFixed(2)}c on ${o.q}` : `  ${k} -`; }).join('') + (none ? `   (${none} fills with no reading in time)` : ''));
+  }
+}
+
+module.exports = { slices, standAside, signals, fair, TENNIS };
 
 if (require.main === module) {
   const args = process.argv.slice(2);
@@ -142,6 +169,7 @@ if (require.main === module) {
   const dir = path.resolve(flag('dir') || path.join(root, 'data', 'fly', 'archive'));
   const day = flag('day');
   const books = new Map(), prints = new Map();   // ticker -> [[t, bidSize, askSize]], ticker -> [[t, contracts, takerSide]]
+  const pm = new Map();                            // Kalshi ticker -> [[t, Polymarket mid]] from the pair recorder's rows in the same file
   const push = (m, k, v) => { if (!m.has(k)) m.set(k, []); m.get(k).push(v); };
   if (!day || day === true) { console.error('usage: node tools/maker-slice.js --day YYYY-MM-DD [--standaside] [--no-tennis] [--dir DIR]'); process.exit(1); }
   (async () => {
@@ -149,10 +177,17 @@ if (require.main === module) {
     const lines = (d) => { const f = path.join(dir, `journal-${d}.jsonl`); return fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n') : []; };
     const jall = journalFills([...lines(dayBefore), ...lines(day)]);
     const check = makeFillCheck(cfg, maker, jall.cools);
+    let counting = false;
     const read = async (tf) => {
       const rl = readline.createInterface({ input: fs.createReadStream(tf), crlfDelay: Infinity });
       for await (const line of rl) {
-        if (!line.startsWith('{"mk"')) continue;
+        if (!line.startsWith('{"mk"')) {
+          if (!counting || line.indexOf('"pair"') < 0) continue;
+          let r; try { r = JSON.parse(line); } catch { continue; }
+          const ks = r.pair && String(r.pair).split('|')[1];
+          if (ks && Number.isFinite(r.pmBid) && Number.isFinite(r.pmAsk)) push(pm, ks, [Date.parse(r.qt || r.t), (r.pmBid + r.pmAsk) / 2]);
+          continue;
+        }
         let row; try { row = JSON.parse(line); } catch { continue; }
         if (row.mk === 'b') push(books, row.k, [row.t, row.bs || 0, row.as || 0]);
         else if (row.mk === 'p') push(prints, row.k, [row.t, row.n || 0, row.s]);
@@ -161,6 +196,7 @@ if (require.main === module) {
     };
     const warm = path.join(dir, `ticks-${dayBefore}.jsonl`);
     if (fs.existsSync(warm)) { check.counting(false); await read(warm); check.counting(true); }
+    counting = true;
     const tf = path.join(dir, `ticks-${day}.jsonl`);
     if (!fs.existsSync(tf)) { console.error(`no tape for ${day} in ${dir}`); process.exit(1); }
     await read(tf);
@@ -171,5 +207,6 @@ if (require.main === module) {
     slices(res, own);
     if (args.includes('--standaside')) standAside(res, own);
     if (args.includes('--signals')) signals(res, own, books, prints);
+    if (args.includes('--fair')) fair(res, own, pm);
   })();
 }

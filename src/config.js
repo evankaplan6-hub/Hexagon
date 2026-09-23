@@ -200,6 +200,20 @@ module.exports = {
   // and moves run-over cost by under $2. Both halves were looked at to pick the row, so it is a
   // choice, not an out-of-sample result. fly.toml turns it on for the box.
   makerToxByContracts: env('MAKER_TOX_BY_CONTRACTS', '0') === '1',
+  // The fair rail (maker.fairSide): a maker side that would trade against Polymarket's price for the
+  // same event is not rested. Four days of tape (2026-09-19 → 09-22, tools/maker-slice.js --fair):
+  // of the maker's fills on markets the pair scanner also priced, those placed with Polymarket
+  // marked about -0.05c a contract 30 minutes on and those placed against it about -0.43c, and the
+  // sign held on every day at two hours. It is a rail, not an edge: it stops the bleeding on the
+  // paired book and earns nothing by itself. A market with no Polymarket pair is untouched by it,
+  // which is why MAKER_WIDEN went off on the box the same day (fly.toml): the crawl-widened markets
+  // were where the money went, and none of them is paired.
+  makerFairRail: env('MAKER_FAIR_RAIL', '1') !== '0',
+  // How far inside the fair value a quote must sit to rest. Half a cent: on a one-cent book the bid
+  // rests only under Polymarket's mid and the ask only over it.
+  makerFairMargin: num('MAKER_FAIR_MARGIN', 0.005),
+  // A Polymarket reading older than this is no reading, and the rail stands aside (both sides rest).
+  makerFairMaxAgeMin: num('MAKER_FAIR_MAX_AGE_MIN', 30),
   // The maker keeps its own drawdown rail. TESS's watches the TAKER book's equity and would never
   // notice this desk bleeding, because the two ledgers are deliberately separate.
   makerMaxDrawdownPct: num('MAKER_MAX_DRAWDOWN_PCT', 0.10),
