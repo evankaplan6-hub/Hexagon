@@ -95,7 +95,7 @@ function makeFillCheck(cfg, maker, cools = new Map()) {
   const both = { fills: 0, tapeQty: 0, alwaysQty: 0 };
   const mids = new Map();         // ticker -> [[t, mid]] in file order, for the marks
   const fills = [];               // every counted fill: { bucket, k, t, side, px, qty } -- marked at the end
-  const note = (bucket, k, t, f) => { if (counting) fills.push({ bucket, k, t, side: f.side, px: f.px, qty: f.qty }); };
+  const note = (bucket, k, t, f) => { if (counting) fills.push({ bucket, k, t, side: f.side, px: f.px, qty: f.qty, ro: !!f.runOver }); };
   const tapeOnly = { fills: 0, qty: 0 };
   let lastKind = null, lastBookT = null, prints = 0, rows = 0;
   // Warm-up: the day before is fed through first with counting off. A quote that has not changed since
@@ -208,7 +208,7 @@ function makeFillCheck(cfg, maker, cools = new Map()) {
       exactQueue: exact > 0 && exact >= inferred * 20, warmed,
       tape: { fills: sum((s) => s.tape.fills), qty: sum((s) => s.tape.qty), ro: sum((s) => s.tape.ro) },
       always: { fills: sum((s) => s.always.fills), qty: sum((s) => s.always.qty) },
-      both, tapeOnly, lost, marked: markFills(),
+      both, tapeOnly, lost, marked: markFills(), fills, midAt,   // the raw fills and the mid lookup, for anyone slicing the marks another way
       byMarket: new Map([...M].map(([k, s]) => [k, { prints: s.prints, tape: s.tape, always: s.always }])),
     };
   }
