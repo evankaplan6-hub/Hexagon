@@ -26,5 +26,41 @@ main{flex:1;min-height:0;display:grid;place-items:center;background:radial-gradi
 .curtain{position:absolute;inset:0;display:grid;place-content:center;text-align:center;background:rgba(3,5,4,.74);backdrop-filter:grayscale(1) blur(4px)}.curtain[hidden]{display:none}.curtain b{font:800 clamp(13px,1.5vw,27px) var(--mono);letter-spacing:.15em;color:#fa8589}.curtain span{margin-top:8px;color:#a8b1aa;font:600 clamp(7px,.65vw,12px) var(--mono)}
 .scene.quiet .agent:not(.makr) i{animation:none}.scene.quiet .screenbar>em{color:#e4bd69}.scene.quiet .screenbar>em>i{background:#e4bd69;box-shadow:0 0 8px #e4bd69}.scene.fill .maker{animation:screenFill .8s ease-out}.scene.halt .wall-display,.scene.stale .wall-display{filter:saturate(.35)}.scene.halt .screenbar>em,.scene.stale .screenbar>em{color:#ff8589}.scene.halt .screenbar>em>i,.scene.stale .screenbar>em>i{background:#ff7378;box-shadow:0 0 8px #ff7378}.scene.halt .mode i{background:var(--red);box-shadow:0 0 9px var(--red)}
 @keyframes screenFill{0%{box-shadow:inset 0 0 45px rgba(84,223,140,.7),0 0 28px rgba(84,223,140,.55)}100%{box-shadow:inset 0 0 26px rgba(51,146,151,.11),0 0 14px rgba(22,83,87,.2)}}
-@media(max-width:760px){header{padding:0 12px;height:50px}.brand small,.notice{display:none}main{align-items:start}.scene{width:100vw}.event{width:66%}.agent em{display:none}}
+/* A phone is not a small lookout. Scaled to 375px the room is a 210px strip whose screens are
+   unreadable, with an empty page under it. So the painting stays as the picture on top (the
+   curtain still falls over it), and everything that was pinned over the picture -- the latest
+   event, the three wall screens, the seven desks with their notes -- comes off it and stacks
+   underneath as real type. The page scrolls; nothing here is an overlay any more. */
+@media(max-width:760px){
+  html,body{height:auto;min-height:100%;overflow:auto}
+  header{position:sticky;top:0;padding:0 12px;height:50px}.brand small,.notice{display:none}
+  main{display:block;min-height:0;padding-bottom:28px}
+  .scene{display:flex;flex-direction:column;width:100%;aspect-ratio:auto;overflow:visible;box-shadow:none;background:none}
+  .scene>img{position:relative;order:0;width:100%;height:auto;aspect-ratio:1672/941;object-fit:cover}
+  .wash,.scan-beam,.order-packet{display:none}
+  .curtain{inset:auto;top:0;left:0;width:100%;aspect-ratio:1672/941;padding:0 20px}
+  /* the mode chip and the latest event, right under the picture */
+  .mode{position:static;order:1;align-self:flex-start;margin:12px 12px 0}
+  .mode b{font-size:11px}.mode span{font-size:10px}
+  .event{position:static;order:2;transform:none;width:auto;margin:10px 12px 0}
+  .event b{font-size:10px}.event span{font-size:13px;white-space:normal}.event time{font-size:10px}
+  /* the three wall screens, one under another, with type a thumb's length away can read */
+  .wall-display{position:static;order:3;width:auto;height:auto;display:flex;flex-direction:column;gap:10px;margin:14px 12px 0;pointer-events:auto}
+  .screen{flex:none}
+  .screenbar{height:auto;align-self:stretch;padding:8px 12px}.screenbar>span{font-size:10px}.screenbar>em{font-size:10px}
+  .screenhero{height:auto;padding:12px 12px 10px}.screenhero small{font-size:10px}.screenhero b{margin-top:4px;font-size:30px}
+  .facts{height:auto}.facts>span{padding:9px 12px}.facts i{font-size:9px}.facts strong{margin-top:3px;font-size:13px}
+  .brief h2{width:auto;margin:14px 12px 0;font-size:17px;white-space:normal}.brief p{width:auto;margin:6px 12px 0;font-size:11px;white-space:normal}
+  .agent-strip{height:auto;width:auto;margin:12px 12px 12px;gap:6px}.agent-strip i{aspect-ratio:auto;padding:6px 0;font-size:10px}
+  /* the seven desks as a list: dot, name, role, and the note that was a hover tooltip */
+  .agents{position:static;order:4;display:flex;flex-direction:column;gap:6px;margin:14px 12px 0}
+  .agent{position:static;width:auto;aspect-ratio:auto;display:grid;grid-template-columns:12px auto 1fr;grid-template-areas:"dot name role" "dot note note";align-items:center;column-gap:10px;row-gap:4px;padding:10px 12px;text-align:left;background:rgba(6,10,8,.88);border:1px solid rgba(112,128,117,.3);border-radius:5px;filter:none}
+  .agent:hover,.agent.focus{filter:none;border-color:color-mix(in srgb,var(--c) 60%,#34413a)}
+  .agent i{grid-area:dot;position:static;inset:auto;width:10px;height:10px;border:0;border-radius:50%;background:var(--c);opacity:.35;transform:none;box-shadow:0 0 8px var(--c)}
+  .agent.active i{opacity:1;animation:none}
+  .agent b,.agent span,.agent em{position:static;transform:none;white-space:normal;text-shadow:none}
+  .agent b{grid-area:name;font-size:12px}.agent span{grid-area:role;font-size:10px}
+  .agent em{grid-area:note;width:auto;max-width:none;opacity:1;padding:0;border:0;background:none;font-size:12px;line-height:1.35;color:#c9d1cb;transition:none}
+  .scene.quiet .agent:not(.makr) i{animation:none}
+}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
