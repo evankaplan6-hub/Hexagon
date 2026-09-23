@@ -63,6 +63,23 @@ function desiredQuotes(book, inv, cfg) {
   };
 }
 
+// ---------------------------------------------------------------- the fair rail
+// Polymarket's price for the same event is the one thing this desk knows that the flow hitting it
+// on Kalshi may not, and on four days of tape (2026-09-19 → 09-22, tools/maker-slice.js --fair) it
+// was the only signal that sorted the maker's fills: fills placed WITH Polymarket (bought under its
+// mid, or sold over it) marked flat 30 minutes on, fills placed AGAINST it lost 0.3c to 0.8c a
+// contract, and the sign held on every day at two hours. So a side that would trade against
+// Polymarket is not rested: the bid stays only if it sits at least `margin` under the fair value,
+// the ask only if it sits at least `margin` over it. The one exception is a market being worked
+// off (reduce-only): its reducing side stays up regardless, or a rotated-out position could never
+// close while the two venues disagreed. No fair value, no change.
+function fairSide(q, fair, margin, reducing = null) {
+  if (!Number.isFinite(fair)) return { bid: q.bid, ask: q.ask, against: null };
+  const bidOk = q.bid == null || q.bid <= fair - margin + 1e-9 || reducing === 'bid';
+  const askOk = q.ask == null || q.ask >= fair + margin - 1e-9 || reducing === 'ask';
+  return { bid: bidOk ? q.bid : null, ask: askOk ? q.ask : null, against: bidOk && askOk ? null : !bidOk && !askOk ? 'both' : bidOk ? 'ask' : 'bid' };
+}
+
 // ---------------------------------------------------------------- fills
 // NO LOOKAHEAD. `quotes` are what we were ALREADY resting before these trades arrived, and a fill
 // happens at OUR price, not the trade's. So when the market gaps through a stale quote we sell low
@@ -344,4 +361,4 @@ async function eligibleSeries(candidates, { getJSON = http.getJSON, sleep = (ms)
   return ok;
 }
 
-module.exports = { tickerEventDays, daysToEnd, desiredQuotes, queueAfter, fillsFrom, applyFill, settlePosition, gainLock, toxWindow, toxicGate, drawdownFrom, eligibleSeries, candidatesFrom };
+module.exports = { tickerEventDays, daysToEnd, desiredQuotes, fairSide, queueAfter, fillsFrom, applyFill, settlePosition, gainLock, toxWindow, toxicGate, drawdownFrom, eligibleSeries, candidatesFrom };

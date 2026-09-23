@@ -265,6 +265,19 @@ function makeMakerDesk(cfg, deps = {}) {
     return s;
   }
 
+  // Polymarket's mid for each Kalshi market the pair scanner has paired and priced (engine.quote),
+  // for the fair rail (maker.fairSide). A reading older than makerFairMaxAgeMin is no reading.
+  function fairMap(E, now) {
+    const out = new Map();
+    if (!cfg.makerFairRail) return out;
+    for (const p of E.pairs || []) {
+      if (!p || !p.q || !p.ks || !p.ks.ticker || !Number.isFinite(p.q.pmMid)) continue;
+      if (!(p.q.t > 0) || now - p.q.t > cfg.makerFairMaxAgeMin * 60000) continue;
+      if (!out.has(p.ks.ticker)) out.set(p.ks.ticker, p.q.pmMid);
+    }
+    return out;
+  }
+
   async function step(E) {
     blocked = false;
     if (!cfg.makerEnabled) return;
@@ -357,6 +370,7 @@ function makeMakerDesk(cfg, deps = {}) {
     const byTicker = bucket(tapeRes.trades);
 
     let filled = 0, netQty = 0, settled = 0, settledQty = 0, settledPnl = 0;
+    const fairOf = fairMap(E, clock());
     for (const u of work) {
       const m = S.markets[u.ticker] || (S.markets[u.ticker] = { series: u.series, inv: 0, cost: 0, realized: 0, fills: 0, quotes: { bid: null, ask: null }, seen: [] });
       // A ticker like KXBALANCEPOWERCOMBO-27FEB-RR says nothing about what is being traded. Keep
@@ -427,6 +441,11 @@ function makeMakerDesk(cfg, deps = {}) {
       // 2) rest a fresh quote for the next cycle. No sleep here any more -- there is no per-market
       // request left to pace, so the whole book requotes in one pass.
       const q = maker.desiredQuotes(bk, m.inv, cfg);
+      // The fair rail: a side that would trade against Polymarket's price for the same event is
+      // not rested (maker.fairSide). A market being worked off keeps its reducing side regardless.
+      const fair = fairOf.get(u.ticker);
+      const fr = maker.fairSide(q, fair, cfg.makerFairMargin, u.reduceOnly ? (m.inv < 0 ? 'bid' : m.inv > 0 ? 'ask' : null) : null);
+      m.fair = fair ?? null;
       // A profitable maker inventory stops growing once its mark has made a meaningful gain.
       // Keep the reducing quote resting (so the position can still work down without crossing),
       // but withdraw the side that would add risk. This is the maker form of gain-lock.
@@ -447,9 +466,9 @@ function makeMakerDesk(cfg, deps = {}) {
       }
       // reduce-only: drop whichever side would grow the position
       const next = g.cooled ? { bid: null, ask: null }
-        : u.reduceOnly ? { bid: m.inv < 0 ? q.bid : null, ask: m.inv > 0 ? q.ask : null }
-        : gainLocked ? { bid: m.inv < 0 ? q.bid : null, ask: m.inv > 0 ? q.ask : null }
-        : { bid: q.bid, ask: q.ask };
+        : u.reduceOnly ? { bid: m.inv < 0 ? fr.bid : null, ask: m.inv > 0 ? fr.ask : null }
+        : gainLocked ? { bid: m.inv < 0 ? fr.bid : null, ask: m.inv > 0 ? fr.ask : null }
+        : { bid: fr.bid, ask: fr.ask };
       // Queue position (maker.queueAfter): moving to a new price puts us at the back of whatever is
       // resting there; staying put keeps the position we have already worked down. A cancel-replace
       // at the same price would lose it, which is a reason not to churn quotes still at the touch.
@@ -457,7 +476,9 @@ function makeMakerDesk(cfg, deps = {}) {
       m.quotes = next;
       m.mid = q.mid ?? m.mid;
       m.spread = q.spread ?? null;
-      m.why = g.cooled ? `cooled until ${new Date(g.cooledUntil).toISOString().slice(11, 16)}Z · run-over ${(g.rate * 100).toFixed(0)}%` : (q.why || null);
+      m.why = g.cooled ? `cooled until ${new Date(g.cooledUntil).toISOString().slice(11, 16)}Z · run-over ${(g.rate * 100).toFixed(0)}%`
+        : fr.against ? `${fr.against === 'both' ? 'both sides' : fr.against} against Polymarket (${(fair * 100).toFixed(1)}c)${q.why ? ` · ${q.why}` : ''}`
+        : (q.why || null);
     }
 
     nothingResting = false;

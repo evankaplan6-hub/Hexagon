@@ -23,6 +23,21 @@ const book = (bid, ask, bidSize = 5000, askSize = 5000) => ({
   yesAsks: ask == null ? [] : [{ price: ask, size: askSize }],
 });
 
+// ---------------------------------------------------------------- fairSide
+group('the fair rail: a side that would trade against Polymarket is not rested');
+{
+  const q = { bid: 0.44, ask: 0.45, mid: 0.445 };
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  ok('Polymarket at 47c: the bid rests, the ask does not', same(maker.fairSide(q, 0.47, 0.005), { bid: 0.44, ask: null, against: 'ask' }), maker.fairSide(q, 0.47, 0.005));
+  ok('Polymarket at 42c: the ask rests, the bid does not', same(maker.fairSide(q, 0.42, 0.005), { bid: null, ask: 0.45, against: 'bid' }), maker.fairSide(q, 0.42, 0.005));
+  ok('Polymarket at 44.5c, the middle of a one-cent book: both sit half a cent inside it and both rest', same(maker.fairSide(q, 0.445, 0.005), { bid: 0.44, ask: 0.45, against: null }));
+  ok('Polymarket at 44.8c: the ask is only 0.2c over it and does not rest', same(maker.fairSide(q, 0.448, 0.005), { bid: 0.44, ask: null, against: 'ask' }));
+  ok('no Polymarket price: nothing changes', same(maker.fairSide(q, null, 0.005), { bid: 0.44, ask: 0.45, against: null }) && same(maker.fairSide(q, NaN, 0.005), { bid: 0.44, ask: 0.45, against: null }));
+  ok('a side already withdrawn stays withdrawn, and is not what the rail names', same(maker.fairSide({ bid: null, ask: 0.45 }, 0.47, 0.005), { bid: null, ask: null, against: 'ask' }));
+  ok('a market being worked off keeps its reducing side even against Polymarket', same(maker.fairSide(q, 0.47, 0.005, 'ask'), { bid: 0.44, ask: 0.45, against: null }));
+  ok('...but only that side', same(maker.fairSide(q, 0.42, 0.005, 'ask'), { bid: null, ask: 0.45, against: 'bid' }));
+}
+
 // ---------------------------------------------------------------- desiredQuotes
 group('queue position after a requote (queueAfter, shared with the fill check)');
 {

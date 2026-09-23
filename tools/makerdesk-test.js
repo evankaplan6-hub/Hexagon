@@ -285,6 +285,27 @@ const scans = (E) => E.logs.filter((l) => l.kind === 'SCAN' && /^(quoting|no mar
     ok('the desk stays halted until a person resumes it', /flattened by operator \(test\)/.test(r.S.halted) && r.E.journalled.filter((j) => j.kind === 'MAKER_FLATTEN').length === 2, r.S.halted);
   }
 
+  group('the fair rail: Polymarket\'s price for the same event decides which side rests');
+  {
+    const r = rig({ crawl: [listed('KXTEST-A')], markets: { 'KXTEST-A': held() } });
+    r.tape.bk.set('KXTEST-A', book(0.44, 100, 0.45, 100));
+    r.E.pairs = [{ id: 'pm1:0|KXTEST-A', ks: { ticker: 'KXTEST-A' }, q: { pmMid: 0.47, t: r.at.now } }];
+    await r.round();
+    const m = r.S.markets['KXTEST-A'];
+    ok('Polymarket at 47c: the bid rests and the ask is withheld', m.quotes.bid === 0.44 && m.quotes.ask === null, m.quotes);
+    ok('...and the market says why', /ask against Polymarket \(47\.0c\)/.test(m.why || ''), m.why);
+    ok('...and remembers the fair value it used', m.fair === 0.47, m.fair);
+    r.E.pairs[0].q = { pmMid: 0.42, t: r.at.now };
+    await r.round();
+    ok('Polymarket at 42c: the ask rests and the bid is withheld', m.quotes.bid === null && m.quotes.ask === 0.45, m.quotes);
+    r.E.pairs[0].q = { pmMid: 0.42, t: r.at.now - 31 * 60000 };
+    await r.round();
+    ok('a reading older than MAKER_FAIR_MAX_AGE_MIN is no reading: both sides rest', m.quotes.bid === 0.44 && m.quotes.ask === 0.45 && m.fair === null, { quotes: m.quotes, fair: m.fair });
+    r.E.pairs = [];
+    await r.round();
+    ok('no pair at all: both sides rest', m.quotes.bid === 0.44 && m.quotes.ask === 0.45, m.quotes);
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => { console.log(`  FAIL  the suite threw: ${e.stack}`); console.log(`\n${pass} passed, ${fail + 1} failed`); process.exit(1); });

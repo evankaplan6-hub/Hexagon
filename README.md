@@ -425,6 +425,16 @@ list was never selecting for quality — it was just a list.
 trade-rate probe still picks it, and the run-over gate still benches markets that keep getting swept.
 The change is what the probe gets to choose from.
 
+**And on 2026-09-23 the widening went off again on the box.** Four days of the maker's own tape,
+marked 30 minutes after each fill (`tools/maker-slice.js`), put the loss in the widened markets:
+-0.66c to -1.82c a contract there against -0.34c to -0.64c on the listed series, and two thirds of
+the contracts. The same tape gave the maker its one useful signal, Polymarket's price for the same
+event: fills placed with it marked flat, fills placed against it lost, every day. That is the fair
+rail (`maker.fairSide`, `MAKER_FAIR_RAIL`): a side that would trade against Polymarket is not
+rested. It stops the bleeding on the paired book; it does not make the book profitable, and nothing
+else tried on that tape (mid velocity, book lean, flow direction, spread, quote age, inventory, fill
+size) did either.
+
 One thing it is careful about. The crawl excluded Sports until 2026-09-19, so a listed sports series
 was missing from it for a reason that was not merit; those few series were still scanned by name,
 which kept the pool a superset of the old one. Sports is crawled now (see *Fights, and the wall
