@@ -380,9 +380,17 @@ class Engine {
 
   quote(pair) {
     const m = this.quotes.pm.get(pair.pm.id), k = this.quotes.ks.get(pair.ks.ticker);
-    if (!m || !k) return null;
-    let pmBid = m.bestBid, pmAsk = m.bestAsk;
-    if (pair.pm.tokenIndex === 1) { pmBid = 1 - m.bestAsk; pmAsk = 1 - m.bestBid; }
+    if (!k) return null;
+    let pmBid, pmAsk, pmVol, pmFee, pmAt;
+    if (m) {
+      pmBid = m.bestBid; pmAsk = m.bestAsk;
+      if (pair.pm.tokenIndex === 1) { pmBid = 1 - m.bestAsk; pmAsk = 1 - m.bestBid; }
+      pmVol = m.vol24; pmFee = m.feeRate; pmAt = m.at;
+    } else if (pair.pmGone && pair.q) {
+      // A game pair Polymarket has closed on (HOLT keeps it for SNIPE_HOLD_SEC, decide.keepClosedGamePairs):
+      // its last Polymarket quote stands, timestamped as it was, and its Kalshi side goes on repricing.
+      pmBid = pair.q.pmBid; pmAsk = pair.q.pmAsk; pmVol = pair.q.pmVol; pmFee = pair.q.pmFeeRate; pmAt = pair.q.pmAt || pair.q.t;
+    } else return null;
     let ksBid = k.yesBid, ksAsk = k.yesAsk;
     if (this.cfg.demo) {
       const s = this.demoShift.get(pair.id) || 0;
@@ -393,11 +401,15 @@ class Engine {
       pmBid, pmAsk, ksBid, ksAsk,
       pmMid: (pmBid + pmAsk) / 2, ksMid: (ksBid + ksAsk) / 2,
       pmSpread: pmAsk - pmBid, ksSpread: ksAsk - ksBid,
-      pmVol: m.vol24, ksVol: k.vol24,
+      pmVol, ksVol: k.vol24,
       // this Polymarket market's own taker fee rate; decide.pmRate falls back when it is unknown
-      pmFeeRate: Number.isFinite(m.feeRate) ? m.feeRate : this.cfg.pmFeeFallback,
+      pmFeeRate: Number.isFinite(pmFee) ? pmFee : this.cfg.pmFeeFallback,
       // this pair's OWN observation time, not the global clock: see refreshQuotes
-      t: Math.min(m.at || this.lastQuoteAt, k.at || this.lastQuoteAt),
+      t: Math.min(pmAt || this.lastQuoteAt, k.at || this.lastQuoteAt),
+      // each side's own time, and Kalshi's top-of-book sizes (free with its listing): the settlement
+      // snipe (decide.snipeSignal) needs a fresh Kalshi side and sizes off what is offered
+      pmAt: pmAt || null, ksAt: k.at || null,
+      ksBidSize: Number.isFinite(k.yesBidSize) ? k.yesBidSize : null, ksAskSize: Number.isFinite(k.yesAskSize) ? k.yesAskSize : null,
     };
   }
   // One leg's own market, in the PAIR's outcome terms ({bid, ask, mid} for YES), or null.

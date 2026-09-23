@@ -43,7 +43,7 @@ npm run reset                                 # wipe the paper account
 ```
 server.js         HTTP + SSE server, .env loader, live-mode gate
 src/config.js     all tunables          src/engine.js    state, cash, positions, cycle loop
-src/decide.js     pure decision core: gates, ranking, sizing, exits (no I/O, no clock)
+src/decide.js     pure decision core: gates, ranking, sizing, exits, the settlement snipe (no I/O, no clock)
 src/agents.js     the six desks         src/matcher.js   cross-venue matching (Fed + games, every cycle)
 src/anymarket.js  any-market scanner: src/discovery.js crawls both venues (sports included since 2026-09-19), src/match-any.js pairs any
                   category, src/rules.js decides which pairs' resolution rules match (only those trade)
@@ -61,7 +61,8 @@ src/makertape.js  records the maker's book, prints and quotes into the ticks-*.j
 src/whales.js     whale watch: top wallets' big bets on Polymarket's sports/politics/economics/crypto/culture/tech/finance boards (advisory, never trades; WHALE_WATCH=0 off)
 src/ask.js        the dashboard Ask panel: read-only Claude tool loop (src/ask-tools.js), ASK_DAILY_USD ceiling; needs ANTHROPIC_API_KEY
 tools/            edge-scan, replay, maker-replay, maker-rank, pm-maker-scan, maker-report, fillcheck (files only: replays the maker's own tape against its journal, and says what each missed fill was),
-                  maker-slice (the same replay cut by market/side/run-over/price/hour, plus a stand-aside rail scored on it; the four-day verdict is in its header), ufc-scan (prices a
+                  maker-slice (the same replay cut by market/side/run-over/price/hour, plus a stand-aside rail scored on it; the four-day verdict is in its header),
+                  settle-lag (when Polymarket settles a game, what Kalshi still offers the winner at: the study behind the settlement snipe), ufc-scan (prices a
                   fight card on both venues, cross-venue and within Kalshi, net of fees; read-only),
                   history-scan, golden, api, lab-fetch + lab (strategy tournament on settled markets),
                   whale-fetch + whale-lab (does copying top sports wallets pay? no, out of sample),

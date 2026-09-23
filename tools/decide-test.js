@@ -534,5 +534,41 @@ group('property: the arb is the better signal wherever both are available');
   console.log(`  (arb available alongside a valid convergence candidate in ${both} cells; convergence nominally larger in ${convWon}, by at most ${(worst * 100).toFixed(2)}c)`);
 }
 
+group('the settlement snipe: Polymarket has settled, Kalshi still offers the winner');
+{
+  const cfg = { ...require('../src/config'), snipe: true, snipeMinEdge: 0.02, snipeMinKsPrice: 0.75, snipePmBid: 0.99, snipeMaxKsAgeSec: 30, snipeHoldSec: 300 };
+  const now = 1_800_000_000_000;
+  const pair = (q, over = {}) => ({ id: 'pmX:0|KXNFLGAME-T-MIN', label: 'NFL test', kind: 'game', inPlay: true, pm: { id: 'pmX', tokenIndex: 0 }, ks: { ticker: 'KXNFLGAME-T-MIN' }, q: { pmVol: 1, ksVol: 1, pmFeeRate: 0.05, t: now, pmAt: now, ksAt: now, ksBidSize: 200, ksAskSize: 300, ...q }, ...over });
+  const s1 = d.snipeSignal(pair({ pmBid: 0.99, pmAsk: 1, ksBid: 0.82, ksAsk: 0.86 }), cfg, now);
+  ok('YES settled on Polymarket, Kalshi offers YES at 86c: buy YES at 86c, ~13c net', s1 && s1.type === 'snipe' && s1.legs[0].venue === 'KS' && s1.legs[0].side === 'yes' && Math.abs(s1.legs[0].px - 0.86) < 1e-9 && s1.edge > 0.12 && s1.edge < 0.14 && s1.size === 300 && s1.won === 'yes', s1);
+  const s2 = d.snipeSignal(pair({ pmBid: 0, pmAsk: 0.01, ksBid: 0.11, ksAsk: 0.14 }), cfg, now);
+  ok('NO settled, Kalshi bids 11c for YES: buy NO at 89c, ~10c net', s2 && s2.legs[0].side === 'no' && Math.abs(s2.legs[0].px - 0.89) < 1e-9 && s2.edge > 0.09 && s2.size === 200, s2);
+  ok('a game still going (81/83) is nothing', d.snipeSignal(pair({ pmBid: 0.81, pmAsk: 0.83, ksBid: 0.82, ksAsk: 0.83 }), cfg, now) === null);
+  ok('an empty Polymarket book (0/1) is not a settlement', d.snipeSignal(pair({ pmBid: 0, pmAsk: 1, ksBid: 0.49, ksAsk: 0.5 }), cfg, now) === null);
+  ok('a one-sided 0.1/1 book is not a settlement either', d.snipeSignal(pair({ pmBid: 0.1, pmAsk: 1, ksBid: 0.12, ksAsk: 0.14 }), cfg, now) === null);
+  const v1 = d.snipeSignal(pair({ pmBid: 0, pmAsk: 0.01, ksBid: 0.44, ksAsk: 0.47 }), cfg, now);
+  ok('Kalshi at 44c on a "settled" game is a mismatched pair: vetoed, not bought', v1 && v1.veto && /not the same game/.test(v1.veto), v1);
+  const v2 = d.snipeSignal(pair({ pmBid: 0.99, pmAsk: 1, ksBid: 0.82, ksAsk: 0.86, ksAt: now - 60000 }), cfg, now);
+  ok('a Kalshi quote a minute old is vetoed', v2 && /stale/.test(v2.veto), v2);
+  const v3 = d.snipeSignal(pair({ pmBid: 0.99, pmAsk: 1, ksBid: 0.98, ksAsk: 0.99 }), cfg, now);
+  ok('Kalshi already at 99c: under the edge bar, vetoed by the cents', v3 && /net after the fee/.test(v3.veto), v3);
+  const v4 = d.snipeSignal(pair({ pmBid: 0.99, pmAsk: 1, ksBid: 0.82, ksAsk: 0.86, pmAt: now - 400000 }), cfg, now);
+  ok('a settlement seen more than SNIPE_HOLD_SEC ago is vetoed', v4 && /too long ago/.test(v4.veto), v4);
+  ok('not a game: nothing', d.snipeSignal(pair({ pmBid: 0.99, pmAsk: 1, ksBid: 0.82, ksAsk: 0.86 }, { kind: 'event' }), cfg, now) === null);
+  ok('not in play: nothing', d.snipeSignal(pair({ pmBid: 0.99, pmAsk: 1, ksBid: 0.82, ksAsk: 0.86 }, { inPlay: false }), cfg, now) === null);
+  ok('switched off: nothing', d.snipeSignal(pair({ pmBid: 0.99, pmAsk: 1, ksBid: 0.82, ksAsk: 0.86 }), { ...cfg, snipe: false }, now) === null);
+  ok('the edge is one minus the price minus Kalshi\'s fee', Math.abs(d.snipeEdge(0.86, 'KXNFLGAME-T-MIN', cfg) - (0.14 - 0.07 * 0.86 * 0.14)) < 0.002, d.snipeEdge(0.86, 'KXNFLGAME-T-MIN', cfg));
+
+  // HOLT keeps a game pair Polymarket's listing just dropped, for a while, flagged
+  const gone = pair({ pmBid: 0.99, pmAsk: 1, ksBid: 0.82, ksAsk: 0.86 });
+  const prev = new Map([[gone.id, gone], ['other', pair({ pmBid: 0.5, pmAsk: 0.51, ksBid: 0.5, ksAsk: 0.51 }, { id: 'other', kind: 'event' })], ['pregame', pair({ pmBid: 0.5, pmAsk: 0.51, ksBid: 0.5, ksAsk: 0.51 }, { id: 'pregame', inPlay: false })]]);
+  const kept = d.keepClosedGamePairs(prev, [], cfg, now);
+  ok('the in-play game pair that vanished is kept, flagged, and stamped', kept.length === 1 && kept[0].id === gone.id && kept[0].pmGone === true && kept[0].pmGoneAt === now, kept);
+  ok('a pair still listed is not duplicated', d.keepClosedGamePairs(prev, [gone], cfg, now).length === 0);
+  ok('after SNIPE_HOLD_SEC it is let go', d.keepClosedGamePairs(new Map([[gone.id, { ...gone, pmGoneAt: now - 301000 }]]), [], cfg, now).length === 0);
+  ok('and the stamp is carried, not reset', d.keepClosedGamePairs(new Map([[gone.id, { ...gone, pmGoneAt: now - 100000 }]]), [], cfg, now)[0].pmGoneAt === now - 100000);
+  ok('switched off, nothing is kept', d.keepClosedGamePairs(prev, [], { ...cfg, snipe: false }, now).length === 0);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

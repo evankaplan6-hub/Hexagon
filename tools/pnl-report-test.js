@@ -60,5 +60,21 @@ group('the printed report');
   ok('an empty journal still renders', typeof render(summarize([]), null) === 'string');
 }
 
+group('the settlement snipe has its own line and column');
+{
+  const ev = [
+    { t: T(27), kind: 'OPEN', id: 's1-KSy', group: 's1', strategy: 'snipe', venue: 'KS', side: 'yes', qty: 100, entry: 0.86, fee: 0.85, cost: 86.85 },
+    { t: T(27), kind: 'SETTLE', id: 's1-KSy', group: 's1', strategy: 'snipe', qty: 100, exit: 1, fee: 0, pnl: 13.15 },
+    { t: T(28), kind: 'OPEN', id: 's2-KSn', group: 's2', strategy: 'snipe', venue: 'KS', side: 'no', qty: 50, entry: 0.89, fee: 0.35, cost: 44.85 },
+    { t: T(28), kind: 'SETTLE', id: 's2-KSn', group: 's2', strategy: 'snipe', qty: 50, exit: 0, fee: 0, pnl: -44.85 },
+  ];
+  const s = summarize(ev);
+  ok('two settled, one winner, the sum, both entry fees', s.snipe.n === 2 && s.snipe.w === 1 && Math.abs(s.snipe.pnl - -31.70) < 0.005 && Math.abs(s.snipe.fees - 1.20) < 0.005, s.snipe);
+  ok('by day', Math.abs(s.days.get('2026-09-27').snipe - 13.15) < 0.005 && Math.abs(s.days.get('2026-09-28').snipe - -44.85) < 0.005, [...s.days]);
+  const out = render(s, null);
+  ok('the report prints it, in the total and the day table', /SETTLEMENT SNIPE/.test(out) && /2 settled or closed · 1 winners · realized -\$31\.70/.test(out) && /ALL-IN REALIZED -\$31\.70/.test(out) && /converge      arb    snipe/.test(out), out);
+  ok('a snipe is not counted as convergence', s.conv.n === 0);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -358,6 +358,31 @@ CLOB directly; trading the listing price would have chased an arb that was not t
 
 ## The MAKER desk (07)
 
+## The settlement snipe
+
+Polymarket settles a game the moment it ends: its book goes to 99/100 on the winner (bids at 99c,
+nothing offered) and the market closes seconds later. Kalshi's book for the same game does not. On
+four days of tape (2026-09-19 → 09-22, about 180 game pairs, `tools/settle-lag.js`) Kalshi's fresh
+quote was still offering the winner 3c to 13c under par in ten games at the moment Polymarket
+settled: Vikings 86c, Saints 87c, Guardians 88c, Nationals 90c, the Royals' opponent at 89c. That
+is 13c a contract net of Kalshi's fee on the best of them, on a quote a second old.
+
+The desk never took it, for two reasons that are now fixed. In-play pairs are excluded from every
+other rule (`decide.liveWindow`), so nothing looked. And the pair was dropped the cycle Polymarket
+closed, because Polymarket's listing only returns open markets, so the tape stopped 15-30 seconds
+after the settlement and nobody knows how long Kalshi stayed under par or how deep it was.
+
+Since 2026-09-23 (`SNIPE=1`, paper): when Polymarket has settled a game and Kalshi still offers the
+winner, KETT buys it on Kalshi at the ask, up to `SNIPE_MAX_QTY`, if Kalshi already bids at least
+`SNIPE_MIN_KS_PRICE` for that winner (a 44c book on a "settled" game was a different game of a
+series, not an edge), the Kalshi quote is under `SNIPE_MAX_KS_AGE_SEC` old, and the live book still
+clears `SNIPE_MIN_EDGE` after the fee. HOLT keeps a game pair Polymarket's listing has dropped for
+`SNIPE_HOLD_SEC`, flagged `pmGone` on the tape, with its Kalshi side still repricing, and game rows
+now carry Kalshi's top-of-book sizes. The position is held to Kalshi's settlement like any other.
+It is the only Kalshi-only edge the tape has shown; the first Sunday with the hold in place says
+what it is worth. Two things it is not: an in-play strategy (it acts after the final whistle), and
+anything to do with the maker.
+
 Everything above this line TAKES liquidity: buy the ask, sell the bid, pay a taker fee both ways.
 That is roughly a 4c round trip against venues that disagree by about half a cent, which is why
 seven days of measurement and a full threshold sweep found nothing. There is no 4c mispricing to
