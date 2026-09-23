@@ -68,7 +68,8 @@ tools/            edge-scan, replay, maker-replay, maker-rank, pm-maker-scan, ma
                   research only, no broker code -- nothing beat buy-and-hold),
                   chain-record (writes the option-chain tape to data/chains/ from Cboe's free delayed feed;
                   read-only, no broker -- free historical chains do not exist, so the history has to be collected daily;
-                  ops/install-chains.sh schedules it),
+                  ops/install-chains.sh schedules it on the Mac; on the box src/chainsched.js runs it inside the desk
+                  (CHAINS=1 in fly.toml) and keeps only the newest 14 days there -- the Mac's tape is the archive),
                   weather-fetch + weather-lab (Kalshi daily-high-temperature markets vs the public forecast; no edge, out of sample),
                   favorites-check (one preset rule on older settled markets from lab-fetch --historical; the non-Sports favourite lead did not replicate),
                   pnl-report (one-screen realised P&L per book from data/fly/archive journals; --marks prices held maker inventory),

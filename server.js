@@ -317,6 +317,9 @@ server.listen(cfg.port, cfg.bindHost, () => {
 });
 
 engine.start().catch((e) => { console.error('engine failed to start:', e); process.exit(1); });
+// The chain recorder's schedule (CHAINS=1: the box, which has no cron). A child process, so
+// nothing it does can stall a desk loop or take the desk down with it.
+if (cfg.chains) require('./src/chainsched').start({ dataDir: cfg.dataDir, keepDays: cfg.chainsKeepDays });
 
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { engine.save(); console.log('\nstate saved, bye'); process.exit(0); });
 // Whatever else gets past every catch above still exits (Fly restarts the desk), but with the
