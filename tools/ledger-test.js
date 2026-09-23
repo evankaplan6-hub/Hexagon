@@ -3,7 +3,10 @@
 // two can disagree is named. A synthetic journal, no network, no clock.
 //
 //   node tools/ledger-test.js
-const { rebuild, compare, stateTime } = require('./ledger-check');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { rebuild, compare, stateTime, readJournals, pruneBoxNow } = require('./ledger-check');
 
 let pass = 0, fail = 0;
 const ok = (name, cond, got) => {
@@ -99,6 +102,27 @@ group('the journal is compared only as far as the state had got');
   s.cash = 9893.45; s.stats = { fees: 2.15, realized: 0.15, groupsClosed: 1, wins: 1, losses: 0 }; s.maker.realized = -1.42;
   ok('...and such a state has no problems', compare(built, s).problems.length === 0, compare(built, s).problems);
   ok('stateTime is the newest moment the state vouches for', stateTime({ log: [{ t: 5 }], balanceHistory: [{ t: 7 }], maker: { lastFill: { at: 9 }, hist: [{ t: 8 }] } }) === 9 && stateTime({}) === Infinity);
+}
+
+group('box-now holds only what the archive lacks');
+{
+  // the 2026-09-23 false alarm: a shorter copy of an archived day, left over from the day before,
+  // shadowed the archive's complete copy because the later directory wins in readJournals
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-'));
+  const archive = path.join(root, 'archive'); const box = path.join(root, 'box-now');
+  fs.mkdirSync(archive); fs.mkdirSync(box);
+  const line = (i) => JSON.stringify({ t: T(i), kind: 'OPEN', id: `g${i}-KSy`, group: `g${i}`, qty: 1, entry: 0.5, fee: 0, cost: 0.5, cash: 10000 - 0.5 * i }) + '\n';
+  fs.writeFileSync(path.join(archive, 'journal-2026-09-22.jsonl'), line(1) + line(2) + line(3));
+  fs.writeFileSync(path.join(box, 'journal-2026-09-22.jsonl'), line(1) + line(2));           // yesterday's partial copy
+  fs.writeFileSync(path.join(box, 'journal-2026-09-23.jsonl'), line(4));                     // today's, which the archive lacks
+  fs.writeFileSync(path.join(box, 'state.json'), '{}');
+  ok('the later directory shadows the earlier one, so the stale copy loses a line', readJournals([archive, box]).events.length === 3);
+  const stale = pruneBoxNow(box, ['journal-2026-09-23.jsonl']);
+  ok('the stale copy of the archived day is dropped, by name', stale.length === 1 && stale[0] === 'journal-2026-09-22.jsonl', stale);
+  ok("today's journal and the state are left alone", fs.existsSync(path.join(box, 'journal-2026-09-23.jsonl')) && fs.existsSync(path.join(box, 'state.json')));
+  ok('and the rebuild now sees every line', readJournals([archive, box]).events.length === 4);
+  ok('a missing box-now folder is nothing to prune', pruneBoxNow(path.join(root, 'nope'), []).length === 0);
+  fs.rmSync(root, { recursive: true, force: true });
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
