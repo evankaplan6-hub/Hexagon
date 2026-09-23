@@ -230,6 +230,19 @@ async function checkVenues(events, log) {
 }
 
 // ---------------------------------------------------------------- the box
+// box-now holds only what the archive lacks. A journal left there by an earlier run, for a day the
+// pull has archived since, is a shorter copy of that same day, and readJournals lets the later
+// directory win: on 2026-09-23 a 741-line copy of 09-22 shadowed the archive's 1014-line one and the
+// check reported 329 problems that were not there. Drop every journal this run will not copy afresh.
+function pruneBoxNow(dest, keep) {
+  const keepSet = new Set(keep);
+  let names = [];
+  try { names = fs.readdirSync(dest); } catch { return []; }
+  const stale = names.filter((n) => JOURNAL.test(n) && !keepSet.has(n)).sort();
+  for (const n of stale) fs.unlinkSync(path.join(dest, n));
+  return stale;
+}
+
 // Copies the box's state.json and the journals the archive does not have yet (today's, and any
 // day the pull has not run for) into DEST/box-now, read-only on the box side.
 function pullBox(app, archive, dest, log) {
@@ -239,12 +252,14 @@ function pullBox(app, archive, dest, log) {
   try { for (const n of fs.readdirSync(archive)) { const m = JOURNAL.exec(n); if (m) have.add(m[1]); } } catch { /* no archive yet */ }
   const listing = execFileSync(fly, ['ssh', 'console', '-q', '-a', app, '-C', 'ls /data'], { encoding: 'utf8', timeout: 120000 });
   const want = listing.split('\n').map((s) => s.trim()).filter((n) => { const m = JOURNAL.exec(n); return m && !have.has(m[1]); });
+  const stale = pruneBoxNow(dest, want);
   for (const name of ['state.json', ...want]) {
     const to = path.join(dest, name);
     try { fs.unlinkSync(to); } catch { /* fresh copy */ }
     execFileSync(fly, ['ssh', 'sftp', 'get', '-q', '-a', app, `/data/${name}`, to], { stdio: 'ignore', timeout: 600000 });
   }
-  log(`box     copied state.json and ${want.length} journal(s) not yet in the archive (${want.map((n) => n.slice(8, 18)).join(', ') || 'none'})`);
+  log(`box     copied state.json and ${want.length} journal(s) not yet in the archive (${want.map((n) => n.slice(8, 18)).join(', ') || 'none'})`
+    + (stale.length ? `; dropped ${stale.length} older copy(ies) the archive has since replaced (${stale.map((n) => n.slice(8, 18)).join(', ')})` : ''));
   return { state: path.join(dest, 'state.json'), journals: dest };
 }
 
@@ -274,7 +289,7 @@ function run(argv, { log = console.log } = {}) {
   return done.then((v) => (problems.length || (v && v.differ.length) ? 1 : 0));
 }
 
-module.exports = { readJournals, rebuild, compare, stateTime, checkVenues, run };
+module.exports = { readJournals, rebuild, compare, stateTime, checkVenues, pruneBoxNow, run };
 
 if (require.main === module) {
   Promise.resolve(run(process.argv.slice(2))).then((code) => { process.exitCode = code; });
