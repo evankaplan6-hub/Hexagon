@@ -104,7 +104,7 @@ const deferred = () => { let release; const p = new Promise((res) => { release =
     ok('web search is offered, max 3 uses', ws && ws.name === 'web_search' && ws.max_uses === 3, ws);
     const names = body.tools.map((t) => t.name);
     ok('tools are in a fixed name order', JSON.stringify(names) === JSON.stringify([...names].sort()), names);
-    ok('every read-only tool is offered', ['activity_log', 'closed_trades', 'desk_overview', 'docs', 'journal', 'maker_status', 'markets', 'open_positions', 'settings', 'whale_bets'].every((n) => names.includes(n)), names);
+    ok('every read-only tool is offered', ['activity_log', 'closed_trades', 'desk_overview', 'docs', 'journal', 'maker_status', 'market_data', 'markets', 'open_positions', 'settings', 'whale_bets'].every((n) => names.includes(n)), names);
     ok('no tool_choice on an ordinary round', !('tool_choice' in body), body.tool_choice);
     ok('the refusal fallback is requested', body.fallbacks === 'default' && headers['anthropic-beta'] === 'server-side-fallback-2026-07-01', [body.fallbacks, headers]);
     ok('the per-call timeout is ASK_TIMEOUT_MS', timeoutMs === 120000, timeoutMs);
@@ -668,13 +668,24 @@ const deferred = () => { let release; const p = new Promise((res) => { release =
     const S = {
       anthropic: 'sk-ant-PLANTED-anthropic-9f8e7d6c', dash: 'PLANTED-dash-pass-4c3b2a19', flatten: 'PLANTED-flatten-token-1a2b3c4d',
       kalshiId: 'PLANTED-kalshi-key-id-77aa88bb', polyKey: 'PLANTED-polymarket-us-secret-5566', pemBody: 'PLANTED-PEM-BODY-abcdef123456', pemPath: pem,
+      cxKey: 'PLANTED-chartexchange-key-3344cc',
     };
     fs.writeFileSync(pem, `-----BEGIN PRIVATE KEY-----\n${S.pemBody}\n-----END PRIVATE KEY-----\n`);
     S.cookie = crypto.createHmac('sha256', S.dash).update('hexagon-session-v1').digest('hex');
     S.link = crypto.createHmac('sha256', S.dash).update('hexagon-link-v1').digest('hex').slice(0, 32);
     const savedEnv = { ...process.env };
-    Object.assign(process.env, { ANTHROPIC_API_KEY: S.anthropic, DASH_PASS: S.dash, FLATTEN_TOKEN: S.flatten, KALSHI_API_KEY_ID: S.kalshiId, KALSHI_PRIVATE_KEY_PATH: pem, POLYMARKET_US_SECRET_KEY: S.polyKey });
-    const { E, ask, calls, script } = setup({ dataDir: dir, dashPass: S.dash, flattenToken: S.flatten, kalshiKeyId: S.kalshiId, kalshiKeyPath: pem });
+    Object.assign(process.env, { ANTHROPIC_API_KEY: S.anthropic, DASH_PASS: S.dash, FLATTEN_TOKEN: S.flatten, KALSHI_API_KEY_ID: S.kalshiId, KALSHI_PRIVATE_KEY_PATH: pem, POLYMARKET_US_SECRET_KEY: S.polyKey, CHARTEXCHANGE_API_KEY: S.cxKey });
+    const { E, ask, calls, script } = setup({ dataDir: dir, dashPass: S.dash, flattenToken: S.flatten, kalshiKeyId: S.kalshiId, kalshiKeyPath: pem, chartexchangeKey: S.cxKey });
+    // A ChartExchange that answers the way the real one does, key and all, so the whitelist has
+    // something to leave out: the API echoes the request URL back in `next`.
+    const cxCalls = [];
+    E.cx = {
+      quote: async (sym) => { cxCalls.push(['quote', sym]); return { symbol: 'SPY', name: 'SPDR S&P 500 ETF Trust', price: 767.93, change: -5.45, changePct: -0.705, asOf: '2026-09-14T13:30:00Z', exchange: 'NYSE', url: `https://chartexchange.com/?api_key=${S.cxKey}` }; },
+      cryptoQuote: async (sym) => { cxCalls.push(['cryptoQuote', sym]); return { symbol: 'BTCUSD', name: 'Bitcoin', price: 84315.67, change: -1993.1, changePct: -2.309, asOf: '2026-09-14T13:59:00Z', exchange: 'Composite' }; },
+      shortVolume: async (sym, o) => { cxCalls.push(['shortVolume', sym, o]); return [{ d: '2026-09-11', total: 19905772, short: 9443880, long: 10461892, offExchange: 6857265, shortPct: 47.4, next: `?api_key=${S.cxKey}` }]; },
+      darkPoolSummary: async (sym, date) => { cxCalls.push(['darkPoolSummary', sym, date]); return date === '2026-09-11' ? { trades: 232389, volume: 14139795, premium: 10940061730.2, atBidPct: 15.11, atMidPct: 63.95, atAskPct: 20.93, bidVolume: 1, midVolume: 2, askVolume: 3 } : { trades: 0, volume: 0, premium: 0 }; },
+      chainSummary: async (sym, exp) => { cxCalls.push(['chainSummary', sym, exp]); return { underlying: 'US:SPY', expiration: exp, maxPain: 761, callItm: 97686, callOtm: 394084, putItm: 33457, putOtm: 1521583, putCallRatio: 3.16 }; },
+    };
     E.brain.key = S.anthropic;
     const planted = Object.values(S);
 
@@ -708,6 +719,7 @@ const deferred = () => { let release; const p = new Promise((res) => { release =
       markets: [{}, { limit: 40, contains: 'everton' }],
       maker_status: [{}, { limit: 40 }],
       whale_bets: [{}, { date: TODAY }],
+      market_data: [{ symbol: 'SPY' }, { symbol: 'btc', kind: 'crypto' }, { symbol: 'SPY', what: 'short_volume', limit: 3 }, { symbol: 'SPY', what: 'dark_pool' }, { symbol: 'SPY', what: 'dark_pool', date: '2026-09-13' }, { symbol: 'SPY', what: 'max_pain' }],
       settings: [{}, { contains: 'key' }, { contains: 'pass' }, { contains: 'token' }],
       docs: [{ query: 'key env password token secret pem private' }, { query: 'KALSHI_PRIVATE_KEY_PATH ANTHROPIC_API_KEY DASH_PASS FLATTEN_TOKEN' }, { query: 'flatten resume', limit: 4 }],
     };
@@ -734,7 +746,30 @@ const deferred = () => { let release; const p = new Promise((res) => { release =
       }
     }
     ok('no tool output contains a planted secret, even before the scrub', leaks.length === 0, leaks);
-    ok('the settings say which secrets are present, not what they are', /"secretsPresent":\{"anthropicKey":true,"dashboardPassword":true,"flattenSwitch":true,"kalshiKey":true\}/.test(outputs.settings[0]), outputs.settings[0].slice(0, 400));
+    ok('the settings say which secrets are present, not what they are', /"secretsPresent":\{"anthropicKey":true,"dashboardPassword":true,"flattenSwitch":true,"kalshiKey":true,"chartexchangeKey":true\}/.test(outputs.settings[0]), outputs.settings[0].slice(0, 400));
+    {
+      const md = outputs.market_data.map((o) => JSON.parse(o));
+      ok('market_data: the quote, with its source and staleness named', md[0].available && md[0].price === '767.93' && md[0].changeTodayPct === '-0.705%' && /delayed 30 minutes/.test(md[0].staleness) && /ChartExchange/.test(md[0].source) && /2026-09-14 09:30:00 ET/.test(md[0].asOf), md[0]);
+      ok('market_data: nothing off the whitelist, the url least of all', !('url' in md[0]) && !JSON.stringify(md).includes('next'), Object.keys(md[0]));
+      // every input above ran twice (the whitelist alone, then with the scrub), so calls are read by kind
+      const call = (kind) => cxCalls.find((c) => c[0] === kind);
+      ok('market_data: a crypto quote asks the crypto feed', call('cryptoQuote') && call('cryptoQuote')[1] === 'BTC' && md[1].price === '84315.67' && /live/.test(md[1].staleness), [call('cryptoQuote'), md[1]]);
+      ok('market_data: short volume as a share, with what it is and is not', md[2].days.length === 1 && md[2].days[0].shortPct === '47.4%' && /NOT short interest/.test(md[2].meaning) && call('shortVolume')[2].limit === 3, md[2]);
+      ok('market_data: dark pool defaults to the last weekday before today', call('darkPoolSummary')[2] === '2026-09-11' && md[3].found && md[3].dollars === '$10940061730.20' && md[3].atMidPct === '63.95%', [call('darkPoolSummary'), md[3]]);
+      ok('market_data: a day with no prints says so instead of showing zeros', md[4].found === false && /no prints/.test(md[4].note) && !('trades' in md[4]), md[4]);
+      ok('market_data: max pain defaults to the next Friday and says what it is not', call('chainSummary')[2] === '2026-09-18' && md[5].maxPain === '761' && md[5].putCallRatio === '3.16' && /not a forecast/.test(md[5].meaning), [call('chainSummary'), md[5]]);
+      let threw = '';
+      try { await tools.runTool(E, 'market_data', { symbol: 'not a ticker!' }, T0); } catch (e) { threw = e.message; }
+      ok('market_data: a bad ticker is refused before any call', /plain ticker/.test(threw), threw);
+      try { threw = ''; await tools.runTool(E, 'market_data', { symbol: 'SPY', what: 'everything' }, T0); } catch (e) { threw = e.message; }
+      ok('market_data: an unknown `what` is refused', /what must be one of/.test(threw), threw);
+      const cxSaved = E.cx, nCalls = cxCalls.length;
+      E.cx = null;
+      const off = JSON.parse(await tools.runTool(E, 'market_data', { symbol: 'SPY' }, T0));
+      ok('market_data: without a key it says so and calls nothing', off.available === false && /CHARTEXCHANGE_API_KEY/.test(off.note) && cxCalls.length === nCalls, off);
+      E.cx = cxSaved;
+      ok('market_data: the step line names the lookup', tools.stepFor('market_data', { symbol: 'spy', what: 'dark_pool' }) === 'looking up dark pool for spy on ChartExchange', tools.stepFor('market_data', { symbol: 'spy', what: 'dark_pool' }));
+    }
     ok('no tool changed the desk', JSON.stringify(E.state) === stateBefore);
 
     const logOut = outputs.activity_log[1];

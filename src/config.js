@@ -25,6 +25,11 @@ module.exports = {
   // The box keeps only the newest CHAINS_KEEP_DAYS days (its volume is 1 GB); the Mac keeps all.
   chains: env('CHAINS', '0') === '1',
   chainsKeepDays: num('CHAINS_KEEP_DAYS', 14),
+  // ChartExchange (src/venues/chartexchange.js): read-only market data behind a paid key --
+  // quotes, short volume, dark-pool prints, max pain, and the historical option bars
+  // tools/option-history.js archives. A trial to 2026-10-07. Only the Ask panel reads it inside
+  // the desk; nothing in the trading loop does, so an empty key changes no trade.
+  chartexchangeKey: env('CHARTEXCHANGE_API_KEY', '').trim(),
   // Any-market pairs are recorded on change plus this heartbeat (src/recorder.js says why).
   recordHeartbeatMin: num('RECORD_HEARTBEAT_MIN', 15),
   // The tape's emergency brake (src/recorder.js). When free space under dataDir falls below this,

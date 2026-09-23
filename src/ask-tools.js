@@ -20,6 +20,7 @@ const path = require('path');
 const crypto = require('crypto');
 const readline = require('readline');
 const http = require('./http');
+const chartexchange = require('./venues/chartexchange');
 
 const ROOT = path.join(__dirname, '..');
 const MAX_OUT = 10000;                 // characters per tool result, before the cut note
@@ -532,7 +533,7 @@ function settings(E, input) {
     // presence only, never the value: says why a feature is off without saying what the secret is
     secretsPresent: {
       anthropicKey: !!(E.brain && E.brain.key), dashboardPassword: !!cfg.dashPass, flattenSwitch: !!cfg.flattenToken,
-      kalshiKey: !!(cfg.kalshiKeyId && cfg.kalshiKeyPath),
+      kalshiKey: !!(cfg.kalshiKeyId && cfg.kalshiKeyPath), chartexchangeKey: !!cfg.chartexchangeKey,
     },
     shown: rows.length,
     settings: rows,
@@ -595,6 +596,96 @@ function docs(_E, input, _now, root = ROOT) {
   };
 }
 
+// ---------------------------------------------------------------- market_data
+// One stock or crypto ticker, looked up on ChartExchange (src/venues/chartexchange.js): the quote,
+// the last days of FINRA short volume, one day's dark-pool prints, or max pain for one expiry.
+// The desk does not trade any of it -- it trades prediction markets -- so this exists for the
+// question "what is SPY doing" asked in the same panel as "why hasn't the desk traded", and the
+// answer says where it came from and how stale it is. Read-only: a key that can only read data.
+//
+// `E.cx` is the session: undefined means build the shared one from the key in the environment,
+// null means there is none (the tests set both). Whitelisted fields only; the API's own paginated
+// replies carry the key inside `next`, which is one more reason nothing is passed through whole.
+const MARKET_WHAT = ['quote', 'short_volume', 'dark_pool', 'max_pain'];
+const TICKER_RE = /^[A-Z0-9.\-]{1,12}$/;
+function ticker(v, name) {
+  if (v == null || typeof v !== 'string' || !v.trim()) throw new Error(`${name} is required: a ticker like SPY, or BTC for crypto`);
+  const t = v.trim().toUpperCase().replace(/^US:/, '').replace(/:USD$/, '');
+  if (!TICKER_RE.test(t)) throw new Error(`${name} must be a plain ticker like SPY or BTC`);
+  return t;
+}
+// The last weekday before an Eastern day: holidays are not known here, and a holiday comes back
+// from the API as a day with no prints, which the answer then says.
+function priorWeekday(easternDay) {
+  let t = Date.parse(`${easternDay}T12:00:00Z`);
+  for (let i = 0; i < 7; i++) {
+    t -= 86400000;
+    const wd = new Date(t).getUTCDay();
+    if (wd >= 1 && wd <= 5) return new Date(t).toISOString().slice(0, 10);
+  }
+  return easternDay;
+}
+// The next Friday on or after an Eastern day, where most listed expiries fall.
+function nextFriday(easternDay) {
+  let t = Date.parse(`${easternDay}T12:00:00Z`);
+  for (let i = 0; i < 7; i++, t += 86400000) if (new Date(t).getUTCDay() === 5) return new Date(t).toISOString().slice(0, 10);
+  return easternDay;
+}
+async function marketData(E, input, now) {
+  const symbol = ticker(input.symbol, 'symbol');
+  const what = input.what == null || input.what === '' ? 'quote' : String(input.what);
+  if (!MARKET_WHAT.includes(what)) throw new Error(`what must be one of ${MARKET_WHAT.join(', ')}`);
+  const kind = input.kind === 'crypto' ? 'crypto' : 'stock';
+  const cx = E.cx === undefined ? chartexchange.session() : E.cx;
+  const source = 'ChartExchange (chartexchange.com), a read-only market-data subscription; not a venue the desk trades on';
+  if (!cx) {
+    return { available: false, source, note: 'ChartExchange is not configured on this desk (CHARTEXCHANGE_API_KEY is empty), so there is no quote, short-volume, dark-pool or max-pain lookup here. The desk trades prediction markets and needs none of it to run.' };
+  }
+  const today = etDay(now);
+  if (what === 'quote') {
+    const q = kind === 'crypto' ? await cx.cryptoQuote(symbol) : await cx.quote(symbol);
+    if (!q || !fin(q.price)) return { available: true, source, symbol, found: false, note: 'no quote came back for that ticker' };
+    return {
+      available: true, source, symbol: q.symbol || symbol, name: q.name, kind,
+      price: fin(q.price) ? String(q.price) : null, changeToday: fin(q.change) ? String(q.change) : null, changeTodayPct: fin(q.changePct) ? `${q.changePct}%` : null,
+      asOf: et(Date.parse(q.asOf || '')) || q.asOf, exchange: q.exchange,
+      staleness: kind === 'crypto' ? 'a live composite across exchanges' : 'delayed 30 minutes by the data plan',
+    };
+  }
+  if (what === 'short_volume') {
+    const limit = int(input.limit, 5, 1, 30, 'limit');
+    const days = await cx.shortVolume(symbol, { limit });
+    return {
+      available: true, source, symbol, kind: 'stock', shown: days.length,
+      meaning: 'FINRA daily short-sale volume: the share of the day\'s reported volume that was sold short. Around 40-50% is ordinary for a big ETF because market makers short to fill buyers; it is NOT short interest (shares held short), and one day says little.',
+      days: days.map((d) => ({ date: d.d, reportedVolume: d.total, shortVolume: d.short, shortPct: fin(d.shortPct) ? `${d.shortPct}%` : null })),
+    };
+  }
+  if (what === 'dark_pool') {
+    const date = day(input.date, 'date', priorWeekday(today));
+    const dp = await cx.darkPoolSummary(symbol, date);
+    const none = !dp || !(dp.trades > 0);
+    return {
+      available: true, source, symbol, kind: 'stock', date, found: !none,
+      meaning: 'off-exchange (dark pool and other TRF) prints for the day, and how many traded at the bid, mid or ask. Prints at the ask lean buyer-initiated, at the bid seller-initiated; mid says nothing. A large print is not a large bet: it is a large trade, and both sides made it.',
+      ...(none ? { note: 'no prints recorded for that date; it may be a weekend or holiday, or the day may not be processed yet (the data plan shows the previous market day)' } : {
+        trades: dp.trades, shares: dp.volume, dollars: money(dp.premium),
+        atBidPct: fin(dp.atBidPct) ? `${dp.atBidPct}%` : null, atMidPct: fin(dp.atMidPct) ? `${dp.atMidPct}%` : null, atAskPct: fin(dp.atAskPct) ? `${dp.atAskPct}%` : null,
+      }),
+    };
+  }
+  // max_pain
+  const expiration = day(input.expiration, 'expiration', nextFriday(today));
+  const cs = await cx.chainSummary(symbol, expiration);
+  if (!cs || !fin(cs.maxPain)) return { available: true, source, symbol, expiration, found: false, note: 'no option chain summary for that expiry; most listed expiries are Fridays' };
+  return {
+    available: true, source, symbol, kind: 'stock', expiration, found: true,
+    meaning: 'max pain is the strike at which the most option contracts open at this expiry would expire worthless. It is a description of where open interest sits, not a forecast, and the evidence that prices are drawn to it is weak.',
+    maxPain: String(cs.maxPain), putCallRatio: fin(cs.putCallRatio) ? String(cs.putCallRatio) : null,
+    openInterest: { callsInTheMoney: cs.callItm, callsOutOfTheMoney: cs.callOtm, putsInTheMoney: cs.putItm, putsOutOfTheMoney: cs.putOtm },
+  };
+}
+
 // ---------------------------------------------------------------- the tool list
 // Byte-stable and in a fixed (name-sorted) order: tools render at the very front of the prompt, so
 // any change here re-bills every cached conversation. Nothing per-request goes in a description.
@@ -652,6 +743,18 @@ const DEFS = [
     } },
   },
   {
+    name: 'market_data',
+    description: 'One stock or crypto ticker on ChartExchange, a read-only market-data subscription the desk does not trade on: the quote (stocks delayed 30 minutes, crypto live), the last days of FINRA short volume, one day\'s dark-pool prints, or max pain for one option expiry. Call this only when asked about a stock, ETF, index fund or coin by name; it says so if the key is not configured.',
+    input_schema: { type: 'object', properties: {
+      symbol: STR('the ticker, e.g. SPY, AAPL, TLT, or BTC for crypto'),
+      what: { type: 'string', enum: MARKET_WHAT, description: 'quote (default), short_volume, dark_pool or max_pain' },
+      kind: { type: 'string', enum: ['stock', 'crypto'], description: 'stock (default) or crypto; only the quote works for crypto' },
+      date: STR('dark_pool only: the Eastern trading date like 2026-09-22; default the last weekday before today'),
+      expiration: STR('max_pain only: the option expiry like 2026-09-26; default the next Friday'),
+      limit: INT('short_volume only: days to return, 1-30, default 5'),
+    }, required: ['symbol'] },
+  },
+  {
     name: 'markets',
     description: 'Matched markets (the same outcome on Polymarket and Kalshi) with live prices, the gap between venues, the best trade and its profit after fees, and the rule that stopped each one, plus a tally of why pairs are not trading. Call this for "why isn\'t it trading" or anything about a specific market\'s prices.',
     input_schema: { type: 'object', properties: {
@@ -683,7 +786,7 @@ const DEFS = [
 
 const RUN = {
   activity_log: activityLog, closed_trades: closedTrades, desk_overview: deskOverview, docs, journal,
-  maker_status: makerStatus, markets, open_positions: openPositions, settings, whale_bets: whaleBets,
+  maker_status: makerStatus, market_data: marketData, markets, open_positions: openPositions, settings, whale_bets: whaleBets,
 };
 
 // What the dashboard shows while a tool runs. Plain words; the page escapes them.
@@ -698,6 +801,7 @@ function stepFor(name, input = {}) {
     case 'journal': return `reading the journal for ${i.date ? q(i.date) : 'today'}`;
     case 'markets': return `reading matched markets${i.contains ? ` for "${q(i.contains)}"` : ''}`;
     case 'maker_status': return 'reading the maker desk';
+    case 'market_data': return `looking up ${q(i.what || 'quote').replace('_', ' ')} for ${q(i.symbol || '?')} on ChartExchange`;
     case 'whale_bets': return 'reading whale bets';
     case 'settings': return 'reading the settings';
     case 'docs': return `searching the docs: ${q(i.query || '')}`;
