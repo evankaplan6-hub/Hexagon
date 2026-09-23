@@ -9,6 +9,7 @@
 //
 //   node tools/maker-slice.js --day 2026-09-22              one ET day from data/fly/archive
 //   node tools/maker-slice.js --day 2026-09-22 --standaside  ...plus the stand-aside grid
+//   node tools/maker-slice.js --day 2026-09-22 --signals     ...plus the book-lean and flow-direction grids
 //   node tools/maker-slice.js --day 2026-09-21 --no-tennis   leave out the live-match markets (KXWTA/KXATP/KXITF/KXDAVISCUP)
 //
 // What four days said (2026-09-19 → 09-22, 30-minute marks, the desk's own fills, per contract):
@@ -17,8 +18,11 @@
 //   live tennis (09-20, 09-21 only; PR #98 stopped it)     -17c to -71c on the worst markets, +72c on the best: coin flips
 //   stand aside on a moved mid (K=10m, X=1c)               takes $24 / $73 / $24 off 09-19/20/21 and nothing off 09-22;
 //                                                          the kept fills still mark -0.5c to -0.7c
-// So the loss is not one market, one hour or one side; it is the sweep itself, and no rail here
-// makes what is left positive.
+//   book lean (refuse when our side of the touch is thin)   halves the volume; the kept fills still mark -0.2c to -2.0c,
+//                                                          and on 09-20 the kept fills are the WORSE half
+//   flow direction (refuse after one-way taker flow at us)  backwards: the fills it refuses mark better than the kept
+// So the loss is not one market, one hour or one side, and neither the book nor the flow announces
+// the sweep in time; it is the sweep itself, and no rail here makes what is left positive.
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
@@ -93,7 +97,38 @@ function standAside(res, own, out = console.log) {
   }
 }
 
-module.exports = { slices, standAside, TENNIS };
+// Two signals real makers dodge sweeps with, scored the same way. A: the touch is thin on our side
+// (we are selling and the ask holds under theta of bid+ask depth, or the mirror), read from the last
+// book row before the fill. B: the last K minutes of taker flow mostly came at our side (lifting
+// offers while we sell, hitting bids while we buy), from the print rows. Both are what the desk
+// could see before quoting: the book is in desiredQuotes already, the prints come through src/tape.js.
+function signals(res, own, books, prints, out = console.log) {
+  const mark = (f) => { const mid = res.midAt(f.k, f.t + H * 60000); return mid == null ? null : f.qty * (f.side === 'buy' ? mid - f.px : f.px - mid); };
+  const lastBefore = (arr, t) => { let lo = 0, hi = arr.length - 1, best = null; while (lo <= hi) { const m = (lo + hi) >> 1; if (arr[m][0] < t) { best = arr[m]; lo = m + 1; } else hi = m - 1; } return best; };
+  const ourShare = (f) => { const b = lastBefore(books.get(f.k) || [], f.t); if (!b) return null; const [, bs, as] = b; if (bs + as <= 0) return null; return f.side === 'sell' ? as / (bs + as) : bs / (bs + as); };
+  const flowAtUs = (f, K, minN) => {
+    const ps = prints.get(f.k) || [];
+    let same = 0, tot = 0;
+    for (let i = ps.length - 1; i >= 0; i--) { const [t, n, s] = ps[i]; if (t >= f.t) continue; if (t < f.t - K * 60000) break; tot += n; if ((f.side === 'sell' && s === 'a') || (f.side === 'buy' && s === 'b')) same += n; }
+    return tot >= minN ? same / tot : null;
+  };
+  const score = (title, rows) => {
+    out(`\n${title}`);
+    for (const [name, refuse] of rows) {
+      const kept = { q: 0, p: 0 }, ref = { q: 0, p: 0 };
+      let unknown = 0;
+      for (const f of own) { const pm = mark(f); if (pm == null) continue; const r = refuse(f); if (r == null) { unknown++; kept.q += f.qty; kept.p += pm; continue; } const o = r ? ref : kept; o.q += f.qty; o.p += pm; }
+      const c = (o) => `${String(o.q).padStart(6)} ${(o.q ? 100 * o.p / o.q : 0).toFixed(2).padStart(6)}c $${o.p.toFixed(0).padStart(5)}`;
+      out(`  ${name.padEnd(28)} kept ${c(kept)}   refused ${c(ref)}   (${unknown} unknown, kept)`);
+    }
+  };
+  score('A. book lean: refuse when our side of the touch holds < theta of the touch depth', [0.15, 0.25, 0.35, 0.5].map((th) => [`theta=${th}`, (f) => { const s = ourShare(f); return s == null ? null : s < th; }]));
+  score('B. flow: refuse when >= phi of the last K min taker flow came at our side (20+ contracts seen)', [[5, 0.7], [15, 0.7], [15, 0.85], [30, 0.7], [30, 0.85]].map(([K, phi]) => [`K=${K}m phi=${phi}`, (f) => { const s = flowAtUs(f, K, 20); return s == null ? null : s >= phi; }]));
+  const dist = (pred) => { const xs = []; for (const f of own) { if (!pred(f)) continue; const s = ourShare(f); if (s != null) xs.push(s); } xs.sort((a, b) => a - b); const q = (p) => (xs.length ? xs[Math.floor(p * (xs.length - 1))].toFixed(2) : '-'); return `n=${xs.length} p25=${q(0.25)} p50=${q(0.5)} p75=${q(0.75)}`; };
+  out(`\nour side's share of the touch depth at the fill: run-over ${dist((f) => f.ro)} · in-rate ${dist((f) => !f.ro)}`);
+}
+
+module.exports = { slices, standAside, signals, TENNIS };
 
 if (require.main === module) {
   const args = process.argv.slice(2);
@@ -106,6 +141,8 @@ if (require.main === module) {
   const maker = require('../src/maker');
   const dir = path.resolve(flag('dir') || path.join(root, 'data', 'fly', 'archive'));
   const day = flag('day');
+  const books = new Map(), prints = new Map();   // ticker -> [[t, bidSize, askSize]], ticker -> [[t, contracts, takerSide]]
+  const push = (m, k, v) => { if (!m.has(k)) m.set(k, []); m.get(k).push(v); };
   if (!day || day === true) { console.error('usage: node tools/maker-slice.js --day YYYY-MM-DD [--standaside] [--no-tennis] [--dir DIR]'); process.exit(1); }
   (async () => {
     const dayBefore = new Date(Date.parse(`${day}T12:00:00Z`) - 86400000).toISOString().slice(0, 10);
@@ -117,6 +154,8 @@ if (require.main === module) {
       for await (const line of rl) {
         if (!line.startsWith('{"mk"')) continue;
         let row; try { row = JSON.parse(line); } catch { continue; }
+        if (row.mk === 'b') push(books, row.k, [row.t, row.bs || 0, row.as || 0]);
+        else if (row.mk === 'p') push(prints, row.k, [row.t, row.n || 0, row.s]);
         check.feed(row);
       }
     };
@@ -131,5 +170,6 @@ if (require.main === module) {
     console.log(`${day} (ET)${noTennis ? ', live-match markets left out' : ''}: ${own.length} of the desk's own fills`);
     slices(res, own);
     if (args.includes('--standaside')) standAside(res, own);
+    if (args.includes('--signals')) signals(res, own, books, prints);
   })();
 }
