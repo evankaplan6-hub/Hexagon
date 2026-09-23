@@ -61,7 +61,15 @@ primary_region = "iad"          # Ashburn, Virginia — close to the exchange, a
   # cycle near 19%. These pairs are Oscars 2027 and September unemployment; they do not move in 20
   # minutes, and src/anymarket.js restores the last crawl's pairs across a restart. The starvation
   # itself turned out to be Fly's CPU cap, not the crawl: see [[vm]] below (2026-09-22).
-  DISCOVER_EVERY_MIN = "45"
+  # 90 since 2026-09-22, once the steady polls were trimmed (#109-#111) and the crawl was the
+  # biggest read left: ~272 MB of Kalshi events and ~60 MB of Polymarket events a crawl, about a
+  # third of every byte the desk read at 45 minutes. Each crawl cannot be made much smaller: 68% of
+  # the Kalshi bytes are markets the keep filter drops, but most sit inside events that also hold
+  # markets it keeps, and Kalshi filters /events by nothing that tracks volume. Skipping events that
+  # kept nothing last time would save at most ~25% of the Kalshi half, for a two-step crawl. So it
+  # runs half as often: a new election, award or season market is paired up to 90 minutes after it
+  # lists, and the maker's crawl-fed universe (MAKER_WIDEN) is refreshed as often.
+  DISCOVER_EVERY_MIN = "90"
   # Raised from the 3% default (src/config.js) on 2026-09-17: the desk hit 3% intraday and TESS
   # correctly halted new risk, but 3% of a $10k paper account is $300 -- tight enough that one bad
   # day parks the desk for the rest of it. Widened by request; it is still paper money.
