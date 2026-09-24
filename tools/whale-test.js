@@ -357,6 +357,43 @@ async function watchTests() {
       ok('a full page is taken alone, as every read was before: the older $9K is not added to it', whaleLines(E3).length === 0, whaleLines(E3));
     }
 
+    // ---- a buy of an outcome already at 95c or more: recorded for the lab, not called on the floor
+    {
+      const cfg = config();                                            // no whaleMaxPx: the 0.95 default
+      const E = desk(), w = makeWhaleWatch(cfg);
+      feed = [
+        // 'No' at 99c on a Fed move: the last cent of a decided market
+        row({ conditionId: 'F1', outcomeIndex: 1, outcome: 'No', title: 'Fed decreases interest rates by 50+ bps after October 2026 meeting?', price: 0.99, size: 12000, usdcSize: 11880, transactionHash: '0xf1' }),
+        // exactly at the bar is at the bar
+        row({ conditionId: 'F2', outcomeIndex: 0, outcome: 'Yes', price: 0.95, size: 12000, usdcSize: 11400, transactionHash: '0xf2' }),
+        // built at 60c before the game turned, and only crossed the bar with a 97c fill: a real call
+        row({ conditionId: 'G1', outcomeIndex: 0, outcome: 'Alice Tubello', price: 0.60, size: 10000, usdcSize: 6000, timestamp: now - 900, transactionHash: '0xg1' }),
+        row({ conditionId: 'G1', outcomeIndex: 0, outcome: 'Alice Tubello', price: 0.97, size: 6186, usdcSize: 6000, timestamp: now - 300, transactionHash: '0xg2' }),
+        // and a bet at 94c is still a bet
+        row({ conditionId: 'G2', outcomeIndex: 1, outcome: 'Under', price: 0.94, size: 12000, usdcSize: 11280, transactionHash: '0xg3' }),
+      ];
+      await w.step(E);
+      const said = whaleLines(E).map((l) => l.text);
+      ok('a 99c buy is not called on the floor', !said.some((t) => /on No \(Fed/.test(t)), said);
+      ok('...nor one at exactly 95c', !said.some((t) => /F2|at 95c/.test(t)), said);
+      ok('a position built at 60c that crossed the bar at 97c is still called', said.some((t) => /Alice Tubello at 97c/.test(t)), said);
+      ok('a 94c buy is still called', said.some((t) => /on Under .*at 94c/.test(t)), said);
+      ok('the panel skips the same two', w.snapshot().recent.map((r) => r.outcome).sort().join() === 'Alice Tubello,Under', w.snapshot().recent.map((r) => r.outcome));
+      const recs = recordLines(cfg.dataDir).map((l) => JSON.parse(l));
+      ok('the record keeps all four, the lab and the Ask panel read it', recs.length === 4 && ['F1', 'F2', 'G1', 'G2'].every((c) => recs.some((r) => r.conditionId === c)), recs.map((r) => r.conditionId));
+
+      // a restart reads the record back: the 95c+ bets are remembered as said, and stay off the panel
+      const E2 = desk(), after = makeWhaleWatch(cfg);
+      await after.step(E2);
+      ok('after a restart none of the four is called again', whaleLines(E2).length === 0, whaleLines(E2));
+      ok('...and the panel still leaves the 95c+ ones out', after.snapshot().recent.map((r) => r.outcome).sort().join() === 'Alice Tubello,Under', after.snapshot().recent.map((r) => r.outcome));
+
+      const E3 = desk(), loose = makeWhaleWatch(config({ whaleMaxPx: 1.01 }));
+      feed = [row({ conditionId: 'F1', outcomeIndex: 1, outcome: 'No', price: 0.99, size: 12000, usdcSize: 11880, transactionHash: '0xf1' })];
+      await loose.step(E3);
+      ok('WHALE_MAX_PX above a dollar calls every bet, as before', whaleLines(E3).length === 1, whaleLines(E3));
+    }
+
     // ---- RECORD=0, and a data directory that is not there
     {
       const base = tmp();

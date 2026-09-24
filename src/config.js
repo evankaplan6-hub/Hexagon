@@ -499,6 +499,7 @@ module.exports = {
   whaleMinUsdOther: num('WHALE_MIN_USD_OTHER', 5000), // ...for a wallet on the other boards, which bet smaller
   whaleWindowMin: num('WHALE_WINDOW_MIN', 360),   // ...summed over this trailing window
   whaleFreshMin: num('WHALE_FRESH_MIN', 20),      // older bets are noted as seen, not announced
+  whaleMaxPx: num('WHALE_MAX_PX', 0.95),          // a bet at this price or dearer is recorded, not announced: the market is decided (2026-09-24)
   whaleEverySec: num('WHALE_EVERY_SEC', 15),
   whaleRereadMin: Math.max(1, num('WHALE_REREAD_MIN', 20)), // each visit re-reads this far back past the last one; older fills are kept from before (src/whales.js)
   whalePerPoll: Math.max(1, Math.round(num('WHALE_PER_POLL', 5))),  // wallets read per poll: 25 wallets every 75s

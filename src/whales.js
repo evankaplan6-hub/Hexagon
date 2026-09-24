@@ -196,6 +196,10 @@ function makeWhaleWatch(cfg) {
   let order = [], cursor = 0, boardAt = 0, running = false, lastError = '', polls = 0, restored = false;
   const keepSec = () => 2 * cfg.whaleWindowMin * 60;
   const remember = (entry) => { recent.unshift(entry); if (recent.length > 20) recent.length = 20; };
+  // Bought at WHALE_MAX_PX or dearer, and on average too (poll explains why). An old record line
+  // without an average is judged on its price.
+  const maxPx = cfg.whaleMaxPx ?? 0.95;
+  const nearSettled = (b) => b.price >= maxPx && (Number.isFinite(b.avg) ? b.avg : b.price) >= maxPx;
 
   // Every deploy is a restart, and before this each one called the bets of the last twenty minutes
   // again: 16 of the box's first 151 record lines were repeats, after v26, v27 and v28. So the watch
@@ -206,7 +210,7 @@ function makeWhaleWatch(cfg) {
   function restore() {
     const nowMs = Date.now();
     const calls = readRecord(cfg.dataDir, Math.floor(nowMs / 1000) - keepSec(), nowMs);
-    for (const r of calls) { announced.set(r.key, r.ts); remember(panelEntry(r)); }
+    for (const r of calls) { announced.set(r.key, r.ts); if (!nearSettled(r)) remember(panelEntry(r)); }
   }
 
   // Every followed board, merged by wallet. The same wallets top several boards (one was #1 in
@@ -305,8 +309,16 @@ function makeWhaleWatch(cfg) {
       const text = describe(bet, w, ctx);
       // recorded as the floor named it: the fill's name, else the leaderboard's
       const rec = { ...bet, name: bet.name || (w && w.name) || '', rank: w ? w.rank : null, board: w ? w.category : null, ranks: w ? w.ranks : null, walletPnl: w ? Math.round(w.pnl) : null, kalshi: ctx.ks ? Math.round(ctx.ks.px * 1000) / 1000 : null, inPlay: ctx.inPlay ?? null };
-      remember(panelEntry(rec));
       record(rec);
+      // A buy of an outcome already at 95c or more is a wallet collecting the last few cents of a
+      // market that is decided, not a view on it: 243 of the 1,652 bets called 09-16..09-23 (15%,
+      // about 30 a day) were that, 'No' at 99c on a Fed move and a tennis player at 98c mid-match,
+      // and they buried the real calls. The record keeps every one (the lab and the Ask panel read
+      // it); only the floor line and the panel skip them. A wallet that built its position lower
+      // and crossed the bar with one dear fill is still called: its average price says so (47 of
+      // the 243, some bought at 45-80c before the game turned), so 196 of them go quiet.
+      if (nearSettled(bet)) continue;
+      remember(panelEntry(rec));
       E.log('ILSA', 'WHALE', null, text);
     }
   }
