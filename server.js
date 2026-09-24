@@ -10,6 +10,7 @@ const cfg = require('./src/config');
 const { Engine } = require('./src/engine');
 const { actionRefusal, rebindRefusal, routeAsk } = require('./src/ask');
 const chaintape = require('./src/chaintape');
+const { crashRecord } = require('./src/journal');
 
 if (cfg.mode === 'live') {
   const problems = [];
@@ -24,6 +25,10 @@ if (cfg.mode === 'live') {
 }
 
 const engine = new Engine(cfg);
+// START, STOP and CRASH in the journal (src/journal.js says why): a restart the desk did not ask
+// for has to be countable the next morning, not just visible in a log that rolls over in half an
+// hour. Never in the way of starting or exiting: the journal already swallows a failed write.
+const lifecycle = (kind, payload) => { try { engine.journal(engine, kind, payload); } catch { /* the exit still happens */ } };
 const clients = new Set();
 const PUBLIC = path.join(__dirname, 'public');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json' };
@@ -43,6 +48,9 @@ if (!LOOPBACK.includes(cfg.bindHost) && !cfg.dashPass) {
   console.error('  Set DASH_PASS in .env, or bind to 127.0.0.1 and reach it over an SSH tunnel.');
   process.exit(1);
 }
+// Written only once every startup refusal above has passed: a refused start never ran, and a
+// START with no STOP after it would read as an unexplained restart the next morning.
+lifecycle('START', { sha: cfg.buildSha || null, pid: process.pid });
 
 // A real login page, not HTTP basic auth.
 //
@@ -316,14 +324,15 @@ server.listen(cfg.port, cfg.bindHost, () => {
   console.log(`The Hexagon  →  http://localhost:${cfg.port}   mode=${cfg.mode.toUpperCase()}${cfg.demo ? ' (DEMO quotes)' : ''}   bound to ${cfg.bindHost}${cfg.dashPass ? '   password set' : ''}${cfg.flattenToken ? '   flatten switch armed' : ''}`);
 });
 
-engine.start().catch((e) => { console.error('engine failed to start:', e); process.exit(1); });
+engine.start().catch((e) => { console.error('engine failed to start:', e); lifecycle('CRASH', crashRecord('engine.start', e)); process.exit(1); });
 // The chain recorder's schedule (CHAINS=1: the box, which has no cron). A child process, so
 // nothing it does can stall a desk loop or take the desk down with it.
 if (cfg.chains) require('./src/chainsched').start({ dataDir: cfg.dataDir, keepDays: cfg.chainsKeepDays });
 
-for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { engine.save(); console.log('\nstate saved, bye'); process.exit(0); });
+// A deploy stops the desk with SIGTERM, so STOP is what tells a deploy's restart from a crash's.
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { lifecycle('STOP', { signal: sig }); engine.save(); console.log('\nstate saved, bye'); process.exit(0); });
 // Whatever else gets past every catch above still exits (Fly restarts the desk), but with the
 // ledger saved first rather than losing the last ten seconds of it -- the same courtesy a signal gets.
 for (const ev of ['uncaughtException', 'unhandledRejection']) {
-  process.on(ev, (e) => { console.error(`${ev}:`, (e && e.stack) || e); try { engine.save(); } catch { /* nothing left to save with */ } process.exit(1); });
+  process.on(ev, (e) => { console.error(`${ev}:`, (e && e.stack) || e); lifecycle('CRASH', crashRecord(ev, e)); try { engine.save(); } catch { /* nothing left to save with */ } process.exit(1); });
 }

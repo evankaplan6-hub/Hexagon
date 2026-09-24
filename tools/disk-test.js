@@ -4,8 +4,9 @@
 // Two halves. tools/fly-pull.js is the normal route: the Mac copies closed days down and deletes a
 // box tape only once its copy is proven identical. src/recorder.js's brake is the last resort:
 // below TAPE_MIN_FREE_MB it deletes the oldest tapes itself, copied or not. What has to hold:
-// nothing but an old tick tape is ever deleted, never today's, never without a verified copy
-// (pull) or a real shortage (brake), and a dry run touches nothing on either side.
+// nothing but an old tick tape or probe file is ever deleted by the pull (only old tapes by the
+// brake), never today's, never without a verified copy (pull) or a real shortage (brake), and a
+// dry run touches nothing on either side.
 //
 // The pull is driven end to end against a fake `fly` (a local script that plays the box out of a
 // temp folder), because the delete path is exactly the part that must never be tried on the box.
@@ -113,17 +114,35 @@ group('planPull: a Mac copy that is not a prefix is never overwritten or deleted
   ok('a file flagged not-a-prefix never counts as archived, whatever its hash says', lie.have.length === 0 && lie.delete.length === 0, lie);
 }
 
-group('planPull: journals, whales and probes are copied but never deleted');
+group('planPull: journals and whales are copied but never deleted');
 {
-  const kinds = ['journal', 'whales', 'probes'];
+  const kinds = ['journal', 'whales'];
   const box = kinds.map((k, i) => ({ name: `${k}-2026-09-01.jsonl`, size: 10, sha256: H(String(i)) }));
   const archived = planPull(box, box.map((f) => ({ ...f })), { todayET: TODAY, keep: 1, trim: true });
-  ok('archived and weeks old, still not deleted', archived.delete.length === 0 && archived.deleteAfterCopy.length === 0 && archived.have.length === 3, archived);
+  ok('archived and weeks old, still not deleted', archived.delete.length === 0 && archived.deleteAfterCopy.length === 0 && archived.have.length === 2, archived);
   const fresh = planPull(box, [], { todayET: TODAY, keep: 1, trim: true });
-  ok('...and copied when missing', fresh.copy.length === 3 && fresh.deleteAfterCopy.length === 0);
+  ok('...and copied when missing', fresh.copy.length === 2 && fresh.deleteAfterCopy.length === 0);
   const odd = ['ticks-2026-09-01.jsonl.bak', 'ticks-2026-9-1.jsonl', 'xticks-2026-09-01.jsonl', '../ticks-2026-09-01.jsonl', 'ticks-2026-09-01.jsonl/'];
   const oddPlan = planPull(odd.map((name) => ({ name, size: 1, sha256: H('e') })), odd.map((name) => ({ name, size: 1, sha256: H('e') })), { todayET: TODAY, keep: 1, trim: true });
   ok('names that are not exactly ticks-YYYY-MM-DD.jsonl are ignored outright', oddPlan.copy.length + oddPlan.have.length + oddPlan.delete.length + oddPlan.open.length === 0, oddPlan);
+}
+
+group('planPull: probe files are trimmed exactly like tick tapes (2026-09-24: ~6 MB a day, never trimmed)');
+{
+  const days = ['2026-09-10', '2026-09-11', '2026-09-12', '2026-09-13'];
+  const box = [...days.map((d, i) => ({ name: `probes-${d}.jsonl`, size: 100 + i, sha256: H(String(i)) })), { name: `probes-${TODAY}.jsonl`, size: 5, sha256: null }];
+  const local = box.filter((f) => f.sha256).map((f) => ({ ...f }));
+  const p = planPull(box, local, { todayET: TODAY, keep: 3, trim: true });
+  ok('outside the keep window and identical on the Mac: deleted', JSON.stringify(names(p.delete)) === '["probes-2026-09-10.jsonl","probes-2026-09-11.jsonl"]', names(p.delete));
+  ok('inside it: kept on the box', JSON.stringify(p.keptOnBox) === '["probes-2026-09-12.jsonl","probes-2026-09-13.jsonl"]', p.keptOnBox);
+  ok("today's never", p.open.includes(`probes-${TODAY}.jsonl`) && !names(p.delete).includes(`probes-${TODAY}.jsonl`));
+  ok('without --trim, never', planPull(box, local, { todayET: TODAY, keep: 3, trim: false }).delete.length === 0);
+  const missing = planPull(box, [], { todayET: TODAY, keep: 3, trim: true });
+  ok('not on the Mac yet: only after its copy verifies', missing.delete.length === 0 && names(missing.deleteAfterCopy).length === 2, missing);
+  const conflict = planPull(box, [{ name: 'probes-2026-09-10.jsonl', size: 100, sha256: H('z') }], { todayET: TODAY, keep: 3, trim: true });
+  ok('a conflict is never deleted', !names([...conflict.delete, ...conflict.deleteAfterCopy]).includes('probes-2026-09-10.jsonl') && conflict.conflicts.length === 1, conflict);
+  const odd = planPull([{ name: 'probes-2026-09-01.jsonl.bak', size: 1, sha256: H('e') }, { name: 'xprobes-2026-09-01.jsonl', size: 1, sha256: H('e') }], [], { todayET: TODAY, keep: 1, trim: true });
+  ok('names that are not exactly probes-YYYY-MM-DD.jsonl are ignored outright', odd.copy.length + odd.deleteAfterCopy.length === 0, odd);
 }
 
 group('planPull: a dry run is just the plan -- pure, repeatable, inputs untouched');
@@ -233,8 +252,16 @@ function main() {
     const name = remote.replace(/^\\/data\\//, '');
     note({ op: 'get', name, app, machine });
     if (fs.existsSync(local)) return refuse(1, 'Error: file ' + local + ' is already there.');
-    if (process.env.FAKE_FAIL_GET === name) return refuse(1, 'Error: get: connection reset');
     const bytes = fs.readFileSync(path.join(box, name));
+    // a dropped connection leaves half a file behind, as the real one did on 2026-09-21 and 09-23
+    const drop = () => { fs.writeFileSync(local, bytes.subarray(0, bytes.length >> 1)); return refuse(1, 'Error: get: connection lost (' + (bytes.length >> 1) + ' bytes written)'); };
+    if (process.env.FAKE_FAIL_GET === name) return drop();
+    // FAKE_FLAKY_GET=name:n drops the first n tries of that file, then works
+    const flaky = /^(.+):(\\d+)$/.exec(process.env.FAKE_FLAKY_GET || '');
+    if (flaky && flaky[1] === name) {
+      const tries = fs.readFileSync(calls, 'utf8').split('\\n').filter((l) => l.includes('"op":"get"') && l.includes('"name":' + JSON.stringify(name))).length;
+      if (tries <= Number(flaky[2])) return drop();
+    }
     fs.writeFileSync(local, process.env.FAKE_CORRUPT_GET === name ? Buffer.concat([bytes, Buffer.from('x')]) : bytes);
     return 0;
   }
@@ -257,20 +284,21 @@ function scene(label) {
   put('whales-2026-09-13.jsonl', 'whale\n');
   put('state.json', '{"cash":1}');
   const calls = path.join(root, 'calls.jsonl');
-  const lines = [];
+  const lines = [], pauses = [];
   // `macNow` is this Mac's clock; the fake box's clock is the same unless env.FAKE_BOX_NOW says otherwise
   const go = (argv, env = {}, macNow = NOW, extra = {}) => {
-    const keys = ['FAKE_BOX', 'FAKE_CALLS', 'FAKE_FAIL_LIST', 'FAKE_FAIL_GET', 'FAKE_CORRUPT_GET', 'FAKE_NO_MACHINE', 'FAKE_BOX_NOW', 'FAKE_NO_TODAY'];
+    const keys = ['FAKE_BOX', 'FAKE_CALLS', 'FAKE_FAIL_LIST', 'FAKE_FAIL_GET', 'FAKE_FLAKY_GET', 'FAKE_CORRUPT_GET', 'FAKE_NO_MACHINE', 'FAKE_BOX_NOW', 'FAKE_NO_TODAY'];
     const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
     Object.assign(process.env, { FAKE_BOX: box, FAKE_CALLS: calls, FAKE_BOX_NOW: String(macNow) }, env);
     const args = extra.noDest ? argv : [...argv, '--dest', dest];
-    try { fs.rmSync(calls, { force: true }); lines.length = 0; return run(args, { now: () => new Date(macNow), fly: [process.execPath, fakeFly], cwd: root, root, out: (s) => lines.push(s), err: (s) => lines.push(s), ...extra.opts }); }
+    // the pause between download tries is recorded, never slept
+    try { fs.rmSync(calls, { force: true }); lines.length = 0; pauses.length = 0; return run(args, { now: () => new Date(macNow), fly: [process.execPath, fakeFly], cwd: root, root, out: (s) => lines.push(s), err: (s) => lines.push(s), pause: (ms) => pauses.push(ms), ...extra.opts }); }
     finally { for (const k of keys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; } }
   };
   const log = () => (fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
   const onBox = () => fs.readdirSync(box).sort();
   const onMac = () => (fs.existsSync(dest) ? fs.readdirSync(dest).sort() : null);
-  return { root, box, dest, put, go, log, onBox, onMac, lines };
+  return { root, box, dest, put, go, log, onBox, onMac, lines, pauses };
 }
 
 group('run --trim --dry-run: prints the plan, changes nothing on either side');
@@ -284,8 +312,8 @@ group('run --trim --dry-run: prints the plan, changes nothing on either side');
   ok('the box is untouched', JSON.stringify(s.onBox()) === JSON.stringify(boxBefore), s.onBox());
   ok('the Mac is untouched: no archive folder, no pull.log', s.onMac() === null, s.onMac());
   ok('it says what it would copy', /would copy 7 files/.test(text), text);
-  ok('it says what it would delete: the 10th and 11th', /would delete 2 tick tapes/.test(text) && /ticks-2026-09-10\.jsonl/.test(text) && /ticks-2026-09-11\.jsonl/.test(text), text);
-  ok("it names what stays: from the 12th on, today's tape and the journals", /kept on the box: tapes from 2026-09-12 on/.test(text), text);
+  ok('it says what it would delete: the 10th and 11th', /would delete 2 tape or probe files/.test(text) && /ticks-2026-09-10\.jsonl/.test(text) && /ticks-2026-09-11\.jsonl/.test(text), text);
+  ok("it names what stays: from the 12th on, today's files and the journals", /kept on the box: tapes and probes from 2026-09-12 on/.test(text) && /every journal and whales file/.test(text), text);
 }
 
 group('run --trim: copies closed days, verifies, deletes only old tapes');
@@ -316,25 +344,57 @@ group('run --trim: copies closed days, verifies, deletes only old tapes');
   ok('...and adds its own line to pull.log', fs.readFileSync(path.join(s.dest, 'pull.log'), 'utf8').trim().split('\n').length === 2);
 }
 
-group('run --trim: a download whose hash does not match stops every delete');
+// Since 2026-09-24 a failed copy blocks only its own file. Before, one dropped download of the
+// newest tape kept every older, already-archived tape on the box too (09-22 and 09-23).
+group('run --trim: a download whose hash never matches keeps its own tape on the box, and only that one');
 {
   const s = scene('corrupt');
-  const code = s.go(['--trim'], { FAKE_CORRUPT_GET: 'ticks-2026-09-12.jsonl' });
+  const code = s.go(['--trim'], { FAKE_CORRUPT_GET: 'ticks-2026-09-10.jsonl' });
   const text = s.lines.join('\n');
   ok('exits non-zero', code === 1, { code, text });
-  ok('no rm reaches the box, not even for tapes that copied fine', !s.log().some((c) => c.op === 'rm'), s.log());
-  ok('the bad download is not kept', !s.onMac().includes('ticks-2026-09-12.jsonl') && !s.onMac().some((n) => n.endsWith('.part')), s.onMac());
-  ok('the box still has every tape', ['10', '11', '12', '13'].every((d) => s.onBox().includes(`ticks-2026-09-${d}.jsonl`)));
-  ok('it says so, and pull.log records a PROBLEM', /sha256 does not match/.test(text) && /PROBLEM/.test(fs.readFileSync(path.join(s.dest, 'pull.log'), 'utf8')), text);
+  ok('it was tried three times, with a pause between', s.log().filter((c) => c.op === 'get' && c.name === 'ticks-2026-09-10.jsonl').length === 3 && JSON.stringify(s.pauses) === '[30000,30000]', [s.log(), s.pauses]);
+  ok('the bad download is not kept', !s.onMac().includes('ticks-2026-09-10.jsonl') && !s.onMac().some((n) => n.endsWith('.part')), s.onMac());
+  ok('the box keeps the 10th', s.onBox().includes('ticks-2026-09-10.jsonl'), s.onBox());
+  ok('...and the 11th, which copied fine, is still deleted', JSON.stringify(s.log().filter((c) => c.op === 'rm').map((c) => c.name)) === '["ticks-2026-09-11.jsonl"]', s.log());
+  ok('it says so, and pull.log records a PROBLEM', /sha256 does not match/.test(text) && /ticks-2026-09-10\.jsonl: copy failed after 3 tries/.test(text) && /PROBLEM/.test(fs.readFileSync(path.join(s.dest, 'pull.log'), 'utf8')), text);
 }
 
-group('run --trim: a failed download stops every delete');
+group('run --trim: a download that keeps dropping blocks only its own file');
 {
   const s = scene('getfail');
-  const code = s.go(['--trim'], { FAKE_FAIL_GET: 'journal-2026-09-10.jsonl' });
+  const code = s.go(['--trim'], { FAKE_FAIL_GET: 'ticks-2026-09-11.jsonl' });
   ok('exits non-zero', code === 1);
-  ok('no rm reaches the box', !s.log().some((c) => c.op === 'rm'), s.log());
-  ok('the box still has every tape', ['10', '11', '12', '13'].every((d) => s.onBox().includes(`ticks-2026-09-${d}.jsonl`)));
+  ok('the dropped tape stays on the box, the verified one goes', JSON.stringify(s.log().filter((c) => c.op === 'rm').map((c) => c.name)) === '["ticks-2026-09-10.jsonl"]' && s.onBox().includes('ticks-2026-09-11.jsonl'), s.log());
+  ok('the half-written temp file is not left on the Mac, nor a half tape', !s.onMac().some((n) => n.endsWith('.part')) && !s.onMac().includes('ticks-2026-09-11.jsonl'), s.onMac());
+  const j = scene('getfail-journal');
+  ok('a journal that will not copy blocks no tape delete either', j.go(['--trim'], { FAKE_FAIL_GET: 'journal-2026-09-10.jsonl' }) === 1 && JSON.stringify(j.log().filter((c) => c.op === 'rm').map((c) => c.name)) === '["ticks-2026-09-10.jsonl","ticks-2026-09-11.jsonl"]', j.log());
+}
+
+group('run --trim: a dropped download is tried again, from an empty temp file, and then counts as copied');
+{
+  const s = scene('flaky');
+  const code = s.go(['--trim'], { FAKE_FLAKY_GET: 'ticks-2026-09-10.jsonl:2' });
+  const text = s.lines.join('\n');
+  ok('exits 0: the third try worked', code === 0, { code, text });
+  ok('three gets of that file, two pauses', s.log().filter((c) => c.op === 'get' && c.name === 'ticks-2026-09-10.jsonl').length === 3 && s.pauses.length === 2, [s.log(), s.pauses]);
+  ok('the copy is whole and byte-identical', fs.readFileSync(path.join(s.dest, 'ticks-2026-09-10.jsonl'), 'utf8') === 'tape of the 10th\n'.repeat(50));
+  ok('...so it is deleted from the box like any other', JSON.stringify(s.log().filter((c) => c.op === 'rm').map((c) => c.name)) === '["ticks-2026-09-10.jsonl","ticks-2026-09-11.jsonl"]', s.log());
+  ok('each retry is said out loud', (text.match(/retry    ticks-2026-09-10\.jsonl/g) || []).length === 2, text);
+  ok('pull.log says ok', /^\S+ ok /.test(fs.readFileSync(path.join(s.dest, 'pull.log'), 'utf8')));
+}
+
+group('run --trim: old probe files leave the box once copied and verified, today\'s and recent ones stay');
+{
+  const s = scene('probes');
+  for (const d of ['10', '11', '12', '13']) s.put(`probes-2026-09-${d}.jsonl`, `probe ${d}\n`.repeat(30));
+  s.put(`probes-${TODAY}.jsonl`, 'probing\n');
+  const code = s.go(['--trim']);
+  ok('exits 0', code === 0, s.lines);
+  const rms = s.log().filter((c) => c.op === 'rm').map((c) => c.name);
+  ok('the 10th and 11th of both kinds are deleted', JSON.stringify(rms) === '["probes-2026-09-10.jsonl","probes-2026-09-11.jsonl","ticks-2026-09-10.jsonl","ticks-2026-09-11.jsonl"]', rms);
+  ok('...each after its copy landed on the Mac', ['10', '11'].every((d) => fs.readFileSync(path.join(s.dest, `probes-2026-09-${d}.jsonl`), 'utf8') === `probe ${d}\n`.repeat(30)));
+  ok("the box keeps the 12th, 13th and today's probes", ['12', '13'].every((d) => s.onBox().includes(`probes-2026-09-${d}.jsonl`)) && s.onBox().includes(`probes-${TODAY}.jsonl`), s.onBox());
+  ok("today's probe file is not even copied", !s.onMac().includes(`probes-${TODAY}.jsonl`), s.onMac());
 }
 
 group('run --trim: a listing that does not name its machine copies, but never deletes');
@@ -709,6 +769,155 @@ group('config: the brake is on by default only on a Fly machine');
   ok('on a Fly machine: 200 MB', knob({ FLY_MACHINE_ID: 'abcdef1234' }) === 200);
   ok("on the Mac: off, because its tapes exist nowhere else", knob({}) === 0);
   ok('TAPE_MIN_FREE_MB wins either way', knob({ TAPE_MIN_FREE_MB: '50' }) === 50 && knob({ FLY_MACHINE_ID: 'abcdef1234', TAPE_MIN_FREE_MB: '0' }) === 0);
+}
+
+// ================================================================ ops/run-pull.sh
+// The launcher itself, run with bash in a made-up checkout: a fake fly that only answers
+// `auth whoami`, a fake tools/fly-pull.js that writes one pull.log line the way the real one does,
+// and a made-up HOME whose iCloud Drive folder is a temp folder. The date is fixed with PULL_TODAY_ET.
+const { spawnSync } = require('child_process');
+const HAVE_BASH = fs.existsSync('/bin/bash') && fs.existsSync('/usr/bin/rsync');
+function pullJob(label, { icloud = true } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), `hexagon-runpull-${label}-`));
+  const w = (rel, body, mode) => { const f = path.join(root, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, body); if (mode) fs.chmodSync(f, mode); return f; };
+  w('ops/run-pull.sh', fs.readFileSync(path.join(__dirname, '..', 'ops', 'run-pull.sh')));
+  // the fake pull: FAKE_PULL_RC=1 is a failed run; every call is noted with its arguments
+  w('tools/fly-pull.js', `const fs = require('fs'), path = require('path');
+const a = path.join(__dirname, '..', 'data', 'fly', 'archive');
+fs.appendFileSync(path.join(__dirname, '..', 'pulls.txt'), process.argv.slice(2).join(' ') + '\\n');
+const rc = Number(process.env.FAKE_PULL_RC || 0);
+if (!process.argv.includes('--dry-run')) { fs.mkdirSync(a, { recursive: true }); fs.appendFileSync(path.join(a, 'pull.log'), process.env.FAKE_PULL_STAMP + (rc ? ' PROBLEM' : ' ok') + ' hexagon-desk copied 1 file\\n'); }
+process.exit(rc);
+`);
+  const fly = w('bin/fly', '#!/bin/sh\n[ "$1 $2" = "auth whoami" ] && exit 0\nexit 9\n', 0o755);
+  w('data/chains/chains-2026-09-23.jsonl', 'chain\n');
+  w('data/options/history/SPY/2026-10-16.json', '{}');
+  w('data/fly/archive/ticks-2026-09-22.jsonl', 'tape\n');
+  w('data/fly/archive/.ticks-2026-09-23.jsonl.123.part', 'half a tape');
+  w('data/chains/kalshi-private-key.pem', 'SECRET');
+  w('data/fly/archive/.env', 'SECRET=1');
+  w('.env', 'SECRET=1');
+  const home = path.join(root, 'home');
+  const cloud = path.join(home, 'Library', 'Mobile Documents', 'com~apple~CloudDocs');
+  if (icloud) fs.mkdirSync(cloud, { recursive: true });
+  const backup = path.join(cloud, 'Hexagon-backup');
+  const archive = path.join(root, 'data', 'fly', 'archive');
+  const read = (f) => { try { return fs.readFileSync(f, 'utf8'); } catch { return ''; } };
+  // `today` is the Eastern date the script believes; `stamp` is the UTC time the fake pull writes
+  const go = (args = [], { today = '2026-09-24', stamp = '2026-09-24T13:31:16Z', rc = 0 } = {}) => {
+    const r = spawnSync('/bin/bash', [path.join(root, 'ops', 'run-pull.sh'), ...args], {
+      encoding: 'utf8',
+      env: { HOME: home, PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`, FLY_BIN: fly, PULL_TODAY_ET: today, FAKE_PULL_STAMP: stamp, FAKE_PULL_RC: String(rc), PULL_NET_TRIES: '1' },
+    });
+    return { code: r.status, out: `${r.stdout}${r.stderr}` };
+  };
+  const pulls = () => read(path.join(root, 'pulls.txt')).split('\n').filter(Boolean);
+  const pullLog = () => read(path.join(archive, 'pull.log')).split('\n').filter(Boolean);
+  const backupLog = () => read(path.join(archive, 'backup.log')).split('\n').filter(Boolean);
+  const walk = (d) => (fs.existsSync(d) ? fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)).map((n) => `${e.name}/${n}`) : [e.name])).sort() : null);
+  return { root, cloud, backup, archive, go, pulls, pullLog, backupLog, walk, w, done: () => fs.rmSync(root, { recursive: true, force: true }) };
+}
+
+if (!HAVE_BASH) {
+  console.log('\nrun-pull.sh: skipped, no /bin/bash or /usr/bin/rsync here');
+} else {
+  group('run-pull.sh: the pull, then the backup of the three folders into iCloud Drive');
+  {
+    const j = pullJob('fresh');
+    const r = j.go();
+    ok('exits with the pull\'s code, 0', r.code === 0, r);
+    ok('the pull ran once, with --trim', JSON.stringify(j.pulls()) === '["--trim"]', j.pulls());
+    ok('chains, options and the archive are copied, each under its own name', JSON.stringify(j.walk(j.backup)) === JSON.stringify(['archive/pull.log', 'archive/ticks-2026-09-22.jsonl', 'chains/chains-2026-09-23.jsonl', 'options/history/SPY/2026-10-16.json']), j.walk(j.backup));
+    ok('no half-downloaded .part, no .env and no .pem goes to iCloud', !j.walk(j.backup).some((n) => /\.part$|\.env$|\.pem$/.test(n)), j.walk(j.backup));
+    ok('backup.log says ok, and pull.log gets no backup line on a good day', /^\S+Z ok backup copied data\/chains data\/options data\/fly\/archive/.test(j.backupLog()[0] || '') && j.pullLog().length === 1 && / ok hexagon-desk /.test(j.pullLog()[0]), [j.backupLog(), j.pullLog()]);
+    fs.rmSync(path.join(j.backup, 'chains', 'chains-2026-09-23.jsonl'));
+    fs.writeFileSync(path.join(j.root, 'data', 'chains', 'chains-2026-09-24.jsonl'), 'more\n');
+    fs.rmSync(path.join(j.root, 'data', 'fly', 'archive', 'ticks-2026-09-22.jsonl'));
+    const again = j.go(['--backup-only']);
+    ok('--backup-only runs no pull', again.code === 0 && j.pulls().length === 1, again);
+    ok('a file deleted on the Mac is not deleted from the backup (no --delete), a new one arrives', fs.existsSync(path.join(j.backup, 'archive', 'ticks-2026-09-22.jsonl')) && fs.existsSync(path.join(j.backup, 'chains', 'chains-2026-09-24.jsonl')), j.walk(j.backup));
+    j.done();
+  }
+
+  group('run-pull.sh: hourly, but once a day is done, a run does nothing and says nothing');
+  {
+    const j = pullJob('twice');
+    j.go();
+    const logs = [j.pullLog().join('\n'), j.backupLog().join('\n')];
+    const r = j.go();
+    ok('the second run the same day exits 0 at once', r.code === 0 && r.out === '' && j.pulls().length === 1, r);
+    ok('...and writes no line anywhere', JSON.stringify([j.pullLog().join('\n'), j.backupLog().join('\n')]) === JSON.stringify(logs));
+    const next = j.go([], { today: '2026-09-25', stamp: '2026-09-25T13:30:40Z' });
+    ok('the next Eastern day pulls and backs up again', next.code === 0 && j.pulls().length === 2 && j.backupLog().length === 2, [next, j.pulls()]);
+    j.done();
+
+    // 22:00 in New York on the 23rd is 02:00Z on the 24th: that pull was yesterday's, not today's
+    const e = pullJob('evening');
+    e.w('data/fly/archive/pull.log', '2026-09-24T02:00:00Z ok hexagon-desk copied 0 files\n');
+    e.w('data/fly/archive/backup.log', '2026-09-24T13:00:00Z ok backup copied data/chains\n');
+    e.go();
+    ok('a pull line from 02:00Z is the Eastern day before: the pull runs', e.pulls().length === 1, e.pulls());
+    e.done();
+
+    const p = pullJob('lastfailed');
+    p.w('data/fly/archive/pull.log', '2026-09-24T13:31:16Z ok hexagon-desk copied 1 file\n2026-09-24T14:31:16Z PROBLEM hexagon-desk FAILED: could not list the box\n');
+    p.w('data/fly/archive/backup.log', '2026-09-24T14:31:20Z ok backup copied data/chains\n');
+    const pr = p.go([], { stamp: '2026-09-24T15:31:16Z' });
+    ok('an ok earlier in the day does not count when the last pull line is a PROBLEM: it pulls again', pr.code === 0 && p.pulls().length === 1, pr);
+    ok('...and the backup, already done today, is not done again', p.backupLog().length === 1, p.backupLog());
+    p.done();
+  }
+
+  group('run-pull.sh: the backup runs even when the pull fails, and a failed backup is its own problem');
+  {
+    const j = pullJob('pullfails');
+    const r = j.go([], { rc: 1, stamp: '2026-09-24T13:31:16Z' });
+    ok('exits with the pull\'s code, 1', r.code === 1, r);
+    ok('...but the chain tape was still backed up', fs.existsSync(path.join(j.backup, 'chains', 'chains-2026-09-23.jsonl')) && j.backupLog().length === 1, j.walk(j.backup));
+    ok("the pull's PROBLEM stays the last line of pull.log, not hidden by the backup", / PROBLEM hexagon-desk /.test(j.pullLog().slice(-1)[0]), j.pullLog());
+    const r2 = j.go([], { stamp: '2026-09-24T14:30:40Z' });
+    ok('the next hour pulls again, and does not back up twice', r2.code === 0 && j.pulls().length === 2 && j.backupLog().length === 1, [r2, j.backupLog()]);
+    j.done();
+
+    const n = pullJob('noicloud', { icloud: false });
+    const nr = n.go();
+    const last = n.pullLog().slice(-1)[0] || '';
+    ok('no iCloud Drive: the pull still counts, exit 0', nr.code === 0 && n.pulls().length === 1, nr);
+    ok('...and no fake iCloud folder is made on the Mac', !fs.existsSync(n.cloud), n.walk(path.join(n.root, 'home')));
+    ok('pull.log gets its own PROBLEM line, which does not say the box went unpulled', / PROBLEM backup run-pull\.sh: iCloud Drive is not at /.test(last) && !/NOT pulled/.test(last) && /Fly box pull is separate/.test(last), last);
+    ok('backup.log has the same PROBLEM', / PROBLEM backup /.test(n.backupLog()[0] || ''), n.backupLog());
+    fs.mkdirSync(n.cloud, { recursive: true });
+    const nr2 = n.go();
+    ok('the next hour: the pull (ok today) is skipped, the backup is tried again and goes through', nr2.code === 0 && n.pulls().length === 1 && / ok backup copied /.test(n.backupLog().slice(-1)[0]), [nr2, n.pulls(), n.backupLog()]);
+    ok("pull.log's last line says the backup is mended, so the daily check stops flagging it", / ok backup run-pull\.sh: the backup that failed above has gone through now$/.test(n.pullLog().slice(-1)[0]), n.pullLog());
+    ok('...and the pull check still reads past it to the pull line: the next run is quiet', n.go().out === '' && n.pulls().length === 1);
+    const bo = pullJob('backuponly-noicloud', { icloud: false });
+    ok('--backup-only exits non-zero when the backup fails (how install-pull.sh tests it)', bo.go(['--backup-only']).code === 1 && bo.pulls().length === 0);
+    bo.done();
+    n.done();
+  }
+
+  group('run-pull.sh: a dry run copies nothing and writes nothing, and always runs');
+  {
+    const j = pullJob('dry');
+    j.go();
+    const before = [j.pullLog().length, j.backupLog().length];
+    const r = j.go(['--dry-run']);
+    ok('the pull is asked for its plan even after a done day', r.code === 0 && j.pulls().slice(-1)[0] === '--trim --dry-run', [r, j.pulls()]);
+    ok('the backup only says what it would copy', /would copy data\/chains data\/options data\/fly\/archive to .*Hexagon-backup/.test(r.out), r.out);
+    ok('no line in either log', JSON.stringify([j.pullLog().length, j.backupLog().length]) === JSON.stringify(before));
+    j.done();
+  }
+}
+
+group('the schedule: every hour at :30, and the installer tests the backup from a bare environment');
+{
+  const plist = fs.readFileSync(path.join(__dirname, '..', 'ops', 'com.hexagon.pull.plist'), 'utf8');
+  const cal = plist.slice(plist.indexOf('<key>StartCalendarInterval</key>'));
+  const dict = cal.slice(0, cal.indexOf('</dict>') + 7);
+  ok('one calendar entry, Minute 30 and no Hour', /<key>StartCalendarInterval<\/key>\s*<dict>\s*<key>Minute<\/key>\s*<integer>30<\/integer>\s*<\/dict>/.test(dict) && !/<key>Hour<\/key>/.test(plist), dict);
+  const inst = fs.readFileSync(path.join(__dirname, '..', 'ops', 'install-pull.sh'), 'utf8');
+  ok('install-pull.sh runs the backup from env -i before installing', /env -i HOME="\$HOME"[^\n]*\\\n\s*\/bin\/bash "\$HEXDIR\/ops\/run-pull\.sh" --backup-only/.test(inst) && inst.indexOf('--backup-only') < inst.indexOf('launchctl load'), null);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

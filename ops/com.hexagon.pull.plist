@@ -15,27 +15,19 @@
     <string>__HEXDIR__/ops/run-pull.sh</string>
   </array>
 
-  <!-- Twice a day. The pull only copies Eastern days that are already over and only trims tapes
-       older than three of them, so a second run on a good day finds nothing to do; on a bad
-       morning (the Mac woke offline, Fly was down) it is the same-day retry. If the Mac is asleep
-       at a slot, launchd runs it when it wakes; if it is switched off, the slot is skipped.
-       Skipping a few days is harmless -- the box has about two weeks of room, and its own brake
+  <!-- Every hour at :30. ops/run-pull.sh exits at once, writing nothing, when pull.log and
+       backup.log already have an ok line dated today (Eastern), so a good day costs one real run
+       and the other slots are free retries. Until 2026-09-24 there were two slots, 09:30 and 13:30,
+       and 9 of the 21 runs from 09-15 failed: launchd starts a slot the Mac slept through in the next
+       brief battery DarkWake, the Mac falls back asleep within seconds, and the frozen run times out
+       hours later. launchd never starts a second copy while one is still running. If the Mac is
+       switched off, the slots are skipped; the box has about two weeks of room, and its own brake
        after that. -->
   <key>StartCalendarInterval</key>
-  <array>
-    <dict>
-      <key>Hour</key>
-      <integer>9</integer>
-      <key>Minute</key>
-      <integer>30</integer>
-    </dict>
-    <dict>
-      <key>Hour</key>
-      <integer>13</integer>
-      <key>Minute</key>
-      <integer>30</integer>
-    </dict>
-  </array>
+  <dict>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
 
   <!-- Not at login, and not kept alive: this is a daily chore, not a server. -->
   <key>RunAtLoad</key>

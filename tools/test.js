@@ -4,6 +4,7 @@
 // Each suite is a standalone script with its own exit code, so they can still be run one at a
 // time while working on one file. This just runs them all and refuses to be quiet about a failure.
 const { execFileSync } = require('child_process');
+const fs = require('fs');
 const path = require('path');
 
 const SUITES = [
@@ -40,12 +41,20 @@ const SUITES = [
   ['weather-lab', 'the weather lab: whole-degree settlement maths, the per-city fit, the answer never shown to the strategy'],
   ['favorites-check', 'the favourites check: the rule fixed in advance, Sports excluded, a four-part verdict'],
   ['fillcheck', "the fill check: a round read in the desk's order, the queue, restarts, the warm-up day, and what a missed fill is put down to"],
-  ['pnl-report', 'the P&L report: convergence, arbs and maker realised from the journals, the mind kept apart'],
+  ['pnl-report', 'the P&L report: convergence, arbs from every leg, maker realised from the journals, today from box-now'],
+  ['restarts', "the desk's lifecycle: START, STOP and CRASH in the journal, a restart nothing explains, and every reader passes them by"],
   ['lookout', 'the lookout page: the painted room, read-only, fed by the same stream as the floor'],
   ['themes', 'what a market is about: leagues off the series, the tickers that only look like one, and the page filter built on it'],
 ];
 
 let failed = 0, totalPassed = 0;
+// This is a list, not a glob, so each suite carries a line saying what it covers. The price is that
+// a new tools/<name>-test.js nobody adds here would never run and nothing would say so (2026-09-24:
+// the docs named 24 of the 36 suites and no one could tell from npm test). So a file with no entry
+// fails the run, and so does an entry with no file.
+const onDisk = fs.readdirSync(__dirname).filter((f) => /-test\.js$/.test(f)).map((f) => f.slice(0, -'-test.js'.length));
+const listed = new Set(SUITES.map(([name]) => name));
+for (const name of onDisk.filter((n) => !listed.has(n)).sort()) { failed++; console.log(`FAIL  ${name.padEnd(9)} tools/${name}-test.js exists but is not in SUITES in tools/test.js, so it never ran`); }
 for (const [name, what] of SUITES) {
   const file = path.join(__dirname, `${name}-test.js`);
   let out = '', code = 0;

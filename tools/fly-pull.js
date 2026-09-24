@@ -1,6 +1,6 @@
 'use strict';
 // Copy the Fly box's closed days down to the Mac, and -- only with --trim -- delete old tick tapes
-// from the box once the Mac copy is proven byte-identical.
+// and probe files from the box once the Mac copy is proven byte-identical.
 //
 // Why this exists: /data on hexagon-desk is a 1GB volume and the tick tape is 35-62MB per Eastern
 // day, so the box fills in about two weeks. A full disk does not just stop the tape; the journal
@@ -10,7 +10,7 @@
 // for when this has stopped running; that one deletes without a copy, which is why this should run.
 //
 //   node tools/fly-pull.js                     copy every closed day into data/fly/archive
-//   node tools/fly-pull.js --trim              ...then delete box tapes older than the newest 3 ET days
+//   node tools/fly-pull.js --trim              ...then delete box tapes and probes older than the newest 3 ET days
 //   node tools/fly-pull.js --trim --dry-run    print what it would copy and delete; change nothing
 //   flags: --app hexagon-desk   --dest data/fly/archive   --keep 3
 //
@@ -18,10 +18,16 @@
 //   - a file is copied only once its Eastern day is over (today's files are still being written);
 //   - a copy lands under a temp name and is renamed into place only after its sha256 matches the
 //     box's; a local file that differs and is NOT just an older, shorter copy is never overwritten;
-//   - a delete needs a ticks-*.jsonl outside the --keep window AND a local copy whose sha256
-//     equals the box's sha256 from this same run. Journals, whales, probes and state.json are
-//     never deleted, and neither is today's tape;
-//   - any failure before verification means no deletes at all this run. The trim can wait a day.
+//   - a delete needs a ticks-*.jsonl or probes-*.jsonl outside the --keep window AND a local copy
+//     whose sha256 equals the box's sha256 from this same run. Journals, whales and state.json are
+//     never deleted, and neither is anything of today's;
+//   - a copy that fails blocks the delete of its own file only; a listing it cannot vouch for, or a
+//     box that did not say its own date, means no deletes at all this run. The trim can wait a day.
+//
+// Probes joined the tapes on 2026-09-24: nothing on the box reads an old probes-*.jsonl (only
+// tools/replay.js and tools/history-scan.js do, on the Mac), and at 5-8 MB a day, never trimmed,
+// they had grown to about 50 MB of the box's 1 GB and took more of its free space every day, toward
+// the floor where the brake starts deleting tapes that never reached the Mac.
 //
 // data/fly/ itself is a frozen snapshot that the maker baselines point at; this writes only to
 // the archive folder under it and refuses a --dest of data/fly, however it is spelled.
@@ -36,7 +42,11 @@ const { execFileSync } = require('child_process');
 const { ET_DAY } = require('../src/recorder');
 
 const DATED = /^(ticks|journal|whales|probes)-(\d{4}-\d{2}-\d{2})\.jsonl$/;
-const TICKS = /^ticks-\d{4}-\d{2}-\d{2}\.jsonl$/;
+// what --trim may delete from the box once the Mac has it: the tapes and the probe files
+const TRIMMED = /^(ticks|probes)-(\d{4}-\d{2}-\d{2})\.jsonl$/;
+// a download that fails is tried this many times in all, each from an empty temp file: on 2026-09-23
+// an awake Mac lost the connection 80 MB into a 123 MB tape, and the next try would have been hours away
+const GET_TRIES = 3;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const HEX64 = /^[0-9a-f]{64}$/;
 const MB = 1024 * 1024;
@@ -64,7 +74,7 @@ function addDays(day, n) {
 //   open             names whose Eastern day is not over, left alone
 //   delete           [{ name, size, sha256 }] safe to delete now: archived, verified, old enough
 //   deleteAfterCopy  [{ name, size, sha256 }] safe once its copy verifies (what a dry run shows)
-//   keptOnBox        closed tick tapes inside the keep window
+//   keptOnBox        closed tick tapes and probe files inside the keep window
 //   cutoff           the oldest Eastern day whose tape stays on the box
 function planPull(boxFiles, localFiles, { todayET, keep = 3, trim = false } = {}) {
   if (!DAY.test(String(todayET))) throw new Error(`todayET must be YYYY-MM-DD, got ${todayET}`);
@@ -97,7 +107,7 @@ function planPull(boxFiles, localFiles, { todayET, keep = 3, trim = false } = {}
       plan.conflicts.push({ name: f.name, why: l.notPrefix ? 'the Mac copy differs and is not just an older, shorter copy of the box file' : 'the Mac copy differs and is not shorter than the box file' });
       state = 'conflict';
     }
-    if (kind !== 'ticks' || !TICKS.test(f.name)) continue;   // journals, whales, probes: never deleted
+    if ((kind !== 'ticks' && kind !== 'probes') || !TRIMMED.test(f.name)) continue;   // journals, whales: never deleted
     if (day >= cutoff) { plan.keptOnBox.push(f.name); continue; }
     if (!trim) continue;
     if (state === 'have') plan.delete.push(entry);
@@ -253,6 +263,9 @@ function runFly(fly, args, timeoutMs) {
   }
 }
 
+// A plain blocking wait between download tries; the whole run is synchronous already.
+const sleepMs = (ms) => { if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
+
 const pin = (app, machine) => ['-a', app, ...(machine ? ['--machine', machine] : [])];
 
 // Run a self-contained function on the box with `node -e` and read back its JSON. The source
@@ -296,7 +309,7 @@ function parseArgs(argv) {
 // Everything main does, with the clock and the fly binary passed in, returning the exit code
 // instead of exiting -- tools/disk-test.js drives it against a fake fly with a fixed date.
 // `root` is the checkout this file sits in; the tests point it at a made-up one.
-function run(argv, { now = () => new Date(), fly = findFly(), cwd = process.cwd(), out = console.log, err = console.error, root = path.join(__dirname, '..') } = {}) {
+function run(argv, { now = () => new Date(), fly = findFly(), cwd = process.cwd(), out = console.log, err = console.error, root = path.join(__dirname, '..'), pause = sleepMs, retryPauseMs = 30000 } = {}) {
   let opts;
   try { opts = parseArgs(argv); } catch (e) { err(`fly-pull: ${e.message}\n${USAGE}`); return 2; }
   if (opts.help) { out(USAGE); return 0; }
@@ -381,16 +394,21 @@ function run(argv, { now = () => new Date(), fly = findFly(), cwd = process.cwd(
     if (plan.open.length) out(`still being written today, left alone: ${plan.open.join(', ')}`);
     if (opts.trim) {
       const del = [...plan.delete, ...plan.deleteAfterCopy].sort(byName);
-      out(`would delete ${plural(del.length, 'tick tape')} / ${mb(del.reduce((a, f) => a + f.size, 0))} MB from the box${plan.deleteAfterCopy.length ? ', each only after its copy verifies' : ''}`);
+      out(`would delete ${plural(del.length, 'tape or probe file')} / ${mb(del.reduce((a, f) => a + f.size, 0))} MB from the box${plan.deleteAfterCopy.length ? ', each only after its copy verifies' : ''}`);
       for (const f of del) out(`  ${f.name.padEnd(26)} ${mb(f.size).padStart(7)} MB`);
-      out(`kept on the box: tapes from ${plan.cutoff} on${plan.keptOnBox.length ? ` (${plan.keptOnBox.join(', ')})` : ''}, today's tape, and every journal, whales and probes file`);
+      out(`kept on the box: tapes and probes from ${plan.cutoff} on${plan.keptOnBox.length ? ` (${plan.keptOnBox.join(', ')})` : ''}, today's files, and every journal and whales file`);
     }
     return finish(problems.length ? `dry run found ${plural(problems.length, 'problem')}; nothing was changed` : 'dry run: nothing was changed');
   }
 
-  // 3. copy: download under a temp name, check the sha256, check the prefix if replacing, rename
-  let copied = 0, copiedBytes = 0, copyFailed = false;
-  const notPrefix = new Set();
+  // 3. copy: download under a temp name, check the sha256, check the prefix if replacing, rename.
+  // A copy that fails blocks only its own file's delete (2026-09-24). It used to stop every delete in
+  // the run, so one dropped download of the newest tape kept older tapes the Mac already had on the
+  // box: ticks-09-19 and 09-20 stayed there from 09-22 to a hand run on 09-23, box free fell to
+  // 410.9 MB. Safe because a failed name is kept out of the re-plan below, and the delete loop
+  // re-hashes every Mac copy against the box's sha256 before any rm anyway.
+  let copied = 0, copiedBytes = 0, prepFailed = false;
+  const notPrefix = new Set(), failedCopy = new Set();
   if (plan.copy.length) {
     try {
       fs.mkdirSync(dest, { recursive: true });
@@ -398,16 +416,28 @@ function run(argv, { now = () => new Date(), fly = findFly(), cwd = process.cwd(
       for (const n of fs.readdirSync(dest)) {
         if (/^\.(ticks|journal|whales|probes)-\d{4}-\d{2}-\d{2}\.jsonl\.\d+\.part$/.test(n)) { try { fs.unlinkSync(path.join(dest, n)); } catch { /* next run */ } }
       }
-    } catch (e) { copyFailed = true; problem(`could not prepare ${shown}: ${e.message}`); }
+    } catch (e) { prepFailed = true; problem(`could not prepare ${shown}: ${e.message}`); }
   }
-  for (const f of copyFailed ? [] : plan.copy) {
+  for (const f of prepFailed ? [] : plan.copy) {
     const final = path.join(dest, f.name);
     const tmp = path.join(dest, `.${f.name}.${process.pid}.part`);
     try {
-      try { fs.unlinkSync(tmp); } catch { /* not there: good, fly refuses to overwrite */ }
-      runFly(fly, ['ssh', 'sftp', 'get', '-q', ...pin(opts.app, machine), `${BOX_DIR}/${f.name}`, tmp], 30 * 60000);
-      const got = sha256File(tmp);
-      if (got !== f.sha256) throw new Error(`the download's sha256 does not match the box's (${got.slice(0, 12)}… vs ${f.sha256.slice(0, 12)}…)`);
+      // each try starts from nothing: fly refuses to overwrite, and a half-written temp file is
+      // just removed rather than resumed (a byte-offset resume over `fly ssh console` would trust
+      // its stdout to be byte-clean, which nothing promises)
+      for (let attempt = 1; ; attempt++) {
+        try { fs.unlinkSync(tmp); } catch { /* not there: good */ }
+        try {
+          runFly(fly, ['ssh', 'sftp', 'get', '-q', ...pin(opts.app, machine), `${BOX_DIR}/${f.name}`, tmp], 30 * 60000);
+          const got = sha256File(tmp);
+          if (got !== f.sha256) throw new Error(`the download's sha256 does not match the box's (${got.slice(0, 12)}… vs ${f.sha256.slice(0, 12)}…)`);
+          break;
+        } catch (e) {
+          if (attempt >= GET_TRIES) throw e;
+          out(`  retry    ${f.name.padEnd(26)} try ${attempt} of ${GET_TRIES} failed (${e.message}); trying again`);
+          pause(retryPauseMs);
+        }
+      }
       if (f.reason === 'partial' && !isBytePrefix(final, tmp)) {
         fs.unlinkSync(tmp);
         notPrefix.add(f.name);
@@ -419,16 +449,16 @@ function run(argv, { now = () => new Date(), fly = findFly(), cwd = process.cwd(
       out(`  copied   ${f.name.padEnd(26)} ${mb(f.size).padStart(7)} MB  sha256 matches the box`);
     } catch (e) {
       try { fs.unlinkSync(tmp); } catch { /* never got that far */ }
-      copyFailed = true;
-      problem(`${f.name}: copy failed: ${e.message}`);
+      failedCopy.add(f.name);
+      problem(`${f.name}: copy failed after ${GET_TRIES} tries: ${e.message}; not deleted from the box`);
     }
   }
 
-  // 4. trim. Only when nothing before verification failed (a known conflict blocks just its own
-  // file), and re-planned against hashes read fresh off the Mac's disk -- not against what the
-  // copy loop believes it wrote.
+  // 4. trim. Only when the listing itself can be trusted (a known conflict or a failed copy blocks
+  // just its own file), and re-planned against hashes read fresh off the Mac's disk -- not against
+  // what the copy loop believes it wrote.
   let deleted = 0, deletedBytes = 0, freeAfter = freeBefore;
-  if (opts.trim && (copyFailed || plan.errors.length || !boxToday)) {
+  if (opts.trim && (prepFailed || plan.errors.length || !boxToday)) {
     out('not deleting anything from the box this run: something before verification failed');
   } else if (opts.trim && plan.delete.length + plan.deleteAfterCopy.length && !machine) {
     // the app has one machine today; if that ever changes, an unpinned rm could land on a machine
@@ -440,9 +470,10 @@ function run(argv, { now = () => new Date(), fly = findFly(), cwd = process.cwd(
       const fresh = readLocal().map((f) => (notPrefix.has(f.name) ? { ...f, notPrefix: true } : f));
       plan2 = planPull(box.files, fresh, { todayET, keep: opts.keep, trim: true });
     } catch (e) { problem(`could not re-read ${shown} before trimming, so nothing was deleted: ${e.message}`); }
-    for (const f of plan2 ? plan2.delete : []) {
+    for (const f of plan2 ? plan2.delete.filter((x) => !failedCopy.has(x.name)) : []) {
       // belt and braces on the one irreversible step: the exact name shape, the window, the hash
-      if (!TICKS.test(f.name) || f.name.slice(6, 16) >= plan2.cutoff) { problem(`${f.name}: refused to delete, not an old tick tape`); continue; }
+      const tm = TRIMMED.exec(f.name);
+      if (!tm || tm[2] >= plan2.cutoff) { problem(`${f.name}: refused to delete, not an old tape or probe file`); continue; }
       let localSha = null;
       try { localSha = sha256File(path.join(dest, f.name)); } catch { /* reported below */ }
       if (localSha !== f.sha256) { problem(`${f.name}: not deleted, the Mac copy does not match the box's sha256`); continue; }
