@@ -224,7 +224,7 @@ ok('the signals count is filtered', /\(S\.signals \|\| \[\]\)\.filter\(inTheme\)
 ok('the feed and the bubbles over the floor are filtered', /if \(!feedKeeps\(e\)\) \{ hidden\+\+; continue; \}/.test(app) && /!seenKeys\.has\(logKey\(e\)\) && feedKeeps\(e\)/.test(app));
 ok('a line that names no market is never hidden by a filter', /const feedKeeps = \(e\) => !theme \|\| !e\.theme \|\| e\.theme === theme;/.test(app));
 ok('the page does not classify anything itself: the desk stamps each line as it writes it', /lineTheme\(text, refs\)/.test(engine) && /if \(theme\) entry\.theme = theme;/.test(engine));
-ok('a line is classified once, at write time, not on every snapshot', engine.indexOf('lineTheme(text, refs)') < engine.indexOf('snapshot() {'));
+ok('a line is classified once, at write time, not on every snapshot', engine.indexOf('lineTheme(text, refs)') < engine.indexOf('snapshot({ histories = true } = {}) {'));
 ok('the phone card is filtered', /m\.quoting && inTheme\(m\)/.test(app));
 ok('an unstamped market is only ever hidden by a filter, never by default', /const inTheme = \(x\) => !theme \|\| \(x && x\.theme\) === theme;/.test(app));
 ok('the feed says how many lines the filter took out', /other line\$\{hidden === 1 \? '' : 's'\} hidden/.test(app));

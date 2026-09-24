@@ -11,6 +11,7 @@ const { Engine } = require('./src/engine');
 const { actionRefusal, rebindRefusal, routeAsk } = require('./src/ask');
 const chaintape = require('./src/chaintape');
 const { crashRecord } = require('./src/journal');
+const sse = require('./src/sse');
 
 if (cfg.mode === 'live') {
   const problems = [];
@@ -274,6 +275,9 @@ function handle(req, res) {
   }
   if (p === '/api/trades') return json(res, engine.state.closed);
   if (p === '/api/volume') return json(res, engine.volume.entries());
+  // The two P&L histories the stream leaves out (engine.snapshot): the page fetches them once a
+  // minute instead of being resent 295 KB of them every two seconds.
+  if (p === '/api/history') return json(res, engine.pnlHistory());
   // The Stocks and Options tabs. Read-only, off the tape on disk rather than the engine: the desk
   // does not trade these and nothing here touches a position. It reads only the tail of the newest
   // file (src/chaintape.js), so it stays cheap as the tape grows, and it answers with ok:false
@@ -284,11 +288,12 @@ function handle(req, res) {
   }
   if (p === '/api/positions') return json(res, engine.state.positions);
   if (p === '/api/log') return json(res, engine.state.log);
+  // The snapshot without its histories, gzipped when the browser takes it (src/sse.js).
   if (p === '/api/stream') {
-    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
-    res.write(`data: ${JSON.stringify(engine.snapshot())}\n\n`);
-    clients.add(res);
-    req.on('close', () => clients.delete(res));
+    const client = sse.openStream(req, res);
+    client.send(sse.frame(engine.snapshot({ histories: false })));
+    clients.add(client);
+    req.on('close', () => { clients.delete(client); client.close(); });
     return;
   }
   const rel = p === '/' ? '/index.html' : p;
@@ -314,8 +319,8 @@ const server = http.createServer((req, res) => {
 
 setInterval(() => {
   if (!clients.size) return;
-  const payload = `data: ${JSON.stringify(engine.snapshot())}\n\n`;
-  for (const c of clients) c.write(payload);
+  const payload = sse.frame(engine.snapshot({ histories: false }));
+  for (const c of clients) c.send(payload);
 }, 2000);
 
 // Loopback by default: /api/positions and the whole activity log are unauthenticated, and on a

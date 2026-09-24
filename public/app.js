@@ -1730,7 +1730,7 @@
 
   function chartPoints() {
     const M = S.maker || {};
-    const pts = combinePnlHistory(S.balanceHistory, M.hist, S.initial, M.historyValidFrom || 0);
+    const pts = combinePnlHistory(pnlHist.balanceHistory, pnlHist.makerHist, S.initial, pnlHist.historyValidFrom);
     if (!pts.length) return [];
     // End on the live combined value so the line is never stale.
     const makerLive = Number.isFinite(M.equity) && Number.isFinite(M.initial) ? M.equity - M.initial : 0;
@@ -1785,6 +1785,23 @@
     try { const r = await fetch('/api/volume'); if (r.ok) volume = await r.json(); } catch { /* the chart is just without bars */ }
   }
   loadVolume(); setInterval(loadVolume, 30000);
+  // The two P&L histories the chart and the wall's "Today" are drawn from: the account's balance and
+  // the maker's one-minute equity. They used to ride in every 2-second frame, 295 KB of a 494 KB one
+  // on the box (2026-09-24), resent to every open tab for series that gain a point a minute. Now
+  // the stream leaves them out and they are fetched here once a minute; the live end of every
+  // curve still comes from the frame. The first answer redraws at once if a frame is already in,
+  // rather than leaving the chart empty until the next one.
+  let pnlHist = { balanceHistory: [], makerHist: [], historyValidFrom: 0 };
+  async function loadHistory() {
+    try {
+      const r = await fetch('/api/history');
+      if (!r.ok) return;
+      const h = await r.json(), first = !pnlHist.loaded;
+      pnlHist = { balanceHistory: h.balanceHistory || [], makerHist: h.makerHist || [], historyValidFrom: h.historyValidFrom || 0, loaded: true };
+      if (first && lastFrameAt) render();
+    } catch { /* the chart keeps the history it had */ }
+  }
+  loadHistory(); setInterval(loadHistory, 60000);
   // the button shows the chart you have; the tip says what a click turns it into
   const TYPE_ICON = {
     candles: '<svg viewBox="0 0 16 16" width="1.1em" height="1.1em" aria-hidden="true"><path d="M4.5 1.5v13M11.5 3v10" stroke="currentColor" stroke-width="1.3"/><rect x="2.5" y="4.5" width="4" height="6" fill="currentColor"/><rect x="9.5" y="5.5" width="4" height="5" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>',
@@ -2152,7 +2169,7 @@
       const M = S.maker || {};
       const live = Number.isFinite(M.equity) && Number.isFinite(M.initial) && Number.isFinite(M.realized)
         ? [{ t: S.now, c: M.realized, e: r2(M.equity - M.initial) }] : [];
-      const swing = plot.swing = paperSwing([...(M.hist || []), ...live], slots, candles, M.historyValidFrom || 0, paperSkew(M));
+      const swing = plot.swing = paperSwing([...pnlHist.makerHist, ...live], slots, candles, pnlHist.historyValidFrom, paperSkew(M));
       // a slot with nothing to say yet is left blank (a time with no value), not drawn at zero
       const at = (i) => slots[i].t / 1000 + off;
       plot.mh.setData(slots.map((p, i) => (mom[i] && mom[i].h != null ? { time: at(i), value: mom[i].h, color: mom[i].h >= 0 ? MOM.up : MOM.down } : { time: at(i) })));
@@ -2376,7 +2393,7 @@
     // Today, specifically: the account's own curve since midnight EASTERN -- the desk's own day,
     // the one TESS's drawdown limit and every journal file roll on -- not the browser's. Day 10 and
     // an all-time number said nothing about whether this morning went well.
-    const curve = combinePnlHistory(S.balanceHistory, M.hist, S.initial ?? 0, M.historyValidFrom || 0);
+    const curve = combinePnlHistory(pnlHist.balanceHistory, pnlHist.makerHist, S.initial ?? 0, pnlHist.historyValidFrom);
     const opened = curve.filter((p) => p.t <= etMidnight(S.now)).pop();
     const today = curve.length && opened ? r2(curve[curve.length - 1].v - opened.v) : null;
     const stat = (label, v, cls) => `<div class="${cls || ''}"><dt>${label}</dt><dd class="${v >= 0 ? 'pos' : 'neg'}">${signed(v)}</dd></div>`;

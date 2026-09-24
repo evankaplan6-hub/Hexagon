@@ -1069,6 +1069,34 @@ const position = (over = {}) => ({
     ok('...and the pair is back in balance and no longer stuck', leg(S, 'KS').qty === 127 && leg(S, 'PM').qty === 127 && !leg(S, 'KS').orphan && leg(S, 'KS').orphanQty === undefined, S.state.positions);
   }
 
+  group('the stream frame leaves the P&L histories out, and /api/history has them');
+  {
+    // The box on 2026-09-24: 5,000 one-minute maker samples (277 KB) and a long balance history,
+    // resent in full to every open tab every two seconds.
+    const E = engine();
+    const t0 = Date.now() - 5000 * 60000;
+    E.state.maker = { ...(E.state.maker || {}), hist: Array.from({ length: 5000 }, (_, i) => ({ t: t0 + i * 60000, c: i / 100, m: 12.34, e: i / 50 })), historyValidFrom: t0 + 60000 };
+    E.state.balanceHistory = Array.from({ length: 2400 }, (_, i) => ({ t: t0 + i * 125000, b: 10000 + i / 10 }));
+    const slim = E.snapshot({ histories: false });
+    ok('the stream frame has no maker hist', slim.maker && !('hist' in slim.maker), slim.maker && Object.keys(slim.maker));
+    ok('...and no balanceHistory', !('balanceHistory' in slim), Object.keys(slim));
+    ok('...but still says where the maker history starts being right', slim.maker.historyValidFrom === t0 + 60000, slim.maker.historyValidFrom);
+    ok('...and is a fraction of the full one', JSON.stringify(slim).length * 4 < JSON.stringify(E.snapshot()).length, [JSON.stringify(slim).length, JSON.stringify(E.snapshot()).length]);
+    const full = E.snapshot();
+    ok('/api/state (the full snapshot) keeps both, for the tools that read it', full.maker.hist.length === 5000 && full.balanceHistory.length > 0, [full.maker.hist && full.maker.hist.length, full.balanceHistory && full.balanceHistory.length]);
+    const h = E.pnlHistory();
+    ok('/api/history carries all 5000 maker samples', Array.isArray(h.makerHist) && h.makerHist.length === 5000 && h.makerHist[4999].e === 4999 / 50, h.makerHist && h.makerHist.length);
+    ok('...where they start being right', h.historyValidFrom === t0 + 60000, h.historyValidFrom);
+    ok('...and the same thinned balance history the full snapshot has (about 600 points, the newest kept)',
+      JSON.stringify(h.balanceHistory) === JSON.stringify(full.balanceHistory) && h.balanceHistory.length <= 601 && h.balanceHistory[h.balanceHistory.length - 1].t === t0 + 2399 * 125000, h.balanceHistory.length);
+    const bare = engine();
+    bare.state.balanceHistory = E.state.balanceHistory.slice(0, 50);
+    ok('a short balance history is sent whole', bare.pnlHistory().balanceHistory.length === 50, bare.pnlHistory().balanceHistory.length);
+    bare.state.balanceHistory = [];
+    const hb = bare.pnlHistory();
+    ok('a desk with no maker history yet answers empty, not undefined', Array.isArray(hb.makerHist) && hb.makerHist.length === 0 && hb.historyValidFrom === 0 && Array.isArray(hb.balanceHistory), hb);
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

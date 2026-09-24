@@ -1076,18 +1076,21 @@ class Engine {
   }
 
   // ---------------------------------------------------------------- snapshot for the UI
-  snapshot() {
+  // The two P&L histories -- the account's balanceHistory and the maker's one-minute `hist` -- are
+  // the long, slow part of this: on the box on 2026-09-24 they were 295 KB of a 494 KB snapshot that
+  // /api/stream resent to every open tab every two seconds, about 21 GB a day per tab, for series
+  // that gain one point a minute. { histories: false } leaves both out; the stream sends that, and
+  // the page reads them from /api/history (pnlHistory() below) once a minute. /api/state stays whole.
+  snapshot({ histories = true } = {}) {
     const now = Date.now();
     const s = this.state;
     const equity = this.equity();
     // each computed once: the scorecard, the maker's book and the P&L that reads both
     const arbGroups = this.arbScorecard();
-    const maker = this.maker.snapshot(this);
+    const maker = this.maker.snapshot(this, { hist: histories });
     const pnl = this.pnlScorecard(arbGroups, maker);
     const unrealized = r2(s.positions.reduce((a, p) => a + (p.qty * (p.mark ?? p.entry) - p.cost), 0));
     const deployed = r2(s.positions.reduce((a, p) => a + p.qty * (p.mark ?? p.entry), 0));
-    let hist = s.balanceHistory;
-    if (hist.length > 600) { const k = Math.ceil(hist.length / 600); hist = hist.filter((_, i) => i % k === 0 || i === hist.length - 1); }
     const pairs = this.pairs.filter((p) => p.q).map((p) => ({
       id: p.id, label: p.label, kind: p.kind, series: p.series, category: p.category || null, theme: this.themeFor(p), inPlay: !!p.inPlay, startsAt: p.startsAt || null,
       closesAt: p.closesAt || null, watchOnly: p.watchOnly || null,
@@ -1168,7 +1171,7 @@ class Engine {
       closed: s.closed.slice(-80).map((c) => ({ t: c.exitAt, pnl: c.pnl, label: c.label, reason: c.reason, strategy: c.strategy })),
       takerFills: takerFills.slice(0, 120),
       log: s.log.slice(0, 150),
-      balanceHistory: hist,
+      ...(histories ? { balanceHistory: thinHistory(s.balanceHistory) } : {}),
       // `thinking` is a live state the floor can draw: a desk with a Claude turn open right now.
       // It is deliberately separate from `active`, which means the desk's engine step is current.
       agents: AGENTS.map((a) => ({ ...a, ...this.agentStatus[a.key], active: now - this.agentStatus[a.key].lastActive < 4000, thinking: this.brain.thinking(a.key) })),
@@ -1193,6 +1196,21 @@ class Engine {
         makerMarkets: this.cfg.makerMarkets, makerMinTradesPerDay: this.cfg.makerMinTradesPerDay },
     };
   }
+
+  // The histories the stream leaves out, for /api/history: the same thinned account series and the
+  // maker's whole one-minute series the full snapshot carries, so a chart drawn from either agrees.
+  pnlHistory() {
+    const mk = this.maker && this.maker.history ? this.maker.history(this) : { hist: [], historyValidFrom: 0 };
+    return { balanceHistory: thinHistory(this.state.balanceHistory), makerHist: mk.hist, historyValidFrom: mk.historyValidFrom };
+  }
+}
+
+// The account's balance history, thinned to about 600 points for the page: every k-th sample and
+// always the newest.
+function thinHistory(h) {
+  if (h.length <= 600) return h;
+  const k = Math.ceil(h.length / 600);
+  return h.filter((_, i) => i % k === 0 || i === h.length - 1);
 }
 
 module.exports = { Engine, AGENTS };
