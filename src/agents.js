@@ -11,6 +11,7 @@
 //   BRAM  pricing    — fair value + signals (locked arbs, convergence gaps)
 //   KETT  execution  — turns signals into fills within TESS's budget
 const ks = require('./venues/kalshi');
+const pm = require('./venues/polymarket');
 const { matchPairs } = require('./matcher');
 const http = require('./http');
 const decide = require('./decide');
@@ -242,8 +243,15 @@ async function RIGO(E) {
     // A stuck leg -- one whose exit failed or went unfilled -- is naked directional risk sitting
     // in the book. Retry it every cycle at the current mark, ahead of any strategy logic, until
     // it clears. Nothing here waits for a signal or a threshold.
+    // A leg left short by an arb unwind owes only the contracts its partner already sold
+    // (`orphanQty`); the rest of it is still hedged, and selling that too would break the pair.
     if (pos.orphan) {
-      await E.close(pos, q ? E.markPrice(pos, q) : (pos.mark ?? pos.entry), `retry flatten of stuck leg (attempt ${(pos.exitSeq || 0) + 1})`);
+      const owe = pos.orphanQty > 0 ? Math.min(pos.orphanQty, pos.qty) : pos.qty;
+      const r = await E.close(pos, q ? E.markPrice(pos, q) : (pos.mark ?? pos.entry), `retry flatten of stuck leg (attempt ${(pos.exitSeq || 0) + 1})`, false, owe);
+      if (pos.orphanQty > 0) {
+        const got = (r && r.sold) || 0;
+        if (got >= owe) { pos.orphan = false; delete pos.orphanQty; } else if (got) pos.orphanQty = owe - got;
+      }
       continue;
     }
     const intent = decide.exitIntent(pos, pair, E.cfg, Date.now());
@@ -259,12 +267,37 @@ async function RIGO(E) {
         [{ id: pos.id, g: pos.group || pos.id, label: String(pos.label || '') }]);
     }
   }
-  // locked arbs: if both legs' bids sum past $1 by more than the exit fee, take the early exit
+  // Locked arbs: if both legs' bids sum past $1 by more than the exit fee, take the early exit --
+  // but only on what the live books will pay, and one leg at a time (2026-09-24). The marks alone
+  // said "+$1.38 over holding" on the Debut arb (09-23); the Kalshi leg sold, the Polymarket leg had
+  // no bid within 1c for 45 minutes, and the group made -$8.75 against +$1.52 held. So the marks
+  // only say "look": both exit ladders are read (at most once a minute a group), decide.arbUnwindLive
+  // sizes the unwind to what both can absorb, the thinner leg sells first without being flagged
+  // stuck if it falls short, and the other leg sells exactly what the first one did. A first leg
+  // that sells nothing leaves the arb whole.
   const groups = new Map();
   for (const p of E.state.positions) if (p.strategy === 'arb') (groups.get(p.group) || groups.set(p.group, []).get(p.group)).push(p);
-  for (const [, legs] of groups) {
+  for (const [g, legs] of groups) {
     const u = decide.arbUnwind(legs, E.cfg);
-    if (u) for (const l of legs) await E.close(l, l.mark, u.reason);
+    if (!u || typeof E.exitLadder !== 'function') continue;
+    if (legs.some((l) => l.orphan || l.pendingExit)) continue;   // a stuck leg is the retry's, above
+    if (!E.due(`arb-unwind-${g}`, 60)) continue;
+    const ladders = await Promise.all(legs.map((l) => E.exitLadder(l)));
+    const plan = decide.arbUnwindLive(legs, ladders, E.cfg);
+    if (!plan) {
+      if (E.due(`arb-unwind-pass-${g}`, 600)) E.log('RIGO', 'PASS', null, `${legs[0].label}: marks sum ${u.bidSum.toFixed(3)}, but ${ladders.every(Array.isArray) ? 'the live books do not pay that for 5 or more' : 'a book to sell into could not be read'} · holding the arb`);
+      continue;
+    }
+    const first = legs[plan.first], second = legs[1 - plan.first];
+    const a = await E.close(first, first.mark, plan.reason, false, plan.qty, { unwind: true });
+    const sold = (a && a.sold) || 0;
+    if (!sold) {
+      E.log('RIGO', 'PASS', null, `${first.label}: early unwind stopped, the ${VEN[first.venue]} leg sold nothing · both legs kept, still hedged`);
+      continue;
+    }
+    const b = await E.close(second, second.mark, plan.reason, false, sold);
+    const got = (b && b.sold) || 0;
+    if (got < sold && E.state.positions.includes(second)) { second.orphan = true; second.orphanQty = sold - got; }
   }
   E.touch('RIGO', `${marked} marked · ${E.state.positions.length} open`);
   if (E.due('rigo-log', 300) && E.state.positions.length) {
@@ -413,6 +446,24 @@ async function KETT(E) {
       }
       if (mind) sizeMult = mind.stance === 'converging' ? 1 : E.cfg.baseSizeMult;
       else sizeMult = b && b.reliable && b.score >= 0.5 ? 1 : E.cfg.baseSizeMult;
+    }
+
+    // A snipe buys only a game Polymarket has actually finished (2026-09-24). Its 99c/1.00 reading
+    // is not a settlement: NC State v Vanderbilt read 0.99/1 for 2m15s on 2026-09-19 with Kalshi at
+    // 94/96, then traded back to 4c, and NC State lost -- 100 bought at 96c. Polymarket's own market
+    // record has to say closed or resolved. Not "not accepting orders" alone, which a paused market
+    // also says, and not the listing having dropped the pair (pmGone), which it also does to live
+    // games. A lookup that fails is a pass; the signal stays alive for SNIPE_HOLD_SEC and asks again
+    // next cycle. One Gamma call, only on the rare cycle a snipe signal exists.
+    if (s.type === 'snipe') {
+      const m = await pm.fetchMarket(s.pair.pm.id).catch(() => null);
+      if (standDown(E)) return;
+      const yesPx = m && Array.isArray(m.prices) ? m.prices[s.pair.pm.tokenIndex || 0] : null;
+      const against = Number.isFinite(yesPx) && (s.won === 'yes' ? yesPx < 0.5 : yesPx > 0.5);
+      if (!(m && (m.closed || m.resolved)) || against) {
+        if (E.due(`snipe-open-${s.pair.id}`, 60)) E.log('KETT', 'PASS', null, `${s.pair.label}: Polymarket reads ${s.won.toUpperCase()} at 99c but ${!m ? 'its market record could not be read' : against ? 'its market record says the other side' : 'has not closed the market'} · not a settlement yet`);
+        continue;
+      }
     }
 
     // real books at size — and for directional trades, re-verify the gap from live books on BOTH venues

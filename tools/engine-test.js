@@ -902,7 +902,10 @@ const position = (over = {}) => ({
 
   for (const d of dirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch {} }
   group('the settlement snipe goes through KETT as a one-leg Kalshi buy');
-  {
+  const pmvSnipe = require('../src/venues/polymarket');
+  const realFetchMarket = pmvSnipe.fetchMarket;
+  pmvSnipe.fetchMarket = async (id) => ({ id, closed: true, resolved: true, prices: [1, 0], tokenIds: ['t0', 't1'] });   // Polymarket has really closed it
+  try {
     const E = engine({ snipe: true, snipeMaxQty: 100 });
     E.halt = null;   // TESS has not run; the existing KETT cases clear this the same way
     const now = Date.now();
@@ -932,6 +935,138 @@ const position = (over = {}) => ({
     const q = E3.quote(kept);
     ok('the kept pair quotes: Polymarket\'s last 99/100, Kalshi\'s new 85/88, with Kalshi\'s own time and sizes', q && q.pmBid === 0.99 && q.pmAsk === 1 && q.ksBid === 0.85 && q.ksAsk === 0.88 && q.ksAt === now + 15000 && q.ksAskSize === 70 && q.pmAt === now, q);
     ok('...and it still says snipe', (decide.snipeSignal({ ...kept, q }, E3.cfg, now + 15000) || {}).type === 'snipe');
+  } finally { pmvSnipe.fetchMarket = realFetchMarket; }
+
+  group('a snipe buys only once Polymarket has closed the market: 99c is a reading, not a settlement');
+  {
+    // NC State v Vanderbilt, 2026-09-19 20:13:14Z: Polymarket 0.99/1 with Kalshi 0.94/0.96. It held
+    // for 2m15s, traded back to 0.86 and 0.04, and NC State lost (Kalshi finalized "no").
+    const pmv = require('../src/venues/polymarket');
+    const real = pmv.fetchMarket;
+    const now = Date.now();
+    const ncst = () => ({ id: 'pmNC:0|KXNCAAFGAME-26SEP19NCSTVAN-NCST', label: 'NCAAF NC State v Vanderbilt · NC State', kind: 'game', series: 'KXNCAAFGAME', inPlay: true, startsAt: now - 3 * 3600000,
+      pm: { id: 'pmNC', tokenIndex: 0 }, ks: { ticker: 'KXNCAAFGAME-26SEP19NCSTVAN-NCST' },
+      q: { pmBid: 0.99, pmAsk: 1, ksBid: 0.94, ksAsk: 0.96, pmMid: 0.995, ksMid: 0.95, pmVol: 1e6, ksVol: 1e6, pmFeeRate: 0.05, t: now, pmAt: now, ksAt: now, ksBidSize: 300, ksAskSize: 300 } });
+    const run = async (market) => {
+      const E = engine({ snipe: true, snipeMaxQty: 100 });
+      E.halt = null;
+      const pair = ncst();
+      E.pairs = [pair];
+      E.signals = [decide.snipeSignal(pair, E.cfg, now)];
+      let asked = 0;
+      pmv.fetchMarket = async (id) => { asked++; if (market instanceof Error) throw market; return market && { id, tokenIds: ['t0', 't1'], ...market }; };
+      E.book = async () => ({ asks: [{ price: 0.96, size: 500 }], yesBid: 0.94, yesAsk: 0.96 });
+      await KETT(E);
+      return { E, asked, signal: E.signals[0] };
+    };
+    try {
+      const open = await run({ closed: false, resolved: false, accepting: true, prices: [0.995, 0.005] });
+      ok('the row fires the signal at 96c (the pure gates alone would buy it)', open.signal && open.signal.type === 'snipe' && open.signal.legs[0].px === 0.96, open.signal);
+      ok('Polymarket still open: nothing bought', open.asked === 1 && open.E.state.positions.length === 0 && open.E.state.cash === 10000, open.E.state.positions);
+      const paused = await run({ closed: false, resolved: false, accepting: false, prices: [0.995, 0.005] });
+      ok('not accepting orders alone is a pause, not a result: nothing bought', paused.E.state.positions.length === 0, paused.E.state.positions);
+      const failed = await run(new Error('gamma down'));
+      ok('a lookup that fails is a pass', failed.E.state.positions.length === 0 && failed.E.state.cash === 10000);
+      const other = await run({ closed: true, resolved: true, prices: [0, 1] });
+      ok('closed with the other side winning: nothing bought', other.E.state.positions.length === 0, other.E.state.positions);
+      const done = await run({ closed: true, resolved: false, prices: [1, 0] });
+      const pos = done.E.state.positions[0];
+      ok('closed on Polymarket: the snipe buys, 100 at 96c', pos && pos.strategy === 'snipe' && pos.qty === 100 && pos.entry === 0.96, pos);
+    } finally { pmv.fetchMarket = real; }
+  }
+
+  group('a held Polymarket leg with no pair is priced from the CLOB, not from Gamma');
+  {
+    const pmv = require('../src/venues/polymarket');
+    const real = pmv.fetchPrices;
+    let asked = [];
+    pmv.fetchPrices = async (toks) => { asked = [...toks].sort(); return new Map([['z0', { bid: 0.78, ask: 0.80 }], ['p0', { bid: 0.40, ask: 0.42 }]]); };
+    try {
+      const E = engine();
+      // Gamma's price for the Debut NO leg's market: 0.72/0.73 on the YES token, so the NO sells at 0.27
+      E.quotes.pm.set('pz', { id: 'pz', tokenIds: ['z0', 'z1'], bestBid: 0.72, bestAsk: 0.73, at: 1 });
+      E.quotes.pm.set('pp', { id: 'pp', tokenIds: ['p0', 'p1'], bestBid: 0.30, bestAsk: 0.31, at: 1 });
+      E.pairs = [{ id: 'paired', pm: { id: 'pp', tokenId: 'p0', tokenIndex: 0 }, ks: { ticker: 'KXP' } }];
+      E.state.positions = [
+        position({ id: 'gone-pm', pairId: 'gone', venue: 'PM', pmId: 'pz', tokenIndex: 0, side: 'no', strategy: 'arb' }),
+        position({ id: 'held-pm', pairId: 'paired', venue: 'PM', pmId: 'pp', tokenIndex: 0, side: 'yes', strategy: 'arb' }),
+      ];
+      const before = E.venueMark(E.state.positions[0]);
+      await E.refreshPmPairPrices();
+      ok('the pairless leg\'s token is asked for, once, alongside the pairs\'', JSON.stringify(asked) === JSON.stringify(['p0', 'z0']), asked);
+      const m = E.quotes.pm.get('pz');
+      ok('its market takes the CLOB price, stamped now', m.bestBid === 0.78 && m.bestAsk === 0.80 && m.at > 1, m);
+      ok('...so the NO leg now marks at 20c, not Gamma\'s 27c', before === 0.27 && E.venueMark(E.state.positions[0]) === 0.2, { before, after: E.venueMark(E.state.positions[0]) });
+      ok('a leg whose pair is priced is priced through the pair, as before', E.quotes.pm.get('pp').bestBid === 0.40);
+      const t = engine();
+      t.quotes.pm.set('pz', { id: 'pz', tokenIds: ['z0', 'z1'], bestBid: 0.72, bestAsk: 0.73, at: 1 });
+      t.pairs = [];
+      t.state.positions = [position({ id: 'second', venue: 'PM', pmId: 'pz', tokenIndex: 1, side: 'yes', strategy: 'arb' })];
+      await t.refreshPmPairPrices();
+      ok('token 0 is written as is; a tokenIndex 1 leg reads it flipped (sells at 1 - 0.80)', Math.abs(t.venueMark(t.state.positions[0]) - 0.2) < 1e-9, t.venueMark(t.state.positions[0]));
+    } finally { pmv.fetchPrices = real; }
+  }
+
+  group('an arb unwinds early only on what the live books pay, one leg at a time (the 2026-09-23 Debut arb)');
+  {
+    // Marks 0.76 + 0.27 = 1.03 on 187 lots: decide.arbUnwind says go. A ladder is the OTHER side's
+    // asks (engine.exitLadder), so the Kalshi YES leg sells into NO asks at 1 - price.
+    const legs = () => [
+      position({ id: 'deb-KSy', group: 'deb', pairId: 'deb', label: 'Oscars Best Picture Noms - The Debut', strategy: 'arb', venue: 'KS', ref: 'KXOSCARNOMPIC-27-DEB', side: 'yes', qty: 187, entry: 0.70, mark: 0.76, cost: 132.2, fee: 1.3 }),
+      position({ id: 'deb-PMn', group: 'deb', pairId: 'deb', label: 'Oscars Best Picture Noms - The Debut', strategy: 'arb', venue: 'PM', pmId: 'pmdeb', tokenIndex: 0, side: 'no', qty: 187, entry: 0.22, mark: 0.27, cost: 41.9, fee: 0.8, feeRate: 0.04 }),
+    ];
+    const KS_DEEP = [{ price: 0.24, size: 400 }];
+    const setup = (ladders) => {
+      const U = engine();
+      U.pairs = [];
+      U.resolution = async () => null;
+      U.state.positions = legs();
+      U.state.arbGroups.deb = { pairId: 'deb', qty: 187, expectedPayout: 187, status: 'filled' };
+      U.reads = { KS: 0, PM: 0 };
+      // each venue's ladder by call: the first read is RIGO's check, the next the sale's own
+      U.exitLadder = async (pos) => { const l = ladders[pos.venue]; const n = U.reads[pos.venue]++; return Array.isArray(l[0]) ? l[Math.min(n, l.length - 1)] : l; };
+      U.sold = [];
+      const sell = U.broker.sell.bind(U.broker);
+      U.broker.sell = async (o) => { const f = await sell(o); U.sold.push(`${o.venue}:${f.filled}`); return f; };
+      return U;
+    };
+    const leg = (U, v) => U.state.positions.find((p) => p.venue === v);
+
+    // Polymarket bids nothing within 1c of its 0.27 mark (it sold at 0.2168, 0.2091 and 0.20)
+    const A = setup({ KS: KS_DEEP, PM: [{ price: 0.7832, size: 92 }, { price: 0.7909, size: 33 }, { price: 0.80, size: 62 }] });
+    await RIGO(A);
+    ok('the Debut shape: nothing is sold', A.sold.length === 0, A.sold);
+    ok('...both legs are kept whole, and neither is flagged stuck', leg(A, 'KS').qty === 187 && leg(A, 'PM').qty === 187 && !leg(A, 'KS').orphan && !leg(A, 'PM').orphan, A.state.positions);
+    await RIGO(A);
+    ok('the books are read at most once a minute a group', A.reads.KS === 1 && A.reads.PM === 1, A.reads);
+
+    // 60 resting at the mark: 60 of each, the thin Polymarket leg first
+    const B = setup({ KS: KS_DEEP, PM: [{ price: 0.73, size: 60 }, { price: 0.80, size: 500 }] });
+    await RIGO(B);
+    ok('partial depth: Polymarket sells 60 first, then Kalshi exactly 60', B.sold.join(',') === 'PM:60,KS:60', B.sold);
+    ok('...leaving a smaller arb, still hedged and not stuck', leg(B, 'KS').qty === 127 && leg(B, 'PM').qty === 127 && !leg(B, 'KS').orphan && !leg(B, 'PM').orphan, B.state.positions);
+    ok('...journalled as partial closes, no new kinds', (B.journalled || []).filter((j) => j.type === 'CLOSE_PARTIAL').length === 2, (B.journalled || []).map((j) => j.type));
+
+    // the book moves between the check and the sale: 20 left
+    const C = setup({ KS: KS_DEEP, PM: [[{ price: 0.73, size: 60 }], [{ price: 0.73, size: 20 }]] });
+    await RIGO(C);
+    ok('a first leg that sells short: the second sells exactly what it did', C.sold.join(',') === 'PM:20,KS:20', C.sold);
+    ok('...and the short first leg is not flagged stuck', leg(C, 'PM').qty === 167 && !leg(C, 'PM').orphan && leg(C, 'KS').qty === 167 && !leg(C, 'KS').orphan, C.state.positions);
+
+    // ...or nothing at all
+    const D = setup({ KS: KS_DEEP, PM: [[{ price: 0.73, size: 60 }], []] });
+    await RIGO(D);
+    ok('a first leg that sells nothing: the other leg is not touched', D.sold.join(',') === 'PM:0', D.sold);
+    ok('...both legs un-orphaned at their original 187', leg(D, 'PM').qty === 187 && !leg(D, 'PM').orphan && leg(D, 'KS').qty === 187 && !leg(D, 'KS').orphan, D.state.positions);
+    ok('...and the failed attempt is still on the journal', (D.journalled || []).some((j) => j.type === 'EXIT_FAIL'), (D.journalled || []).map((j) => j.type));
+
+    // the second leg falls short: it owes only the difference, and the retry sells only that
+    const S = setup({ KS: [KS_DEEP, [{ price: 0.24, size: 45 }], KS_DEEP], PM: [{ price: 0.73, size: 60 }, { price: 0.80, size: 500 }] });
+    await RIGO(S);
+    ok('a second leg that sells short is flagged stuck for the shortfall only', leg(S, 'KS').qty === 142 && leg(S, 'KS').orphan && leg(S, 'KS').orphanQty === 15, leg(S, 'KS'));
+    await RIGO(S);
+    ok('...the retry sells 15, not the 142 still hedged', S.sold.join(',') === 'PM:60,KS:45,KS:15', S.sold);
+    ok('...and the pair is back in balance and no longer stuck', leg(S, 'KS').qty === 127 && leg(S, 'PM').qty === 127 && !leg(S, 'KS').orphan && leg(S, 'KS').orphanQty === undefined, S.state.positions);
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);

@@ -16,7 +16,15 @@
 //
 // Two artifacts to know: an EMPTY Polymarket book records as 0/1 (rain delays, suspended games), which
 // is why both sides have to agree before a row counts as settled; and a mismatched pair (the wrong game
-// of a series) shows a 40c "gap" with Kalshi mid-game. The snipe's SNIPE_MIN_KS_PRICE is for the second.
+// of a series: the Rays-Yankees doubleheader on 2026-09-22, Polymarket's game 1 paired with Kalshi's
+// game 2) shows a 40c "gap" with Kalshi mid-game. The snipe's SNIPE_MIN_KS_PRICE is for the second.
+//
+// And the one that matters most (2026-09-24): a "settled" row here is a Polymarket 99c/1.00 READING,
+// not a settlement. NC State v Vanderbilt read 0.99/1 for 2m15s on 2026-09-19, then traded back to 4c,
+// and NC State lost; Temple did the same that day. Every edge this study counted was seen while
+// Polymarket's market was still open. The desk now buys only once Polymarket's market record says
+// closed or resolved, so the edge has to be measured again after the close -- Sunday 09-27 may show
+// little or none.
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
