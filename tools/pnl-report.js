@@ -37,7 +37,7 @@ function summarize(events) {
   const conv = { n: 0, w: 0, pnl: 0, fees: 0, mind: { n: 0, pnl: 0 }, rules: { n: 0, pnl: 0 }, byReason: new Map() };
   const arb = { n: 0, pnl: 0 };
   const snipe = { n: 0, w: 0, pnl: 0, fees: 0 };   // the settlement snipe (README): bought on Kalshi after Polymarket settled, held to settlement
-  const mk = { fills: 0, qty: 0, runQty: 0, realized: 0, settles: 0, settlePnl: 0 };
+  const mk = { fills: 0, qty: 0, runQty: 0, realized: 0, settles: 0, settlePnl: 0, flattens: 0 };
   const pos = {};
 
   for (const e of events) {
@@ -69,6 +69,11 @@ function summarize(events) {
       const d = D(day(e)); d.maker += r.pnl || 0; d.makerFills++; d.makerQty += e.qty; if (e.runOver) d.runQty += e.qty;
     } else if (e.kind === 'MAKER_SETTLE') {
       mk.settles++; mk.settlePnl += e.pnl || 0; D(day(e)).maker += e.pnl || 0;
+      if (pos[e.ticker]) { pos[e.ticker].inv = 0; pos[e.ticker].cost = 0; }
+    } else if (e.kind === 'MAKER_FLATTEN') {
+      // A whole position crossed out at the touch: the operator's flatten, and since 2026-09-24 the
+      // maker's own cross-out the day before a configured event date. `pnl` is net of the taker fee.
+      mk.flattens++; mk.realized += e.pnl || 0; D(day(e)).maker += e.pnl || 0;
       if (pos[e.ticker]) { pos[e.ticker].inv = 0; pos[e.ticker].cost = 0; }
     }
   }
@@ -108,7 +113,7 @@ function render(s, unreal) {
   L.push('');
   L.push('MAKER');
   const runPct = mk.qty ? Math.round((mk.runQty / mk.qty) * 100) : 0;
-  L.push(`  ${mk.fills} fills · ${Math.round(mk.qty)} contracts · ${runPct}% run over · realized ${usd(r2(mk.realized + mk.settlePnl))} (of which ${mk.settles} settlements ${usd(r2(mk.settlePnl))})`);
+  L.push(`  ${mk.fills} fills · ${Math.round(mk.qty)} contracts · ${runPct}% run over · realized ${usd(r2(mk.realized + mk.settlePnl))} (of which ${mk.settles} settlements ${usd(r2(mk.settlePnl))})${mk.flattens ? ` · ${mk.flattens} positions crossed out` : ''}`);
   const heldQty = s.held.reduce((a, h) => a + Math.abs(h.inv), 0);
   L.push(`  still holding ${Math.round(heldQty)} contracts in ${s.held.length} markets${unreal == null ? ' · run with --marks to price them' : ` · marked ${usd(r2(unreal))} (a MARK, not money)`}`);
   const total = conv.pnl + arb.pnl + snipe.pnl + mk.realized + mk.settlePnl;

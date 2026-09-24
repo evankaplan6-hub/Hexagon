@@ -116,9 +116,30 @@ module.exports = {
   // survive a realistic queue, because the queue only clears if the market actually trades.
   makerMinTradesPerDay: num('MAKER_MIN_TPD', 10),
   // Inventory held into resolution is not a spread capture, it is a coin flip settled at 0 or 1.
-  // Nothing currently quoted resolves inside 114 days, so this costs nothing today -- which is
-  // exactly when to put it in, rather than after the universe rotates into something expiring.
+  // "Days" is the earliest of close_time, the date in the ticker and the date configured for the
+  // series below (maker.daysToEnd). The midterm markets are the ones this was blind to: their
+  // tickers carry no day and their close_time is 130 to 405 days out, yet they resolve on election
+  // night, so they read as far away while holding 43% of the book on 2026-09-24.
   makerMinDaysToClose: num('MAKER_MIN_DAYS_TO_CLOSE', 7),
+  // The event date of series whose tickers name none: `pattern,pattern=YYYY-MM-DD`, several groups
+  // separated by `;`, and a pattern ending in `*` is a series prefix. With the 7-day rail above,
+  // these leave the universe on 2026-10-27 and are worked off reduce-only from then.
+  // KXMANCHINCOMBO is dated in its own ticker (-26NOV03) and KXPRIMARYTURNOUT has no open market,
+  // so neither is listed. KXGOVBAL is Italy's budget balance, not an election.
+  makerEventDates: env('MAKER_EVENT_DATES', 'SENATE*,GOVPARTY*,CONTROLS,CONTROLH,KXBALANCEPOWERCOMBO,KXBLUETSUNAMICOMBO,KXHOUSERACE,KXRHOUSESEATS=2026-11-03')
+    .split(';').map((g) => g.split('=').map((x) => x.trim())).filter((g) => g.length === 2 && /^\d{4}-\d{2}-\d{2}$/.test(g[1]))
+    .flatMap(([list, date]) => list.split(',').map((p) => p.trim()).filter(Boolean).map((p) => [p, date])),
+  // Whatever a configured event still holds this many days before its date is crossed out at the
+  // touch, paying the taker fee, the way a flatten does (makerdesk). Reduce-only quoting from the
+  // 7-day mark will not clear a 100-contract position in six days on these markets, and the fee is
+  // about 1.75c a contract at 50c: at most ~$35 on the 2,010 contracts held on 2026-09-24, against
+  // positions that settle at 0 or 1 overnight.
+  makerEventCrossDays: num('MAKER_EVENT_CROSS_DAYS', 1),
+  // The event rail (maker.eventSide), in dollars: on an event whose markets exclude each other, a
+  // side is not rested when its fill would take the event's worst settlement outcome past this.
+  // Defaults to what one market at the cap can already lose, so a race stops carrying two capped
+  // bets on the same outcome (SENATETX-26 +100 D / -100 R, -$115.40 if R wins, 2026-09-24).
+  makerEventMaxLoss: num('MAKER_EVENT_MAX_LOSS', num('MAKER_CAP', 100)),
   // Doubled once the probe stopped making a second call per candidate for depth it already had.
   // How many markets QUALIFY is what limits this desk -- widening the search is the only lever
   // that is not just leverage.

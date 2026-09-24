@@ -49,6 +49,9 @@ group('arbs and the maker');
   ok('a settlement books its own pnl and is counted', s.mk.settles === 1 && s.mk.settlePnl === -2, s.mk);
   ok('run-over is a share of contracts, not of fills', s.mk.qty === 29 && s.mk.runQty === 10, s.mk);
   ok('what is still held is reported, and a settled market is not', s.held.length === 1 && s.held[0].ticker === 'M2' && s.held[0].inv === 5, s.held);
+  // the maker crosses out what a configured event still holds the day before it (MAKER_FLATTEN)
+  const x = summarize([...ev, { t: T('18'), kind: 'MAKER_FLATTEN', ticker: 'M2', qty: 5, px: 0.28, fee: 0.1, pnl: -0.2, reason: 'event 20h away' }]);
+  ok('a crossed-out position is realised, net of its fee, and is no longer held', Math.abs(x.mk.realized - 0.3) < 1e-9 && x.mk.flattens === 1 && x.held.length === 0 && Math.abs(x.days.get('2026-09-18').maker - -0.2) < 1e-9, x.mk);
 }
 
 group('the printed report');

@@ -9,6 +9,7 @@
 const { makeMakerDesk, EMPTY_RETRY_MS, SCAN_EVERY_MS } = require('../src/makerdesk');
 const ks = require('../src/venues/kalshi');
 const base = require('../src/config');
+const { rebuild } = require('./ledger-check');
 
 let pass = 0, fail = 0;
 const ok = (name, cond, got) => {
@@ -28,7 +29,7 @@ const cfg = (over = {}) => ({
   makerMinMid: 0.08, makerMaxMid: 0.92, makerEverySec: 2, makerTapePages: 5,
   makerMaxRunOver: 0.40, makerToxCooldownMin: 60, makerToxMinFills: 10, makerToxByContracts: false,
   makerMaxDrawdownPct: 0.10, gainLockTriggerPct: 0.10, gainLockGivebackPct: 0.35,
-  initialBalance: 10000, ksFeeRate: 0.07, record: false, ...over,
+  initialBalance: 10000, ksFeeRate: 0.07, record: false, makerEventDates: [], makerEventCrossDays: 1, makerEventMaxLoss: 100, ...over,
 });
 
 // ---- the fakes --------------------------------------------------------------------------------
@@ -42,7 +43,8 @@ const listed = (ticker, over = {}) => ({ ticker, seriesTicker: 'KXTEST', yesBid:
 
 // One desk with everything it touches faked. `at.now` is the clock; `tape.trades` is what the next
 // round's poll returns (then emptied, as a real poll never returns a print twice).
-function rig({ over = {}, markets = {}, crawl = [], state = {} } = {}) {
+// `serve(url)` answers any other call a test wants to allow (a listing, an events call); undefined is "not mine"
+function rig({ over = {}, markets = {}, crawl = [], state = {}, serve = null } = {}) {
   const at = { now: T0 };
   const tape = {
     trades: [], bk: new Map(), mk: new Map(), asked: [], fresh: [], failed: 0, gap: false, broken: null,
@@ -62,6 +64,8 @@ function rig({ over = {}, markets = {}, crawl = [], state = {} } = {}) {
   // the only call a wide-universe scan makes: each candidate's last 100 prints, here 20 in an hour
   const getJSON = async (url) => {
     calls.push(url);
+    const own = serve && serve(url);
+    if (own !== undefined && own !== null) return own;
     if (/\/markets\/trades\?ticker=/.test(url)) return { trades: Array.from({ length: 20 }, (_, i) => ({ created_time: new Date(T0 - i * 180000).toISOString(), count_fp: '10' })) };
     throw new Error(`unexpected call in a hermetic test: ${url}`);
   };
@@ -304,6 +308,148 @@ const scans = (E) => E.logs.filter((l) => l.kind === 'SCAN' && /^(quoting|no mar
     r.E.pairs = [];
     await r.round();
     ok('no pair at all: both sides rest', m.quotes.bid === 0.44 && m.quotes.ask === 0.45, m.quotes);
+  }
+
+  group('a pair whose two venues disagree by more than 30c is no fair value');
+  {
+    // the any-market scanner has paired two different questions (a US-only chart against a worldwide
+    // one, 0.6c against 83c, 2026-09-20); a wrong fair value would decide which side rests
+    const r = rig({ crawl: [listed('KXTEST-A')], markets: { 'KXTEST-A': held() } });
+    r.tape.bk.set('KXTEST-A', book(0.44, 100, 0.45, 100));
+    r.E.pairs = [{ id: 'pm1:0|KXTEST-A', ks: { ticker: 'KXTEST-A' }, q: { pmMid: 0.90, ksMid: 0.445, t: r.at.now } }];
+    await r.round();
+    const m = r.S.markets['KXTEST-A'];
+    ok('Polymarket at 90c against Kalshi at 44.5c: no fair value, both sides rest', m.quotes.bid === 0.44 && m.quotes.ask === 0.45 && m.fair === null, { quotes: m.quotes, fair: m.fair });
+    r.E.pairs[0].q = { pmMid: 0.47, ksMid: 0.445, t: r.at.now, watchOnly: true };
+    await r.round();
+    ok('a pair that agrees still steers, unverified or not: the ask is withheld at 47c', m.quotes.bid === 0.44 && m.quotes.ask === null && m.fair === 0.47, m.quotes);
+  }
+
+  group('a market being worked off stops at flat: the flag rides on the resting quote');
+  {
+    // KXRT-PRI-90, 2026-09-24: short 87 with only its bid resting, swept to long 99 in one round
+    const r = rig({ markets: { 'KXOLD-S': held({ series: 'KXOLD', inv: -30, cost: -18 }) } });
+    const m = r.S.markets['KXOLD-S'];
+    r.tape.bk.set('KXOLD-S', book(0.60, 50, 0.62, 50));
+    await r.round();
+    ok('the pinned short rests its bid alone, flagged reduce-only', m.quotes.bid === 0.60 && m.quotes.ask === null && m.quotes.reduceOnly === true, m.quotes);
+    ok('...and the flag goes to the tape writer with the quote', r.taped[r.taped.length - 1].markets['KXOLD-S'].quotes.reduceOnly === true);
+    r.tape.trades = [print('KXOLD-S', 0.60, 1000, 'ask')];   // 50 ahead, a tenth of 950 would be 95
+    await r.round();
+    ok('a sweep that would have bought 95 buys the 30 still short, and no more', m.inv === 0 && r.E.journalled.length === 1 && r.E.journalled[0].qty === 30 && r.E.journalled[0].inv === 0, r.E.journalled);
+    ok('flat, it is no longer worked: nothing rests', m.quotes.bid === null && m.quotes.ask === null, m.quotes);
+    r.tape.trades = [print('KXOLD-S', 0.60, 1000, 'ask')];
+    await r.round();
+    ok('...and the next sweep opens nothing', m.inv === 0 && r.E.journalled.length === 1, r.E.journalled);
+  }
+
+  group('a halted maker still settles and re-marks what it holds, and resume lifts the halt');
+  {
+    // 2026-09-24: $83.60 above the 10% rail with 4,682 contracts held. The halt used to return before
+    // the books, so nothing settled or re-marked, and resume re-tripped on the frozen equity.
+    const r = rig({ markets: {
+      'KXOLD-L': held({ series: 'KXOLD', inv: 50, cost: 20, mid: 0.40, quotes: { bid: null, ask: 0.41 } }),
+      'KXOLD-D': held({ series: 'KXOLD', inv: -40, cost: -16, mid: 0.40 }),      // short 40 at 40c, about to resolve NO
+    }, state: { cash: 8955, equity: 8989, peak: 10000 } });
+    const L = r.S.markets['KXOLD-L'], D = r.S.markets['KXOLD-D'];
+    r.tape.bk.set('KXOLD-L', book(0.30, 50, 0.32, 50));
+    r.tape.bk.set('KXOLD-D', book(0.01, 50, 0.03, 50));
+    r.tape.mk.set('KXOLD-D', { status: 'finalized', result: 'no', settlementValue: 0 });
+    await r.round();
+    ok('10.1% off the peak halts it, and every quote is withdrawn', /drawdown 10\.1%/.test(r.S.halted || '') && L.quotes.ask === null, { halted: r.S.halted, q: L.quotes });
+    ok('no prints are asked for and nothing is quoted: no universe, no fills', r.tape.asked.length === 0 && !r.E.journalled.some((j) => j.kind === 'MAKER_FILL'), r.tape.asked);
+    ok('a held market that finalized while halted is settled: short 40 on NO books +$16', D.inv === 0 && D.realized === 16 && r.E.journalled.some((j) => j.kind === 'MAKER_SETTLE' && j.ticker === 'KXOLD-D'), D);
+    ok('the rest is re-marked at its book: equity is cash plus 50 at 31c', Math.abs(L.mid - 0.31) < 1e-9 && r.S.equity === r2(8955 + 50 * 0.31), { mid: L.mid, equity: r.S.equity });
+    ok('...and the halt line no longer claims a mark it did not take', r.E.logs.some((l) => /HALT .*settled and re-marked once a minute/.test(l.text)) && r.E.logs.some((l) => /halted, still settling: 1 finalized market/.test(l.text)), r.E.logs.map((l) => l.text));
+    r.tape.bk.set('KXOLD-L', book(0.20, 50, 0.22, 50));
+    await r.round();
+    ok('re-marked once a minute, not every round', Math.abs(L.mid - 0.31) < 1e-9, L.mid);
+    await r.round(60000);
+    ok('...a minute on, at the new book', Math.abs(L.mid - 0.21) < 1e-9 && r.S.equity === r2(8955 + 50 * 0.21) && r.S.halted, { mid: L.mid, equity: r.S.equity });
+    r.desk.resume(r.E);
+    await r.round();
+    ok('resume measures the drawdown afresh: the next round is not halted again', r.S.halted === null && r.S.peak === r2(8955 + 50 * 0.21), { halted: r.S.halted, peak: r.S.peak });
+    ok('...and quotes again: the pinned long is offered', L.quotes.ask === 0.22 && L.quotes.bid === null && L.quotes.reduceOnly === true, L.quotes);
+    r.E.halt = true;
+    const asked = r.tape.asked.length;
+    r.tape.bk.set('KXOLD-L', book(0.24, 50, 0.26, 50));
+    await r.round(60000);
+    ok('the taker desk\'s halt holds the maker the same way: quotes withdrawn, no prints, still re-marked', L.quotes.ask === null && r.tape.asked.length === asked && Math.abs(L.mid - 0.25) < 1e-9 && r.S.halted === null, { q: L.quotes, mid: L.mid });
+    const peak = r.S.peak;
+    r.desk.resume(r.E);
+    ok('a resume that clears some other halt does not move the maker\'s peak', r.S.peak === peak);
+  }
+
+  group('an event with a configured date is crossed out the day before it');
+  {
+    // The midterm markets resolve on election night, with no day in their tickers and a close_time a
+    // year out (maker.eventDateDays). Here the event is 2026-09-22; the clock starts 09-21 15:00Z.
+    const over = { makerEventDates: [['KXEVA*', '2026-09-22']], makerEventCrossDays: 1 };
+    const r = rig({ over, markets: {
+      'KXEVA-26-L': held({ series: 'KXEVA', inv: 40, cost: 16 }),      // long 40 from 40c
+      'KXEVA-26-S': held({ series: 'KXEVA', inv: -20, cost: -12 }),    // short 20 from 60c
+    }, state: { cash: 10000 - 16 + 12 } });
+    const L = r.S.markets['KXEVA-26-L'], Sh = r.S.markets['KXEVA-26-S'];
+    r.tape.bk.set('KXEVA-26-L', book(0.44, 50, 0.46, 50));
+    r.tape.bk.set('KXEVA-26-S', book(0.58, 50, 0.60, 50));
+    await r.round();
+    ok('33 hours out, it is worked off like any held market: reduce-only, nothing crossed', L.quotes.ask === 0.46 && L.quotes.reduceOnly === true && !r.E.journalled.length, L.quotes);
+    await r.round(10 * 3600000);
+    const feeL = ks.fee(40, 0.44, 0.07, 'KXEVA-26-L'), feeS = ks.fee(20, 0.60, 0.07, 'KXEVA-26-S');
+    const flats = r.E.journalled.filter((j) => j.kind === 'MAKER_FLATTEN');
+    ok('inside a day of it, both are crossed out at the touch: the long sold at the bid, the short bought at the ask', L.inv === 0 && Sh.inv === 0 && flats.length === 2 && flats[0].px === 0.44 && flats[1].px === 0.60, flats);
+    ok('...paying the taker fee, and booking what each position made', L.realized === r2(40 * 0.04 - feeL) && Sh.realized === r2(0 - feeS) && r.S.realized === r2(L.realized + Sh.realized), { L: L.realized, S: Sh.realized, all: r.S.realized });
+    ok('...journalled as a flatten would be, with why', flats.every((f) => /^event \d+h away$/.test(f.reason)) && flats[0].qty === 40 && flats[1].qty === -20, flats);
+    ok('...said once each, and nothing rests', r.E.logs.filter((l) => /its event is .* crossed out/.test(l.text)).length === 2 && L.quotes.bid === null && L.quotes.ask === null, L.quotes);
+    // the ledger check rebuilds it: the seeded positions as the fills that made them, then the journal
+    const at = new Date(T0).toISOString();
+    const seed = [{ t: at, kind: 'MAKER_FILL', ticker: 'KXEVA-26-L', side: 'buy', qty: 40, px: 0.40, inv: 40 }, { t: at, kind: 'MAKER_FILL', ticker: 'KXEVA-26-S', side: 'sell', qty: 20, px: 0.60, inv: -20 }];
+    const built = rebuild([...seed, ...r.E.journalled.map((j) => ({ t: at, ...j }))], 10000).maker;
+    ok('tools/ledger-check.js rebuilds the cash and realised exactly', built.cash === r.S.cash && built.realized === r.S.realized && built.markets.get('KXEVA-26-L').inv === 0 && !built.drifts.length, { built: [built.cash, built.realized], state: [r.S.cash, r.S.realized] });
+    const n = r.E.journalled.length;
+    await r.round();
+    ok('flat, the market leaves the loop and nothing more is written', r.E.journalled.length === n && !r.tape.asked[r.tape.asked.length - 1].includes('KXEVA-26-L'), r.tape.asked[r.tape.asked.length - 1]);
+  }
+
+  group('one event, one bet: the event rail through the loop');
+  {
+    // SENATETX-26 on the box, 2026-09-24: long 100 D, and short R on the same side of the race
+    const mkR = (mx) => listed('SENATETX-26-R', { seriesTicker: 'SENATETX', eventTicker: 'SENATETX-26', mutuallyExclusive: mx, yesBid: 0.41, yesAsk: 0.42 });
+    const ledger = () => ({ 'SENATETX-26-D': held({ series: 'SENATETX', inv: 100, cost: 57.64 }), 'SENATETX-26-R': held({ series: 'SENATETX', inv: -80, cost: -33.6 }) });
+    const r = rig({ over: { makerSoftCap: 1 }, crawl: [mkR(true)], markets: ledger() });
+    r.tape.bk.set('SENATETX-26-R', book(0.41, 50, 0.42, 50)); r.tape.bk.set('SENATETX-26-D', book(0.57, 50, 0.58, 50));
+    await r.round();
+    const R = r.S.markets['SENATETX-26-R'], D = r.S.markets['SENATETX-26-D'];
+    ok('R wins would cost $104.04: selling more R is not rested, buying it back is', R.quotes.bid === 0.41 && R.quotes.ask === null, R.quotes);
+    ok('...and the board says why', /ask would deepen SENATETX-26 past -\$100\.00 \(worst outcome -\$104\.04\)/.test(R.why || ''), R.why);
+    ok('the market remembers its event, so it is still a leg once it leaves the universe', R.event === 'SENATETX-26' && R.mx === true, { event: R.event, mx: R.mx });
+    ok('the pinned D leg keeps its reducing offer', D.quotes.ask === 0.58 && D.quotes.bid === null, D.quotes);
+    const loose = rig({ over: { makerSoftCap: 1 }, crawl: [mkR(false)], markets: ledger() });
+    loose.tape.bk.set('SENATETX-26-R', book(0.41, 50, 0.42, 50)); loose.tape.bk.set('SENATETX-26-D', book(0.57, 50, 0.58, 50));
+    await loose.round();
+    const R2 = loose.S.markets['SENATETX-26-R'];
+    ok('an event whose markets can pay together is left to the per-market cap: both sides rest', R2.quotes.bid === 0.41 && R2.quotes.ask === 0.42, R2.quotes);
+  }
+
+  group('a listed series pays for its events once every six hours, not every scan');
+  {
+    // the listing has event_ticker but not mutually_exclusive; the box's CPU is the scarce thing
+    const serve = (url) => {
+      if (/\/markets\?series_ticker=SENATETX/.test(url)) return { markets: [{ ticker: 'SENATETX-26-R', event_ticker: 'SENATETX-26', yes_bid_dollars: '0.41', yes_ask_dollars: '0.42', volume_24h_fp: '90000', close_time: '2027-11-03T15:00:00Z', yes_bid_size_fp: '50', yes_ask_size_fp: '50', title: 'R' }] };
+      if (/\/events\?series_ticker=SENATETX/.test(url)) return { events: [{ event_ticker: 'SENATETX-26', mutually_exclusive: true }] };
+      return undefined;
+    };
+    const r = rig({ over: { makerSeries: ['SENATETX'] }, serve });
+    r.tape.bk.set('SENATETX-26-R', book(0.41, 50, 0.42, 50));
+    const evCalls = () => r.calls.filter((u) => /\/events\?/.test(u)).length;
+    const settle = async () => { for (let i = 0; i < 5; i++) await new Promise((res) => setImmediate(res)); };
+    await r.round();
+    ok('the first scan reads the series\' events once, and the market carries mutually_exclusive', evCalls() === 1 && r.S.markets['SENATETX-26-R'].mx === true && r.S.markets['SENATETX-26-R'].event === 'SENATETX-26', { calls: r.calls, m: r.S.markets['SENATETX-26-R'] });
+    await r.round(SCAN_EVERY_MS); await settle();
+    ok('the fifteen-minute re-scan lists the series again but does not re-read its events', evCalls() === 1 && r.calls.filter((u) => /\/markets\?series_ticker/.test(u)).length === 2, r.calls);
+    r.at.now += 6 * 3600000; r.desk.noteCrawl(r.E, [], () => 'quadratic');   // the crawl keeps running meanwhile
+    await r.round(); await settle();
+    ok('six hours on, it does', evCalls() === 2, r.calls);
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);

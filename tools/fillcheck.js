@@ -62,7 +62,7 @@ const REASONS = [
   ['restart', 'not up yet after a restart: the saved quote is withdrawn until the first round ends', 'ops'],
   ['cooled', 'cooled by the run-over gate (MAKER_COOL in the journal): both sides withdrawn for the cooldown', 'rail'],
   ['entire', 'both sides withdrawn for another reason: halted, or a book the desk would not quote', 'rail'],
-  ['growing', 'the growing side withdrawn: a rotated-out market worked off one-sided, the cap, or the gain lock', 'rail'],
+  ['growing', 'the growing side withdrawn: a rotated-out market worked off one-sided, the cap, or the gain lock; or a reduce-only quote stopped at flat', 'rail'],
   ['side', 'that side withdrawn while flat or reducing', 'rail'],
   ['price', 'quoted, but not at the price the always-on desk had: a round behind the book', 'ops'],
   ['queue', 'quoted at that price, but further back in the queue: it had rejoined the back more recently', 'ops'],
@@ -107,7 +107,7 @@ function makeFillCheck(cfg, maker, cools = new Map()) {
   const requoteAlways = (s) => {
     if (!s.book) return;
     const q = maker.desiredQuotes(s.book, s.minv || 0, cfg);
-    const next = { bid: q.bid ?? null, ask: q.ask ?? null };
+    const next = { bid: q.bid ?? null, ask: q.ask ?? null, ...(q.reduceOnly ? { reduceOnly: true } : {}) };
     s.mqueue = requeue(s.mq, s.mqueue, next, s.book);
     s.mq = next;
   };
@@ -155,13 +155,17 @@ function makeFillCheck(cfg, maker, cools = new Map()) {
         const have = fm.side === 'buy' ? s.rq.bid : s.rq.ask, other = fm.side === 'buy' ? s.rq.ask : s.rq.bid;
         const growing = (fm.side === 'buy' && s.rinv > 0) || (fm.side === 'sell' && s.rinv < 0);
         const crosses = have != null && (fm.side === 'buy' ? have >= row.p : have <= row.p);
-        const why = s.down ? 'restart' : have == null && other == null ? (cooledAt(row.k, row.t) ? 'cooled' : 'entire') : have == null ? (growing ? 'growing' : 'side') : crosses ? 'queue' : 'price';
+        // a reduce-only quote that the print did reach, but with nothing left to reduce: stopped at flat
+        const stopped = crosses && s.rq.reduceOnly && !(fm.side === 'buy' ? s.rinv < 0 : s.rinv > 0);
+        const why = s.down ? 'restart' : have == null && other == null ? (cooledAt(row.k, row.t) ? 'cooled' : 'entire') : have == null ? (growing ? 'growing' : 'side') : stopped ? 'growing' : crosses ? 'queue' : 'price';
         lost[why].fills++; lost[why].qty += fm.qty; if (fm.runOver) lost[why].ro += fm.qty;
         note(why, row.k, row.t, fm);
       }
     } else if (kind === 'q') {
       const s = st(row.k);
-      const next = { bid: row.b ?? null, ask: row.a ?? null };
+      // `ro`: the quote was reduce-only, and maker.fillsFrom clips each fill on it at flat (since
+      // 2026-09-24). A tape from before it has no `ro` and replays unclipped, as the desk then filled.
+      const next = { bid: row.b ?? null, ask: row.a ?? null, ...(row.ro ? { reduceOnly: true } : {}) };
       // The desk's own number where the tape has it (qb/qa, since the evening of 2026-09-21). An older tape has only
       // the depth at the touch, so a quote first seen is assumed to have just joined the back of it.
       if (Number.isFinite(row.qb) && Number.isFinite(row.qa)) { s.rqueue = { bid: row.qb, ask: row.qa }; if (counting) exact++; }

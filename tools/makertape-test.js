@@ -79,6 +79,13 @@ group('our own quote and inventory');
   rec(E(), { markets: m(0.44, 0.45, 0) }); rec(E(), { markets: m(0.44, 0.45, 0) }); rec(E(), { markets: m(0.44, null, -12) });
   const L = io.lines();
   ok('written when the quote or the inventory changes', L.length === 2 && L[1].a === null && L[1].i === -12, L);
+  ok('a quote that is not reduce-only carries no flag', L.every((x) => !('ro' in x)), L);
+  // 2026-09-24: maker.fillsFrom clips a reduce-only quote at flat, and the fill check replays the tape,
+  // so the tape has to say which quotes were
+  rec(E(), { markets: { A: { quotes: { bid: 0.44, ask: null, reduceOnly: true }, inv: -12 } } });
+  rec(E(), { markets: { A: { quotes: { bid: 0.44, ask: null, reduceOnly: true }, inv: -12 } } });
+  const R = io.lines();
+  ok('the same quote and inventory, now reduce-only, is a new line, and says so with ro:1', R.length === 3 && R[2].ro === 1 && R[2].b === 0.44 && R[2].i === -12, R);
 }
 
 group('it can be turned off, and it can never hurt the desk');
