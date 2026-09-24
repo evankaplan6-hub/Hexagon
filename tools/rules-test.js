@@ -147,6 +147,14 @@ group('an allowlisted family still needs the right Polymarket template');
   const wrongPm = { ...FIX.control, pm: { ...FIX.control.pm, eventTitle: 'Who will be governor?', question: 'Will Jane Doe win?' } };
   ok('CONTROLS against a question about neither chamber is not `same`', rules.staticVerdict(wrongPm).verdict !== 'same', rules.staticVerdict(wrongPm));
   ok('a family on neither list with nothing to compare is `unclear`', rules.staticVerdict(FIX.unknown).verdict === 'unclear');
+  // KXTOPARTIST is Spotify's worldwide chart. Polymarket's "Top US Spotify Artist 2026" matched the old
+  // /spotify/ template and was verified `same` on 2026-09-20 at Bad Bunny 0.006 against 0.83.
+  const artist = (eventTitle) => pair('artist', { eventTitle, question: 'Will Bad Bunny be the top artist for 2026?', groupItemTitle: 'Bad Bunny', description: 'Resolves to the most streamed artist on Spotify for 2026.' },
+    { ticker: 'KXTOPARTIST-26B-BAD', seriesTicker: 'KXTOPARTIST', title: 'Top artist on Spotify in 2026?', yesSubTitle: 'Bad Bunny', rulesPrimary: 'If Bad Bunny is the most streamed Spotify artist in 2026, then the market resolves to Yes.', rulesSecondary: '' });
+  ok('the worldwide Spotify chart is still `same`', rules.staticVerdict(artist('Top Spotify Artist 2026')).verdict === 'same', rules.staticVerdict(artist('Top Spotify Artist 2026')));
+  for (const t of ['Top US Spotify Artist 2026', 'Top U.S. Spotify Artist 2026', 'Top Spotify Artist in the United States 2026']) {
+    ok(`"${t}" is not allowlisted against the worldwide chart`, rules.staticVerdict(artist(t)).verdict !== 'same', rules.staticVerdict(artist(t)));
+  }
 }
 
 group('the Claude check: cached, budgeted, one call per pair of rules texts, never overriding a conflict');

@@ -23,6 +23,7 @@ const fs = require('fs');
 const path = require('path');
 const decide = require('./decide');
 const http = require('./http');
+const { MAX_VENUE_DISAGREE } = require('./matcher');
 
 // Only the matched candidates go to disk (a few hundred records), atomically, so a restart has
 // pairs at once. The full crawl is tens of MB and is simply fetched again.
@@ -39,6 +40,12 @@ const fileStore = {
 };
 
 const r3 = (x) => Math.round(x * 1000) / 1000;
+
+// Two real books whose nearest prices are more than MAX_VENUE_DISAGREE apart (see afterPricing).
+function booksDisagree(q) {
+  if (!q || decide.quoteFault(q)) return false;
+  return Math.max(q.ksBid - q.pmAsk, q.pmBid - q.ksAsk) > MAX_VENUE_DISAGREE;
+}
 
 // How long after boot the first crawl waits.
 //
@@ -266,12 +273,24 @@ function makeAnyMarket(cfg, deps = {}) {
   // After BRAM: a watch-only pair that would have produced a signal is worth asking the rules judge
   // about (once per pair of rules texts, cached, inside RULES_DAILY_USD). Asking only then keeps the
   // cost to the handful of pairs that actually show an edge.
+  //
+  // Except an "edge" of 30c or more: that is two different questions or a quote that will not stand,
+  // never a price worth verifying, and it is the same bar the fast matcher refuses a pair on
+  // (MAX_VENUE_DISAGREE). On 2026-09-19 a watch-only pair ("Trump bans more news outlets... before
+  // Oct 1") showed a 61c arb when Kalshi's bid jumped to 0.75 on 40 contracts against Polymarket's
+  // 0.06/0.07; this is where it was sent to the judge, it came back `same` fifteen seconds later, and
+  // the desk booked $67 on it a minute after that, alongside its own venues_disagree alert. The test is on
+  // the books themselves, not their mids: Polymarket's best ask under Kalshi's best bid by more than
+  // the bar (or the other way round) is a disagreement no spread can explain, and it holds when one
+  // book is wide -- Kalshi's was 10c wide that minute, so a narrow-books-only mid test would have let
+  // it through. Not asking costs nothing: the pair stays watch-only, priced and on the tape.
   function afterPricing(E) {
     if (!judge || typeof judge.request !== 'function') return;
     const now = clock();
     const byId = new Map(candidates.map((c) => [c.id, c]));
     for (const p of E.pairs) {
       if (p.kind !== 'event' || p.watchOnly !== 'unclear' || !p.q || p.inPlay) continue;
+      if (booksDisagree(p.q)) continue;
       const r = decide.pairSignals({ ...p, watchOnly: null }, E.cfg, now);
       if (!r.signals.length) continue;
       const c = byId.get(p.id);

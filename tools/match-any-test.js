@@ -134,6 +134,23 @@ group('near-misses are rejected, with the reason');
   const oth = [P({ eventId: 'ia', eventTitle: 'Iowa Senate Election Winner', question: 'Will another candidate win the Iowa Senate race?', groupItemTitle: 'Other' })];
   ok('a Polymarket "Other" bucket never pairs', m.matchAny(oth, [K('SENATEIA-26-R', { eventTicker: 'SENATEIA-26', eventTitle: 'Iowa Senate winner?', title: 'Will Republicans win the Senate race in Iowa?', yesSubTitle: 'Other' })]).candidates.length === 0);
   ok('different years in the titles reject the event pair', m.eventGate('Will Karen Bass win the 2026 Los Angeles mayoral election?', 'Who will win the 2030 Los Angeles Mayoral Election?').why === 'figures');
+
+  // The US Spotify chart is not the worldwide one (2026-09-20: Bad Bunny 0.006 on Polymarket's US
+  // market against 0.83 on Kalshi's worldwide one, verified `same` and signalling for 25 minutes).
+  const topK = [K('KXTOPARTIST-26B-BAD', { eventTicker: 'KXTOPARTIST-26B', category: 'Entertainment', eventTitle: 'Top artist on Spotify in 2026?', eventSubTitle: 'In 2026', title: 'Who will be the top Spotify artist this year?', yesSubTitle: 'Bad Bunny' })];
+  const topP = (eventTitle, question) => [P({ eventId: 'sp', eventTitle, question, groupItemTitle: 'Bad Bunny' })];
+  ok('the worldwide Spotify chart still pairs', has(topP('Top Spotify Artist 2026', 'Will Bad Bunny be the top artist for 2026?'), topK, 'KXTOPARTIST-26B-BAD'));
+  const usP = topP('Top US Spotify Artist 2026', 'Will Bad Bunny be the top US Spotify artist for 2026?');
+  ok('the US Spotify chart is not the worldwide one', !has(usP, topK, 'KXTOPARTIST-26B-BAD') && why(usP, topK).includes('scope'), why(usP, topK));
+  ok('...whichever way the US is written', m.eventGate('Top Spotify artist in the United States 2026', 'Top artist on Spotify in 2026?').why === 'scope'
+    && m.eventGate('Top U.S. Spotify Artist 2026', 'Top artist on Spotify in 2026?').why === 'scope');
+  ok('a Billboard title is not held to it (its charts are the US ones on both venues)', m.eventGate('Billboard Hot 100 #1 song in the US', 'Billboard Hot 100 top song') === null);
+  // Qualifying for a tournament is not winning it (2026-09-23, a 94c gap on Scotland).
+  const qualK = [K('KXUEFAEUROQUAL-28-SCO', { eventTicker: 'KXUEFAEUROQUAL-28', category: 'Sports', eventTitle: 'Which countries will qualify for Euro 2028?', title: 'Will Scotland qualify for Euro 2028?', yesSubTitle: 'Scotland' })];
+  const winP = [P({ eventId: 'eu', eventTitle: 'UEFA EURO 2028', question: 'Will Scotland win UEFA EURO 2028?', groupItemTitle: 'Scotland' })];
+  ok('qualifying for Euro 2028 is not winning it', !has(winP, qualK, 'KXUEFAEUROQUAL-28-SCO') && why(winP, qualK).includes('family'), why(winP, qualK));
+  const qualP = [P({ eventId: 'eq', eventTitle: 'Which countries qualify for EURO 2028?', question: 'Will Scotland qualify for EURO 2028?', groupItemTitle: 'Scotland' })];
+  ok('...and qualifying against qualifying still pairs', has(qualP, qualK, 'KXUEFAEUROQUAL-28-SCO'), pairsOf(qualP, qualK));
 }
 
 group('a fight: two named Polymarket outcomes against two Kalshi legs');

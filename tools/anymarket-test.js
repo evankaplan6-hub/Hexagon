@@ -256,6 +256,19 @@ function harness(list, over = {}) {
     requested.length = 0;
     A.afterPricing(E);
     ok('nor is one inside its live window', requested.length === 0, requested);
+
+    // A 30c+ "edge" is a wrong pair or a quote that will not stand, not a price to verify. The press-ban
+    // pair of 2026-09-19 was sent to the judge on exactly these books, came back `same`, and traded.
+    requested.length = 0;
+    E.pairs = [
+      mk('a:0|SENATEIA-26-R', { pmBid: 0.06, pmAsk: 0.07, ksBid: 0.75, ksAsk: 0.85 }),          // press ban: Kalshi 10c wide
+      mk('z:0|KXTIME-26-ZOH', { pmBid: 0.006, pmAsk: 0.025, ksBid: 0.83, ksAsk: 0.84 }),        // US vs worldwide Spotify
+    ];
+    A.afterPricing(E);
+    ok('books 30c+ apart are never sent to the judge, wide or narrow', requested.length === 0, requested);
+    E.pairs = [mk('a:0|SENATEIA-26-R', { pmBid: 0.40, pmAsk: 0.41, ksBid: 0.65, ksAsk: 0.66 })];
+    A.afterPricing(E);
+    ok('a 24c arb is still asked about', requested.includes('a:0|SENATEIA-26-R'), requested);
   }
 
   group('a restart restores the last matched pairs, stale until repriced');

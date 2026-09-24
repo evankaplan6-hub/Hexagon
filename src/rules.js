@@ -62,7 +62,10 @@ const ALLOW = [
   { ks: /^KXSPACEXCOUNT-/, why: 'SpaceX launch count: whole launches, same month window (the matcher pairs N+ with Above N-1 only)' },
   { ks: /^KXTIME-/, why: 'TIME Person of the Year: named or pictured, all named resolve Yes on both' },
   { ks: /^KXTOPSONG-/, why: 'Billboard Hot 100 #1 for the dated chart week' },
-  { ks: /^KXTOPARTIST-/, pm: /spotify|top artist/i, why: 'Spotify\'s most-streamed artist of the year (not the US chart)' },
+  // Kalshi's is the worldwide chart, so a Polymarket title naming the US is refused here rather than
+  // allowlisted: "Top US Spotify Artist 2026" matched /spotify/ and was verified `same` on 2026-09-20,
+  // Bad Bunny at 0.006 against Kalshi's 0.83.
+  { ks: /^KXTOPARTIST-/, pm: /^(?![^]*(\bU\.?S\.?A?\.?(?![a-z])|\bunited states\b))[^]*(spotify|top artist)/i, why: 'Spotify\'s most-streamed artist of the year (not the US chart)' },
   { ks: /^KX(BIGBROTHER|DANCINGWITHTHESTARS)-/, why: 'reality show winner of the named season' },
   { ks: /^KXARCTICICEMIN-/, why: 'Arctic sea ice minimum, same NSIDC figure' },
   { ks: /^KXFEDDECISION-/, why: 'Fed decision: change in the upper bound at the named meeting' },

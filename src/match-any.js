@@ -232,6 +232,9 @@ const FAMILIES = [
   ['gdp', /\bgdp\b/], ['dissent', /\bdissent/], ['mentions', /\bsay\b|\bmention/], ['count', /how many|number of|# of/],
   ['hit', /\bhit\b|\breach\b|\bdip\b|how high|how low/], ['close', /\bclose[sd]?\b|\bsettle/], ['up or down', /up or down/],
   ['ipo', /\bipo\b/], ['acquire', /acquir|merger/], ['approval', /\bapproval\b/], ['popular vote', /popular vote/],
+  // qualifying for a tournament is not winning it: on 2026-09-23 Kalshi's "qualify for Euro 2028"
+  // (KXUEFAEUROQUAL-28-SCO) paired with Polymarket's "UEFA EURO 2028 - Scotland" (win) at a 94c gap
+  ['qualify', /\bqualif/],
   ['electoral college', /electoral/], ['party switch', /\bleave the (democrat|republican)|switch part/], ['pardon', /\bpardon/], ['arrest', /\barrest|indict/],
 ];
 // A rank other than first, normalized to a word so "third-place", "3rd" and "3 place" agree.
@@ -243,6 +246,13 @@ function rankOf(t) {
   return RANK_WORD[m[1] || m[2] || m[3] || m[4] || m[5]] || null;
 }
 const SCOPE = /\b(global|worldwide)\b/;
+// The US chart of a streaming service is not its worldwide one, and a worldwide title rarely says
+// "worldwide": Kalshi's KXTOPARTIST is "Top artist on Spotify in 2026?", and on 2026-09-20 it paired
+// with Polymarket's "Top US Spotify Artist 2026" -- Bad Bunny 0.006 against 0.83, a 62c "edge" for 25
+// minutes. norm() has already folded U.S./USA/United States into "us". Billboard is left out: its
+// charts are the US ones on both venues whether a title says so or not.
+const US_SCOPE = /\bus\b/;
+const STREAMING = /\b(spotify|netflix|google|youtube)\b/;
 const yearsOf = (s) => new Set((String(s).match(/\b20\d{2}\b/g) || []));
 const monthsOf = (s) => new Set((norm(s).match(new RegExp(`\\b(${MONTHS.join('|')}|${MON3.join('|')})\\b`, 'g')) || []).map((m) => m.slice(0, 3)));
 const disjoint = (a, b) => a.size && b.size && ![...a].some((x) => b.has(x));
@@ -253,6 +263,7 @@ function eventGate(pmText, ksText) {
   const ra = rankOf(a), rb = rankOf(b);
   if (ra !== rb) return { why: 'rank', detail: `${ra || 'first'} vs ${rb || 'first'}` };
   if (SCOPE.test(a) !== SCOPE.test(b) && /\b(spotify|netflix|google|youtube|billboard|chart|search)\b/.test(`${a} ${b}`)) return { why: 'scope', detail: 'global vs US' };
+  if (US_SCOPE.test(a) !== US_SCOPE.test(b) && STREAMING.test(`${a} ${b}`)) return { why: 'scope', detail: 'US vs worldwide' };
   if (disjoint(yearsOf(pmText), yearsOf(ksText))) return { why: 'figures', detail: `years ${[...yearsOf(pmText)]} vs ${[...yearsOf(ksText)]}` };
   return null;
 }
