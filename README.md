@@ -1272,8 +1272,9 @@ one, resumes from what is on disk: `bash ops/install-history.sh` puts the job ba
 
 **What ChartExchange is not, here.** Its dividend history stops in mid-2021 (SPY's last entry is
 June 2021), so its bars cannot be dividend-adjusted and `tools/stock-fetch.js` keeps Yahoo for the
-ETF lab's total-return series. Its stock quotes are 30 minutes delayed on this plan. And the
-subscription renews at $89.65 a month unless cancelled before 2026-10-07.
+ETF lab's total-return series. Its stock quotes were 30 minutes delayed on that plan. The listing
+said the plan renews at $89.65 a month after 2026-10-07, but no card was ever given (Evan, 2026-09-24),
+so nothing renews and nothing is charged.
 
 ## Operating it
 
