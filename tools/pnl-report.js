@@ -69,6 +69,12 @@ function summarize(events) {
       arb.pnl += e.pnl || 0; D(day(e)).arb += e.pnl || 0;
       arbGroups.add(e.group || open.group || e.id);
       arb.n = arbGroups.size;
+    } else if (e.kind === 'CLOSE_PARTIAL' && open.strategy === 'converge') {
+      // A gain-lock sale of part of a convergence bet. The CLOSE that ends the bet carries only
+      // the rest (engine: CLOSE.pnl is the exit's own), so the partial is booked here, as money,
+      // without counting a closed trade or a winner.
+      conv.pnl += e.pnl || 0; D(day(e)).conv.pnl += e.pnl || 0;
+      conv.fees += e.fee || 0;
     } else if ((e.kind === 'CLOSE' || e.kind === 'SETTLE') && e.strategy === 'converge') {
       const pnl = e.pnl || 0;
       const d = D(day(e)).conv;

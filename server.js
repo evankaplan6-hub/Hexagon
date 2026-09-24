@@ -29,7 +29,6 @@ const engine = new Engine(cfg);
 // for has to be countable the next morning, not just visible in a log that rolls over in half an
 // hour. Never in the way of starting or exiting: the journal already swallows a failed write.
 const lifecycle = (kind, payload) => { try { engine.journal(engine, kind, payload); } catch { /* the exit still happens */ } };
-lifecycle('START', { sha: cfg.buildSha || null, pid: process.pid });
 const clients = new Set();
 const PUBLIC = path.join(__dirname, 'public');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json' };
@@ -49,6 +48,9 @@ if (!LOOPBACK.includes(cfg.bindHost) && !cfg.dashPass) {
   console.error('  Set DASH_PASS in .env, or bind to 127.0.0.1 and reach it over an SSH tunnel.');
   process.exit(1);
 }
+// Written only once every startup refusal above has passed: a refused start never ran, and a
+// START with no STOP after it would read as an unexplained restart the next morning.
+lifecycle('START', { sha: cfg.buildSha || null, pid: process.pid });
 
 // A real login page, not HTTP basic auth.
 //

@@ -30,6 +30,22 @@ group('convergence: pnl, winners, fees on both legs, and the mind kept apart fro
   ok('each day gets its own row', s.days.get('2026-09-16').conv.n === 1 && s.days.get('2026-09-17').conv.n === 2);
 }
 
+group('convergence: a gain-lock partial sale is money, not a trade');
+{
+  // CLOSE_PARTIAL carries no strategy of its own; the OPEN says converge. The final CLOSE carries
+  // only the rest of the position's pnl.
+  const ev = [
+    { t: T('18'), kind: 'OPEN', id: 'g', fee: 1, strategy: 'converge' },
+    { t: T('18'), kind: 'CLOSE_PARTIAL', id: 'g', pnl: 3, fee: 0.5 },
+    { t: T('19'), kind: 'CLOSE', id: 'g', strategy: 'converge', pnl: -1, fee: 0.5, reason: 'gap closed to 0.5c' },
+  ];
+  const s = summarize(ev);
+  ok('the partial is in the book\'s pnl and fees', s.conv.pnl === 2 && s.conv.fees === 2, s.conv);
+  ok('but only the closing trade is counted, and it lost', s.conv.n === 1 && s.conv.w === 0, s.conv);
+  ok('the partial lands on its own day', s.days.get('2026-09-18').conv.pnl === 3 && s.days.get('2026-09-18').conv.n === 0);
+  ok('and is not mistaken for an arb', s.arb.pnl === 0 && s.arb.n === 0, s.arb);
+}
+
 group('arbs and the maker');
 {
   const ev = [
