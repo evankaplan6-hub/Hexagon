@@ -42,7 +42,7 @@ npm run reset                                 # wipe the paper account
 
 ```
 server.js         HTTP + SSE server, .env loader, live-mode gate; journals START/STOP/CRASH
-src/sse.js        the dashboard stream: slim frames (no P&L histories; GET /api/history has them), gzipped per tab
+src/sse.js        the dashboard stream's per-tab gzip, flushed per frame (the frames leave out the P&L histories via engine.snapshot; GET /api/history serves them)
 src/config.js     all tunables          src/engine.js    state, cash, positions, cycle loop
 src/decide.js     pure decision core: gates, ranking, sizing, exits, the settlement snipe (no I/O, no clock)
 src/agents.js     the six desks         src/matcher.js   cross-venue matching (Fed + games, every cycle)

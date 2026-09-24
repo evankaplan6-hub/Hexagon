@@ -98,7 +98,7 @@ before funding anything.
   out of the matched set fell back to Gamma's listing price, which goes stale (a 0.72/0.73 listing
   against a 0.78/0.80 book); about 13 of 20 open arbs were being marked that way on 09-24. Those legs
   are now priced in the same CLOB call, as the Kalshi half already was.
-- **Venues 30c or more apart are two different questions** (`venues disagree 30c+`, 2026-09-24):
+- **Venues more than 30c apart are two different questions** (`venues disagree 30c+`, 2026-09-24):
   `decide.pairSignals` emits nothing for a pair where one venue's bid is over the other's ask by more
   than 30c. New entries only. The press-ban arb and the US Spotify chart are the cases (*Look-alikes
   the rules judge was shown*).
@@ -157,7 +157,7 @@ BRAM RESEARCH  gate ledger over 19 pairs · 8 gap under minGap · 6 mid outside 
   lines without a `pair`.
 - Append-only, never rewritten, rotating by filename at Eastern midnight. A failed write logs once
   (rate-limited) and the cycle continues; the tape can never halt the desk.
-- About 85–130 MB a day since 2026-09-19, when sports joined the crawl (several hundred pairs over a
+- About 90–130 MB a day since 2026-09-19, when sports joined the crawl (several hundred pairs over a
   day, plus ~25 MB of maker lines). On the Mac nothing prunes them; on the box `tools/fly-pull.js
   --trim` keeps the newest three days and the disk brake (`TAPE_MIN_FREE_MB`) trims more if the pull
   stops. `data/` is gitignored, so they stay local. Set `RECORD=0` in `.env` to turn the recorder off.
