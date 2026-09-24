@@ -85,6 +85,19 @@ group('what a missed fill is put down to');
   ok('three of the five are rails, two are operations', v.rails === 30 && v.ops === 20, v);
 }
 
+group('a reduce-only quote replays clipped at flat, as the desk fills it');
+{
+  // short 30 with only a bid resting to work it off; three sell-side prints of 300 against it
+  const rows = (ro) => [b(0, 0.40, 0, 0.42, 0), q(1, 0.40, null, -30, 'A', ro ? { ro: 1 } : {}), b(500, 0.40, 0, 0.42, 0),
+    p(1000, 0.40, 300, 'a'), p(1200, 0.40, 300, 'a'), p(1400, 0.40, 300, 'a')];
+  const clipped = run(rows(true));
+  ok('a line with ro:1 fills the 30 still short and then nothing', clipped.tape.fills === 1 && clipped.tape.qty === 30, clipped.tape);
+  const old = run(rows(false));
+  ok('a line without it, every tape before 2026-09-24, replays as the desk then filled: through zero to long 60', old.tape.fills === 3 && old.tape.qty === 90, old.tape);
+  // the always-on desk quotes both sides at short 30 and goes on buying what the clipped quote refuses
+  ok('what the flag refused is put down to the rail that stopped it, not to the queue', clipped.lost.growing.fills === 2 && clipped.lost.growing.qty === 60 && clipped.lost.queue.fills === 0, clipped.lost);
+}
+
 group('the day before warms the replay up and is not counted');
 {
   const c = makeFillCheck(cfg, maker);

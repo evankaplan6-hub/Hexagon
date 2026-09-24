@@ -241,6 +241,93 @@ group('the position cap is enforced per fill, and adverse fills are flagged');
   ok('a print AT our ask is not run-over', clean.fills[0].runOver === false, clean.fills[0]);
 }
 
+group('a reduce-only quote stops at flat: it closes a position and never opens the other side');
+{
+  // 2026-09-24: KXRT-PRI-90 was short 87 with only its bid resting to work the short off, and one
+  // sweep filled that bid for 139 and then 47 more, leaving it long 99. Quotes carry no size, so the
+  // cap was the only limit; 3,010 of the 6,203 contracts traded on work-off markets in the day after
+  // MAKER_WIDEN=0 opened new positions instead of closing old ones.
+  const c = cfg({ makerParticipation: 0.10, makerCap: 100 });
+  const offer = { bid: null, ask: 0.45, reduceOnly: true };
+  const swept = maker.fillsFrom([trade('ro1', 'bid', 0.45, 10000)], offer, 30, c, new Set(), noQueue);
+  ok('long 30, a reduce-only offer swept for 1,000 sells exactly 30', swept.fills.length === 1 && swept.fills[0].qty === 30 && swept.fills[0].side === 'sell', swept.fills);
+  const three = maker.fillsFrom([trade('ro2', 'ask', 0.40, 1000), trade('ro3', 'ask', 0.40, 1000), trade('ro4', 'ask', 0.40, 1000)], { bid: 0.40, ask: null, reduceOnly: true }, -100, c, new Set(), noQueue);
+  ok('short 100, three 1,000-lot sweeps of a reduce-only bid buy 100 once and stop at flat', three.fills.length === 1 && three.fills[0].qty === 100, three.fills);
+  const old = maker.fillsFrom([trade('ro5', 'ask', 0.40, 1000), trade('ro6', 'ask', 0.40, 1000), trade('ro7', 'ask', 0.40, 1000)], { bid: 0.40, ask: null }, -100, c, new Set(), noQueue);
+  ok('...where the same bid without the flag went on to long 100 (the bug, kept for a quote that is not reduce-only)', old.fills.reduce((a, f) => a + f.qty, 0) === 200, old.fills);
+  const partial = maker.fillsFrom([trade('ro8', 'bid', 0.45, 150), trade('ro9', 'bid', 0.45, 150), trade('ro10', 'bid', 0.45, 150)], offer, 25, c, new Set(), noQueue);
+  ok('a fill bigger than what is left is clipped, not skipped: 15 then the last 10, then nothing', partial.fills.map((f) => f.qty).join() === '15,10', partial.fills);
+  const queued = maker.fillsFrom([trade('ro11', 'bid', 0.45, 1000)], offer, 30, c, new Set(), { bid: 0, ask: 600 });
+  ok('the queue ahead is still worked through first: 40 would fill, 30 does', queued.fills[0].qty === 30 && queued.queue.ask === 0, queued);
+  const flat = maker.fillsFrom([trade('ro12', 'bid', 0.45, 1000)], offer, 0, c, new Set(), { bid: 0, ask: 200 });
+  ok('flat, a reduce-only quote fills nothing', flat.fills.length === 0, flat.fills);
+  ok('...but the prints still work the queue down, as they would for any quote at that price', flat.queue.ask === 0, flat.queue);
+  // what the clip must NOT touch
+  const both = maker.fillsFrom([trade('ro13', 'bid', 0.45, 1000)], QUOTES, 30, c, new Set(), noQueue);
+  ok('a two-sided quote at long 30 may still sell through flat: that market is being made, not worked off', both.fills[0].qty === 100, both.fills);
+  const fairOnly = maker.fillsFrom([trade('ro14', 'bid', 0.45, 1000)], { bid: null, ask: 0.45 }, 0, c, new Set(), noQueue);
+  ok('a side the fair rail left alone on a flat market still fills', fairOnly.fills.length === 1 && fairOnly.fills[0].qty === 100, fairOnly.fills);
+  const fairLong = maker.fillsFrom([trade('ro15', 'bid', 0.45, 1000)], { bid: null, ask: 0.45 }, 30, c, new Set(), noQueue);
+  ok('...and at long 30 with the bid pulled by the fair rail the ask is not clipped: only the flag clips', fairLong.fills[0].qty === 100, fairLong.fills);
+}
+
+group('a book under the minimum spread keeps its reducing side, as the tails do');
+{
+  // Kalshi prices 48 of the held markets in tenths of a cent. The spread refusal ran first and pulled
+  // both sides, so CONTROLH-2026-D sat short 100 on a 91.6/91.7c book from 09-19 with no way out.
+  const c = cfg({ makerMinSpread: 0.01, makerMinMid: 0.08, makerMaxMid: 0.92 });
+  const short = maker.desiredQuotes(book(0.916, 0.917), -100, c);
+  ok('short 100 on a 91.6/91.7c book keeps its 91.6c bid', short.bid === 0.916 && short.ask === null, short);
+  ok('...flagged reduce-only, and says so', short.reduceOnly === true && /spread 0\.1c under 1\.0c · reducing only/.test(short.why), short);
+  const mid = maker.desiredQuotes(book(0.241, 0.249), 4, c);
+  ok('not only in the tails: long 4 on a 24.1/24.9c book keeps its offer', mid.ask === 0.249 && mid.bid === null && mid.reduceOnly === true, mid);
+  const flat = maker.desiredQuotes(book(0.916, 0.917), 0, c);
+  ok('flat on the same book quotes nothing, and flags nothing', flat.bid === null && flat.ask === null && !flat.reduceOnly && flat.why === 'spread 0.1c under 1.0c', flat);
+  ok('the tails flag their reducing quote too', maker.desiredQuotes(book(0.93, 0.94), -38, c).reduceOnly === true);
+  ok('a normal two-sided quote is not flagged, nor is the side left at the soft cap', !maker.desiredQuotes(book(0.44, 0.45), 0, c).reduceOnly && !maker.desiredQuotes(book(0.44, 0.45), 100, cfg({ makerSoftCap: 1 })).reduceOnly);
+}
+
+group('the event date of a series whose tickers name none');
+{
+  // SENATETX-26-D has no day in its ticker and closes 2027-11-03; it resolves on 2026-11-03.
+  const dates = [['SENATE*', '2026-11-03'], ['CONTROLS', '2026-11-03']];
+  const at = (iso) => Date.parse(iso);
+  ok('a prefix pattern dates every series under it', Math.round(maker.eventDateDays('SENATETX', dates, at('2026-10-28T00:00:00Z'))) === 7 && maker.eventDateDays('SENATEME', dates, at('2026-10-28T00:00:00Z')) != null);
+  ok('an exact pattern dates only its own series', maker.eventDateDays('CONTROLS', dates, at('2026-10-28T00:00:00Z')) != null && maker.eventDateDays('CONTROLSX', dates, at('2026-10-28T00:00:00Z')) === null);
+  ok('a series on no list has no date, and no list is no date', maker.eventDateDays('KXOSCARPIC', dates) === null && maker.eventDateDays('SENATETX', null) === null && maker.eventDateDays('SENATETX', []) === null);
+  const d = maker.daysToEnd('SENATETX-26-D', '2027-11-03T15:00:00Z', at('2026-10-28T00:00:00Z'), dates, 'SENATETX');
+  ok('daysToEnd takes the event date over a close time 405 days out', d > 6.9 && d < 7, d);
+  ok('...reading the series off the ticker when none is passed', maker.daysToEnd('SENATETX-26-D', '2027-11-03T15:00:00Z', at('2026-10-28T00:00:00Z'), dates) === d);
+  ok('...and an earlier date in the ticker still wins', Math.round(maker.daysToEnd('SENATEXX-26OCT30-D', '2027-11-03T15:00:00Z', at('2026-10-28T00:00:00Z'), dates)) === 3);
+  // the configured default, through the same filter the crawl and the listed scan both use
+  const c = cfg({ makerMinMid: 0.08, makerMaxMid: 0.92, makerMinSpread: 0.01, makerMinVol24: 5000, makerMinDaysToClose: 7 });
+  const tx = { ticker: 'SENATETX-26-D', seriesTicker: 'SENATETX', yesBid: 0.58, yesAsk: 0.59, vol24: 100000, closeTime: '2027-11-03T15:00:00Z' };
+  const free = () => 'quadratic';
+  ok('SENATETX-26-D is still quoted on 2026-09-24', maker.candidatesFrom([tx], free, c, at('2026-09-24T18:00:00Z')).length === 1);
+  ok('...and refused by the 7-day rail on 2026-10-28', maker.candidatesFrom([tx], free, c, at('2026-10-28T00:00:00Z')).length === 0);
+  ok('the default list covers the midterm series the book held on 2026-09-24', ['SENATETX', 'GOVPARTYFL', 'CONTROLS', 'CONTROLH', 'KXBALANCEPOWERCOMBO', 'KXBLUETSUNAMICOMBO', 'KXHOUSERACE', 'KXRHOUSESEATS'].every((x) => maker.eventDateDays(x, base.makerEventDates, at('2026-09-24T00:00:00Z')) != null)
+    && maker.eventDateDays('KXGOVBAL', base.makerEventDates) === null);
+}
+
+group('one event, one bet: the event rail on markets that exclude each other');
+{
+  // SENATETX-26 on the box, 2026-09-24: long 100 D at 57.64c, and here short 80 R at 42c.
+  const legs = [{ ticker: 'SENATETX-26-D', inv: 100, cost: 57.64 }, { ticker: 'SENATETX-26-R', inv: -80, cost: -33.6 }];
+  ok('the worst outcome sums every leg: R wins costs 80 on the short and the $24.04 net basis', Math.abs(maker.eventWorst(legs) + 104.04) < 1e-9, maker.eventWorst(legs));
+  const r = maker.eventSide({ bid: 0.41, ask: 0.42 }, legs, 'SENATETX-26-R', 100);
+  ok('past -$100, selling more R is not rested', r.ask === null && r.against === 'ask', r);
+  ok('...buying R back, which shrinks the short, stays', r.bid === 0.41, r);
+  const d = maker.eventSide({ bid: 0.57, ask: 0.58 }, legs, 'SENATETX-26-D', 100);
+  ok('buying more D deepens the same outcome and is not rested; selling D stays', d.bid === null && d.ask === 0.58, d);
+  ok('...and it reports the worst outcome it measured', Math.abs(d.worst + 104.04) < 1e-9, d);
+  const small = [{ ticker: 'SENATETX-26-D', inv: 100, cost: 57.64 }];
+  const s = maker.eventSide({ bid: 0.41, ask: 0.42 }, small, 'SENATETX-26-R', 100);
+  ok('inside the limit nothing is withdrawn: long D alone loses $57.64 at worst', s.bid === 0.41 && s.ask === 0.42 && s.against === null, s);
+  const none = maker.eventWorst([{ ticker: 'A', inv: 30, cost: 12 }, { ticker: 'B', inv: 20, cost: 8 }]);
+  ok('"none of the listed markets wins" is an outcome too: long both legs loses the whole basis', none === -20, none);
+  ok('a market not yet held in the event is a leg of nothing: the rail sees only the others', maker.eventSide({ bid: 0.3, ask: 0.31 }, [], 'X', 100).against === null);
+}
+
 // ---------------------------------------------------------------- applyFill
 group('applyFill: once flat, realised MUST equal the change in cash');
 {
@@ -413,7 +500,8 @@ group('the wide universe: which crawled markets this desk may quote');
 {
   // The ceiling was never the code, it was MAKER_SERIES: Kalshi runs 13,929 fee-free series and the
   // list named 39. candidatesFrom filters the any-market crawl instead, which walks them all anyway.
-  const c = cfg({ makerMinMid: 0.08, makerMaxMid: 0.92, makerMinSpread: 0.01, makerMinVol24: 5000, makerMinDaysToClose: 7 });
+  // no configured event dates here: the group is about the ticker and the close time (the event-date list has its own below)
+  const c = cfg({ makerMinMid: 0.08, makerMaxMid: 0.92, makerMinSpread: 0.01, makerMinVol24: 5000, makerMinDaysToClose: 7, makerEventDates: [] });
   const NOW = Date.parse('2026-09-16T00:00:00Z');
   const day = (n) => new Date(NOW + n * 86400000).toISOString();
   const mk = (over = {}) => ({ ticker: 'SENATETX-26-D', seriesTicker: 'SENATETX', yesBid: 0.44, yesAsk: 0.45,

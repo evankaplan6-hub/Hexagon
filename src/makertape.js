@@ -14,7 +14,8 @@
 //   {"mk":"b","t":ms,"k":ticker,"b":0.44,"bs":120,"a":0.45,"as":300}       top of book, on change
 //   {"mk":"p","t":ms,"k":ticker,"id":trade_id,"p":0.45,"n":12,"s":"b"|"a"}  a print (taker on the bid / ask book side)
 //   {"mk":"q","t":ms,"k":ticker,"b":0.44,"a":0.45,"i":-12,"qb":310,"qa":0}   OUR resting quote and inventory, on change,
-//                                                                           and how much is still ahead of each side
+//                                                                           and how much is still ahead of each side;
+//                                                                           "ro":1 when the quote is reduce-only
 //   {"mk":"g","t":ms,"why":"start"|"halt"|"data-failure"|"tape-gap"|"write-failed"|"resume"}   a hole in what was observed
 //
 // `g` says the tape is NOT a record of quiet here. While the desk is halted it withdraws every quote
@@ -32,6 +33,11 @@
 // joined the back -- and a quote that had rested for days (CONTROLH-2026-R bid 10c, 103 contracts
 // filled on 2026-09-19) replayed to nothing behind a queue the desk had long since worked through.
 // tools/fillcheck.js reads both.
+//
+// `ro` (from 2026-09-24) says the quote may only take the position to flat: maker.fillsFrom clips a
+// fill on it at zero, and the fill check has to apply the same clip or its replay drifts from the
+// ledger on every work-off sweep. A line without it is a quote that was not clipped, which is every
+// quote written before the clip existed.
 //
 // Book lines are written when the price or size changes, and otherwise once a minute so a flat market
 // and a gap in the tape stay apart (`hb:1`). `t` on a print is the exchange's own timestamp; on a
@@ -90,12 +96,12 @@ function makeMakerTape(cfg, { io = fs, clock = Date.now } = {}) {
     for (const [ticker, m] of Object.entries(markets || {})) {
       const q = m && m.quotes;
       if (!q) continue;
-      const key = `${q.bid ?? ''}|${q.ask ?? ''}|${m.inv || 0}`;
+      const key = `${q.bid ?? ''}|${q.ask ?? ''}|${m.inv || 0}|${q.reduceOnly ? 1 : 0}`;
       if (lastQuote.get(ticker) === key) continue;
       pendQuote.set(ticker, key);
       const ahead = m.queue || {};
       lines.push(JSON.stringify({ mk: 'q', t: now, k: ticker, b: q.bid == null ? null : r4(q.bid), a: q.ask == null ? null : r4(q.ask), i: m.inv || 0,
-        qb: q.bid == null ? 0 : Math.round(ahead.bid || 0), qa: q.ask == null ? 0 : Math.round(ahead.ask || 0) }));
+        qb: q.bid == null ? 0 : Math.round(ahead.bid || 0), qa: q.ask == null ? 0 : Math.round(ahead.ask || 0), ...(q.reduceOnly ? { ro: 1 } : {}) }));
     }
     if (!lines.length) { inGap = nextGap; return; }
     try {

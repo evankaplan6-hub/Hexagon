@@ -7,6 +7,7 @@ const maker = require('./maker');
 const { makeMakerTape } = require('./makertape');
 const { makeTape } = require('./tape');
 const { openTradeStream } = require('./kalshi-ws');
+const { MAX_VENUE_DISAGREE } = require('./matcher');
 
 const realSleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -16,6 +17,8 @@ const c = (x) => `${(x * 100).toFixed(1)}c`;
 const money = (x) => `$${Math.abs(x).toFixed(2)}`;
 const SCAN_EVERY_MS = 15 * 60 * 1000;   // how often the universe is re-picked
 const EMPTY_RETRY_MS = 2 * 60 * 1000;   // ...and how soon after a scan that picked nothing
+const HOLD_EVERY_MS = 60 * 1000;        // how often a halted desk settles and re-marks what it holds
+const EVENTS_EVERY_MS = 6 * 3600 * 1000; // how often a listed series' events are re-read for the event rail
 
 // the exchange-wide tape grouped by ticker, oldest first as it arrived
 function bucket(trades) {
@@ -191,6 +194,23 @@ function makeMakerDesk(cfg, deps = {}) {
     await probeAndPick(E, rows);
   }
 
+  // Which events exclude each other's markets (Kalshi's `mutually_exclusive`), for the event rail.
+  // The crawl's rows carry it (src/discovery.js reads it off each event); a market listing does not,
+  // so a listed series costs one /events call the first time it is scanned and again every
+  // EVENTS_EVERY_MS -- about 38 calls every six hours, on a box whose CPU is the scarce thing. A
+  // failed call is retried after half an hour rather than on every fifteen-minute scan.
+  const eventMx = new Map();          // event ticker -> true / false
+  const eventsReadAt = new Map();     // series -> when its events were last read (or last failed)
+  async function readEvents(s) {
+    const at = eventsReadAt.get(s);
+    if (at != null && clock() - at < EVENTS_EVERY_MS) return;
+    try {
+      const d = await getWithBackoff(`${ks.BASE}/events?series_ticker=${s}&status=open&limit=200`);
+      for (const ev of (d.events || [])) if (ev && ev.event_ticker) eventMx.set(ev.event_ticker, ev.mutually_exclusive === true);
+      eventsReadAt.set(s, clock());
+    } catch { eventsReadAt.set(s, clock() - EVENTS_EVERY_MS + 30 * 60000); }
+  }
+
   // One listing call per series, filtered as it is read. The narrow path's whole scan, and the wide
   // path's top-up for series the crawl does not cover.
   async function scanSeries(E, seriesList) {
@@ -199,6 +219,7 @@ function makeMakerDesk(cfg, deps = {}) {
     for (const s of seriesList) {
       try {
         const d = await getWithBackoff(`${ks.BASE}/markets?series_ticker=${s}&status=open&limit=200`);
+        let evRead = false;
         for (const m of (d.markets || [])) {
           const b = parseFloat(m.yes_bid_dollars), a = parseFloat(m.yes_ask_dollars);
           const v = parseFloat(m.volume_24h_fp) || 0;
@@ -209,12 +230,16 @@ function makeMakerDesk(cfg, deps = {}) {
           if (v < cfg.makerMinVol24) continue;
           // Do not be carrying inventory when the market settles: that is a 0-or-1 coin flip, not
           // a spread. Cheap to check here -- close_time is already in the listing we just fetched.
-          const days = maker.daysToEnd(m.ticker, m.close_time, clock());
+          const days = maker.daysToEnd(m.ticker, m.close_time, clock(), cfg.makerEventDates, s);
           if (!(days >= cfg.makerMinDaysToClose)) continue;
           // top-of-book depth, free with this listing -- see marketStats
           const depth = ((parseFloat(m.yes_bid_size_fp) || 0) + (parseFloat(m.yes_ask_size_fp) || 0)) / 2;
+          // only a series with a quotable market pays for its events
+          if (!evRead && m.event_ticker) { evRead = true; await readEvents(s); }
+          const event = m.event_ticker || null;
           rows.push({ ticker: m.ticker, series: s, vol: v, spread: a - b, days, depth,
-            title: m.title || '', sub: m.yes_sub_title || '' });
+            title: m.title || '', sub: m.yes_sub_title || '',
+            event, ...(event && eventMx.has(event) ? { mx: eventMx.get(event) } : {}) });
         }
       } catch (e) { failed.push(s); }
       await sleep(150);                    // pace the scan; it runs once every 15 minutes
@@ -267,15 +292,129 @@ function makeMakerDesk(cfg, deps = {}) {
 
   // Polymarket's mid for each Kalshi market the pair scanner has paired and priced (engine.quote),
   // for the fair rail (maker.fairSide). A reading older than makerFairMaxAgeMin is no reading.
+  //
+  // Nor is a pair whose two venues sit more than MAX_VENUE_DISAGREE apart: at 30c the likelier
+  // explanation is that the pairing matched two different questions, which the any-market scanner
+  // has done (a US-only Spotify chart against Kalshi's worldwide one at 0.6c against 83c on
+  // 2026-09-20; Euro 2028 "qualify" against "win" 94c apart on 09-23), and a wrong fair value would
+  // steer which side rests. The fast matcher refuses such a pair when it pairs; the any-market one
+  // does not. Watch-only pairs stay in: the rail can only ever withdraw a side, so an unverified
+  // pair whose price agrees does no harm.
   function fairMap(E, now) {
     const out = new Map();
     if (!cfg.makerFairRail) return out;
     for (const p of E.pairs || []) {
       if (!p || !p.q || !p.ks || !p.ks.ticker || !Number.isFinite(p.q.pmMid)) continue;
       if (!(p.q.t > 0) || now - p.q.t > cfg.makerFairMaxAgeMin * 60000) continue;
+      if (Number.isFinite(p.q.ksMid) && Math.abs(p.q.pmMid - p.q.ksMid) > MAX_VENUE_DISAGREE) continue;
       if (!out.has(p.ks.ticker)) out.set(p.ks.ticker, p.q.pmMid);
     }
     return out;
+  }
+
+  // A finalized or determined market retires its inventory at what the exchange paid. Shared by the
+  // round and the hold round below; returns what it settled, or null when there was nothing to settle.
+  function settleFinal(E, S, ticker, m, lifecycle) {
+    const yesPx = lifecycle && (lifecycle.result === 'yes' ? 1 : lifecycle.result === 'no' ? 0
+      : ((lifecycle.status === 'determined' || lifecycle.status === 'finalized') && Number.isFinite(lifecycle.settlementValue)
+        ? lifecycle.settlementValue : null));
+    if (!m.inv || yesPx == null || !(yesPx >= 0 && yesPx <= 1)) return null;
+    const beforeInv = m.inv, beforeCost = m.cost || 0;
+    const res = maker.settlePosition(m, yesPx);
+    S.cash = r2(S.cash + res.cashDelta);
+    S.realized = r2((S.realized || 0) + res.pnl);
+    m.inv = res.inv; m.cost = res.cost; m.realized = res.realized;
+    m.mid = yesPx; m.quotes = { bid: null, ask: null };
+    m.settledPx = yesPx; m.settledAt = clock();
+    E.journal(E, 'MAKER_SETTLE', {
+      ticker, qty: beforeInv, cost: beforeCost, yesPx,
+      cashDelta: res.cashDelta, pnl: res.pnl, cash: S.cash,
+    });
+    return { qty: Math.abs(beforeInv), pnl: res.pnl };
+  }
+
+  // Mark every held market at its mid, and take the minute's equity sample.
+  //
+  // Equity history. The board could say what the desk is worth right now but never which way it
+  // had been going, and for a market maker that is the whole question -- banked cash only ever
+  // rises, so the shape of the mark against it is the actual P&L story. Sampled once a minute and
+  // capped at 5,000 minute samples (about 3.5 days). The former twelve-hour cutoff made the 24h
+  // button and "All" axis claim a range the combined chart did not actually possess.
+  function markBook(S) {
+    let inv = 0, mtm = 0;
+    for (const m of Object.values(S.markets)) { inv += Math.abs(m.inv); mtm += m.inv * (m.mid ?? 0.5); }
+    S.equity = r2(S.cash + mtm);
+    const nowMs = clock();
+    S.hist = S.hist || [];
+    const last = S.hist[S.hist.length - 1];
+    if (!last || nowMs - last.t >= 60000) {
+      S.hist.push({ t: nowMs, c: r2(S.realized || 0), m: r2(mtm), e: r2(S.equity - cfg.initialBalance) });
+      if (S.hist.length > 5000) S.hist.splice(0, S.hist.length - 5000);
+    }
+    return inv;
+  }
+
+  // Close one market's whole position at `px`, paying the TAKER fee -- getting out means crossing,
+  // and pretending otherwise is how the first backtest flattered itself. The operator's flatten and
+  // the event cross-out both go through here, so both write the one journal line (MAKER_FLATTEN)
+  // that tools/ledger-check.js already rebuilds.
+  //
+  // Flattening CLOSES a position, so it realises whatever that position made -- it used to move
+  // cash and then zero `inv` and `cost` without booking a cent of it, which breaks the same
+  // invariant maker.applyFill exists to hold: once flat, realised equals the change in cash.
+  // A desk flattened at a profit reported no profit at all. The crossing fee is a realised cost
+  // and comes off with it.
+  function closeAt(E, S, ticker, m, px, reason) {
+    const fee = ks.fee(Math.abs(m.inv), px, cfg.ksFeeRate, ticker);
+    const qty = Math.abs(m.inv);
+    const res = maker.applyFill(m, { side: m.inv > 0 ? 'sell' : 'buy', qty, px });
+    const pnl = r2(res.pnl - fee);
+    m.realized = r2(res.realized - fee);                  // applyFill already folded in res.pnl
+    S.realized = r2((S.realized || 0) + pnl);
+    S.cash = r2(S.cash + res.cashDelta - fee);
+    E.journal(E, 'MAKER_FLATTEN', { ticker, qty: m.inv, px, fee, pnl, reason });
+    m.inv = res.inv; m.cost = res.cost;
+    return { qty, pnl };
+  }
+
+  // The HOLD round: what a halted maker still does. A halt used to return before the book fetch, so
+  // while it lasted nothing held was settled or re-marked -- the halt line said "inventory held and
+  // marked" and neither was true -- and it could not be lifted: resume() cleared S.halted, the next
+  // round measured the drawdown again from the equity frozen at the halt, and halted again before
+  // anything had moved. On 2026-09-24 the maker was $83.60 above its 10% rail with 4,682 contracts
+  // held, nine of those markets due to settle within the week. So a halt still withdraws every quote
+  // and rests none, and once a minute it fetches the books of what it holds, settles what has
+  // finalized and re-marks the rest. No universe scan, no prints, no quotes: whether a halted desk
+  // should work anything off is a separate decision with its own evidence. The operator's halt
+  // (flatten, the kill switch) is not this: it returns before anything is asked.
+  let heldAt = 0;
+  async function hold(E, S, withdraw) {
+    withdraw();
+    if (clock() - heldAt < HOLD_EVERY_MS) return;
+    heldAt = clock();
+    const tickers = Object.keys(S.markets).filter((t) => S.markets[t].inv);
+    let bookRes = { books: new Map(), markets: new Map() };
+    if (tickers.length) {
+      try { bookRes = await tape.books(tickers); }
+      catch (e) {
+        if (E.due('makr-hold-fail', 300)) E.log('MAKR', 'OPS', null, `halted: market data failed (${String(e.message).slice(0, 80)}) · held inventory not re-marked this minute`);
+        return;
+      }
+    }
+    let settled = 0, settledQty = 0, settledPnl = 0;
+    for (const t of tickers) {
+      const m = S.markets[t];
+      const done = settleFinal(E, S, t, m, bookRes.markets && bookRes.markets.get(t));
+      if (done) { settled++; settledQty += done.qty; settledPnl = r2(settledPnl + done.pnl); continue; }
+      const bk = bookRes.books.get(t);
+      if (!bk) continue;
+      const q = maker.desiredQuotes(bk, m.inv, cfg);
+      m.mid = q.mid ?? m.mid;
+      m.spread = q.spread ?? null;
+    }
+    markBook(S);
+    if (settled) E.log('MAKR', 'SETTLE', settledPnl, `halted, still settling: ${settled} finalized market${settled === 1 ? '' : 's'}, ${Math.round(settledQty)} contracts · realised ${settledPnl >= 0 ? '+' : '-'}${money(settledPnl)} · equity ${money(S.equity)}`);
+    E.dirty = true;
   }
 
   async function step(E) {
@@ -294,7 +433,7 @@ function makeMakerDesk(cfg, deps = {}) {
       // tell the tape: without this it would show the last quote resting straight through the halt
       recordTape(E, { markets: S.markets, gap: 'halt', ...extra });
     };
-    if (E.operatorHalt || E.halt || S.halted) { withdraw(); return; }
+    if (E.operatorHalt) { withdraw(); return; }
 
     // Own drawdown rail. TESS watches the taker book and would never see this desk bleeding,
     // because the two ledgers are separate on purpose.
@@ -309,12 +448,12 @@ function makeMakerDesk(cfg, deps = {}) {
     S.peak = peak;
     if (dd >= cfg.makerMaxDrawdownPct && !S.halted) {
       S.halted = `maker drawdown ${(dd * 100).toFixed(1)}% from a peak of ${money(S.peak)} hit the ${(cfg.makerMaxDrawdownPct * 100).toFixed(0)}% limit`;
-      E.log('MAKR', 'OPS', null, `HALT · ${S.halted} · quotes withdrawn, inventory held and marked`);
+      E.log('MAKR', 'OPS', null, `HALT · ${S.halted} · quotes withdrawn; held inventory is still settled and re-marked once a minute, and resume measures the drawdown afresh from the equity then`);
       E.journal(E, 'MAKER_HALT', { reason: S.halted, equity: S.equity });
     }
-    // A halt means stop QUOTING. Existing inventory is still marked; withdrawing quotes is the
-    // maker equivalent of KETT standing down.
-    if (E.operatorHalt || E.halt || S.halted) { withdraw(); return; }
+    // A halt means stop QUOTING. Existing inventory is still settled and marked (the hold round);
+    // withdrawing quotes is the maker equivalent of KETT standing down.
+    if (E.halt || S.halted) { await hold(E, S, withdraw); return; }
     // The scan costs 38 series listings plus 40 trade-rate probes -- about 23 seconds, against a
     // 15-second tick. Awaiting it made the whole desk skip ticks every fifteen minutes, taker side
     // included. The first one has to block (there is nothing to quote yet); after that it runs in
@@ -371,31 +510,28 @@ function makeMakerDesk(cfg, deps = {}) {
 
     let filled = 0, netQty = 0, settled = 0, settledQty = 0, settledPnl = 0;
     const fairOf = fairMap(E, clock());
+    // Which event each market belongs to: the row's, then the ledger's, then the ticker less its last
+    // segment (a ledger older than the event rail knows none). The ledger's markets of each event,
+    // for the event rail; which of them are held is read live below, so a fill earlier in this
+    // round counts, even one that opened a leg.
+    const eventOf = (t, m, u) => u.event || m.event || (t.includes('-') ? t.slice(0, t.lastIndexOf('-')) : t);
+    const heldIn = new Map();
+    for (const [t, m] of Object.entries(S.markets)) {
+      const ev = eventOf(t, m, {});
+      if (!heldIn.has(ev)) heldIn.set(ev, []);
+      heldIn.get(ev).push(t);
+    }
     for (const u of work) {
       const m = S.markets[u.ticker] || (S.markets[u.ticker] = { series: u.series, inv: 0, cost: 0, realized: 0, fills: 0, quotes: { bid: null, ask: null }, seen: [] });
       // A ticker like KXBALANCEPOWERCOMBO-27FEB-RR says nothing about what is being traded. Keep
       // the exchange's own words for it, and keep them on the ledger so a market that drops out of
       // the universe can still say what it was.
       if (u.title) { m.title = u.title; m.sub = u.sub || ''; }
-      const lifecycle = bookRes.markets && bookRes.markets.get(u.ticker);
-      const yesPx = lifecycle && (lifecycle.result === 'yes' ? 1 : lifecycle.result === 'no' ? 0
-        : ((lifecycle.status === 'determined' || lifecycle.status === 'finalized') && Number.isFinite(lifecycle.settlementValue)
-          ? lifecycle.settlementValue : null));
-      if (m.inv && yesPx != null && yesPx >= 0 && yesPx <= 1) {
-        const beforeInv = m.inv, beforeCost = m.cost || 0;
-        const res = maker.settlePosition(m, yesPx);
-        S.cash = r2(S.cash + res.cashDelta);
-        S.realized = r2((S.realized || 0) + res.pnl);
-        m.inv = res.inv; m.cost = res.cost; m.realized = res.realized;
-        m.mid = yesPx; m.quotes = { bid: null, ask: null };
-        m.settledPx = yesPx; m.settledAt = clock();
-        settled++; settledQty += Math.abs(beforeInv); settledPnl = r2(settledPnl + res.pnl);
-        E.journal(E, 'MAKER_SETTLE', {
-          ticker: u.ticker, qty: beforeInv, cost: beforeCost, yesPx,
-          cashDelta: res.cashDelta, pnl: res.pnl, cash: S.cash,
-        });
-        continue;
-      }
+      // and its event, so the event rail still sees it as one leg of a race once it is pinned
+      if (u.event) m.event = u.event;
+      if (typeof u.mx === 'boolean') m.mx = u.mx;
+      const done = settleFinal(E, S, u.ticker, m, bookRes.markets && bookRes.markets.get(u.ticker));
+      if (done) { settled++; settledQty += done.qty; settledPnl = r2(settledPnl + done.pnl); continue; }
       const trades = byTicker.get(u.ticker) || [];        // already oldest-first
       const bk = bookRes.books.get(u.ticker);
       // Nothing of ours was resting (the first round after a start): the saved quote goes before
@@ -438,6 +574,27 @@ function makeMakerDesk(cfg, deps = {}) {
       for (const t of trades) seen.add(t.trade_id);
       m.seen = [...seen].slice(-400);                       // bounded
 
+      // An event with a configured date (cfg.makerEventDates: the midterms) is not held into it.
+      // Inside makerEventCrossDays of the date whatever is still held is crossed out at this round's
+      // touch, as a flatten would, and nothing is quoted again. A book with nothing on the side to
+      // cross into is tried again next round.
+      const evDays = maker.eventDateDays(m.series || u.series || u.ticker.split('-')[0], cfg.makerEventDates, clock());
+      if (evDays != null && evDays < cfg.makerEventCrossDays) {
+        const lvl = m.inv > 0 ? bk.yesBids[0] : m.inv < 0 ? bk.yesAsks[0] : null;
+        const when = evDays < 0 ? 'past' : `${(evDays * 24).toFixed(0)}h away`;
+        if (lvl && Number.isFinite(lvl.price)) {
+          const out = closeAt(E, S, u.ticker, m, lvl.price, `event ${when}`);
+          E.log('MAKR', 'OPS', out.pnl, `${u.ticker}: its event is ${when} · crossed out ${out.qty} at ${c(lvl.price)} (${out.pnl >= 0 ? '+' : '-'}${money(out.pnl)} after the taker fee)`);
+        }
+        m.queue = maker.queueAfter(m.quotes, m.queue, { bid: null, ask: null }, bk);
+        m.quotes = { bid: null, ask: null };
+        const bq = maker.desiredQuotes(bk, m.inv, cfg);
+        m.mid = bq.mid ?? m.mid;
+        m.spread = bq.spread ?? null;
+        m.why = m.inv ? `event ${when} · nothing on the book to cross into` : `event ${when} · not quoted`;
+        continue;
+      }
+
       // 2) rest a fresh quote for the next cycle. No sleep here any more -- there is no per-market
       // request left to pace, so the whole book requotes in one pass.
       const q = maker.desiredQuotes(bk, m.inv, cfg);
@@ -464,11 +621,24 @@ function makeMakerDesk(cfg, deps = {}) {
         E.log('MAKR', 'OPS', null, `${u.ticker} cooled ${cfg.makerToxCooldownMin}m: ${(g.rate * 100).toFixed(0)}% of ${cfg.makerToxByContracts ? 'the contracts in ' : ''}its last ${m.fills < 30 ? m.fills : 30} fills were run over (limit ${(cfg.makerMaxRunOver * 100).toFixed(0)}%) · quotes withdrawn, ${Math.abs(m.inv)} held`);
         E.journal(E, 'MAKER_COOL', { ticker: u.ticker, rate: r4(g.rate), inv: m.inv, until: new Date(g.cooledUntil).toISOString() });
       }
-      // reduce-only: drop whichever side would grow the position
+      // The event rail (maker.eventSide): on an event whose markets exclude each other, a side whose
+      // fill would push the event's worst outcome past makerEventMaxLoss is not rested. The side
+      // that shrinks this market's own position always stays.
+      const ev = eventOf(u.ticker, m, u);
+      const mx = typeof u.mx === 'boolean' ? u.mx : m.mx === true;
+      const legs = mx && cfg.makerEventMaxLoss > 0
+        ? [...new Set([...(heldIn.get(ev) || []), u.ticker])].filter((t) => t === u.ticker || S.markets[t].inv)
+          .map((t) => ({ ticker: t, inv: S.markets[t].inv || 0, cost: S.markets[t].cost || 0 }))
+        : null;
+      const er = legs ? maker.eventSide(fr, legs, u.ticker, cfg.makerEventMaxLoss) : null;
+      const side = er || fr;
+      // Reduce-only: drop whichever side would grow the position, and flag what is left so fillsFrom
+      // stops it at flat. The flag rides on m.quotes, so it holds for the next round's prints and
+      // across a restart, and on the tape's quote line, so the fill check replays the same rule.
+      // The tails and a too-narrow book are flagged by desiredQuotes itself.
       const next = g.cooled ? { bid: null, ask: null }
-        : u.reduceOnly ? { bid: m.inv < 0 ? fr.bid : null, ask: m.inv > 0 ? fr.ask : null }
-        : gainLocked ? { bid: m.inv < 0 ? fr.bid : null, ask: m.inv > 0 ? fr.ask : null }
-        : { bid: fr.bid, ask: fr.ask };
+        : u.reduceOnly || gainLocked ? { bid: m.inv < 0 ? side.bid : null, ask: m.inv > 0 ? side.ask : null, ...(m.inv ? { reduceOnly: true } : {}) }
+        : { bid: side.bid, ask: side.ask, ...(q.reduceOnly ? { reduceOnly: true } : {}) };
       // Queue position (maker.queueAfter): moving to a new price puts us at the back of whatever is
       // resting there; staying put keeps the position we have already worked down. A cancel-replace
       // at the same price would lose it, which is a reason not to churn quotes still at the touch.
@@ -478,6 +648,7 @@ function makeMakerDesk(cfg, deps = {}) {
       m.spread = q.spread ?? null;
       m.why = g.cooled ? `cooled until ${new Date(g.cooledUntil).toISOString().slice(11, 16)}Z · run-over ${(g.rate * 100).toFixed(0)}%`
         : fr.against ? `${fr.against === 'both' ? 'both sides' : fr.against} against Polymarket (${(fair * 100).toFixed(1)}c)${q.why ? ` · ${q.why}` : ''}`
+        : er && er.against ? `${er.against === 'both' ? 'both sides' : er.against} would deepen ${ev} past -${money(cfg.makerEventMaxLoss)} (worst outcome ${er.worst < 0 ? '-' : '+'}${money(er.worst)})${q.why ? ` · ${q.why}` : ''}`
         : (q.why || null);
     }
 
@@ -496,24 +667,10 @@ function makeMakerDesk(cfg, deps = {}) {
       if (m.queue) delete m.queue;
     }
 
-    // mark inventory at the current mid
-    let inv = 0, mtm = 0;
-    for (const m of Object.values(S.markets)) { inv += Math.abs(m.inv); mtm += m.inv * (m.mid ?? 0.5); }
-    S.equity = r2(S.cash + mtm);
+    // mark inventory at the current mid, and the minute's equity sample
+    const inv = markBook(S);
     if (settled) E.log('MAKR', 'SETTLE', settledPnl, `settled ${settled} finalized market${settled === 1 ? '' : 's'}, ${Math.round(settledQty)} contracts · realised ${settledPnl >= 0 ? '+' : '-'}${money(settledPnl)} · equity ${money(S.equity)}`);
 
-    // Equity history. The board could say what the desk is worth right now but never which way it
-    // had been going, and for a market maker that is the whole question -- banked cash only ever
-    // rises, so the shape of the mark against it is the actual P&L story. Sampled once a minute and
-    // capped at 5,000 minute samples (about 3.5 days). The former twelve-hour cutoff made the 24h
-    // button and "All" axis claim a range the combined chart did not actually possess.
-    const nowMs = clock();
-    S.hist = S.hist || [];
-    const last = S.hist[S.hist.length - 1];
-    if (!last || nowMs - last.t >= 60000) {
-      S.hist.push({ t: nowMs, c: r2(S.realized || 0), m: r2(mtm), e: r2(S.equity - cfg.initialBalance) });
-      if (S.hist.length > 5000) S.hist.splice(0, S.hist.length - 5000);
-    }
     // the data this round already fetched, kept: see src/makertape.js
     recordTape(E, { books: bookRes.books, trades: byTicker, markets: S.markets, at: bookRes.at, missed: !!tapeRes.gap });
     E.touch('MAKR', filled ? `${filled} fills, ${Math.round(netQty)} contracts` : `${universe.length} quoted, ${Math.round(inv)} inv`);
@@ -526,8 +683,7 @@ function makeMakerDesk(cfg, deps = {}) {
     E.dirty = true;
   }
 
-  // Flatten every market's inventory at the touch, paying the TAKER fee -- getting out means
-  // crossing, and pretending otherwise is how the first backtest flattered itself. Called by
+  // Flatten every market's inventory at the touch, paying the TAKER fee (closeAt). Called by
   // engine.flattenAll so one kill switch covers both desks.
   async function flatten(E, reason) {
     const S = book(E);
@@ -540,21 +696,8 @@ function makeMakerDesk(cfg, deps = {}) {
         const bk = await fetchBook(ticker);
         px = m.inv > 0 ? (bk.yesBids[0] ? bk.yesBids[0].price : px) : (bk.yesAsks[0] ? bk.yesAsks[0].price : px);
       } catch { /* fall back to the last mark */ }
-      const fee = ks.fee(Math.abs(m.inv), px, cfg.ksFeeRate, ticker);
-      // Flattening CLOSES a position, so it realises whatever that position made -- it used to move
-      // cash and then zero `inv` and `cost` without booking a cent of it, which breaks the same
-      // invariant maker.applyFill exists to hold: once flat, realised equals the change in cash.
-      // A desk flattened at a profit reported no profit at all. The crossing fee is a realised cost
-      // and comes off with it.
-      const qty = Math.abs(m.inv);
-      const res = maker.applyFill(m, { side: m.inv > 0 ? 'sell' : 'buy', qty, px });
-      const pnl = r2(res.pnl - fee);
-      m.realized = r2(res.realized - fee);                  // applyFill already folded in res.pnl
-      S.realized = r2((S.realized || 0) + pnl);
-      S.cash = r2(S.cash + res.cashDelta - fee);
-      E.journal(E, 'MAKER_FLATTEN', { ticker, qty: m.inv, px, fee, pnl, reason });
-      contracts += qty; closed++;
-      m.inv = res.inv; m.cost = res.cost;
+      const out = closeAt(E, S, ticker, m, px, reason);
+      contracts += out.qty; closed++;
     }
     S.equity = r2(S.cash);
     S.halted = `flattened by operator (${reason})`;
@@ -562,7 +705,16 @@ function makeMakerDesk(cfg, deps = {}) {
     return { markets: closed, contracts };
   }
 
-  function resume(E) { const S = book(E); S.halted = null; }
+  // Resuming starts the drawdown over from where the book stands. Without that a drawdown halt could
+  // never be lifted: the peak stayed where it was, the next round measured the same loss against it
+  // and halted again. The peak moves only when this desk was halted -- an operator resume that
+  // clears some other halt must not quietly loosen the maker's rail.
+  function resume(E) {
+    const S = book(E);
+    if (S.halted && Number.isFinite(S.equity)) S.peak = S.equity;
+    S.halted = null;
+    heldAt = 0;
+  }
 
   // What the dashboard gets. Deliberately NOT a spread of the raw ledger: each market carries a
   // 400-entry `seen` list for trade de-duplication, and streaming 26 of those to every connected

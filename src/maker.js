@@ -39,7 +39,6 @@ function desiredQuotes(book, inv, cfg) {
   if (bid == null || ask == null || !(ask > bid)) return { bid: null, ask: null, why: 'one-sided book' };
   const spread = ask - bid;
   const mid = (bid + ask) / 2;
-  if (spread < cfg.makerMinSpread - 1e-9) return { bid: null, ask: null, spread, mid, why: `spread ${c(spread)} under ${c(cfg.makerMinSpread)}` };
   // The tails are where a one-tick spread is worth least against the risk, so a market priced
   // there gets no NEW position. It used to get no quote at all, and that was the ordering bug:
   // this refusal ran before makerdesk's reduce-only logic ever saw the market, so inventory that
@@ -48,8 +47,17 @@ function desiredQuotes(book, inv, cfg) {
   // rotated out of was in the same position once its price moved. A tail is precisely where a
   // position is on its way to resolving at 0 or 1, which is the coin flip this desk is not paid to
   // take. So the reducing side stays up: a short keeps bidding, a long keeps offering.
-  if (mid < cfg.makerMinMid || mid > cfg.makerMaxMid) {
-    return { bid: inv < 0 ? bid : null, ask: inv > 0 ? ask : null, spread, mid, why: inv ? 'price in the tails · reducing only' : 'price in the tails' };
+  //
+  // A spread under the minimum is the same kind of refusal and gets the same rule. It used to return
+  // nothing on either side, ahead of the tails, so a held market Kalshi prices in tenths of a cent
+  // could never be worked off once its book narrowed: on 2026-09-24 seven held markets, 268
+  // contracts, sat with no quote at all under "spread 0.Xc under 1.0c", CONTROLH-2026-R at +100 and
+  // -D at -100 since 09-19. Both refusals now keep the reducing side and flag the quote reduce-only,
+  // so fillsFrom stops it at flat rather than letting a sweep carry it through zero.
+  const narrow = spread < cfg.makerMinSpread - 1e-9;
+  if (narrow || mid < cfg.makerMinMid || mid > cfg.makerMaxMid) {
+    const why = narrow ? `spread ${c(spread)} under ${c(cfg.makerMinSpread)}` : 'price in the tails';
+    return { bid: inv < 0 ? bid : null, ask: inv > 0 ? ask : null, spread, mid, why: inv ? `${why} · reducing only` : why, ...(inv ? { reduceOnly: true } : {}) };
   }
   // Withdraw the GROWING side at a fraction of the cap, not at the cap. A quote resting at the
   // touch while already long half the cap is an invitation to the next sweep to fill the other
@@ -92,7 +100,19 @@ function fairSide(q, fair, margin, reducing = null) {
 // ahead of it, and scoring the backtest with real depth cut it from +$2187 to +$210. A paper desk
 // that fills instantly at a price where 15,700 orders sit in front of it is not paper trading, it
 // is fiction. Returns the queue it has left so the caller can carry it to the next cycle.
+//
+// A quote flagged `reduceOnly` (a market being worked off, a gain lock, a book in the tails or under
+// the minimum spread) exists to take the position to flat and no further. Quotes carry no size, so
+// it used to be limited by the cap alone and one sweep filled it straight through zero: KXRT-PRI-90
+// went from short 87 to long 99 at 25c in one round on 2026-09-24, and between the MAKER_WIDEN=0
+// deploy (09-23 18:50Z) and 18:05Z the next day 3,010 of the 6,203 contracts traded on work-off
+// markets opened new positions instead of closing old ones -- about $58 of loss, and 1,792 contracts
+// still held where stopping at flat would have left 640. So each fill on a flagged quote is CLIPPED
+// to what is still held (not skipped: a sweep bigger than the position still closes it), and the
+// quote fills nothing once the position is flat. The flag rides on the quote itself, persisted in
+// m.quotes, because the fair rail also leaves a normal market one-sided and that side is not capped.
 function fillsFrom(trades, quotes, inv, cfg, seen, queue) {
+  const toFlat = !!quotes.reduceOnly;
   const out = [];
   let position = inv;
   let qb = Math.max(0, (queue && queue.bid) || 0), qa = Math.max(0, (queue && queue.ask) || 0);
@@ -102,7 +122,8 @@ function fillsFrom(trades, quotes, inv, cfg, seen, queue) {
     if (!Number.isFinite(p) || n <= 0) continue;
     if (t.taker_book_side === 'bid' && quotes.ask != null && quotes.ask <= p) {
       const eaten = Math.min(qa, n); qa -= eaten;          // they filled the orders ahead of us first
-      const qty = Math.floor((n - eaten) * cfg.makerParticipation);
+      let qty = Math.floor((n - eaten) * cfg.makerParticipation);
+      if (toFlat) qty = Math.min(qty, Math.max(0, position));
       if (qty < 1) continue;
       if (position - qty < -cfg.makerCap) continue;
       position -= qty;
@@ -110,7 +131,8 @@ function fillsFrom(trades, quotes, inv, cfg, seen, queue) {
       out.push({ side: 'sell', px: quotes.ask, qty, tradePx: p, runOver: quotes.ask < p, id: t.trade_id });
     } else if (t.taker_book_side === 'ask' && quotes.bid != null && quotes.bid >= p) {
       const eaten = Math.min(qb, n); qb -= eaten;
-      const qty = Math.floor((n - eaten) * cfg.makerParticipation);
+      let qty = Math.floor((n - eaten) * cfg.makerParticipation);
+      if (toFlat) qty = Math.min(qty, Math.max(0, -position));
       if (qty < 1) continue;
       if (position + qty > cfg.makerCap) continue;
       position += qty;
@@ -238,11 +260,36 @@ function tickerEventDays(ticker, now = Date.now()) {
   return (end - now) / 86400000;
 }
 
-// Days until this market can no longer be safely quoted: the earlier of its close time and the event
-// date its ticker names. NaN when neither is known, which every caller treats as "refuse".
-function daysToEnd(ticker, closeTime, now = Date.now()) {
+// The event date a SERIES names, for markets whose tickers carry none. The midterms are the case:
+// SENATETX-26-D, CONTROLS-2026-R and KXBALANCEPOWERCOMBO-27FEB-DR resolve on election night, but the
+// ticker has no day and close_time (and expected_expiration_time) sits 130 to 405 days out, so the
+// 7-day rail read them as far away and the desk would have quoted both sides, at the cap, into
+// 2026-11-03. On 2026-09-24 those series held 1,964 of the book's 4,682 contracts (about $913 if every
+// one went against the desk). Kalshi's event record has no date either, so the date is configured:
+// `eventDates` is cfg.makerEventDates, [pattern, 'YYYY-MM-DD'] pairs, where a pattern ending in `*`
+// is a series prefix. The day is read to its last second UTC, as tickerEventDays reads a ticker's.
+// null when no pattern matches.
+function eventDateDays(series, eventDates, now = Date.now()) {
+  if (!series || !Array.isArray(eventDates)) return null;
+  let best = null;
+  for (const [p, date] of eventDates) {
+    if (!(p.endsWith('*') ? series.startsWith(p.slice(0, -1)) : series === p)) continue;
+    const end = Date.parse(`${date}T23:59:59Z`);
+    if (!Number.isFinite(end)) continue;
+    const d = (end - now) / 86400000;
+    if (best == null || d < best) best = d;
+  }
+  return best;
+}
+
+// Days until this market can no longer be safely quoted: the earliest of its close time, the event
+// date its ticker names and the event date configured for its series. NaN when none is known, which
+// every caller treats as "refuse". `series` defaults to the ticker's first segment, which is the
+// series for every market the event-date list names.
+function daysToEnd(ticker, closeTime, now = Date.now(), eventDates = null, series = null) {
   const c = closeTime ? (Date.parse(closeTime) - now) / 86400000 : NaN;
-  const t = tickerEventDays(ticker, now);
+  const dated = [tickerEventDays(ticker, now), eventDateDays(series || String(ticker || '').split('-')[0], eventDates, now)].filter((x) => x != null);
+  const t = dated.length ? Math.min(...dated) : null;
   return t == null ? (Number.isFinite(c) ? c : 0) : Math.min(Number.isFinite(c) ? c : Infinity, t);
 }
 
@@ -258,10 +305,12 @@ function candidatesFrom(markets, feeTypeOf, cfg, now = Date.now()) {
     if (a - b < cfg.makerMinSpread - 1e-9) continue;
     if ((m.vol24 || 0) < cfg.makerMinVol24) continue;
     // Do not be holding inventory when the market settles: that is a 0-or-1 coin flip, not a spread.
-    const days = daysToEnd(m.ticker, m.closeTime, now);
+    const days = daysToEnd(m.ticker, m.closeTime, now, cfg.makerEventDates, series);
     if (!(days >= cfg.makerMinDaysToClose)) continue;
     rows.push({
       ticker: m.ticker, series, vol: m.vol24 || 0, spread: a - b, days,
+      // which event it belongs to and whether that event's markets exclude each other, for the event rail
+      event: m.eventTicker || null, mx: m.mutuallyExclusive === true,
       depth: ((m.yesBidSize || 0) + (m.yesAskSize || 0)) / 2,
       title: m.title || '', sub: m.yesSubTitle || m.subTitle || '',
     });
@@ -287,6 +336,38 @@ function gainLock(m, markPnl, cfg) {
   const trigger = cost * (cfg.gainLockTriggerPct || 0);
   const floor = peak - cost * (cfg.gainLockGivebackPct || 0);
   return { peak, side, locked: side !== 0 && peak >= trigger && markPnl <= floor };
+}
+
+// ---------------------------------------------------------------- one event, one bet
+// The per-market cap does not see that long YES on one side of a two-way race and short YES on the
+// other are the same bet. The fair rail makes it worse: Polymarket's price says the same thing about
+// both legs, so both rest the side that agrees with it and both fill the same way. On 2026-09-24 the
+// box held SENATETX-26 +100 D / -100 R (-$115.40 if R wins), CONTROLS-2026 -100 R / +61 D (-$101.41)
+// and KXBALANCEPOWERCOMBO-27FEB DD +98 / DR -97 / RR +30 (-$135.23): each within the per-market cap,
+// each a doubled position. So on an event whose markets exclude each other (Kalshi's
+// `mutually_exclusive`), the settlement P&L of every held leg is summed for each way it can resolve --
+// each listed market winning alone, and none of them -- and a side whose fill would push the worst of
+// those past -`limit` dollars, and further than it already is, is not rested. The side that shrinks
+// its own market's position always stays up. Events whose markets can pay together (thresholds,
+// "nominated for") are left to the per-market cap: summing them this way would be wrong.
+// `legs` is [{ ticker, inv, cost }] for the held markets of the event, this one included; a fill is
+// probed at one contract, as the soft cap probes, rather than sized.
+function eventWorst(legs) {
+  let low = 0, cost = 0;
+  for (const l of legs) { low = Math.min(low, l.inv || 0); cost += l.cost || 0; }
+  return low - cost;
+}
+function eventSide(q, legs, ticker, limit) {
+  const own = legs.find((l) => l.ticker === ticker) || { ticker, inv: 0, cost: 0 };
+  const others = legs.filter((l) => l.ticker !== ticker);
+  const before = eventWorst(legs);
+  const deepens = (dir, px) => {
+    const after = eventWorst([...others, { ticker, inv: (own.inv || 0) + dir, cost: (own.cost || 0) + dir * px }]);
+    return after < -limit - 1e-9 && after < before - 1e-9;
+  };
+  const bidOk = q.bid == null || (own.inv || 0) < 0 || !deepens(1, q.bid);
+  const askOk = q.ask == null || (own.inv || 0) > 0 || !deepens(-1, q.ask);
+  return { bid: bidOk ? q.bid : null, ask: askOk ? q.ask : null, worst: r2(before), against: bidOk && askOk ? null : !bidOk && !askOk ? 'both' : bidOk ? 'ask' : 'bid' };
 }
 
 // ---------------------------------------------------------------- toxicity
@@ -361,4 +442,4 @@ async function eligibleSeries(candidates, { getJSON = http.getJSON, sleep = (ms)
   return ok;
 }
 
-module.exports = { tickerEventDays, daysToEnd, desiredQuotes, fairSide, queueAfter, fillsFrom, applyFill, settlePosition, gainLock, toxWindow, toxicGate, drawdownFrom, eligibleSeries, candidatesFrom };
+module.exports = { tickerEventDays, eventDateDays, daysToEnd, desiredQuotes, eventWorst, eventSide, fairSide, queueAfter, fillsFrom, applyFill, settlePosition, gainLock, toxWindow, toxicGate, drawdownFrom, eligibleSeries, candidatesFrom };

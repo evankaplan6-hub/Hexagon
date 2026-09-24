@@ -152,7 +152,8 @@ function replayMarket(trades, cfg, { since, until, queue = QUEUE }) {
     // 2) rest a fresh quote off the book as it now stands, exactly as makerdesk does
     const requote = (at) => {
       const q = maker.desiredQuotes(bookOf(book), m.inv, cfg);
-      let next = { bid: q.bid, ask: q.ask };
+      // a quote in the tails or under the minimum spread is reduce-only, and fillsFrom stops it at flat
+      let next = { bid: q.bid, ask: q.ask, ...(q.reduceOnly ? { reduceOnly: true } : {}) };
       const g = maker.toxicGate(m, cfg, at);
       m.tox = g.tox; m.cooledUntil = g.cooledUntil;
       if (g.cooled) { next = { bid: null, ask: null }; if (g.tripped) s.cooled++; }
