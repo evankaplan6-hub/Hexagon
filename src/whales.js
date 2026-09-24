@@ -117,7 +117,9 @@ function describe(bet, w, ctx = {}) {
 }
 
 // ---------------------------------------------------------------- the record
-// Every called bet is a line in whales-YYYY-MM-DD.jsonl under dataDir, the ET day it was called.
+// Every fresh bet is a line in whales-YYYY-MM-DD.jsonl under dataDir, the ET day it was seen. Since
+// 2026-09-24 that includes the ones bought at WHALE_MAX_PX or dearer, which are recorded but not
+// called on the floor (nearSettled), so a line is a bet seen, not always one announced.
 const recordPath = (dir, day) => path.join(dir, `whales-${day}.jsonl`);
 
 // The ET days whose files can hold a bet made since `fromMs`. A bet is called after it is made, so
@@ -130,7 +132,7 @@ function recordDays(fromMs, nowMs) {
   return [...days];
 }
 
-// The bets already called that were made at or after `fromTs` (unix seconds), one per key -- the
+// The bets already recorded that were made at or after `fromTs` (unix seconds), one per key -- the
 // first time it was said, since past restarts wrote repeats -- in the order they were called. A
 // missing file is a quiet day. A torn or foreign line is skipped, and so is a record under an
 // outcome the feed had not indexed yet: no bet can have that key any more.
