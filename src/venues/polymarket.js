@@ -116,18 +116,18 @@ async function fetchPrices(tokenIds) {
     const chunk = tokenIds.slice(i, i + 100);
     const body = chunk.flatMap((t) => [{ token_id: t, side: 'BUY' }, { token_id: t, side: 'SELL' }]);
     const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), 15000);
+    const held = { abort: () => ctl.abort(), what: `${CLOB}/prices` };
     try {
-      const r = await fetch(`${CLOB}/prices`, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify(body), signal: ctl.signal });
+      // the deadline is kept whether or not fetch honours the abort (src/http.js deadline)
+      const r = await http.deadline(fetch(`${CLOB}/prices`, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify(body), signal: ctl.signal }), 15000, held);
       if (!r.ok) throw new Error(`HTTP ${r.status} ${CLOB}/prices`);
-      const j = await r.json();
+      const j = await http.deadline(r.json(), 15000, held);
       http.stats.ok++;
       for (const [tok, v] of Object.entries(j || {})) {
         const bid = num(v.BUY), ask = num(v.SELL);
         if (bid != null && ask != null && ask > bid) out.set(tok, { bid, ask });
       }
     } catch (e) { http.noteError(e); throw e; }
-    finally { clearTimeout(timer); }
   }
   return out;
 }

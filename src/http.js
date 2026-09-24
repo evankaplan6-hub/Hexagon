@@ -92,6 +92,26 @@ function inflight(now = Date.now(), n = 5) {
 }
 const queued = () => [...pacers.values()].reduce((n, p) => n + p.queued(), 0);
 
+// A deadline a call cannot outlive. The AbortController is asked first, and on a normal day that
+// is what ends a slow call. It is not what ended the box's: from 2026-09-20 to 09-22 the watchdog
+// restarted the desk 48 times, and every report showed the same thing -- calls in the "fetch" phase
+// 290-635 seconds old, against a 15-second abort, while the watchdog's own timer had fired on time
+// (so the process was not asleep). Whatever the runtime's fetch was waiting on, it did not honour
+// the abort, and a taker round that awaits five such calls never finishes. So the abort is a
+// request and the race is the guarantee: the caller gets a timeout error at `ms` whether or not
+// fetch ever settles. A promise that settles late settles into the race's own handler, never as an
+// unhandled rejection.
+function deadline(promise, ms, { abort = null, what = '' } = {}) {
+  let timer;
+  const late = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      try { if (abort) abort(); } catch { /* the abort is best effort; the rejection is not */ }
+      reject(Object.assign(new Error(`timed out after ${ms}ms${what ? ` ${what}` : ''}`), { code: 'ETIMEDOUT', timeout: true }));
+    }, ms);
+  });
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+}
+
 async function getJSON(url, { timeout = 15000, priority = false, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
   for (let attempt = 0; ; attempt++) {
     const call = { url, since: Date.now(), phase: 'queue' };
@@ -100,10 +120,10 @@ async function getJSON(url, { timeout = 15000, priority = false, sleep = (ms) =>
     await takeTurn(url, priority);
     call.phase = 'fetch';
     const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), timeout);
     let retryAfter = null;
     try {
-      const r = await fetch(url, { signal: ctl.signal, headers: { accept: 'application/json', 'user-agent': 'the-hexagon/1.0' } });
+      // the headers and the body both inside the one deadline: a body that never ends is the same stall
+      const r = await deadline(fetch(url, { signal: ctl.signal, headers: { accept: 'application/json', 'user-agent': 'the-hexagon/1.0' } }), timeout, { abort: () => ctl.abort(), what: url.slice(0, 90) });
       if (!r.ok) {
         // A refusal still has a body, and nothing here reads it. Left unread it holds its connection
         // until the garbage collector gets to it -- and a 429 is answered by calling the same host
@@ -119,7 +139,7 @@ async function getJSON(url, { timeout = 15000, priority = false, sleep = (ms) =>
           throw err;
         }
       } else {
-        const j = await r.json();
+        const j = await deadline(r.json(), timeout, { abort: () => ctl.abort(), what: url.slice(0, 90) });
         stats.ok++;
         return j;
       }
@@ -127,11 +147,10 @@ async function getJSON(url, { timeout = 15000, priority = false, sleep = (ms) =>
       noteError(e);
       throw e;
     } finally {
-      clearTimeout(timer);
       calls.delete(call);
     }
     await sleep(retryAfter);
   }
 }
 
-module.exports = { getJSON, stats, noteError, recentErrors, makePacer, paceHost, takeTurn, inflight, queued };
+module.exports = { getJSON, deadline, stats, noteError, recentErrors, makePacer, paceHost, takeTurn, inflight, queued };

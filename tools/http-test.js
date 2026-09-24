@@ -223,9 +223,59 @@ async function inflightTests() {
   } finally { global.fetch = real; http.paceHost(KS, 0); }
 }
 
+// The box's own failure: a fetch that ignores its abort signal and never settles. getJSON must
+// still hand its caller a timeout at `timeout`, drop the call from the in-flight list, and count
+// the error -- or a taker round that awaits it never finishes and the watchdog restarts the desk.
+async function deadlineTests() {
+  group('a fetch that never settles, abort or no abort, still ends at the deadline');
+  const real = global.fetch;
+  const KS = 'https://api.elections.kalshi.com/trade-api/v2';
+  try {
+    let aborted = 0;
+    global.fetch = (url, opts) => new Promise(() => { opts.signal.addEventListener('abort', () => { aborted++; }); });   // never settles
+    const before = http.stats.err;
+    const t0 = Date.now();
+    let err = null;
+    try { await http.getJSON(`${KS}/markets?series_ticker=KXHANG`, { timeout: 20 }); } catch (e) { err = e; }
+    const took = Date.now() - t0;
+    ok('the caller gets a timeout error', err && err.timeout === true && /timed out after 20ms/.test(err.message), err && err.message);
+    ok('...at the deadline, not minutes later', took < 1000, took);
+    ok('...the abort was asked for anyway', aborted === 1, aborted);
+    ok('...the call is no longer in flight', http.inflight().length === 0, http.inflight());
+    ok('...and it counts as an error', http.stats.err === before + 1, [before, http.stats.err]);
+
+    // the headers arrive and the body never does: the same stall, the same deadline
+    global.fetch = async () => ({ ok: true, status: 200, headers: { get: () => null }, json: () => new Promise(() => {}) });
+    err = null;
+    try { await http.getJSON(`${KS}/markets?series_ticker=KXBODY`, { timeout: 20 }); } catch (e) { err = e; }
+    ok('a body that never ends is the same timeout', err && err.timeout === true, err && err.message);
+    ok('...and gone from the in-flight list', http.inflight().length === 0, http.inflight());
+
+    // a fetch that settles inside the deadline is untouched by it
+    global.fetch = async () => ({ ok: true, status: 200, headers: { get: () => null }, json: async () => ({ fine: 1 }) });
+    const j = await http.getJSON(`${KS}/markets?series_ticker=KXFINE`, { timeout: 200 });
+    ok('a prompt answer is returned as before', j && j.fine === 1, j);
+
+    // the helper alone: a late settlement is swallowed, never an unhandled rejection
+    let unhandled = 0;
+    const onUnhandled = () => { unhandled++; };
+    process.on('unhandledRejection', onUnhandled);
+    let late;
+    const slow = new Promise((_, reject) => { late = reject; });
+    let e2 = null;
+    try { await http.deadline(slow, 10, { what: 'slow' }); } catch (e) { e2 = e; }
+    late(new Error('too late'));
+    await new Promise((r) => setTimeout(r, 20));
+    process.off('unhandledRejection', onUnhandled);
+    ok('deadline() rejects at the deadline and names the call', e2 && e2.timeout && /slow/.test(e2.message), e2 && e2.message);
+    ok('...and a promise that fails afterwards fails quietly', unhandled === 0, unhandled);
+  } finally { global.fetch = real; }
+}
+
 run()
   .then(retryTests)
   .then(inflightTests)
+  .then(deadlineTests)
   .catch((e) => { fail++; console.log(`  FAIL  threw: ${e.stack}`); })
   .finally(() => {
     console.log(`\n${pass} passed, ${fail} failed`);

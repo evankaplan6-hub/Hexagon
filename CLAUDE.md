@@ -51,7 +51,7 @@ src/broker.js     paper broker + live Kalshi adapter
 src/makerdesk.js  the maker's loop: universe from the any-market crawl (MAKER_WIDEN, no extra calls),
                   trade-rate probe, run-over gate; src/maker.js holds the pure decisions
 src/venues/       Polymarket (Gamma + CLOB) and Kalshi public data; cboe.js (delayed option quotes for the chain tape);
-                  chartexchange.js (read-only market data behind CHARTEXCHANGE_API_KEY, a trial to 2026-10-07: quotes, short volume,
+                  chartexchange.js (read-only market data behind CHARTEXCHANGE_API_KEY, a trial to 2026-10-07 whose key answered "401 Expired" from the evening of 2026-09-23: quotes, short volume,
                   dark pool, max pain, and the historical option bars; only the Ask panel and tools/ read it, never the trading loop)
 src/watchdog.js   stall watchdog: exits the desk when the taker or maker loop finishes no round (WATCHDOG_SEC)
 src/volume.js     the desk's own trading volume by the minute (fed by the journal, rebuilt from it; /api/volume) for the chart's bars
@@ -90,7 +90,7 @@ data/fly/         gitignored: journals, state and tick tapes copied down from th
                   That snapshot is frozen at 2026-09-12; new copies from the box go in data/fly/archive/
 ops/              Fly deploy, launchd desk autostart (not installed), the daily tape pull (ops/install-pull.sh; installed on the Mac 2026-09-14),
                   and the option-history pull (ops/install-history.sh: four runs a day on the trial key's allowance, installed 2026-09-23;
-                  uninstall after the trial ends 2026-10-07).
+                  the key expired the same evening, so each run is one refused call and one STOPPED line; uninstall it).
                   ops/daily-check.sh is the daily trust routine (read-only): pull alive, ledger-check --box --venues, pnl-report, restarts, CPU pressure.
                   The box also has a disk brake (TAPE_MIN_FREE_MB) that trims its oldest tapes if the pull stops
 data/             gitignored: state.json, journal-*.jsonl, ticks-*.jsonl, desk.log
