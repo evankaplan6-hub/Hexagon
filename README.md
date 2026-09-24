@@ -1276,6 +1276,70 @@ ETF lab's total-return series. Its stock quotes were 30 minutes delayed on that 
 said the plan renews at $89.65 a month after 2026-10-07, but no card was ever given (Evan, 2026-09-24),
 so nothing renews and nothing is charged.
 
+### A first answer from free chains: the option lab
+
+The question the tape is waiting a year to answer can be asked roughly now, on DoltHub's free SPY
+chains (2026-09-24). Thin, as the section above says, but with real bid and ask, which is the part
+that matters for a seller.
+
+```bash
+node tools/dolt-fetch.js                        # SPY, every weekday since 2019 → data/options/dolt/SPY/ (free, about 40 minutes)
+node tools/option-lab.js                        # both strategies, tuned on the older 60%, scored on the newer 40%
+node tools/option-lab.js --detail covered-call  # every setting, both halves
+node tools/option-lab.js --pick cagr --fee 0.65 --cash none
+```
+
+RESEARCH ONLY, like the ETF lab: no broker, no key, no order path.
+
+**What it tests**, fixed before any result was seen: the two strategies Cboe's BXM and PUT indexes
+stand for. *Covered call*: own SPY and sell one call per share. *Put-write*: keep the money in SHY
+and sell puts on as much SPY as it could buy at the strike. Each takes two settings, the expiry
+nearest 14, 30 or 45 days out and the strike whose delta is nearest 0.5, 0.4, 0.3 or 0.2: 12 each.
+Every round sells at the day's **bid** (the whole spread paid), $0.10 a contract, holds to expiry,
+settles on SPY's close, and pays 5bp on any stock an assignment moves. The next round starts on the
+first quote day after the expiry. Picked on 2020-01 → 2024-01 by Sharpe, scored on 2024-01 → 2026-09.
+
+**The data, checked before it was believed.** 1,230 SPY quote days from 2020-01-06; Mondays,
+Wednesdays and Fridays until mid-2024, daily after. Three expiries a day (about two, four and seven
+weeks out), strikes about 2% apart. The mirror also has quotes dated on all 55 market holidays in
+that span, not copies of the day before; nobody can sell at those, so no round starts on one. The
+Cboe-shaped setting (30 days, delta 0.5) against Cboe's own indexes over the same 86 rounds:
+
+| 30 days, delta 0.5 | ours | Cboe | round-by-round correlation |
+|---|---|---|---|
+| covered call vs BXM | 9.9% a year | 7.9% | 0.90 |
+| put-write vs PUT | 8.8% | 9.4% | 0.88 |
+
+The put-write lands on PUT. The covered call's gap is almost all 2020 (ours +13.5%, BXM −4.2%):
+BXM rolls on the third Friday and sold its March call near the low, then the rebound ran through the
+strike. Outside 2020 ours and the index are within two points of each other a year, either way
+round. So **the roll day alone is worth points a year**, and the lab prints the picked setting
+started 0-3 weeks later to show how much.
+
+**The answer: no.** 0 of 24 settings beat owning SPY on return in both halves, and every one of the
+24 trailed SPY in the test years (SPY about 22% a year there).
+
+| picked on 2020-23 | test 2024-01 → 2026-09 | vs SPY | other roll days | max drawdown (SPY 13.2%) |
+|---|---|---|---|---|
+| covered call, 30 days / delta 0.30 | 16.8% a year | −5.2 points | −4.6 to −6.9 | 11.1% |
+| put-write, 30 days / delta 0.20 | 8.4% | −13.6 | −11.0 to −13.8 | 2.3% |
+
+Across all 12 settings the covered call trailed by 3.2 to 10.1 points, the put-write by 8.2 to 14.2.
+Picking on return instead of Sharpe changes nothing: the covered call it picks (14 days / delta 0.2)
+trailed by 4.6 points. Three far-out-of-the-money covered calls did beat SPY on 2020-23, the years
+with the crash and 2022's bear market in them, and none of the three kept it. What selling options
+did buy is smaller drawdowns and, in 5 of the 12 covered-call settings, a better Sharpe in both
+halves: the same thing the ETF lab found with BXM and PUT. Smaller drawdowns alone are also what
+holding less SPY buys; the better Sharpe is the one thing here worth a second look, on 34 rounds.
+
+**How far to trust it.** The test years are 2.6 years of a strong bull market, the worst case for a
+covered call; one bear market in them could change the sign. Drawdown and Sharpe are sampled at the
+rolls, for SPY as well. The strike grid is 2% wide, so "delta 0.3" is the nearest strike on it. Early
+assignment is ignored, which flatters the covered call a little. SHY lost money in 2022 where the
+T-bills PUT holds did not, which is most of why our put-write trails PUT in 2021-22. What it does
+settle: paying Alpha Vantage for full chains to ask this same question again is not worth it on
+this evidence. Full chains earn their price only for a different question.
+
 ## Operating it
 
 The dashboard is read-only. Two control endpoints exist, both POST, both requiring `FLATTEN_TOKEN`

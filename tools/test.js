@@ -25,6 +25,7 @@ const SUITES = [
   ['brain', 'the minds: the proposal clamp, request shaping, cost metering and backoff'],
   ['lab', 'the strategy lab: fees, fills, settlement, and no strategy seeing the answer'],
   ['stock-lab', 'the ETF lab: next-open fills, costs per side, metric arithmetic, no peeking, no test data in the pick'],
+  ['option-lab', 'the option lab: which contract a setting sells, a round sold at the bid and settled on the close, no peeking; the DoltHub fetcher'],
   ['chains', 'the chain tape: a 0 bid is not a missing one, adjusted roots, the band edges, an unchanged chain is not news, and a frozen feed is STALE and a PROBLEM'],
   ['chartexchange', 'the ChartExchange client and the option history: the key never leaks, pages by number, the calendar, the strike window, and nothing half-written'],
   ['chainsched', "the chain recorder's schedule on the box: three Eastern slots on weekdays, the DST switch, and the 14-day display copy"],
