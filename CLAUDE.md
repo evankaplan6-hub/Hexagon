@@ -78,6 +78,8 @@ tools/            edge-scan, replay, maker-replay, maker-rank, pm-maker-scan, ma
                   whale-fetch + whale-lab (does copying top sports wallets pay? no, out of sample),
                   stock-fetch + stock-lab (ETF strategy tournament on Yahoo daily bars, walk-forward vs SPY;
                   research only, no broker code -- nothing beat buy-and-hold),
+                  dolt-fetch + option-lab (covered calls and put-writing on SPY vs owning SPY, sold at the real bid, from
+                  DoltHub's free chains 2020-2026; research only -- 0 of 24 settings beat SPY, every one trailed it in 2024-26),
                   chain-record (writes the option-chain tape to data/chains/ from Cboe's free delayed feed;
                   read-only, no broker -- full historical chains are sold, not free (Alpha Vantage premium from $49.99/mo;
                   DoltHub's free set has only SPY and DIA, thinly; checked 2026-09-24), so the history is collected daily;
@@ -119,6 +121,7 @@ data/chains/      gitignored: the option-chain tape, chains-YYYY-MM-DD.jsonl + .
                   09-23 has no session quotes; the 09-24 09:45 ET lines are copies of 09-22 after-hours prices: filter on qt.
                   Each run leaves an ok/PROBLEM line in data/chains/chains.log and exits 1 on a PROBLEM
 data/options/history/  gitignored: the ChartExchange option history (tools/option-history.js), one JSON per underlying per expiry
+data/options/dolt/     gitignored: DoltHub's free SPY chains, one JSON per weekday (tools/dolt-fetch.js); re-fetchable, 18 MB, rides along in the data/options backup
 data/whales-*.jsonl  gitignored: every bet whale watch saw (near-settled ones, WHALE_MAX_PX, are not announced), for scoring once they settle
 ```
 
