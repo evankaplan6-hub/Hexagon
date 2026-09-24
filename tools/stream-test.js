@@ -222,10 +222,89 @@ group('the tape reads the socket when it can vouch for the interval, and polls w
     fs.rmSync(path.dirname(keyPath), { recursive: true, force: true });
   };
 
+  // ---- the dashboard's own stream (src/sse.js, /api/stream): gzipped, a frame at a time
+  // A real loopback server and a real client. The frame is 200 KB of JSON that compresses the way
+  // the box's does; each has to be readable the moment it is sent, not when the next one pushes it
+  // out of the compressor, or the floor would run a frame behind.
+  const dashRun = async () => {
+    group('the dashboard stream: gzip when the browser takes it, each frame whole on arrival');
+    const nodeHttp = require('http'), zlib = require('zlib');
+    const sse = require('../src/sse');
+    ok('a browser\'s accept-encoding takes gzip', sse.takesGzip({ headers: { 'accept-encoding': 'gzip, deflate, br, zstd' } }));
+    ok('no header, identity, or gzip;q=0 does not', !sse.takesGzip({ headers: {} }) && !sse.takesGzip({ headers: { 'accept-encoding': 'identity' } }) && !sse.takesGzip({ headers: { 'accept-encoding': 'gzip;q=0, br' } }));
+    ok('* takes it', sse.takesGzip({ headers: { 'accept-encoding': '*' } }));
+    const row = (i) => ({ t: 1790000000000 + i, agent: 'BRAM', kind: 'RESEARCH', text: `gate ledger over 19 pairs · ${i % 7} gap under minGap · ${'KXMLBGAME-26SEP24'}${i}` });
+    const big = (n) => ({ n, log: Array.from({ length: 1500 }, (_, i) => row(i + n)) });
+    let client = null, closed = false;
+    const server = nodeHttp.createServer((req, res) => {
+      client = sse.openStream(req, res);
+      client.send(sse.frame(big(0)));
+      req.on('close', () => { closed = true; client.close(); });
+    });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const port = server.address().port;
+    const open = (headers) => new Promise((resolve, reject) => {
+      const req = nodeHttp.get({ host: '127.0.0.1', port, path: '/api/stream', headers }, resolve);
+      req.on('error', reject);
+    });
+    // read decoded text until `want` whole frames have arrived, or give up
+    const frames = (stream, want, ms = 2000) => new Promise((resolve) => {
+      let text = '';
+      const done = () => { stream.removeListener('data', on); clearTimeout(timer); resolve(text.split('\n\n').filter(Boolean).map((f) => { try { return JSON.parse(f.replace(/^data: /, '')); } catch { return { torn: f.length }; } })); };
+      const on = (c) => { text += c; if (text.split('\n\n').length - 1 >= want) done(); };
+      const timer = setTimeout(done, ms);
+      stream.on('data', on);
+    });
+    try {
+      let raw = 0;
+      const res = await open({ 'accept-encoding': 'gzip, deflate, br' });
+      ok('answers gzip, and says it varies on accept-encoding', res.headers['content-encoding'] === 'gzip' && /accept-encoding/.test(res.headers.vary || ''), res.headers);
+      ok('...an event stream that is not cached or buffered by a proxy', res.headers['content-type'] === 'text/event-stream' && res.headers['cache-control'] === 'no-cache' && res.headers['x-accel-buffering'] === 'no', res.headers);
+      res.on('data', (c) => { raw += c.length; });
+      const gun = res.pipe(zlib.createGunzip());
+      gun.setEncoding('utf8');
+      const first = await frames(gun, 1);
+      const plain = sse.frame(big(0)).length;
+      ok('the connect frame arrives whole before anything follows it', first.length === 1 && first[0].n === 0 && first[0].log.length === 1500, first.map((f) => f.n));
+      ok('...compressed to under a quarter of its size', raw > 0 && raw * 4 < plain, [raw, plain]);
+      client.send(sse.frame(big(1)));
+      const second = await frames(gun, 1);
+      ok('the next frame arrives on its own too, and decodes', second.length === 1 && second[0].n === 1, second.map((f) => f.n));
+      res.destroy();
+      await new Promise((r) => setTimeout(r, 100));
+      ok('a tab that goes away closes its stream', closed);
+
+      const res2 = await open({});
+      ok('a client that does not take gzip gets the plain stream', !res2.headers['content-encoding'] && res2.headers['x-accel-buffering'] === 'no', res2.headers);
+      res2.setEncoding('utf8');
+      const p = await frames(res2, 1);
+      ok('...readable as it is', p.length === 1 && p[0].n === 0);
+      res2.destroy();
+    } finally { server.close(); }
+
+    // server.js cannot be required without starting a desk, so pin its wiring from the source
+    const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+    const stream = src.slice(src.indexOf("p === '/api/stream'"), src.indexOf("p === '/api/stream'") + 400);
+    const tick = src.slice(src.indexOf('setInterval(() => {\n  if (!clients.size) return;'));
+    ok('the connect frame is the snapshot without its histories, through the gzip stream', /sse\.openStream\(req, res\)/.test(stream) && /engine\.snapshot\(\{ histories: false \}\)/.test(stream), stream);
+    ok('...and so is the 2-second broadcast', /sse\.frame\(engine\.snapshot\(\{ histories: false \}\)\)/.test(tick.slice(0, 300)) && /c\.send\(payload\)/.test(tick.slice(0, 300)), tick.slice(0, 300));
+    ok('/api/state still sends the whole snapshot', /p === '\/api\/state'\) return json\(res, engine\.snapshot\(\)\)/.test(src));
+    const histAt = src.indexOf("p === '/api/history'");
+    ok('/api/history answers the histories, behind the same login as every /api/ route', /p === '\/api\/history'\) return json\(res, engine\.pnlHistory\(\)\)/.test(src) && histAt > src.indexOf('if (!authed(req))') && histAt > src.indexOf('rebindRefusal(req, cfg.dashPass)'), histAt);
+
+    // the page: history from /api/history once a minute, never from the frame
+    const app = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+    ok('the page fetches /api/history, now and every minute', /fetch\('\/api\/history'\)/.test(app) && /loadHistory\(\); setInterval\(loadHistory, 60000\);/.test(app));
+    ok('...and no longer reads a history off the frame', !/S\.balanceHistory|M\.hist\b/.test(app));
+    ok('the chart, its maker pane and the wall\'s Today read the fetched history', (app.match(/combinePnlHistory\(pnlHist\.balanceHistory, pnlHist\.makerHist,/g) || []).length === 2 && /paperSwing\(\[\.\.\.pnlHist\.makerHist,/.test(app));
+  };
+
   run().catch((e) => { fail++; console.log(`  FAIL  tape+stream threw: `); })
     .finally(() => { http.getJSON = real; })
     .then(clientRun)
     .catch((e) => { fail++; console.log(`  FAIL  client threw: ${e.message}`); })
+    .then(dashRun)
+    .catch((e) => { fail++; console.log(`  FAIL  dashboard stream threw: ${e.stack}`); })
     .then(() => {
       console.log(`\n${pass} passed, ${fail} failed`);
       process.exit(fail ? 1 : 0);

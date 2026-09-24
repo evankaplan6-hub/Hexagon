@@ -719,7 +719,11 @@ function makeMakerDesk(cfg, deps = {}) {
   // What the dashboard gets. Deliberately NOT a spread of the raw ledger: each market carries a
   // 400-entry `seen` list for trade de-duplication, and streaming 26 of those to every connected
   // browser twice a second is a few hundred kilobytes a second of pure dedupe bookkeeping.
-  function snapshot(E) {
+  //
+  // `hist` (5,000 one-minute samples, 277 KB of the box's 494 KB frame on 2026-09-24) is left out
+  // with { hist: false }: the 2-second stream sends that, and the page fetches the history once a
+  // minute from /api/history (history below) instead of being resent it every frame.
+  function snapshot(E, { hist = true } = {}) {
     const S = E.state.maker || {};
     const meta = new Map(universe.map((u) => [u.ticker, u]));
     const recentTickers = new Set((S.recent || []).map((f) => f.ticker));
@@ -742,7 +746,7 @@ function makeMakerDesk(cfg, deps = {}) {
       recent: (S.recent || []).slice(0, 12).map((f) => (f.title || !(S.markets[f.ticker] || {}).title ? f
         : { ...f, title: S.markets[f.ticker].title, sub: S.markets[f.ticker].sub || '' })),
       lastScanAt: lastUniverseAt || null,
-      hist: S.hist || [], historyValidFrom: S.historyValidFrom || 0,
+      ...(hist ? { hist: S.hist || [] } : {}), historyValidFrom: S.historyValidFrom || 0,
       // where the tape is coming from, so "no fills" can be told apart from "not listening"
       feed: stream ? { mode: 'stream', ...stream.health(), ...tape.stats() } : { mode: 'poll', ...tape.stats() },
       initial: cfg.initialBalance, enabled: cfg.makerEnabled,
@@ -757,7 +761,13 @@ function makeMakerDesk(cfg, deps = {}) {
     };
   }
 
-  return { step, flatten, resume, snapshot, noteCrawl, blockedOnScan: () => blocked };
+  // The equity history on its own, for /api/history: the samples and where they start being right.
+  function history(E) {
+    const S = E.state.maker || {};
+    return { hist: S.hist || [], historyValidFrom: S.historyValidFrom || 0 };
+  }
+
+  return { step, flatten, resume, snapshot, history, noteCrawl, blockedOnScan: () => blocked };
 }
 
 module.exports = { makeMakerDesk, EMPTY_RETRY_MS, SCAN_EVERY_MS };

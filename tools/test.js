@@ -19,7 +19,7 @@ const SUITES = [
   ['rules', 'the rules gate: pairs whose rules match, look-alikes that do not, and the cached Claude check'],
   ['discovery', 'the any-market crawl: both venues page by page, backoff, partial results kept, the registry'],
   ['anymarket', 'the any-market scanner: discover off the cycle, reprice in it, and only verified pairs trade'],
-  ['stream', 'the Kalshi trade socket: framing, trade shape, and the tape falling back to the poll'],
+  ['stream', "the Kalshi trade socket: framing, trade shape, and the tape falling back to the poll; the dashboard's stream gzipped a frame at a time"],
   ['engine', 'the ledger: the operator latch, partial exits, and one close per position'],
   ['watchdog', 'the stall watchdog: a loop with no finished round is restarted, and a healthy desk, a sleep, or a live account never is'],
   ['brain', 'the minds: the proposal clamp, request shaping, cost metering and backoff'],
