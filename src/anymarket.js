@@ -6,7 +6,7 @@
 // Polymarket markets every cycle. Everything else on both venues -- elections, CPI, central banks,
 // Treasury yields, awards, charts, deadlines -- needs whole events from both venues (a many-way
 // Polymarket event is split into one market per outcome, and its brackets are exactly what pairs
-// with Kalshi's), which is ~65 Kalshi calls and ~20 Polymarket calls: far too much for a 15-second
+// with Kalshi's), which takes about two minutes of paced calls: far too much for a 15-second
 // cycle. So this runs in two speeds:
 //
 //   discover  every DISCOVER_EVERY_MIN, off the cycle: crawl both venues (src/discovery.js), match

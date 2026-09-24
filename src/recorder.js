@@ -12,11 +12,11 @@ const r4 = (x) => Math.round(x * 10000) / 10000; // edges live at sub-cent scale
 const ET_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' });
 
 // ---------------------------------------------------------------- the emergency brake
-// The Fly box keeps all of this on a 1GB volume, and a busy Eastern day of tape is 35-62MB. The
-// normal way old tapes leave the box is the Mac pulling them down and deleting them only once the
-// copy is proven identical (tools/fly-pull.js, run daily by ops/com.hexagon.pull.plist). This is
-// for when that has stopped -- the Mac asleep for a week, fly logged out. A full disk does not
-// just stop the tape: the journal, the append-only truth, and state.json fail to write with it.
+// The Fly box keeps all of this on a 1GB volume, and an Eastern day of tape is about 90-130MB
+// since sports joined the crawl on 2026-09-19. The normal way old tapes leave the box is the Mac
+// pulling them down and deleting them only once the copy is proven identical (tools/fly-pull.js,
+// run hourly at :30 by ops/com.hexagon.pull.plist). This is for when that has stopped -- the Mac
+// asleep for a week, fly logged out. A full disk does not just stop the tape: the journal, the append-only truth, and state.json fail to write with it.
 // Losing the oldest tape is the cheaper failure, so below `tapeMinFreeMb` the recorder gives up
 // old tapes, oldest first, to keep everything else writing.
 const TICKS_FILE = /^ticks-(\d{4}-\d{2}-\d{2})\.jsonl$/;

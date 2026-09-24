@@ -3,7 +3,7 @@
 #
 # Copies every closed day from the Fly box into data/fly/archive, then deletes box tick tapes and
 # probe files older than three Eastern days -- each only once its Mac copy has the box's sha256
-# (tools/fly-pull.js --trim). The box's /data is 1GB and fills in about two weeks without this.
+# (tools/fly-pull.js --trim). The box's /data is 1GB and fills in about a week without this.
 # Then, pulled or not, it copies data/chains, data/options and data/fly/archive into iCloud Drive
 # (below: the backup).
 #

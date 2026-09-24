@@ -1,9 +1,10 @@
 #!/bin/bash
-# The daily trust routine: five questions about the Fly box, one screen, nothing changed anywhere.
+# The daily trust routine: six questions about the Fly box and the Mac's tapes, one screen, nothing changed on the box.
 #
 #   bash ops/daily-check.sh
 #
-#   1. did the morning pull run?          the last line of data/fly/archive/pull.log, and how old it is
+#   1. did the pull run?                  the last line of data/fly/archive/pull.log, and how old it is (hourly at :30
+#                                         since 2026-09-24, until the day's pull and backup are both ok)
 #   2. does the ledger add up?            tools/ledger-check.js --box --venues: the journal rebuilds the
 #                                         state line by line, and every settlement agrees with the venues
 #   3. what has each book made?           tools/pnl-report.js, from the pulled journals; and tools/fillcheck.js on the
@@ -24,6 +25,8 @@
 #                                         counts that same throttling as waiting, the commit it runs, /data
 #                                         free, and the probe files' total (the pull trims them since
 #                                         2026-09-24; a total that keeps growing means it has stopped)
+#   6. is the option-chain tape alive?    tools/chain-record.js --check on this Mac: the last chains.log
+#                                         line, the newest Cboe stamp per symbol, the last finished weekday
 #
 # Nothing on the box is changed. What it writes on the Mac: step 2 copies the box's state.json and
 # the journals the archive lacks into data/fly/box-now, replacing the copies from the previous run
@@ -44,12 +47,12 @@ if [ -z "$FLY" ] || [ ! -x "$FLY" ]; then echo "fly is not installed (looked in 
 bad=0
 say() { printf '\n== %s\n' "$1"; }
 
-say "1. the morning pull"
+say "1. the pull"
 LOG="$HEXDIR/data/fly/archive/pull.log"
 if [ -f "$LOG" ]; then
   tail -1 "$LOG"
   age=$(( ( $(date +%s) - $(stat -f %m "$LOG") ) / 3600 ))
-  if [ "$age" -ge 26 ]; then echo "PROBLEM: pull.log was last written ${age}h ago; the job runs at 09:30 and 13:30 (launchctl list | grep hexagon)"; bad=$((bad + 1)); fi
+  if [ "$age" -ge 26 ]; then echo "PROBLEM: pull.log was last written ${age}h ago; the job runs every hour at :30 until the day is done (launchctl list | grep hexagon)"; bad=$((bad + 1)); fi
   if tail -1 "$LOG" | grep -q PROBLEM; then bad=$((bad + 1)); fi
 else
   echo "PROBLEM: no $LOG -- the pull has never run here (bash ops/install-pull.sh)"; bad=$((bad + 1))

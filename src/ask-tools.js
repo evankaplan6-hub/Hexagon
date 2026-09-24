@@ -516,6 +516,7 @@ const SETTINGS = [
   ['whalePeriod', 'WHALE_PERIOD', 'leaderboard period the wallets are ranked on'],
   ['whaleMinUsd', 'WHALE_MIN_USD', 'net buying on one outcome that counts as a bet, dollars'],
   ['whaleWindowMin', 'WHALE_WINDOW_MIN', 'minutes that buying is summed over'],
+  ['whaleMaxPx', 'WHALE_MAX_PX', 'price at or above which a whale bet (and the wallet\'s average) is recorded but not called on the floor: the market is already decided'],
 ];
 function settings(E, input) {
   const contains = text(input.contains, 'contains');

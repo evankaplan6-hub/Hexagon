@@ -1,8 +1,8 @@
 # Running the desk in the cloud
 
-The desk currently runs on the Mac under launchd. That is fine for watching it, but it stops when
-the machine sleeps, and the one thing this strategy needs is **days of uninterrupted tape**. A
-cloud box fixes that.
+The desk runs on a Fly.io box (app `hexagon-desk`). The Mac's launchd autostart
+(`ops/install-autostart.sh`) exists but is not installed: a desk on the Mac stops when the machine
+sleeps, and the one thing this strategy needs is **days of uninterrupted tape**.
 
 ## The two things that make this safe
 
@@ -31,6 +31,7 @@ brew install flyctl && fly auth signup        # once
 cd ~/Hexagon
 fly launch --no-deploy --copy-config --name hexagon-desk   # reads fly.toml
 fly volumes create hexagon_data --region iad --size 1      # the journals live here
+fly ips allocate-egress -a hexagon-desk -r iad             # its own outgoing IP (below)
 
 fly secrets set DASH_PASS="$(openssl rand -base64 18)"     # prints nothing; read it back below
 fly secrets list                                            # confirms it is set, not its value
@@ -41,14 +42,24 @@ fly open                                                    # browser prompts: u
 You need the password you generated, so either pick your own instead of `openssl rand`, or run
 the `openssl` line on its own first and copy the output.
 
-Roughly $4–5/month for a shared-cpu-2x with a 1GB volume. It was a shared-cpu-1x until 2026-09-22,
-when the desk was found pinned at that size's CPU cap (6.25% of a core); `fly.toml` has the numbers.
+**The box has its own outgoing IP** (209.71.108.223, allocated 2026-09-15). Kalshi rate-limits by
+address, and on Fly's shared outgoing IP the desk was refused 10-27 Kalshi calls every 5 minutes
+from traffic that was not its own; on its own address, 0. If Kalshi 429s come back, check the box's
+outgoing IP first (from `fly ssh console`, fetch `api.ipify.org`; it should read 209.71.108.223)
+before tuning `KALSHI_GAP_MS` or the retry code. Do not allocate a second one. A region move needs a
+new egress IP in the new region, and the old one released with `fly ips release-egress`, so it is
+not billed twice.
+
+Roughly $8–9/month: a shared-cpu-2x with a 1GB volume ($4–5) plus the static egress IP (~$3.60). It
+was a shared-cpu-1x until 2026-09-22, when the desk was found pinned at that size's CPU cap (6.25%
+of a core); `fly.toml` has the numbers.
 
 ### Auto-deploy
 
 Every push to `main` deploys itself (`.github/workflows/test.yml`, job `deploy`): it waits for the
 test matrix, stands down if a newer push has landed on `main`, skips pushes that touch nothing the
-box runs (docs, `ops/` notes), and refuses to ship
+box runs (`ops/` notes, CLAUDE.md; README.md and ops/DEPLOY.md do deploy, because the Ask panel's
+docs tool reads them from the image), and refuses to ship
 unless `fly.toml` still says `MODE = "paper"`. It authenticates with a deploy-scoped token stored as
 the GitHub secret `FLY_API_TOKEN`, created once without either value ever being printed:
 
@@ -135,18 +146,33 @@ in flight and none queued mean something else awaited forever, and the cause is 
 fly ssh console -C "grep WATCHDOG /data/journal-*.jsonl"     # has it fired?
 ```
 
+**Every start and stop is journaled too (2026-09-24).** `server.js` writes `START` at boot (with the
+build sha), `STOP` when a signal ends it (a deploy stops it with SIGTERM) and `CRASH` from its
+last-resort handlers, with the first 800 characters of the stack. Before, a crash was one console
+line, and `fly logs` keeps about 30 minutes of those. `tools/restarts.js` (step 4 of
+`ops/daily-check.sh`) counts every `START` whose previous lifecycle line is none of `STOP`,
+`WATCHDOG` or `CRASH`: that is an OOM kill or a heap abort, which run no handler.
+
 ## Keeping the disk from filling
 
-The box's `/data` volume is 1 GB. The tick tape (`ticks-<Eastern date>.jsonl`) grows 35–62 MB a
-day, so the disk fills in about two weeks. A full disk stops the journal and `state.json` too, not
-just the tape. Nothing on the box reads old tapes, so they move to the Mac.
+The box's `/data` volume is 1 GB. The tick tape (`ticks-<Eastern date>.jsonl`) grows about 90-130
+MB a day since sports joined the crawl on 2026-09-19 (about a quarter of it the maker's book and
+prints, the rest the paired markets). With about 600 MB free after a pull, the brake's 200 MB floor
+is about four days away if the pull stops; it deletes the two already-copied days first, so a tape
+that never reached the Mac is lost after about six. A full disk stops the journal and `state.json`
+too, not just the tape. Nothing on the box reads old tapes, so they move to the Mac.
 
-**On the Mac, daily: `tools/fly-pull.js`.** It copies every finished Eastern day (tapes,
-journals, whales, probes) into `data/fly/archive/`. Each file downloads under a temp name and is
-kept only if its sha256 matches the box's. With `--trim` it then deletes box tapes older than the
-newest 3 Eastern days (today counts as one), but only tapes whose Mac copy matched in that same run.
-It never deletes journals, whales, probes, `state.json` or today's tape. If anything fails before
-the check, it deletes nothing that run. It never writes to the frozen `data/fly/` snapshot itself.
+**On the Mac, hourly until the day is done: `tools/fly-pull.js`.** It copies every finished
+Eastern day (tapes, journals, whales, probes) into `data/fly/archive/`. Each file downloads under a
+temp name and is kept only if its sha256 matches the box's; a dropped download is tried three times
+in all, 30 seconds apart, from an empty temp file. With `--trim` it then deletes box tapes and probe
+files older than the newest 3 Eastern days (today counts as one), but only files whose Mac copy
+matched in that same run (probe files since 2026-09-24: 14 of them, about 50 MB, had never been
+deleted). It never deletes journals, whales, `state.json` or anything of today's. A failed copy
+keeps only its own file on the box (since 2026-09-24; before, one failed download stopped every
+delete, and on 09-22 and 09-23 two already-copied tapes stayed on the box while free space fell to
+411 MB). A listing that fails, or a box that does not say its date, still deletes nothing that
+run. It never writes to the frozen `data/fly/` snapshot itself.
 "Today" is the earlier of the Mac's and the box's Eastern date, so a clock running fast past
 midnight can't close the tape the box is still writing.
 
@@ -165,30 +191,46 @@ Each run adds one line to `data/fly/archive/pull.log` and exits non-zero on any 
 that differs from the box and isn't just an older, shorter copy is never overwritten. It's reported,
 and that box tape stays.
 
-**The daily job** is a LaunchAgent that runs `ops/run-pull.sh` (which runs `fly-pull.js --trim`) at
-09:30 and again at 13:30; the second run is a same-day retry and finds nothing to do after a good
-morning. If the Mac is asleep at a slot, it runs on wake; if the Mac is off, the slot is skipped.
-On wake the network is often not back yet, so the job waits up to ten minutes for Fly to answer.
-The installer refuses from a worktree, and if `fly` is missing or logged out. Before installing, it
-runs the job as a dry run from launchd's bare environment:
+**The job** is a LaunchAgent that runs `ops/run-pull.sh` (which runs `fly-pull.js --trim`) every
+hour at :30, since 2026-09-24. It was 09:30 and 13:30 before, and 9 of the 21 runs from 09-15
+failed: launchd started most of them in a two-second battery DarkWake, the Mac fell back asleep
+mid-run, and the frozen run timed out hours later. A run exits at once, writing nothing, when
+`pull.log`'s last pull line and `backup.log`'s last line are both `ok` and dated today (Eastern), so a
+good day costs one run and a frozen one is followed by another within the hour. If the Mac is asleep
+at a slot, it runs on wake; if the Mac is off, the slot is skipped. On wake the network is often not
+back yet, so the job waits up to ten minutes for Fly to answer. The installer refuses from a
+worktree, and if `fly` is missing or logged out. Before installing, it runs the pull as a dry run
+and the backup for real, both from launchd's bare environment, and refuses if either fails:
 
 ```bash
 bash ~/Hexagon/ops/install-pull.sh   # install, from the main checkout (run it yourself)
 launchctl start com.hexagon.pull     # run it now
-bash ~/Hexagon/ops/uninstall-pull.sh # remove; leaves the archive and the box alone
+bash ~/Hexagon/ops/uninstall-pull.sh # remove; stops the pull and the backup, leaves the archive, the iCloud copy and the box alone
 ```
 
-Every run leaves one line in `data/fly/archive/pull.log`, including runs that fail before the pull
-starts (no node, no fly, logged out, offline). No new line for a day, or a `PROBLEM` line, means
-look. Full output of each run goes to `~/Library/Logs/hexagon-pull.log`.
+**The same job is the Mac's backup** (installed and first run 2026-09-24). After the pull, whether
+or not it worked, `run-pull.sh` copies `data/chains`, `data/options` and `data/fly/archive` with
+`rsync -a` into `~/Library/Mobile Documents/com~apple~CloudDocs/Hexagon-backup/` (iCloud Drive): no
+`--delete`, no `.part` files, never `.env` or a `.pem`, and it refuses when iCloud Drive does not
+exist rather than make a local folder that only looks like a backup. A failed copy writes its own
+`PROBLEM backup` line to `pull.log` (which does not mean the box went unpulled) and to `backup.log`,
+and is tried again the next hour; a good one writes an `ok` line to `backup.log`. The job's exit
+code is the pull's. `bash ops/run-pull.sh --backup-only` runs only the copy. `.env` and
+`kalshi-private-key.pem` are deliberately not in it: back them up separately (Time Machine on an
+external disk covers them). If macOS ever refuses the LaunchAgent write access to iCloud Drive, the
+only sign is an hourly `PROBLEM backup` line.
 
-**On the box, the emergency brake** (`src/recorder.js`). This is only for when the daily pull has
+Every run that does anything leaves a line in `data/fly/archive/pull.log`, including runs that fail
+before the pull starts (no node, no fly, logged out, offline). No new line for a day, or a `PROBLEM`
+line, means look (`ops/daily-check.sh` step 1 reads it). Full output of each run goes to `~/Library/Logs/hexagon-pull.log`.
+
+**On the box, the emergency brake** (`src/recorder.js`). This is only for when the pull has
 stopped. The recorder checks free space on the first write and then once an hour. Below
 `TAPE_MIN_FREE_MB` (200 on a Fly machine), it deletes the oldest `ticks-*.jsonl` files one at a
 time, never more than that one reading of free space calls for, and stops as soon as free space is
 back above the limit. It never deletes today's (Eastern) tape or anything that isn't a tick tape.
 Each deletion goes in the activity log as `TESS OPS disk low · …`, which says the tape may not
-have reached the Mac and to run `tools/fly-pull.js`. Seeing that line means the daily pull isn't
+have reached the Mac and to run `tools/fly-pull.js`. Seeing that line means the pull isn't
 running. `TAPE_MIN_FREE_MB=0` turns the brake off. It is off by default anywhere but a Fly machine
 (Fly sets `FLY_MACHINE_ID`): the Mac's own `data/ticks-*.jsonl` exist nowhere else.
 
@@ -196,8 +238,8 @@ running. `TAPE_MIN_FREE_MB=0` turns the brake off. It is off by default anywhere
 
 **Do not put the Kalshi private key on a cloud box to run live.** A key sitting on a rented
 machine, reachable by a web process, is a different risk from a key on a laptop — and the desk has
-not earned it: live fills are running at 50% of the modelled rate and the held-out edge is a few
-dollars a day. If that changes, the right shape is a separate, locked-down machine that runs no
+not earned it: the paper books have lost money (2026-09-10 → 09-24 17:58Z realised: convergence −$643,
+locked arbs −$222, maker −$852; `tools/pnl-report.js`), so there is no edge to fund. If that changes, the right shape is a separate, locked-down machine that runs no
 web server at all, not this one with more environment variables. That includes putting the key
 there just for the trade socket: the socket is a Mac-side improvement, and the cloud box keeps
 polling — the tape reports `tape: polling` on its dashboard, and that is the intended state.

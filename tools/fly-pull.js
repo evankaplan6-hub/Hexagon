@@ -2,8 +2,8 @@
 // Copy the Fly box's closed days down to the Mac, and -- only with --trim -- delete old tick tapes
 // and probe files from the box once the Mac copy is proven byte-identical.
 //
-// Why this exists: /data on hexagon-desk is a 1GB volume and the tick tape is 35-62MB per Eastern
-// day, so the box fills in about two weeks. A full disk does not just stop the tape; the journal
+// Why this exists: /data on hexagon-desk is a 1GB volume and the tick tape is about 90-130MB per
+// Eastern day since sports joined the crawl (2026-09-19), so the box fills in about a week. A full disk does not just stop the tape; the journal
 // (the append-only truth) and state.json stop writing with it. Nothing on the box reads an old
 // tape -- only tools/replay.js and tools/history-scan.js do, run by hand -- so the tapes can live
 // on the Mac instead. The box keeps its own last-resort brake (src/recorder.js, TAPE_MIN_FREE_MB)

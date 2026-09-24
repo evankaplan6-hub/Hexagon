@@ -21,8 +21,8 @@
        and 9 of the 21 runs from 09-15 failed: launchd starts a slot the Mac slept through in the next
        brief battery DarkWake, the Mac falls back asleep within seconds, and the frozen run times out
        hours later. launchd never starts a second copy while one is still running. If the Mac is
-       switched off, the slots are skipped; the box has about two weeks of room, and its own brake
-       after that. -->
+       switched off, the slots are skipped; the box has about four days of room before its own brake
+       fires (about six before a tape that never reached the Mac is lost; ops/DEPLOY.md). -->
   <key>StartCalendarInterval</key>
   <dict>
     <key>Minute</key>
