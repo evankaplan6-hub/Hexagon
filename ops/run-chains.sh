@@ -9,7 +9,9 @@
 # ops/run-pull.sh use) and say so loudly when it is missing. A daily job that has quietly stopped
 # working looks exactly like one that is working, and here the cost of not noticing is permanent:
 # an unrecorded day cannot be bought back, from anyone, at any price. That is why every way this
-# can fail before node runs also leaves a PROBLEM line in data/chains/chains.log.
+# can fail before node runs also leaves a PROBLEM line in data/chains/chains.log. Once node runs,
+# tools/chain-record.js writes that file's line itself -- ok or PROBLEM, one per run -- and exits 1
+# on a PROBLEM, which the exec below hands straight to launchd (2026-09-24).
 #
 # Extra arguments pass straight through, which is how install-chains.sh proves the job works from
 # launchd's bare environment before installing it, without writing anything:

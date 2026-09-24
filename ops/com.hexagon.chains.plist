@@ -20,7 +20,9 @@
        is the snapshot a daily rule actually wants: the closing chain. 20:00 is the same-day retry
        for an afternoon the Mac slept through, and 09:45 catches the morning after a machine that
        was switched off. Extra runs cost nothing: an unchanged chain is skipped by content hash,
-       so a quiet market or a weekend writes nothing at all rather than a copy of Friday. -->
+       so a quiet market or a weekend writes nothing at all rather than a copy of Friday. Since
+       2026-09-24 an expiry rolling off no longer makes a frozen file look new, and a file Cboe has
+       not rebuilt since the last run (its own stamp unchanged) is reported STALE. -->
   <key>StartCalendarInterval</key>
   <array>
     <dict>
@@ -51,7 +53,9 @@
 
   <!-- ~/Library/Logs always exists. launchd will not create a log's folder, and a log path inside
        the checkout would stop the job from starting at all -- silently -- the day that folder is
-       moved. data/chains/chains.log still gets one summary line per run. -->
+       moved. data/chains/chains.log still gets one ok/PROBLEM summary line per run (written by
+       tools/chain-record.js since 2026-09-24; before that only run-chains.sh's own failures went
+       there), and a PROBLEM run exits 1, so `launchctl list | grep hexagon` shows it. -->
   <key>StandardOutPath</key>
   <string>__HOME__/Library/Logs/hexagon-chains.log</string>
   <key>StandardErrorPath</key>
