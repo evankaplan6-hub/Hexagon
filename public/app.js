@@ -2395,7 +2395,9 @@
     // an all-time number said nothing about whether this morning went well.
     const curve = combinePnlHistory(pnlHist.balanceHistory, pnlHist.makerHist, S.initial ?? 0, pnlHist.historyValidFrom);
     const opened = curve.filter((p) => p.t <= etMidnight(S.now)).pop();
-    const today = curve.length && opened ? r2(curve[curve.length - 1].v - opened.v) : null;
+    // Measured to the live value, the same end point the chart draws: the curve itself arrives once
+    // a minute from /api/history, so its last sample can be two minutes old.
+    const today = curve.length && opened ? r2(net - opened.v) : null;
     const stat = (label, v, cls) => `<div class="${cls || ''}"><dt>${label}</dt><dd class="${v >= 0 ? 'pos' : 'neg'}">${signed(v)}</dd></div>`;
     const held = sortHeld((M.markets || []).filter((m) => m.inv && inTheme(m)).map((m) => ({ m, name: nameOf(m), tail: lead(OUTCOME(m), QUESTION(m)).tail, type: 'Maker', side: m.inv > 0 ? 'long' : 'short', qty: Math.abs(m.inv), value: Math.abs(m.mark), pl: m.mark - m.cost })).concat(takerRows().filter(inTheme)));
     const up = held.filter((x) => x.pl > 0).length, down = held.filter((x) => x.pl < 0).length;
