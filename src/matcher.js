@@ -45,6 +45,27 @@ function etDate(gameStart) {
   const d = new Date(String(gameStart).replace(' ', 'T').replace(/\+00$/, 'Z'));
   return isNaN(d) ? null : ET.format(d);
 }
+// The ET day before a "YYYY-MM-DD" day.
+const prevDay = (d) => new Date(Date.parse(`${d}T12:00:00Z`) - 86400e3).toISOString().slice(0, 10);
+
+// "KXMLBGAME-26SEP221905TBNYYG2" -> 2026-09-22 19:05 US/Eastern, as epoch ms. MLB tickers carry the
+// first pitch after the date; NFL, college, soccer and tennis tickers do not, and get null. The
+// clock is New York's, so the offset is read for that instant (EDT -4h, EST -5h) rather than assumed:
+// the wall time is first read as UTC, then moved by the zone's offset, twice so a guess on the wrong
+// side of a DST change corrects itself.
+const ET_CLOCK = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric' });
+function nyOffsetMs(t) {
+  const p = Object.fromEntries(ET_CLOCK.formatToParts(new Date(t)).map((x) => [x.type, +x.value]));
+  return Date.UTC(p.year, p.month - 1, p.day, p.hour % 24, p.minute) - Math.floor(t / 60000) * 60000;
+}
+function tickerStartMs(ticker) {
+  const m = String(ticker).match(/-(\d{2})([A-Z]{3})(\d{2})(\d{2})(\d{2})/);
+  if (!m || !MONNUM[m[2]] || +m[4] > 23 || +m[5] > 59) return null;
+  const wall = Date.UTC(2000 + +m[1], +MONNUM[m[2]] - 1, +m[3], +m[4], +m[5]);
+  let t = wall + 5 * 3600e3;
+  for (let i = 0; i < 2; i++) t = wall - nyOffsetMs(t);
+  return t;
+}
 
 const GENERIC = new Set(['state', 'st.', 'st', 'tech', 'united', 'city', 'sox', 'jays', 'a&m', 'college', 'international', 'southern', 'northern']);
 function short(name) {
@@ -107,6 +128,40 @@ function figuresConflict(a, b) {
 // "we matched the wrong thing" has one definition rather than one per file.
 const MAX_VENUE_DISAGREE = 0.30;
 
+// A doubleheader is two Kalshi events for the same two teams on the same ET date, and neither venue
+// says "Game 1" or "Game 2" anywhere the matcher reads: Kalshi's market title is "Tampa Bay wins",
+// Polymarket's question is "Tampa Bay Rays vs. New York Yankees" for both games. The one thing that
+// tells them apart is the start. On 2026-09-22 the first name match won instead: Polymarket's game 1
+// (17:05Z) paired with Kalshi's game 2 (...221905TBNYYG2), and the desk booked a $183 "locked" arb on
+// two different games -- Rays YES on game 1 at 0.42 and Rays NO on game 2 at 0.55, which both lose
+// when the Rays drop game 1 and take game 2, as they did. An early unwind (+$5.17) was all that saved
+// it, and the real game 2 went unpaired for a day behind it. So every candidate event is collected,
+// and with two or more the one whose ticker start is nearest Polymarket's gameStart wins -- if it is
+// within START_NEAREST_MIN, and if any ticker carries a time at all; otherwise nothing pairs. A single
+// candidate pairs as before, with only a looser START_SANITY_MIN bound: a start one venue has moved
+// and the other has not should not unpair the right game. It is still shorter than the gap between
+// two games of a doubleheader (a game takes about three hours; 09-22's were six apart), because once
+// Kalshi's game 1 closes and leaves the listing, Polymarket's game 1 -- still open until it settles --
+// finds game 2 as its only candidate, and that is exactly the pair the settlement snipe would buy.
+const START_NEAREST_MIN = 120;
+const START_SANITY_MIN = 150;
+function pickByStart(found, pmStart) {
+  if (!found.length) return {};
+  const at = (c) => tickerStartMs(c.ks.eventTicker || c.ks.ticker);
+  const off = (c) => (at(c) == null || pmStart == null ? null : Math.abs(at(c) - pmStart) / 60000);
+  const hm = (ms) => new Date(ms).toISOString().slice(11, 16);
+  if (found.length === 1) {
+    const o = off(found[0]);
+    if (o != null && o > START_SANITY_MIN) return { rej: { ...found[0], detail: `Kalshi starts ${hm(at(found[0]))}Z, Polymarket ${hm(pmStart)}Z` } };
+    return { hit: found[0] };
+  }
+  const timed = found.filter((c) => off(c) != null).sort((a, b) => off(a) - off(b));
+  if (!timed.length) return { rej: { ...found[0], detail: `${found.length} games on one date and no start time to tell them apart` } };
+  const best = timed[0];
+  if (off(best) > START_NEAREST_MIN) return { rej: { ...best, detail: `${found.length} games on one date, the nearest starts ${hm(at(best))}Z against Polymarket ${hm(pmStart)}Z` } };
+  return { hit: best };
+}
+
 // Sport classification so "Seattle" (Sounders) can never match "Seattle" (Mariners).
 const SPORT_SERIES = {
   mlb: ['KXMLBGAME'], nfl: ['KXNFLGAME'], nba: ['KXNBAGAME'], tennis: ['KXATPMATCH', 'KXWTAMATCH'],
@@ -134,8 +189,30 @@ const nflFull = (name) => { const c = NFL_CITY[norm(name)]; return c ? `${c} ${n
 const NBA = new Set(['hawks', 'celtics', 'nets', 'hornets', 'bulls', 'cavaliers', 'mavericks', 'nuggets', 'pistons', 'warriors', 'rockets', 'pacers', 'clippers', 'lakers', 'grizzlies', 'heat', 'bucks', 'timberwolves', 'pelicans', 'knicks', 'thunder', 'magic', '76ers', 'suns', 'trail blazers', 'kings', 'spurs', 'raptors', 'jazz', 'wizards']);
 function nick(name) { const t = toks(name); return [t.slice(-2).join(' '), t[t.length - 1]]; }
 function inLeague(set, name) { return nick(name).some((n) => set.has(n)); }
-function classify(question, A, B) {
+// Kalshi's MLB names that are not a prefix of any Polymarket name, keyed on norm() so a changed
+// apostrophe or spacing still lands. "Chicago WS" and "A's" never matched "Chicago White Sox" and
+// "Athletics": none of the 154 KXMLBGAME pairs on the 09-10..09-24 tapes was either team's, about one game
+// in seven on a full slate, and the coverage alarm cannot see two games missing out of fifteen.
+const KS_MLB_ALIAS = { 'chicago ws': 'Chicago White Sox', 'a s': 'Athletics' };
+const mlbName = (name) => KS_MLB_ALIAS[norm(name)] || name;
+
+// Polymarket's slug names the league outright ("mlb-tb-nyy-2026-09-22", "cfb-clmsn-cah-...",
+// "wta-mertens-chwalin-..."), so it is read first. Guessing from the team names filed every two-way
+// moneyline it did not recognise as college -- Valorant, League of Legends, Asian Games cricket -- so
+// Polymarket looked to be "listing" NCAAF on 2026-09-25, and HOLT's renamed-team alarm fired eight
+// times on 09-24 whenever the one real game dropped out of the top 500. Any other prefix (cs2-, val-,
+// lol-, crint-, ufc-, nhl-, itf-, euroleague-) is a sport Kalshi's game series do not list: null,
+// nothing counted, nothing matched. And Polymarket stopped writing "ATP"/"WTA" in tennis questions
+// ("Korea Open: Anna Bondar vs Gabriela Ruse"), which is why the fast matcher paired no tennis after
+// 09-13; the prefix is how it is found now, with the old text test kept behind it.
+const SLUG_SPORT = { mlb: 'mlb', nfl: 'nfl', nba: 'nba', cfb: 'college', atp: 'tennis', wta: 'tennis', epl: 'soccer', ucl: 'soccer', mls: 'soccer', lal: 'soccer' };
+function classify(m, A, B) {
+  const question = m.question || '';
+  const prefix = m.slug ? String(m.slug).split('-')[0].toLowerCase() : null;
+  if (prefix && SLUG_SPORT[prefix]) return SLUG_SPORT[prefix];
   if (/\b(ATP|WTA)\b/.test(question)) return 'tennis';
+  if (prefix) return null;
+  // no slug (a hand-built fixture): the name guess below
   if (inLeague(MLB, A) && inLeague(MLB, B)) return 'mlb';
   if (inLeague(NFL, A) && inLeague(NFL, B)) return 'nfl';
   if (inLeague(NBA, A) && inLeague(NBA, B)) return 'nba';
@@ -204,31 +281,41 @@ function matchPairs(pmList, ksList) {
     // brackets are matched by CODE and Kalshi's label for a code is a range (">25bps" backs
     // Polymarket's "50 bps"), so the figures legitimately differ there and it is not checked.
     const conflictWith = (k) => figuresConflict(q, `${k.title} ${k.subTitle}`);
-    let figRej = null;
+    let figRej = null, timeRej = null;
 
     // 2) Two-way moneylines: "A vs B" on PM  <->  Kalshi game/match event on the same ET date, same sport
     if (!hit && m.sport === 'moneyline' && m.outcomes.length === 2 && m.gameStart) {
       const d = etDate(m.gameStart);
       const [A, B] = m.outcomes;
-      const sport = classify(q, A, B);
+      const sport = classify(m, A, B);
       const allowed = SPORT_SERIES[sport] || [];
-      if (d) pmListing.add(`${sport}|${d}`);
-      for (const ms of byDate.get(d) || []) {
+      if (sport && d) pmListing.add(`${sport}|${d}`);
+      // Kalshi dates a tennis match by the day it was scheduled, and the Asian swing plays overnight:
+      // KXWTAMATCH-26SEP24BONRUS against a Polymarket start of 2026-09-25 04:30Z, which is 09-25 in
+      // New York. So tennis also looks one ET day back; the name, figure and price guards still apply.
+      const days = sport === 'tennis' && d ? [d, prevDay(d)] : [d];
+      const found = [];
+      for (const ms of days.flatMap((x) => byDate.get(x) || [])) {
         const ser = series(ms[0].ticker);
         if (!allowed.includes(ser)) continue;
         const sides = ms.filter((x) => !/^tie\b/i.test(x.subTitle) && !/^tie\b/i.test(x.title));
         if (sides.length !== 2) continue;
         const people = /MATCH/.test(ser); // tennis-style series carry player names
         const [pa, pb] = ser === 'KXNFLGAME' ? [nflFull(A), nflFull(B)] : [A, B];
-        const ia = sides.findIndex((x) => nameMatch(x.subTitle, pa, people));
-        const ib = sides.findIndex((x) => nameMatch(x.subTitle, pb, people));
+        const ksName = (x) => (ser === 'KXMLBGAME' ? mlbName(x.subTitle) : x.subTitle);
+        const ia = sides.findIndex((x) => nameMatch(ksName(x), pa, people));
+        const ib = sides.findIndex((x) => nameMatch(ksName(x), pb, people));
         if (ia < 0 || ib < 0 || ia === ib) continue;
         const label = `${TAG[ser] || ser} ${short(A)} v ${short(B)} · ${short(A)}`;
         const conflict = conflictWith(sides[ia]);
         if (conflict) { figRej = { label, detail: conflict, ks: sides[ia].title }; continue; }
-        hit = { ks: sides[ia], tokenIndex: 0, kind: 'game', label };
-        break;
+        found.push({ ks: sides[ia], label });
       }
+      // Chosen here, before the one-ticker-one-pair check below, so each game of a doubleheader
+      // reaches its own event whichever order either venue lists them in (see pickByStart).
+      const pick = pickByStart(found, startMs(m.gameStart));
+      if (pick.hit) hit = { ks: pick.hit.ks, tokenIndex: 0, kind: 'game', label: pick.hit.label };
+      else if (pick.rej) timeRej = { label: pick.rej.label, detail: pick.rej.detail, ks: pick.rej.ks.title };
     }
 
     // 3) "Will X win on YYYY-MM-DD?" (PM soccer style)  <->  Kalshi 3-way soccer market (event has a Tie leg)
@@ -261,7 +348,8 @@ function matchPairs(pmList, ksList) {
     }
 
     if (!hit) {
-      if (figRej) rejected.push({ ...figRej, why: 'figures', pm: q });
+      if (timeRej) rejected.push({ ...timeRej, why: 'start time', pm: q });
+      else if (figRej) rejected.push({ ...figRej, why: 'figures', pm: q });
       continue;
     }
     if (usedKs.has(hit.ks.ticker)) continue;
@@ -318,4 +406,4 @@ function matchPairs(pmList, ksList) {
   return { pairs, rejected, coverage: [...coverage.values()] };
 }
 
-module.exports = { matchPairs, nameMatch, tickerDate, etDate, figures, figuresConflict, MAX_VENUE_DISAGREE };
+module.exports = { matchPairs, nameMatch, tickerDate, tickerStartMs, etDate, figures, figuresConflict, MAX_VENUE_DISAGREE };

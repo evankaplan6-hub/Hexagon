@@ -7,7 +7,7 @@
 // position that can lose $1/contract on both legs at once.
 //
 //   node tools/matcher-test.js
-const { matchPairs, nameMatch, tickerDate, etDate, figures, figuresConflict } = require('../src/matcher');
+const { matchPairs, nameMatch, tickerDate, tickerStartMs, etDate, figures, figuresConflict } = require('../src/matcher');
 
 let pass = 0, fail = 0;
 const ok = (name, cond, got) => {
@@ -381,6 +381,156 @@ group('matchPairs: coverage names a league that pairs nothing');
     ks({ ticker: 'KXNBAGAME-26OCT14BOSNYK-BOS', eventTicker: 'KXNBAGAME-26OCT14BOSNYK', subTitle: 'Celtics', title: 'Celtics wins' }),
     ks({ ticker: 'KXNBAGAME-26OCT14BOSNYK-NYK', eventTicker: 'KXNBAGAME-26OCT14BOSNYK', subTitle: 'Knicks', title: 'Knicks wins' })]);
   ok('a Kalshi event on a date Polymarket is not listing is not counted', !future.coverage.some((c) => c.league === 'NBA'), future.coverage);
+}
+
+group('tickerStartMs reads the first pitch out of an MLB ticker, in US/Eastern');
+{
+  ok('13:05 EDT is 17:05Z', tickerStartMs('KXMLBGAME-26SEP221305TBNYYG1') === Date.parse('2026-09-22T17:05:00Z'), new Date(tickerStartMs('KXMLBGAME-26SEP221305TBNYYG1')));
+  ok('20:10 EDT is past midnight UTC', tickerStartMs('KXMLBGAME-26SEP192010NYYAZ') === Date.parse('2026-09-20T00:10:00Z'));
+  ok('19:05 EST in winter is 00:05Z the next day', tickerStartMs('KXMLBGAME-26DEC011905ABCDEF') === Date.parse('2026-12-02T00:05:00Z'));
+  ok('a ticker with no time is null (NFL, tennis, college)', tickerStartMs('KXNFLGAME-26SEP20MINCHI') === null && tickerStartMs('KXWTAMATCH-26SEP24BONRUS') === null && tickerStartMs('KXNCAAFGAME-26SEP25CLEMCAL') === null);
+}
+
+group('matchPairs: a doubleheader pairs each game to its own Kalshi event, by start time');
+{
+  // Rays-Yankees, 2026-09-22, rebuilt from both venues' listings. Neither venue writes "Game 1" or
+  // "Game 2" where the matcher reads: Kalshi's legs are "Tampa Bay" / "New York Y" in both events and
+  // Polymarket's two questions are identical. Before the start-time pick, Polymarket's game 1 took
+  // whichever event Kalshi listed first -- game 2 on the day -- and the desk booked a $183 "locked"
+  // arb across two different games; game 2 on Polymarket never paired at all.
+  const dh = (hhmm, g) => [
+    ks({ ticker: `KXMLBGAME-26SEP22${hhmm}TBNYY${g}-TB`, eventTicker: `KXMLBGAME-26SEP22${hhmm}TBNYY${g}`, subTitle: 'Tampa Bay', title: 'Tampa Bay wins' }),
+    ks({ ticker: `KXMLBGAME-26SEP22${hhmm}TBNYY${g}-NYY`, eventTicker: `KXMLBGAME-26SEP22${hhmm}TBNYY${g}`, subTitle: 'New York Y', title: 'New York Y wins' }),
+  ];
+  const g1 = dh('1305', 'G1'), g2 = dh('1905', 'G2');
+  const game = (id, start, slug) => pm({ id, slug, question: 'Tampa Bay Rays vs. New York Yankees', sport: 'moneyline', outcomes: ['Tampa Bay Rays', 'New York Yankees'], gameStart: start });
+  const pm1 = game('2284198', '2026-09-22 17:05:00+00', 'mlb-tb-nyy-2026-05-23'), pm2 = game('4613529', '2026-09-22 23:05:00+00', 'mlb-tb-nyy-2026-09-22');
+  const own = (r) => r.pairs.length === 2 && r.pairs.every((p) => (p.pm.id === '2284198') === /G1-TB$/.test(p.ks.ticker));
+  for (const [name, pms, kss] of [
+    ['Kalshi lists game 2 first (the 09-22 order)', [pm1, pm2], [...g2, ...g1]],
+    ['Kalshi lists game 1 first', [pm1, pm2], [...g1, ...g2]],
+    ['Polymarket lists game 2 first', [pm2, pm1], [...g2, ...g1]],
+    ['both venues list game 2 first... and game 1 first', [pm2, pm1], [...g1, ...g2]],
+  ]) {
+    const r = matchPairs(pms, kss);
+    ok(`${name}: each game pairs to its own`, own(r), r.pairs.map((p) => `${p.pm.id} -> ${p.ks.ticker}`));
+  }
+  const alone = matchPairs([pm1], [...g2, ...g1]);
+  ok('game 1 alone still finds game 1 behind game 2', alone.pairs.length === 1 && /G1-TB$/.test(alone.pairs[0].ks.ticker), alone.pairs.map((p) => p.ks.ticker));
+
+  // Kalshi's game 1 has closed and left the listing while Polymarket's game 1 waits to settle: game 2
+  // is then its only candidate, six hours off, and must not pair -- it is what the snipe would buy.
+  const gone = matchPairs([pm1], g2);
+  ok('game 1 does not fall back to game 2 once game 1 has left Kalshi', gone.pairs.length === 0, gone.pairs.map((p) => p.ks.ticker));
+  ok('...and says why', gone.rejected.length === 1 && gone.rejected[0].why === 'start time', gone.rejected);
+
+  // A lone candidate an hour or two off is the same game with a moved start: it still pairs.
+  const moved = matchPairs([game('x', '2026-09-22 19:05:00+00', 'mlb-tb-nyy-2026-09-22')], g1);
+  ok('one candidate two hours off still pairs', moved.pairs.length === 1, moved.rejected);
+
+  // Two same-date candidates and no time on either ticker: nothing can tell them apart, so neither pairs.
+  const untimed = matchPairs([pm1], [...dh('', 'G1'), ...dh('', 'G2')]);
+  ok('two games with no start time pair to nothing', untimed.pairs.length === 0 && untimed.rejected.length === 1 && untimed.rejected[0].why === 'start time', untimed);
+  // ...and two games where even the nearest is three hours off
+  const far = matchPairs([game('y', '2026-09-22 20:05:00+00', 'mlb-tb-nyy-2026-09-22')], [...dh('1005', 'G1'), ...dh('2330', 'G2')]);
+  ok('the nearest of two games has to be within two hours', far.pairs.length === 0 && far.rejected[0] && far.rejected[0].why === 'start time', far);
+}
+
+group('matchPairs: Kalshi\'s "Chicago WS" and "A\'s" are the White Sox and the Athletics');
+{
+  // Real labels from Kalshi's listing on 2026-09-24. Neither team paired once in the 09-10..09-24 tapes.
+  const ev = (id, a, b) => [
+    ks({ ticker: `KXMLBGAME-${id}-A`, eventTicker: `KXMLBGAME-${id}`, subTitle: a, title: `${a} wins` }),
+    ks({ ticker: `KXMLBGAME-${id}-B`, eventTicker: `KXMLBGAME-${id}`, subTitle: b, title: `${b} wins` }),
+  ];
+  const game = (id, q, outcomes, gameStart, slug) => pm({ id, slug, question: q, sport: 'moneyline', outcomes, gameStart });
+  const cws = matchPairs([game('4757338', 'Colorado Rockies vs. Chicago White Sox', ['Colorado Rockies', 'Chicago White Sox'], '2026-09-26 23:10:00+00', 'mlb-col-cws-2026-09-26')],
+    ev('26SEP261910COLCWS', 'Colorado', 'Chicago WS'));
+  ok('"Chicago WS" pairs with the Chicago White Sox', cws.pairs.length === 1, cws);
+  const ath = matchPairs([game('4723686', 'Houston Astros vs. Athletics', ['Houston Astros', 'Athletics'], '2026-09-27 01:40:00+00', 'mlb-hou-ath-2026-09-26')],
+    ev('26SEP262140HOUATH', 'Houston', 'A’s'));
+  ok('"A\'s" (either apostrophe) pairs with the Athletics', ath.pairs.length === 1, ath);
+  const cubs = matchPairs([game('c', 'Colorado Rockies vs. Chicago Cubs', ['Colorado Rockies', 'Chicago Cubs'], '2026-09-26 23:10:00+00', 'mlb-col-chc-2026-09-26')],
+    ev('26SEP261910COLCWS', 'Colorado', 'Chicago WS'));
+  ok('"Chicago WS" never pairs with the Cubs', cubs.pairs.length === 0, cubs.pairs);
+}
+
+group('matchPairs: the league comes from Polymarket\'s slug, so esports is not college');
+{
+  // 2026-09-25 as the box saw it on 09-24: a Valorant, a LoL and a cricket moneyline, filed as
+  // "college" by the name guess, made Polymarket look to be listing NCAAF; with Clemson v Cal out of
+  // the top 500 the renamed-team alarm fired "NCAAF 2026-09-25: 0 of 6" every 15 minutes.
+  const ncaaf = ['CLEMCAL', 'NWIND', 'NAVYUAB'].flatMap((e) => [
+    ks({ ticker: `KXNCAAFGAME-26SEP25${e}-A`, eventTicker: `KXNCAAFGAME-26SEP25${e}`, subTitle: `${e} A`, title: `${e} A wins` }),
+    ks({ ticker: `KXNCAAFGAME-26SEP25${e}-B`, eventTicker: `KXNCAAFGAME-26SEP25${e}`, subTitle: `${e} B`, title: `${e} B wins` }),
+  ]);
+  const ml = (id, slug, question, outcomes, gameStart) => pm({ id, slug, question, sport: 'moneyline', outcomes, gameStart });
+  const esports = [
+    ml('v', 'val-ns1-nrg-2026-09-25', 'Valorant: Nongshim RedForce vs NRG (BO3) - VCT Champions Group D', ['Nongshim RedForce', 'NRG'], '2026-09-25 13:00:00+00'),
+    ml('l', 'lol-cpd-dkc-2026-09-25', 'LoL: Cupid Esports vs Dplus KIA Challengers (BO1)', ['Cupid Esports', 'Dplus KIA Challengers'], '2026-09-25 14:00:00+00'),
+    ml('c', 'crint-afg-npl-2026-09-25', 'Asian Games Men: Afghanistan vs Nepal', ['Afghanistan', 'Nepal'], '2026-09-25 14:00:00+00'),
+  ];
+  const r = matchPairs(esports, ncaaf);
+  ok('a Valorant, LoL or cricket moneyline adds no NCAAF coverage row', !r.coverage.some((c) => c.league === 'NCAAF'), r.coverage);
+  const cfb = matchPairs([...esports, ml('cfb', 'cfb-clmsn-cah-2026-09-25', 'Clemson vs. California', ['Clemson Tigers', 'California Golden Bears'], '2026-09-25 23:30:00+00')], ncaaf);
+  ok('a real cfb- listing still counts, and says the Kalshi games it could not pair', cfb.coverage.some((c) => c.league === 'NCAAF' && c.events === 3 && c.matched === 0), cfb.coverage);
+  // a known league from the slug wins over a name guess: MLB's "Cardinals" is not the NFL's
+  const mlb = matchPairs([ml('m', 'mlb-stl-pit-2026-09-24', 'St. Louis Cardinals vs. Pittsburgh Pirates', ['St. Louis Cardinals', 'Pittsburgh Pirates'], '2026-09-24 16:35:00+00')],
+    mlbEvent('26SEP24', 'St. Louis', 'Pittsburgh'));
+  ok('an mlb- slug pairs as MLB', mlb.pairs.length === 1 && /^MLB/.test(mlb.pairs[0].label), mlb);
+}
+
+group('matchPairs: tennis is found by its slug, and an overnight match by Kalshi\'s scheduled day');
+{
+  // Polymarket stopped writing "ATP"/"WTA" in the question; the fast matcher paired no tennis after
+  // 09-13. Bondar v Ruse: Kalshi dates it 26SEP24, Polymarket starts it 04:30Z on the 25th (00:30 ET).
+  const wta = [
+    ks({ ticker: 'KXWTAMATCH-26SEP24BONRUS-BON', eventTicker: 'KXWTAMATCH-26SEP24BONRUS', subTitle: 'Anna Bondar', title: 'Will Anna Bondar win the Bondar vs Ruse : Round Of 16 match?' }),
+    ks({ ticker: 'KXWTAMATCH-26SEP24BONRUS-RUS', eventTicker: 'KXWTAMATCH-26SEP24BONRUS', subTitle: 'Gabriela Ruse', title: 'Will Gabriela Ruse win the Bondar vs Ruse : Round Of 16 match?' }),
+  ];
+  const korea = pm({ id: 'k', slug: 'wta-bondar-ruse-2026-09-24', question: 'Korea Open: Anna Bondar vs Gabriela Ruse', sport: 'moneyline', outcomes: ['Anna Bondar', 'Gabriela Ruse'], gameStart: '2026-09-25 04:30:00+00' });
+  const r = matchPairs([korea], wta);
+  ok('"Korea Open: Bondar vs Ruse" pairs with KXWTAMATCH-26SEP24BONRUS', r.pairs.length === 1 && r.pairs[0].ks.ticker === 'KXWTAMATCH-26SEP24BONRUS-BON' && /^WTA/.test(r.pairs[0].label), r);
+  ok('...as a game, so it gets an in-play window', r.pairs[0] && r.pairs[0].kind === 'game');
+  // the day-back is tennis only: an MLB game does not reach yesterday's event
+  const mlbBack = matchPairs([pm({ slug: 'mlb-hou-phi-2026-09-09', question: 'Astros vs. Phillies', sport: 'moneyline', outcomes: ['Houston Astros', 'Philadelphia Phillies'], gameStart: '2026-09-09T23:05:00Z' })], mlbEvent('26SEP08', 'Houston Astros', 'Philadelphia Phillies'));
+  ok('the day-back is for tennis only', mlbBack.pairs.length === 0, mlbBack.pairs);
+  // an ITF match has its own prefix, and Kalshi's tennis series are the main tours: nothing
+  const itf = matchPairs([pm({ slug: 'itf-bynoe1-miguel1-2026-09-24', question: 'M15 Columbia, SC: Evan Bynoe vs Luis Felipe Miguel', sport: 'moneyline', outcomes: ['Evan Bynoe', 'Luis Felipe Miguel'], gameStart: '2026-09-24 14:00:00+00' })], wta);
+  ok('an itf- market is no listing of anything', itf.pairs.length === 0 && itf.coverage.length === 0, itf);
+}
+
+group('HOLT: the renamed-team alarm leaves tennis out');
+{
+  // Polymarket lists a handful of each draw, and Challengers share the atp- prefix, so "0 of 8 ATP
+  // matches paired" is the normal state of a tennis day, not a renamed player.
+  const { HOLT } = require('../src/agents');
+  const base = require('../src/config');
+  const run = (pmList, ksList) => {
+    const logs = [];
+    const E = {
+      pairs: [], cfg: { ...base, snipe: false }, quotes: { pm: new Map(pmList.map((m) => [m.id, m])), ks: new Map(ksList.map((k) => [k.ticker, k])) },
+      touch() {}, due: () => true, log: (agent, kind, ref, text) => logs.push(text),
+    };
+    HOLT(E);
+    return logs.filter((t) => /renamed team/.test(t));
+  };
+  const atp = ['AAABBB', 'CCCDDD'].flatMap((e) => [
+    ks({ ticker: `KXATPMATCH-26SEP24${e}-A`, eventTicker: `KXATPMATCH-26SEP24${e}`, subTitle: `Player ${e} A`, title: 'x' }),
+    ks({ ticker: `KXATPMATCH-26SEP24${e}-B`, eventTicker: `KXATPMATCH-26SEP24${e}`, subTitle: `Player ${e} B`, title: 'y' }),
+  ]);
+  const challenger = pm({ id: 'ch', slug: 'atp-coria-ribeiro-2026-09-24', question: 'Buenos Aires 2: Federico Coria vs Eduardo Ribeiro', sport: 'moneyline', outcomes: ['Federico Coria', 'Eduardo Ribeiro'], gameStart: '2026-09-24 17:50:00+00' });
+  ok('a Challenger on atp- raises no ATP alarm', run([challenger], atp).length === 0, run([challenger], atp));
+  // ...nor one in the older wording, which the text test has always filed as tennis
+  const worded = { ...challenger, id: 'ch2', question: 'ATP Challenger Buenos Aires 2: Federico Coria vs Eduardo Ribeiro' };
+  ok('nor a Challenger that says "ATP"', run([worded], atp).length === 0, run([worded], atp));
+  // ...while a league that really went dark still does
+  const nflKs = ['MINCHI', 'GBNYJ'].flatMap((e) => [
+    ks({ ticker: `KXNFLGAME-26SEP20${e}-A`, eventTicker: `KXNFLGAME-26SEP20${e}`, subTitle: 'Nowhere', title: 'a' }),
+    ks({ ticker: `KXNFLGAME-26SEP20${e}-B`, eventTicker: `KXNFLGAME-26SEP20${e}`, subTitle: 'Elsewhere', title: 'b' }),
+  ]);
+  const nflPm = pm({ id: 'n', slug: 'nfl-min-chi-2026-09-20', question: 'Vikings vs. Bears', sport: 'moneyline', outcomes: ['Vikings', 'Bears'], gameStart: '2026-09-20 17:00:00+00' });
+  ok('an NFL slate that pairs nothing still raises it', run([nflPm], nflKs).length === 1, run([nflPm], nflKs));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
