@@ -40,7 +40,7 @@ const SUITES = [
   ['weather-lab', 'the weather lab: whole-degree settlement maths, the per-city fit, the answer never shown to the strategy'],
   ['favorites-check', 'the favourites check: the rule fixed in advance, Sports excluded, a four-part verdict'],
   ['fillcheck', "the fill check: a round read in the desk's order, the queue, restarts, the warm-up day, and what a missed fill is put down to"],
-  ['pnl-report', 'the P&L report: convergence, arbs and maker realised from the journals, the mind kept apart'],
+  ['pnl-report', 'the P&L report: convergence, arbs from every leg, maker realised from the journals, today from box-now'],
   ['lookout', 'the lookout page: the painted room, read-only, fed by the same stream as the floor'],
   ['themes', 'what a market is about: leagues off the series, the tickers that only look like one, and the page filter built on it'],
 ];

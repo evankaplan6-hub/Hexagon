@@ -1,7 +1,8 @@
 'use strict';
 // One screen answering "how is the desk actually doing?", from the journals and nothing else.
 //
-//   node tools/pnl-report.js                    every day in data/fly/archive (the daily pull fills it)
+//   node tools/pnl-report.js                    every day in data/fly/archive (the daily pull fills it),
+//                                               plus data/fly/box-now for the days the archive lacks yet
 //   node tools/pnl-report.js --since 2026-09-16 from that Eastern-agnostic UTC day on
 //   node tools/pnl-report.js --marks            also mark the maker's open inventory at Kalshi's current
 //                                               prices (public API, read-only, the one network call)
@@ -17,10 +18,23 @@ const maker = require('../src/maker');
 const usd = (x) => `${x < 0 ? '-' : '+'}$${Math.abs(x).toFixed(2)}`;
 const r2 = (x) => Math.round(x * 100) / 100;
 
+// `dir` is one folder or a list of them. With a list, a day is read from the FIRST folder that has
+// its journal: the default is [archive, box-now], and the archive wins. box-now is where the daily
+// check's ledger-check --box copies today's journal (and any day the pull has not reached), so
+// without it "today" was only the tail of yesterday's Eastern file: on 2026-09-24 the check printed
+// -$52.78 for the maker's day when the box's journal already said -$113.00. A copy left in box-now
+// for a day the pull has archived since is an older, shorter one, so it must never win
+// (tools/ledger-check.js pruneBoxNow has the same story).
 function load(dir, since) {
+  const byDay = new Map();
+  for (const d of Array.isArray(dir) ? dir : [dir]) {
+    let names = [];
+    try { names = fs.readdirSync(d); } catch { continue; }
+    for (const n of names) if (/^journal-\d{4}-\d{2}-\d{2}\.jsonl$/.test(n) && !byDay.has(n)) byDay.set(n, path.join(d, n));
+  }
   const ev = [];
-  for (const f of fs.readdirSync(dir).filter((n) => /^journal-\d{4}-\d{2}-\d{2}\.jsonl$/.test(n)).sort()) {
-    for (const line of fs.readFileSync(path.join(dir, f), 'utf8').split('\n')) {
+  for (const [, f] of [...byDay].sort()) {
+    for (const line of fs.readFileSync(f, 'utf8').split('\n')) {
       if (!line) continue;
       try { const e = JSON.parse(line); if (!since || e.t.slice(0, 10) >= since) ev.push(e); } catch { /* a torn last line */ }
     }
@@ -36,13 +50,26 @@ function summarize(events) {
   const opens = new Map();
   const conv = { n: 0, w: 0, pnl: 0, fees: 0, mind: { n: 0, pnl: 0 }, rules: { n: 0, pnl: 0 }, byReason: new Map() };
   const arb = { n: 0, pnl: 0 };
+  const arbGroups = new Set();
   const snipe = { n: 0, w: 0, pnl: 0, fees: 0 };   // the settlement snipe (README): bought on Kalshi after Polymarket settled, held to settlement
   const mk = { fills: 0, qty: 0, runQty: 0, realized: 0, settles: 0, settlePnl: 0, flattens: 0 };
   const pos = {};
 
+  let lastT = null;
   for (const e of events) {
+    if (e.t && (!lastT || e.t > lastT)) lastT = e.t;
+    const open = opens.get(e.id) || {};
     if (e.kind === 'OPEN') opens.set(e.id, e);
-    else if ((e.kind === 'CLOSE' || e.kind === 'SETTLE') && e.strategy === 'converge') {
+    // Every arb leg's own close, partial close and settlement, the way tools/ledger-check.js books
+    // them, and not the group's ARB_UNWOUND/ARB_SETTLED line: those only exist since 03f1ef2
+    // (2026-09-12 16:40Z), and the three Fed arbs that closed before it (+$6.61) were missing, so the
+    // report said 16 groups and -$228.67 where the ledger has 19 and -$222.06. CLOSE_PARTIAL carries
+    // no strategy or group of its own; the OPEN has both. Each leg lands on the day it closed.
+    else if ((e.kind === 'CLOSE' || e.kind === 'SETTLE' || e.kind === 'CLOSE_PARTIAL') && (e.strategy || open.strategy) === 'arb') {
+      arb.pnl += e.pnl || 0; D(day(e)).arb += e.pnl || 0;
+      arbGroups.add(e.group || open.group || e.id);
+      arb.n = arbGroups.size;
+    } else if ((e.kind === 'CLOSE' || e.kind === 'SETTLE') && e.strategy === 'converge') {
       const pnl = e.pnl || 0;
       const d = D(day(e)).conv;
       d.n++; d.pnl += pnl; if (pnl > 0) d.w++;
@@ -59,8 +86,6 @@ function summarize(events) {
       snipe.n++; snipe.pnl += pnl; if (pnl > 0) snipe.w++;
       snipe.fees += (e.fee || 0) + ((opens.get(e.id) || {}).fee || 0);
       D(day(e)).snipe += pnl;
-    } else if (e.kind === 'ARB_UNWOUND' || e.kind === 'ARB_SETTLED') {
-      arb.n++; arb.pnl += e.pnl || 0; D(day(e)).arb += e.pnl || 0;
     } else if (e.kind === 'MAKER_FILL') {
       const p = pos[e.ticker] || (pos[e.ticker] = { inv: 0, cost: 0, realized: 0 });
       const r = maker.applyFill(p, { side: e.side, qty: e.qty, px: e.px, tradePx: e.tradePx });
@@ -78,7 +103,7 @@ function summarize(events) {
     }
   }
   const held = Object.entries(pos).filter(([, p]) => p.inv).map(([ticker, p]) => ({ ticker, inv: p.inv, cost: p.cost }));
-  return { days, conv, arb, snipe, mk, held };
+  return { days, conv, arb, snipe, mk, held, lastT };
 }
 
 // Public, unauthenticated, read-only. Returns ticker -> yes price to mark at.
@@ -106,7 +131,7 @@ function render(s, unreal) {
   L.push(`  RIGO's mind closed ${conv.mind.n} early · ${usd(r2(conv.mind.pnl))}   (the rules closed ${conv.rules.n} · ${usd(r2(conv.rules.pnl))})`);
   L.push('');
   L.push('LOCKED ARBS');
-  L.push(`  ${arb.n} unwound or settled · ${usd(r2(arb.pnl))}`);
+  L.push(`  ${arb.n} groups with a leg closed or settled · ${usd(r2(arb.pnl))}`);
   L.push('');
   L.push('SETTLEMENT SNIPE  (bought on Kalshi after Polymarket settled)');
   L.push(`  ${snipe.n} settled or closed · ${snipe.w} winners · realized ${usd(r2(snipe.pnl))} · fees paid ${usd(-r2(snipe.fees))} of that`);
@@ -121,10 +146,13 @@ function render(s, unreal) {
   L.push(`ALL-IN REALIZED ${usd(r2(total))}${unreal == null ? '' : ` · with marks ${usd(r2(total + unreal))}`}`);
   L.push('');
   L.push('BY DAY            converge      arb    snipe    maker   maker run-over');
-  for (const [k, d] of [...s.days.entries()].sort()) {
+  const rows = [...s.days.entries()].sort();
+  rows.forEach(([k, d], i) => {
     const ro = d.makerQty ? `${Math.round((d.runQty / d.makerQty) * 100)}%` : '-';
-    L.push(`  ${k}  ${`${d.conv.n} · ${usd(r2(d.conv.pnl))}`.padStart(14)} ${usd(r2(d.arb)).padStart(8)} ${usd(r2(d.snipe || 0)).padStart(8)} ${usd(r2(d.maker)).padStart(8)}   ${ro.padStart(6)}`);
-  }
+    // the newest day is whatever the journals hold so far, not a whole day: say up to when
+    const upTo = i === rows.length - 1 && s.lastT && s.lastT.slice(0, 10) === k ? `   so far, through ${s.lastT.slice(11, 16)}Z` : '';
+    L.push(`  ${k}  ${`${d.conv.n} · ${usd(r2(d.conv.pnl))}`.padStart(14)} ${usd(r2(d.arb)).padStart(8)} ${usd(r2(d.snipe || 0)).padStart(8)} ${usd(r2(d.maker)).padStart(8)}   ${ro.padStart(6)}${upTo}`);
+  });
   return L.join('\n');
 }
 
@@ -133,9 +161,10 @@ async function main(argv) {
   const flag = (n) => args.includes(`--${n}`);
   const since = args.includes('--since') ? args[args.indexOf('--since') + 1] : null;
   const dirArg = args.find((a, i) => !a.startsWith('--') && args[i - 1] !== '--since');
-  const dir = dirArg || path.join(__dirname, '..', 'data', 'fly', 'archive');
+  const archive = path.join(__dirname, '..', 'data', 'fly', 'archive');
+  const dir = dirArg || archive;
   if (!fs.existsSync(dir)) { console.error(`no journals at ${dir} -- has the daily pull run? (ops/install-pull.sh)`); process.exit(1); }
-  const events = load(dir, since);
+  const events = load(dirArg ? dir : [archive, path.join(__dirname, '..', 'data', 'fly', 'box-now')], since);
   if (!events.length) { console.error(`no journal events${since ? ` since ${since}` : ''} in ${dir}`); process.exit(1); }
   const s = summarize(events);
   let unreal = null;
