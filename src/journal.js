@@ -26,4 +26,19 @@ function makeJournal(cfg) {
   };
 }
 
-module.exports = { makeJournal };
+// The desk's own comings and goings, so a restart nobody asked for leaves a trace (2026-09-24).
+// Before this a crash was one console line on the box, and fly logs keeps about 30 minutes of
+// those: the daily check could only count WATCHDOG lines, and a desk that crashed and was brought
+// back by Fly's restart policy read as a quiet day. server.js writes START once at boot, STOP when
+// a signal (a deploy, a Ctrl-C) ends it, and CRASH from the last-resort handlers. A heap abort or
+// the kernel's OOM kill runs no handler at all, so those show up only as a START with no STOP,
+// WATCHDOG or CRASH before it: tools/restarts.js counts exactly that. None of them moves money,
+// and every journal reader (ledger-check, pnl-report, fillcheck, volume) passes them by.
+const LIFECYCLE = ['START', 'STOP', 'WATCHDOG', 'CRASH'];
+// 800 characters is the message and the first several frames: enough to find the line, and short
+// enough that a crash loop cannot fill /data with stack traces.
+function crashRecord(ev, e) {
+  return { ev, stack: String((e && e.stack) || e).slice(0, 800) };
+}
+
+module.exports = { makeJournal, crashRecord, LIFECYCLE };

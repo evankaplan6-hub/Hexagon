@@ -8,21 +8,29 @@
 #                                         state line by line, and every settlement agrees with the venues
 #   3. what has each book made?           tools/pnl-report.js, from the pulled journals; and tools/fillcheck.js on the
 #                                         newest pulled day: does the maker fill the way its own tape says
-#   4. how often was the desk restarted?  WATCHDOG lines in the box's journal, yesterday and today (ET).
-#                                         29 on 2026-09-20 and 5 on 2026-09-21; a restart is a
-#                                         cancel-and-repost, so a day with many of them is a day the
-#                                         maker's fills (tools/fillcheck.js) cannot be compared with its model
+#   4. how often was the desk restarted,  tools/restarts.js on the journals step 2 just brought down,
+#      and did each have a reason?        yesterday and today (ET): START, STOP (a deploy), WATCHDOG
+#                                         and CRASH lines, and every START whose previous lifecycle
+#                                         line is none of STOP, WATCHDOG or CRASH -- an OOM kill or a
+#                                         heap abort, which run no handler. Before 2026-09-24 this
+#                                         counted WATCHDOG lines only, so a crash Fly quietly restarted
+#                                         read as a clean day. WATCHDOG: 29 on 2026-09-20, 5 on 09-21;
+#                                         a restart is a cancel-and-repost, so a day with many is a day
+#                                         the maker's fills (tools/fillcheck.js) cannot be compared with its model
 #   5. is the box starved?                /proc/stat since boot: the desk's share of the CPU, and "steal",
 #                                         the time Fly held it back for being over its cap (5ms per 80ms per
 #                                         shared vCPU). Steal is the number to read: ~50% on shared-cpu-1x on
 #                                         2026-09-22, the day of 5 restarts. Then /proc/pressure/cpu, which
-#                                         counts that same throttling as waiting, the commit it runs, /data free
+#                                         counts that same throttling as waiting, the commit it runs, /data
+#                                         free, and the probe files' total (the pull trims them since
+#                                         2026-09-24; a total that keeps growing means it has stopped)
 #
-# Nothing on the box is changed and nothing is deleted anywhere. What it writes on the Mac: step 2
-# copies the box's state.json and today's journal down into data/fly/archive (ledger-check --box),
-# and step 3b appends one line to data/fly/archive/fillcheck.jsonl. It reads no secret and cannot
-# place an order. The pull itself stays with its own job (ops/install-pull.sh); this only says
-# whether that job is alive.
+# Nothing on the box is changed. What it writes on the Mac: step 2 copies the box's state.json and
+# the journals the archive lacks into data/fly/box-now, replacing the copies from the previous run
+# (ledger-check --box), and step 3b appends one line to data/fly/archive/fillcheck.jsonl. Steps 3
+# and 4 read data/fly/box-now next to the archive, so "today" is today's journal and not the tail
+# of yesterday's. It reads no secret and cannot place an order. The pull itself stays with its own
+# job (ops/install-pull.sh); this only says whether that job is alive.
 # Every step runs even if an earlier one fails, and the exit code is how many did.
 set -uo pipefail
 HEXDIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -56,12 +64,12 @@ node tools/pnl-report.js || bad=$((bad + 1))
 say "3b. the maker's fills on the newest pulled day: journal, tape replay, and where the rest went"
 node tools/fillcheck.js || bad=$((bad + 1))
 
-say "4 + 5. the box: restarts, CPU pressure, commit, disk"
-TODAY="$(TZ=America/New_York date +%F)"
-YDAY="$(TZ=America/New_York date -v-1d +%F)"
-# one ssh session for all of it, and nothing heavier than grep: the box has one shared CPU.
-# (the dots stand for the quotes in "kind":"WATCHDOG", which would not survive three shells)
-"$FLY" ssh console -a "$APP" -C "sh -c 'echo commit \$GIT_SHA; for d in $YDAY $TODAY; do echo \"watchdog restarts \$d: \$(n=\$(grep -c kind.:.WATCHDOG., /data/journal-\$d.jsonl 2>/dev/null); echo \${n:-0})\"; done; set -- \$(head -1 /proc/stat); t=\$((\$2+\$3+\$4+\$5+\$6+\$7+\$8+\$9)); echo \"cpu since boot: desk \$(((\$2+\$4)*100/t))%, held back by Fly (steal) \$((\$9*100/t))%\"; cat /proc/pressure/cpu; df -m /data | tail -1'" 2>&1 | grep -v '^Connecting to' || bad=$((bad + 1))
+say "4. restarts, yesterday and today (ET), and whether each had a reason"
+node tools/restarts.js || bad=$((bad + 1))
+
+say "5. the box: CPU pressure, commit, disk, probe files"
+# one ssh session for all of it, and nothing heavier than du: the box has one shared CPU.
+"$FLY" ssh console -a "$APP" -C "sh -c 'echo commit \$GIT_SHA; set -- \$(head -1 /proc/stat); t=\$((\$2+\$3+\$4+\$5+\$6+\$7+\$8+\$9)); echo \"cpu since boot: desk \$(((\$2+\$4)*100/t))%, held back by Fly (steal) \$((\$9*100/t))%\"; cat /proc/pressure/cpu; df -m /data | tail -1; echo \"probe files on the box: \$(ls /data/probes-*.jsonl 2>/dev/null | wc -l) files, \$(du -cm /data/probes-*.jsonl 2>/dev/null | tail -1 | cut -f1) MB\"'" 2>&1 | grep -v '^Connecting to' || bad=$((bad + 1))
 
 printf '\n%s\n' "$([ "$bad" = 0 ] && echo 'all five answered, nothing flagged' || echo "$bad step(s) flagged a problem: read up")"
 exit "$bad"
