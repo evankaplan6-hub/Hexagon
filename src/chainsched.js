@@ -109,7 +109,11 @@ function start({ dataDir, keepDays = 14, log = console.log, now = Date.now, setT
       catch (e) { result = `snapshot failed: ${e && e.message}`; log(`chains: ${result}`); }
       const gone = trim();
       if (gone.length) log(`chains: dropped ${gone.length} old day${gone.length === 1 ? '' : 's'} (the box keeps ${keepDays}; the Mac keeps everything)`);
-      status.last = { at, result: summary(result), wrote: /\d+ lines/.test(result) && !/would be written/.test(result) };
+      // `stale`: every symbol's Cboe file still carried the stamp the previous run had seen.
+      // Nothing was written, and the tabs say so in those words rather than "nothing new": on
+      // 2026-09-24 a frozen feed was written as fresh chains and this line read "70 lines".
+      const stale = STALE_RE.test(result);
+      status.last = { at, result: summary(result), wrote: !stale && /\d+ lines/.test(result) && !/would be written/.test(result), ...(stale ? { stale } : {}), ...(/ PROBLEM chain-record:/.test(result) ? { problem: true } : {}) };
       arm();
     }, Math.min(next.at - now(), 2 ** 31 - 1));
   };
@@ -118,14 +122,24 @@ function start({ dataDir, keepDays = 14, log = console.log, now = Date.now, setT
 }
 
 const STATUS = '.sched.json';
+// tools/chain-record.js's verdict line when no symbol's file had been rebuilt since it was recorded
+const STALE_RE = /; all (\d+) stale:/;
 // The recorder's last lines, as one short phrase for the tabs: what it wrote, or why nothing.
+// Its verdict line (the last one, "... ok|PROBLEM chain-record: what; note; note") says whether
+// anything was wrong, and a PROBLEM's notes are carried through so the tab names it.
 function summary(result) {
   const s = String(result || '');
+  const v = / (ok|PROBLEM) chain-record: ([^|]*)/.exec(s);
+  const notes = v && v[1] === 'PROBLEM' ? v[2].replace(/\s*\(exit \d+\)\s*$/, '').trim().split('; ').slice(1).join('; ') : '';
+  const flag = v && v[1] === 'PROBLEM' ? ` · PROBLEM${notes ? `: ${notes}` : ''}` : '';
+  const stale = STALE_RE.exec(s);
+  if (stale) return `stale: none of the ${stale[1]} Cboe files had been rebuilt since the last run${v && v[1] === 'PROBLEM' ? ' · PROBLEM' : ''}`.slice(0, 160);
   const wrote = s.match(/(\d+) lines, (\d+) contracts/);
-  if (wrote) return `${wrote[1]} lines, ${(+wrote[2]).toLocaleString()} contracts`;
+  if (wrote) return `${wrote[1]} lines, ${(+wrote[2]).toLocaleString()} contracts${flag}`.slice(0, 160);
+  if (flag) return flag.slice(3, 163);
   if (/nothing new/.test(s)) return 'nothing new: the chains had not changed';
   if (/snapshot failed|could not start/.test(s)) return s.replace(/^.*?(snapshot failed|could not start)/, '$1').slice(0, 120);
   return s.split('|').pop().trim().slice(0, 120) || 'ran';
 }
 
-module.exports = { nextRun, prune, start, summary, instant, wall, TIMES, STATUS };
+module.exports = { nextRun, prune, start, summary, instant, wall, TIMES, STATUS, STALE_RE };

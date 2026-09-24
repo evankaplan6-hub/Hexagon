@@ -73,6 +73,28 @@ group('the timer');
     eq('nothing new', summary('2026-09-23T13:45Z ... |   nothing new to record |   skipped: SPY (unchanged since ...)'), 'nothing new: the chains had not changed');
     eq('a failure keeps its reason', summary('snapshot failed: cboe down'), 'snapshot failed: cboe down');
     eq('a refused spawn keeps its reason', summary('could not start the recorder: ENOENT'), 'could not start the recorder: ENOENT');
+
+    group('a frozen feed says so (2026-09-24)');
+    // On 09-24 the box's tabs read "70 lines, 16,096 contracts" over a copy of 09-22's evening
+    // chains. The recorder now skips such a file as STALE and its verdict line says so; these are
+    // its last three lines as the box's schedule collects them.
+    const staleRun = '  nothing new to record |   skipped: SPY (STALE: Cboe file still stamped 2026-09-23 03:54:59), QQQ (STALE: …) |   2026-09-24T13:45:06Z PROBLEM chain-record: nothing new; all 6 stale: Cboe has not rebuilt a file since the last run; old stamps: SPY 2026-09-23 03:54:59 (33.8h) (exit 1)';
+    eq('every symbol stale reads as stale, not "nothing new"', summary(staleRun), 'stale: none of the 6 Cboe files had been rebuilt since the last run · PROBLEM');
+    const quiet = '  nothing new to record |   skipped: … |   2026-09-26T13:45:06Z ok chain-record: nothing new; all 6 stale: Cboe has not rebuilt a file since the last run; oldest stamp 2026-09-26 01:19:00 (12.4h)';
+    eq('a stale weekend is stale without the alarm', summary(quiet), 'stale: none of the 6 Cboe files had been rebuilt since the last run');
+    const partFail = 'SPY QQQ · 30 lines, 9000 contracts, 900 KB → /data/chains/x.jsonl |   skipped: DIA (fetch failed: ECONNRESET) |   2026-09-24T20:25:00Z PROBLEM chain-record: wrote SPY QQQ: 30 lines, 9000 contracts; failed: DIA (fetch failed: ECONNRESET); oldest stamp 2026-09-24 20:13:40 (0.2h) (exit 1)';
+    eq('a write with a failure names the failure', summary(partFail), '30 lines, 9,000 contracts · PROBLEM: failed: DIA (fetch failed: ECONNRESET); oldest stamp 2026-09-24 20:13:40 (0.2h)');
+    const allFail = '  nothing new to record |   skipped: SPY (fetch failed: ENOTFOUND), … |   2026-09-23T20:25:06Z PROBLEM chain-record: nothing fetched; failed: SPY QQQ IWM DIA TLT GLD (fetch failed: ENOTFOUND); after 3 attempts (exit 1)';
+    ok('a run where everything failed says PROBLEM, not "nothing new"', /^PROBLEM: failed: SPY QQQ IWM DIA TLT GLD \(fetch failed: ENOTFOUND\)/.test(summary(allFail)), summary(allFail));
+    eq('an ok verdict leaves the old phrasing alone', summary('  nothing new to record |   skipped: SPY (unchanged since x) |   2026-09-24T20:25:00Z ok chain-record: nothing new; oldest stamp 2026-09-24 20:13:40 (0.2h)'), 'nothing new: the chains had not changed');
+
+    const t3 = [], w3 = {};
+    start({ dataDir: '/tmp/z', log: () => {}, now: () => clock, setTimer: (fn, ms) => t3.push({ fn, ms }), run: async () => staleRun,
+      fs: { readdirSync: () => [], unlinkSync: () => {}, mkdirSync: () => {}, writeFileSync: (p, t) => { w3[p] = JSON.parse(t); } } });
+    await t3[0].fn();
+    const last = w3[`/tmp/z/chains/${STATUS}`].last;
+    ok('the status file says stale, wrote nothing, and a problem', last.stale === true && last.wrote === false && last.problem === true, last);
+    ok('a clean write carries neither flag', st.last.stale === undefined && st.last.problem === undefined, st.last);
     console.log(`\n${pass} passed, ${fail} failed`);
     process.exit(fail ? 1 : 0);
   })();

@@ -13,7 +13,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { makeSession, parseChain, parseOsi, daysToExpiry, CHAIN_COLS } = require('../src/venues/cboe');
-const { chainHash, tapeLines, headerLine, appendLines, readSeen, writeSeen, snapshot, etDay, SEEN, SYMBOLS, DIR } = require('./chain-record');
+const { chainHash, tapeLines, headerLine, appendLines, readSeen, writeSeen, snapshot, etDay, SEEN, SYMBOLS, DIR,
+  expiryHashes, sameQuotes, stampMs, lastWeekdayAt, verdict, recordRun, appendLog, checkTape, LOG, RUN_RETRIES } = require('./chain-record');
+const { execFileSync } = require('child_process');
 const { read: readTape, summarize, latestFile, tail, pickAtm } = require('../src/chaintape');
 
 let pass = 0, fail = 0;
@@ -357,7 +359,8 @@ async function dedupe() {
   ok('the first snapshot records', one.lines === 2 && one.recorded.join() === 'AAA', [one.lines, one.recorded]);
   const two = await snapshot(session, opts);
   ok('the identical second snapshot is skipped', two.lines === 0 && two.file === null, [two.lines, two.file]);
-  ok('and says why', two.skipped.some((s) => /unchanged/.test(s)), two.skipped);
+  // the fixture's stamp did not move either, so this is the very same file: STALE, not just unchanged
+  ok('and says why', two.skipped.some((s) => /STALE: Cboe file still stamped 2026-09-21 20:04:11/.test(s)) && (two.stale || []).join() === 'AAA', two.skipped);
   const forced = await snapshot(session, { ...opts, again: true });
   ok('--again overrides the skip', forced.lines === 2, forced.lines);
 
@@ -455,7 +458,195 @@ async function network() {
   ok('a permanent failure gives up and says the status', /HTTP 500/.test(threw || ''), threw);
 }
 
+// ------------------------------------------------------------------ 2026-09-24: the frozen feed
+// Eastern wall time → instant, for the verdict's clock rules (September is EDT, UTC-4)
+const EDT = (d, hm) => Date.parse(`${d}T${hm}:00-04:00`);
+
+async function frozenFeed() {
+  group('snapshot: a frozen Cboe file is not news on the next day either (2026-09-24)');
+  // The incident: Cboe stopped rebuilding its files after the 09-22 evening. The next day the date
+  // filter dropped the expiry that had settled, the whole-chain hash changed, and the same frozen
+  // file was written again as that morning's chains -- 70 lines, every one a copy.
+  const dir = tmp();
+  const frozen = { symbol: 'AAA', expiries: ['260921', '260925', '261120'], timestamp: '2026-09-21 20:04:11' };
+  const session = { chain: async (sym, o) => parseChain(fixture({ ...frozen, symbol: sym }), o) };
+  const opts = { symbols: ['AAA'], dir, band: 0, maxDte: 70, log: () => {} };
+  const one = await snapshot(session, { ...opts, now: () => NOW });
+  ok('the first day records all three expiries', one.lines === 3, one.lines);
+  ok('the stamp is kept in the seen file', readSeen(dir).AAA.qt === '2026-09-21 20:04:11', readSeen(dir).AAA);
+  ok('and one hash per expiry', Object.keys(readSeen(dir).AAA.exps || {}).length === 3, readSeen(dir).AAA.exps);
+  const nextDay = NOW + 86400000;
+  ok('the whole-chain hash really does change when the expiry rolls off',
+    chainHash(parseChain(fixture(frozen), { maxDte: 70, today: '2026-09-22' })) !== chainHash(parseChain(fixture(frozen), { maxDte: 70, today: TODAY })));
+  const two = await snapshot(session, { ...opts, now: () => nextDay });
+  ok('the same frozen file on the next day writes nothing', two.lines === 0 && two.file === null, [two.lines, two.recorded]);
+  ok('and is called STALE, with the stamp', two.skipped.join() === 'AAA (STALE: Cboe file still stamped 2026-09-21 20:04:11)', two.skipped);
+  ok('and listed as stale for the verdict', (two.stale || []).join() === 'AAA', two.stale);
+  ok('its stamp is still reported, so the verdict can age it', (two.quotes || {}).AAA === '2026-09-21 20:04:11', two.quotes);
+  ok('--again still records it', (await snapshot(session, { ...opts, now: () => nextDay, again: true, dryRun: true })).lines === 2);
+
+  // Cboe rebuilt the file with a new stamp and nothing in it moved: unchanged, not stale
+  const restamped = { chain: async (sym, o) => parseChain(fixture({ ...frozen, symbol: sym, timestamp: '2026-09-22 09:30:00' }), o) };
+  const three = await snapshot(restamped, { ...opts, now: () => nextDay });
+  ok('a rebuilt file with the same quotes is unchanged, not stale', three.lines === 0 && /unchanged since/.test(three.skipped[0] || '') && (three.stale || []).length === 0, three.skipped);
+  ok('its new stamp is remembered, the tape line it matches is not', readSeen(dir).AAA.qt === '2026-09-22 09:30:00' && readSeen(dir).AAA.at === new Date(NOW).toISOString(), readSeen(dir).AAA);
+  // ...so when the feed then freezes on that rebuilt file, the next run says STALE, not "unchanged"
+  const again3 = await snapshot(restamped, { ...opts, now: () => nextDay + 3600000 });
+  ok('a feed that freezes on a rebuilt file is STALE on the next run', again3.lines === 0 && (again3.stale || []).join() === 'AAA', again3.skipped);
+  ok('a dry run remembers no stamp', await (async () => {
+    const d = tmp(); await snapshot(session, { ...opts, dir: d, now: () => NOW });
+    await snapshot(restamped, { ...opts, dir: d, now: () => nextDay, dryRun: true });
+    const q = readSeen(d).AAA.qt; fs.rmSync(d, { recursive: true, force: true }); return q === '2026-09-21 20:04:11';
+  })());
+
+  // a far expiry coming inside the day limit is not news either, when nothing already held moved
+  const later = { chain: async (sym, o) => parseChain(fixture({ ...frozen, symbol: sym, expiries: [...frozen.expiries, '261201'] }), o) };
+  const dirL = tmp();
+  const l1 = await snapshot(later, { ...opts, dir: dirL, now: () => NOW });
+  ok('(the far expiry is outside the limit on the first day)', l1.lines === 3, l1.lines);
+  ok('an expiry coming inside the day limit does not make an old file new', (await snapshot(later, { ...opts, dir: dirL, now: () => nextDay })).lines === 0);
+  fs.rmSync(dirL, { recursive: true, force: true });
+
+  // the content still decides: a changed chain under an old stamp is recorded, never lost
+  const moved = { chain: async (sym, o) => parseChain(fixture({ ...frozen, symbol: sym, spot: 101 }), o) };
+  const four = await snapshot(moved, { ...opts, now: () => nextDay });
+  ok('changed quotes under the same stamp are still recorded', four.lines === 2 && (four.stale || []).length === 0, [four.lines, four.skipped]);
+
+  // a seen file written before this change has a hash and nothing else: it must still dedupe
+  const dirO = tmp();
+  const c0 = parseChain(fixture({ ...frozen, symbol: 'AAA' }), { maxDte: 70, today: TODAY });
+  writeSeen(dirO, { AAA: { hash: chainHash(c0), at: 'then', spot: 100 } });
+  const old = await snapshot(session, { ...opts, dir: dirO, now: () => NOW });
+  ok('an old-format seen entry still skips an unchanged chain by its hash', old.lines === 0 && /unchanged since then/.test(old.skipped[0] || ''), old.skipped);
+  fs.rmSync(dirO, { recursive: true, force: true });
+  fs.rmSync(dir, { recursive: true, force: true });
+
+  group('sameQuotes: what "nothing moved" means');
+  const a = parseChain(fixture({ expiries: ['260925', '261120'] }), {});
+  const b = parseChain(fixture({ expiries: ['261120', '270320'] }), {});
+  const prev = { spot: 100, exps: expiryHashes(a) };
+  ok('the shared expiry quoted the same, same spot: nothing moved', sameQuotes(prev, b, expiryHashes(b)));
+  ok('a different spot moved', !sameQuotes({ ...prev, spot: 99 }, b, expiryHashes(b)));
+  const far = parseChain(fixture({ expiries: ['270320'] }), {});
+  ok('nothing in common is not a match', !sameQuotes(prev, far, expiryHashes(far)));
+  const c = parseChain(fixture({ expiries: ['261120'], strikes: [70, 85, 90, 100, 110, 115, 131] }), {});
+  ok('a changed quote on a shared expiry moved', !sameQuotes(prev, c, expiryHashes(c)));
+  ok('an entry with no expiry hashes never matches this way', !sameQuotes({ spot: 100 }, b, expiryHashes(b)));
+}
+
+async function failures() {
+  group('a failed fetch keeps its cause');
+  // 09-23 16:25 ET logged a bare "fetch failed" six times; the reason under it was thrown away
+  const e = new TypeError('fetch failed');
+  e.cause = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
+  const r = await snapshot({ chain: async () => { throw e; } }, { symbols: ['AAA'], dir: tmp(), band: 0, maxDte: 70, now: () => NOW });
+  ok('the cause code is in the skip reason', r.skipped[0] === 'AAA (fetch failed: ECONNRESET)', r.skipped);
+  ok('and in the failure list', (r.failed || []).length === 1 && r.failed[0].why === 'fetch failed: ECONNRESET', r.failed);
+
+  group('recordRun: when every symbol fails, the whole run again');
+  let calls = 0; const waits = [], tries = [];
+  const down = { chain: async (sym, o) => { calls++; tries.push(o.tries); throw new Error('fetch failed'); } };
+  const all = await recordRun(down, { symbols: ['AAA', 'BBB'], dir: tmp(), band: 0, maxDte: 70, now: () => NOW }, { waitMs: 60000, wait: async (ms) => { waits.push(ms); } });
+  ok(`tried ${RUN_RETRIES + 1} times in all`, all.attempts === RUN_RETRIES + 1 && calls === 2 * (RUN_RETRIES + 1), [all.attempts, calls]);
+  ok('waiting between attempts', waits.length === RUN_RETRIES && waits.every((w) => w === 60000), waits);
+  ok('the retries ask each symbol once, so a dead feed ends in minutes', tries.slice(0, 2).every((t) => t === undefined) && tries.slice(2).every((t) => t === 1), tries);
+  let n = 0;
+  const back = { chain: async (sym, o) => { if (++n <= 2) throw new Error('fetch failed'); return parseChain(fixture({ symbol: sym }), o); } };
+  const rec = await recordRun(back, { symbols: ['AAA', 'BBB'], dir: tmp(), band: 0, maxDte: 70, now: () => NOW }, { wait: async () => {} });
+  ok('a feed that comes back is recorded on the retry', rec.attempts === 2 && rec.recorded.join() === 'AAA,BBB', [rec.attempts, rec.recorded]);
+  let m = 0;
+  const half = { chain: async (sym, o) => { m++; if (sym === 'BBB') throw new Error('HTTP 404'); return parseChain(fixture({ symbol: sym }), o); } };
+  const part = await recordRun(half, { symbols: ['AAA', 'BBB'], dir: tmp(), band: 0, maxDte: 70, now: () => NOW }, { wait: async () => { throw new Error('must not wait'); } });
+  ok('one symbol answering is not retried: the feed is up', part.attempts === 1 && m === 2, [part.attempts, m]);
+}
+
+function verdicts() {
+  group('verdict: one line per run, and PROBLEM when the feed has gone wrong');
+  const S = ['SPY', 'QQQ'];
+  const run = (at, extra = {}) => ({ at, lines: 0, contracts: 0, recorded: [], skipped: [], failed: [], stale: [], quotes: {}, ...extra });
+  const close = EDT('2026-09-24', '16:25');                // a Thursday
+  const fresh = { SPY: '2026-09-24 20:14:02', QQQ: '2026-09-24 20:13:40' };
+  const good = verdict(run(close, { lines: 30, contracts: 9000, recorded: S, quotes: fresh }), { symbols: S });
+  ok('a normal closing run is ok', good.level === 'ok' && !good.problem, good.line);
+  ok('the line reads time, level, what', good.line.startsWith('2026-09-24T20:25:00Z ok chain-record: wrote SPY QQQ: 30 lines, 9000 contracts'), good.line);
+  ok('and says how old the oldest stamp is', /oldest stamp 2026-09-24 20:13:40 \(0\.2h\)/.test(good.line), good.line);
+
+  const failed = verdict(run(close, { lines: 15, recorded: ['SPY'], quotes: { SPY: fresh.SPY }, failed: [{ sym: 'QQQ', why: 'fetch failed: ETIMEDOUT' }] }), { symbols: S });
+  ok('a failed symbol at the close is a PROBLEM', failed.level === 'PROBLEM' && /failed: QQQ \(fetch failed: ETIMEDOUT\)/.test(failed.line), failed.line);
+  const old = verdict(run(close, { quotes: { SPY: fresh.SPY, QQQ: '2026-09-24 16:00:00' } }), { symbols: S });
+  ok('a stamp over three hours old at the close is a PROBLEM', old.problem && /old stamps: QQQ 2026-09-24 16:00:00 \(4\.4h\)/.test(old.line), old.line);
+  ok('three hours is the line', !verdict(run(close, { quotes: { SPY: '2026-09-24 17:26:00' } }), { symbols: S }).problem);
+
+  // the real 09-23 runs
+  const lost = verdict(run(EDT('2026-09-23', '16:25'), { failed: S.map((sym) => ({ sym, why: 'fetch failed' })), attempts: 3 }), { symbols: S });
+  ok('09-23 16:25: every symbol failed is a PROBLEM, and says nothing was fetched', lost.problem && /nothing fetched; failed: SPY QQQ \(fetch failed\)/.test(lost.line), lost.line);
+  ok('and how many attempts it took', /after 3 attempts/.test(lost.line), lost.line);
+  const frozen = { SPY: '2026-09-23 03:54:59', QQQ: '2026-09-23 03:56:14' };
+  const eve = verdict(run(EDT('2026-09-23', '20:00'), { quotes: frozen, stale: S }), { symbols: S });
+  ok('09-23 20:00: every file still stamped the night before is a PROBLEM', eve.problem && /all 2 stale/.test(eve.line) && /SPY 2026-09-23 03:54:59 \(20\.1h\)/.test(eve.line), eve.line);
+  const morn = verdict(run(EDT('2026-09-24', '09:45'), { quotes: frozen, stale: S }), { symbols: S });
+  ok('09-24 09:45: stamps from before the last close are a PROBLEM in the morning too', morn.problem, morn.line);
+
+  // what a morning run may see without alarm
+  const tue = verdict(run(EDT('2026-09-22', '09:45'), { quotes: { SPY: '2026-09-22 13:40:00', QQQ: '2026-09-21 23:58:00' } }), { symbols: S });
+  ok('a morning stamp from the previous evening is fine', !tue.problem, tue.line);
+  const mon = verdict(run(EDT('2026-09-28', '09:45'), { quotes: { SPY: '2026-09-26 01:19:00', QQQ: '2026-09-25 23:50:00' } }), { symbols: S });
+  ok('a Monday morning stamp from Friday evening is fine', !mon.problem, mon.line);
+  ok('a Monday morning stamp from before Friday’s close is not', verdict(run(EDT('2026-09-28', '09:45'), { quotes: { SPY: '2026-09-25 19:00:00' } }), { symbols: S }).problem);
+  const amFail = verdict(run(EDT('2026-09-22', '09:45'), { quotes: { SPY: '2026-09-22 13:40:00' }, failed: [{ sym: 'QQQ', why: 'HTTP 503' }] }), { symbols: S });
+  ok('a morning failure is named but is not a PROBLEM (the close run is the one that matters)', !amFail.problem && /failed: QQQ \(HTTP 503\)/.test(amFail.line), amFail.line);
+  const sat = verdict(run(EDT('2026-09-26', '09:45'), { quotes: { SPY: '2026-09-26 01:19:00', QQQ: '2026-09-25 23:50:00' }, stale: ['SPY'] }), { symbols: S });
+  ok('a weekend run on Friday evening’s files is fine', !sat.problem && /stale: SPY \(/.test(sat.line), sat.line);
+  ok('a missing stamp at the close is a PROBLEM', verdict(run(close, { quotes: { SPY: null } }), { symbols: S }).problem);
+  const seenBad = verdict(run(close, { lines: 1, recorded: ['SPY'], quotes: fresh, seenError: 'EACCES' }), { symbols: S });
+  ok('a seen file that could not be written is a PROBLEM at any hour', seenBad.problem && /\.seen\.json not written: EACCES/.test(seenBad.line), seenBad.line);
+
+  group('the clock helpers');
+  ok('Cboe’s stamp is read as UTC', stampMs('2026-09-22 13:47:17') === Date.UTC(2026, 8, 22, 13, 47, 17), stampMs('2026-09-22 13:47:17'));
+  ok('no stamp is null, not 1970', stampMs(null) === null && stampMs('garbage') === null);
+  ok('the last weekday 16:00 before a Tuesday morning is Monday', lastWeekdayAt(EDT('2026-09-22', '09:45'), 16).day === '2026-09-21');
+  ok('before a Monday morning it is Friday', lastWeekdayAt(EDT('2026-09-28', '09:45'), 16).day === '2026-09-25');
+  ok('after 16:00 on a weekday it is that day', lastWeekdayAt(EDT('2026-09-24', '16:25'), 16).day === '2026-09-24');
+  ok('and it is 16:00 Eastern exactly', lastWeekdayAt(EDT('2026-09-24', '16:25'), 16).at === EDT('2026-09-24', '16:00'));
+}
+
+function checks() {
+  group('--check: the last run, the newest stamps, and the last finished weekday');
+  const dir = tmp();
+  const at = Date.parse('2026-09-23T13:54:48.728Z');
+  const line = (sym, qt) => JSON.stringify({ t: new Date(at).toISOString(), sym, spot: 100, qt, exp: '2026-09-25', dte: 2, c: [[100, 1, 5, 1.1, 5, 1, 0.2, 0.5, 0, 0, 0, 0, 0, 7, 3, null]], p: [] });
+  const S = ['SPY', 'QQQ'];
+  // the 09-23 file as it really was: one morning snapshot, stamped the evening before
+  fs.writeFileSync(path.join(dir, 'chains-2026-09-23.jsonl'), [line('SPY', '2026-09-23 03:54:59'), line('QQQ', '2026-09-23 03:56:14')].join('\n') + '\n');
+  const thu = EDT('2026-09-24', '09:30');
+  const none = checkTape(dir, { now: thu, symbols: S });
+  ok('no chains.log is a problem in itself', none.lines.some((l) => /PROBLEM: no .*chains\.log/.test(l)), none.lines);
+  ok('the last finished weekday with only the night-before stamps is a PROBLEM', none.lines.some((l) => /PROBLEM: 2026-09-23 has no quote stamped that day for SPY QQQ/.test(l)) && none.problems === 2, none.lines);
+  ok('the newest stamp per symbol is printed, with its age', none.lines.some((l) => /SPY  2026-09-23 03:54:59 UTC \(33\.6h old\)/.test(l)), none.lines);
+
+  appendLog(dir, '2026-09-23T20:00:00Z PROBLEM chain-record: nothing new; all 2 stale');
+  appendLog(dir, '2026-09-24T00:00:00Z ok chain-record: wrote SPY QQQ: 2 lines, 4 contracts');
+  ok('appendLog adds a line to chains.log', fs.readFileSync(path.join(dir, LOG), 'utf8').trim().split('\n').length === 2);
+  fs.appendFileSync(path.join(dir, 'chains-2026-09-23.jsonl'), [line('SPY', '2026-09-23 20:14:02'), line('QQQ', '2026-09-23 20:13:40')].join('\n') + '\n');
+  const good = checkTape(dir, { now: thu, symbols: S });
+  ok('a session stamped that day, and an ok last run, is clean', good.problems === 0 && good.lines.some((l) => /2026-09-23: every symbol has a quote stamped that day/.test(l)), good.lines);
+  ok('the last run is printed', good.lines[0] === 'last run: 2026-09-24T00:00:00Z ok chain-record: wrote SPY QQQ: 2 lines, 4 contracts', good.lines[0]);
+  appendLog(dir, '2026-09-24T13:45:00Z PROBLEM chain-record: nothing new; all 2 stale');
+  ok('a PROBLEM last run is counted', checkTape(dir, { now: thu, symbols: S }).problems === 1);
+  ok('from 17:00 Eastern the day itself is the one checked', checkTape(dir, { now: EDT('2026-09-24', '17:30'), symbols: S }).lines.some((l) => /PROBLEM: 2026-09-24 has no tape at all/.test(l)));
+  // the command itself, as ops/daily-check.sh runs it: read-only, and the exit code is the answer
+  let code = 0;
+  try { execFileSync(process.execPath, [path.join(__dirname, 'chain-record.js'), '--check', '--dir', dir], { stdio: 'pipe' }); } catch (e) { code = e.status; }
+  ok('--check exits non-zero on a problem', code === 1, code);
+  ok('--check wrote nothing', fs.readdirSync(dir).sort().join() === ['chains-2026-09-23.jsonl', LOG].sort().join(), fs.readdirSync(dir));
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 (async () => {
+  await frozenFeed();
+  await failures();
+  verdicts();
+  checks();
   await dedupe();
   await resilience();
   await crashSafety();

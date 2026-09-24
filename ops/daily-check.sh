@@ -71,5 +71,10 @@ say "5. the box: CPU pressure, commit, disk, probe files"
 # one ssh session for all of it, and nothing heavier than du: the box has one shared CPU.
 "$FLY" ssh console -a "$APP" -C "sh -c 'echo commit \$GIT_SHA; set -- \$(head -1 /proc/stat); t=\$((\$2+\$3+\$4+\$5+\$6+\$7+\$8+\$9)); echo \"cpu since boot: desk \$(((\$2+\$4)*100/t))%, held back by Fly (steal) \$((\$9*100/t))%\"; cat /proc/pressure/cpu; df -m /data | tail -1; echo \"probe files on the box: \$(ls /data/probes-*.jsonl 2>/dev/null | wc -l) files, \$(du -cm /data/probes-*.jsonl 2>/dev/null | tail -1 | cut -f1) MB\"'" 2>&1 | grep -v '^Connecting to' || bad=$((bad + 1))
 
-printf '\n%s\n' "$([ "$bad" = 0 ] && echo 'all five answered, nothing flagged' || echo "$bad step(s) flagged a problem: read up")"
+say "6. the option-chain tape on this Mac: the last run, the newest Cboe stamp per symbol, the last finished weekday"
+# Read-only (tools/chain-record.js --check). Added 2026-09-24: Cboe's feed froze from the 09-22
+# evening, 09-23 has no session quotes at all, and nothing here said so for a day and a half.
+node tools/chain-record.js --check || bad=$((bad + 1))
+
+printf '\n%s\n' "$([ "$bad" = 0 ] && echo 'every step answered, nothing flagged' || echo "$bad step(s) flagged a problem: read up")"
 exit "$bad"
