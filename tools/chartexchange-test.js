@@ -92,8 +92,10 @@ async function part2() {
     ok('a 5xx is retried and the third answer is taken', q.price === 2 && n === 3 && s.stats.retries === 2, [q, n, s.stats]);
     let n4 = 0, msg = '';
     const s4 = cx.makeSession({ apiKey: KEY, pace: 0, retryMs: 1, tries: 3, fetchImpl: fakeFetch({ '/feed/stocks/quote/': () => { n4++; return { __status: 401, body: '{"detail":"Unauthorized"}' }; } }) });
-    try { await s4.quote('SPY'); } catch (e) { msg = e.message; }
+    let e4 = null;
+    try { await s4.quote('SPY'); } catch (e) { e4 = e; msg = e.message; }
     ok('a 401 is not retried and says why', n4 === 1 && /HTTP 401: Unauthorized/.test(msg), [n4, msg]);
+    ok('...and is flagged expired: the key, not the call, is what failed', e4 && e4.expired === true && e4.status === 401 && !e4.quota, e4);
     let n5 = 0;
     const s5 = cx.makeSession({ apiKey: KEY, pace: 0, retryMs: 1, tries: 2, fetchImpl: fakeFetch({ '/feed/stocks/quote/': () => { n5++; return { __status: 429, body: '' }; } }) });
     try { await s5.quote('SPY'); } catch (e) { msg = e.message; }
@@ -185,7 +187,7 @@ async function part3() {
   // underlying's bars, and a contract whose bars endpoint fails on demand.
   const underlying = [];
   for (let i = 0; i < 600; i++) underlying.push({ timestamp: day('2024-01-01') + i * 86400, open: '100', high: '101', low: '99', close: `${100 + (i % 5)}`, volume: '1' });
-  let failOn = null, badOn = null, capAfter = Infinity;
+  let failOn = null, badOn = null, capAfter = Infinity, deadAfter = Infinity;
   const urls = [];
   const routes = {
     '/data/stocks/bars/': (p) => underlying.filter((b) => b.timestamp >= Number(p.start)).slice(0, 500),
@@ -199,6 +201,7 @@ async function part3() {
     },
     '/data/options/bars/': (p) => {
       if (urls.length > capAfter) return { __status: 406, body: '{"detail":"You have reached the maximum number of requests in trial mode."}' };
+      if (urls.length > deadAfter) return { __status: 401, body: '{"detail":"Expired"}' };
       // the source answers 500 to any start before its history begins, so the archiver must never ask
       if (Number(p.start) < Math.floor(Date.parse('2021-06-01T00:00:00Z') / 1000)) return { __status: 500, body: 'too early' };
       if (failOn && p.symbol === failOn) return { __status: 500, body: 'boom' };
@@ -256,6 +259,17 @@ async function part3() {
   ok('nothing half-written, no file for the cut-off expiry', !fs.existsSync(oh.fileFor(dir, 'SPY', '2025-04-17')) && !fs.existsSync(`${oh.fileFor(dir, 'SPY', '2025-04-17')}.tmp`) && fs.existsSync(oh.underlyingFile(dir, 'SPY')));
   ok('and the remaining expiry was not even asked for', !urls.slice(-3).some((u) => u.includes('2025-05-16')), urls.slice(-3).map((u) => u.replace(KEY, 'KEY')));
   capAfter = Infinity;
+
+  // the key expired (2026-09-23, "HTTP 401: Expired" on every call): the run stops on the first
+  // one, like the cap, rather than spending a call per expiry to be refused 67 times
+  fs.rmSync(path.join(dir, 'SPY'), { recursive: true });
+  deadAfter = urls.length + 4;
+  const before6d = urls.length;
+  const r6d = await oh.archive(session, { symbols: ['SPY'], from: '2025-04', to: '2025-05', dir, now: () => Date.UTC(2025, 5, 1, 16), log: () => {} });
+  ok('an expired key stops the run and names where', r6d.stopped && /^SPY 2025-04-18: HTTP 401: Expired/.test(r6d.stopped) && r6d.pulled.length === 0 && r6d.failed.length === 0, r6d);
+  ok('...after one refused call, not one per expiry', urls.length - before6d === 5, urls.length - before6d);
+  ok('...and nothing half-written', !fs.existsSync(oh.fileFor(dir, 'SPY', '2025-04-17')) && !fs.existsSync(`${oh.fileFor(dir, 'SPY', '2025-04-17')}.tmp`));
+  deadAfter = Infinity;
 
   // this side's own mistake (a 4xx) fails the expiry, writes nothing, and the run goes on
   fs.rmSync(path.join(dir, 'SPY'), { recursive: true });

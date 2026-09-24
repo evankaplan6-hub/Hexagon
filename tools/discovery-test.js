@@ -476,6 +476,19 @@ async function run() {
     ok('a network error is passed through without a status', eBoom && eBoom.status === undefined);
     ok("src/http.js's error and ok counters did not move", http.stats.err === before.err && http.stats.ok === before.ok, http.stats);
 
+    // a page that never comes back, abort or no abort, ends at the deadline (the box's fetches sat
+    // minutes past their abort; a crawl awaiting one would never finish)
+    const hang = D.makeDiscoveryFetch({ timeoutMs: 20, fetchImpl: () => new Promise(() => {}) });
+    let eHang = null;
+    const t0 = Date.now();
+    try { await hang('https://x.test/hang'); } catch (e) { eHang = e; }
+    ok('a fetch that never settles is a timeout at the deadline', eHang && eHang.timeout === true && Date.now() - t0 < 1000, eHang && eHang.message);
+    const hangBody = D.makeDiscoveryFetch({ timeoutMs: 20, fetchImpl: async () => ({ ok: true, status: 200, json: () => new Promise(() => {}) }) });
+    let eBody = null;
+    try { await hangBody('https://x.test/hangbody'); } catch (e) { eBody = e; }
+    ok('a body that never ends is the same timeout', eBody && eBody.timeout === true, eBody && eBody.message);
+    ok('...and still no effect on the halt counter', http.stats.err === before.err, http.stats);
+
     // the real crawl path end to end through the fetcher: a 429 from the "venue" is retried
     let n = 0;
     const venue = async () => (n++ === 0 ? { ok: false, status: 429, json: async () => ({}) } : { ok: true, status: 200, json: async () => clone({ events: [KS_FED], cursor: '' }) });

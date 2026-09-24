@@ -546,6 +546,7 @@ function settings(E, input) {
 // an edited or pulled README without a restart. The box's copies are baked into its image, and a
 // merge that touches either file redeploys it (.github/workflows/test.yml).
 const DOC_FILES = ['README.md', 'ops/DEPLOY.md'];
+const DOC_TEXT_BUDGET = MAX_OUT - 1500;   // characters of section text per answer; the rest is headings, the note and the JSON itself
 let docCache = null;
 function docSections(root = ROOT) {
   const files = [];
@@ -591,7 +592,10 @@ function docs(_E, input, _now, root = ROOT) {
   return {
     query: input.query.slice(0, 120), matchingSections: scored.length,
     note: 'the project docs. They describe how the desk was built and measured; numbers in them are from when they were written, not live.',
-    sections: scored.slice(0, limit).map(({ s }) => ({ file: s.file, heading: s.heading, text: clip(s.text, 3500) })),
+    // Each section is clipped to a share of the answer's bound, so the JSON always closes: four
+    // sections at 3500 characters each ran past MAX_OUT the day the README grew a paragraph, and
+    // the generic cut (bounded) landed inside a string, leaving the model an answer it could not read.
+    sections: scored.slice(0, limit).map(({ s }) => ({ file: s.file, heading: s.heading, text: clip(s.text, Math.min(3500, Math.floor(DOC_TEXT_BUDGET / limit))) })),
     otherMatchingHeadings: scored.slice(limit, limit + 8).map(({ s }) => `${s.file}: ${s.heading}`),
   };
 }

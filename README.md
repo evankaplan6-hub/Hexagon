@@ -1047,6 +1047,14 @@ on every run and the trial's whole yield is the one expiry above. Either way the
 irreplaceable kind once the key is gone, so `data/options/history/` belongs in the same backup as
 `data/chains/`.
 
+**How it ended (2026-09-23, the same evening).** The cap was not the last word: by 22:40Z every call
+answered HTTP 401 "Expired", and it still did the next morning. The trial did not run its fortnight,
+and its whole yield is the one expiry above. The first run to meet that spent 67 calls being refused
+once per expiry, so a 401 is now flagged `expired` by the client and stops a run on the first call,
+the way the cap does; `history.log` says `STOPPED (... HTTP 401: Expired)`. The launchd job is one
+refused call four times a day until `ops/uninstall-history.sh` is run. A paid key, if there is ever
+one, resumes from what is on disk.
+
 **What ChartExchange is not, here.** Its dividend history stops in mid-2021 (SPY's last entry is
 June 2021), so its bars cannot be dividend-adjusted and `tools/stock-fetch.js` keeps Yahoo for the
 ETF lab's total-return series. Its stock quotes are 30 minutes delayed on this plan. And the

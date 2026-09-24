@@ -1,4 +1,5 @@
 'use strict';
+const http = require('./http');   // only its deadline: the crawl's errors never touch its counters
 // Discovery: every open market on both venues, outside sports, in a shape the matcher can pair.
 //
 // The desk's fast path lists eleven Kalshi series and the top Polymarket markets every 15 seconds,
@@ -305,18 +306,17 @@ function makeDiscoveryFetch({ timeoutMs = 60000, pace = null, fetchImpl = null }
     if (pace) await pace();
     const f = fetchImpl || globalThis.fetch;
     const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), timeoutMs);
-    try {
-      const r = await f(url, { signal: ctl.signal, headers: { accept: 'application/json', 'user-agent': 'the-hexagon/1.0 (discovery)' } });
-      if (!r.ok) {
-        const e = new Error(`HTTP ${r.status} ${String(url).slice(0, 90)}`);
-        e.status = r.status;
-        throw e;
-      }
-      return await r.json();
-    } finally {
-      clearTimeout(timer);
+    // the abort is asked for and the deadline is kept regardless (src/http.js deadline: the box's
+    // fetches sat minutes past their abort, and a crawl page that never returns is a crawl that
+    // never ends)
+    const held = { abort: () => ctl.abort(), what: String(url).slice(0, 90) };
+    const r = await http.deadline(f(url, { signal: ctl.signal, headers: { accept: 'application/json', 'user-agent': 'the-hexagon/1.0 (discovery)' } }), timeoutMs, held);
+    if (!r.ok) {
+      const e = new Error(`HTTP ${r.status} ${String(url).slice(0, 90)}`);
+      e.status = r.status;
+      throw e;
     }
+    return await http.deadline(r.json(), timeoutMs, held);
   };
 }
 

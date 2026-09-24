@@ -154,16 +154,20 @@ function makeSession({ fetchImpl = fetch, apiKey = key(), pace = 250, retryMs = 
         // does not change it; the API's own words are kept because they say which ("Invalid
         // symbol: ", "Invalid value: "). A 406 is the trial's request cap ("You have reached the
         // maximum number of requests in trial mode"): every call after it is refused too, so it
-        // is flagged `quota` for callers to stop on rather than fail one item at a time.
+        // is flagged `quota` for callers to stop on rather than fail one item at a time. A 401 is
+        // the key itself refused ("Expired" from the evening of 2026-09-23, two weeks before the
+        // trial's stated end): every call after it is refused too, so it is flagged `expired` the
+        // same way -- the archiver spent 67 calls learning that one at a time.
         if (status >= 400 && status < 500 && status !== 429) {
           let why = '';
           try { const j = JSON.parse(text); why = Array.isArray(j) ? j.join('; ') : (j && (j.detail || j.error || j.message)) || ''; } catch { /* html or nothing */ }
           const quota = status === 406 || /maximum number of requests/i.test(why);
-          throw Object.assign(new Error(`HTTP ${status}${why ? `: ${String(why).slice(0, 120)}` : ''}`), { status, final: true, ...(quota ? { quota: true } : {}) });
+          const expired = status === 401;
+          throw Object.assign(new Error(`HTTP ${status}${why ? `: ${String(why).slice(0, 120)}` : ''}`), { status, final: true, ...(quota ? { quota: true } : {}), ...(expired ? { expired: true } : {}) });
         }
         throw Object.assign(new Error(`HTTP ${status}`), { status });
       } catch (e) {
-        if (e.final || i + 1 >= tries) throw Object.assign(new Error(scrub(e.message, apiKey)), { status: e.status || status || 0, ...(e.quota ? { quota: true } : {}) });
+        if (e.final || i + 1 >= tries) throw Object.assign(new Error(scrub(e.message, apiKey)), { status: e.status || status || 0, ...(e.quota ? { quota: true } : {}), ...(e.expired ? { expired: true } : {}) });
         stats.retries++;
         await sleep((status === 429 ? retryMs * 5 : retryMs) * (i + 1));   // a refusal gets a long breath
       }
