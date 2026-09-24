@@ -790,8 +790,10 @@ const deferred = () => { let release; const p = new Promise((res) => { release =
     ok('maker_status: inventory and an hourly trend', mk.markets[0].ticker === 'KXB' && mk.markets[0].contractsHeld === 12 && mk.pnlTrendLast12h.length === 3, mk);
     const wb = JSON.parse(outputs.whale_bets[1]);
     ok('whale_bets: a recorded day', wb.found && wb.bets[0].who === 'whale' && wb.bets[0].size === '$12000.00', wb);
+    ok('docs: four sections of the real README still fit the bound, so the JSON closes', outputs.docs[2].length <= tools.MAX_OUT && !/cut here/.test(outputs.docs[2]), outputs.docs[2].length);
     const d = JSON.parse(outputs.docs[2]);
     ok('docs: finds the flatten and resume section', d.sections.some((s) => /Operating it/.test(s.heading)), d.sections.map((s) => s.heading));
+    ok('docs: a single section still gets its full 3500 characters', JSON.parse(await tools.runTool(E, 'docs', { query: 'flatten resume', limit: 1 }, T0)).sections[0].text.length <= 3500, 'limit 1');
     {
       const droot = tmp();
       fs.mkdirSync(path.join(droot, 'ops'));
