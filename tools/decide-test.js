@@ -352,6 +352,61 @@ group('a locked arb is unwound only when the gain clears the exit fee');
   ok('a lone leg is not a pair', d.arbUnwind([leg('PM', 0.9)], c) === null);
 }
 
+group('an early unwind is re-priced on the books a sale would walk (the 2026-09-23 Debut arb)');
+{
+  // Oscars Best Picture Noms - The Debut, 187 lots: marks 0.76 (Kalshi YES) + 0.27 (Polymarket NO)
+  // read "bids sum 1.030". A ladder is the OTHER side's asks, so a sale at p is an ask at 1-p.
+  const c = { ...cfg, ksFeeRate: 0.07, arbUnwindMargin: 0.005, slipLimit: 0.01 };
+  const legs = [
+    { venue: 'KS', side: 'yes', mark: 0.76, qty: 187, ref: 'KXOSCARNOMPIC-27-DEB' },
+    { venue: 'PM', side: 'no', mark: 0.27, qty: 187, feeRate: 0.04 },
+  ];
+  ok('the marks alone say unwind', !!d.arbUnwind(legs, c), d.arbUnwind(legs, c));
+  const ksDeep = [{ price: 0.24, size: 130 }, { price: 0.25, size: 400 }];
+  // what the Polymarket leg actually sold at, 45 minutes later: 0.2168, 0.2091, 0.20 -- nothing within 1c of 0.27
+  const pmThere = [{ price: 0.7832, size: 92 }, { price: 0.7909, size: 33 }, { price: 0.80, size: 62 }];
+  ok('Polymarket bids nothing within 1c of its mark: no unwind', d.arbUnwindLive(legs, [ksDeep, pmThere], c) === null);
+  ok('a book that could not be read: no unwind', d.arbUnwindLive(legs, [ksDeep, null], c) === null);
+  // 60 resting at the mark on Polymarket: unwind 60, not 187, and sell the thin leg first
+  const pmSome = [{ price: 0.73, size: 60 }, { price: 0.80, size: 500 }];
+  const u = d.arbUnwindLive(legs, [ksDeep, pmSome], c);
+  ok('partial depth unwinds only what both books take', u && u.qty === 60, u);
+  ok('...and the thinner leg (Polymarket) sells first', u && legs[u.first].venue === 'PM', u);
+  // (0.76 + 0.27 - 1) x 60 = $1.80, less Kalshi's ceil(0.07 x 60 x 0.76 x 0.24) = $0.77 and
+  // Polymarket's 60 x 0.04 x 0.27 x 0.73 = $0.47
+  ok('...with the gain net of both fees at the fill prices', u && Math.abs(u.gain - 0.56) < 0.011 && /of 187/.test(u.reason), u);
+  ok('four lots inside the limit is under the 5-lot floor', d.arbUnwindLive(legs, [ksDeep, [{ price: 0.73, size: 4 }]], c) === null);
+  // deep enough, but walking the Kalshi ladder to 75c eats the gain
+  const ksThin = [{ price: 0.24, size: 10 }, { price: 0.25, size: 400 }];
+  const pmDeep = [{ price: 0.73, size: 400 }];
+  const walked = d.arbUnwindLive(legs, [ksThin, pmDeep], c);
+  ok('a sum of 1.03 at the touch is ~1.0205 walked, which no longer clears the fee at 187 lots', walked === null, walked);
+  const both = d.arbUnwindLive(legs, [[{ price: 0.24, size: 400 }], pmDeep], c);
+  ok('both books deep: the whole 187, the gain as the marks said', both && both.qty === 187 && Math.abs(both.bidSum - 1.03) < 1e-9 && Math.abs(both.gain - d.arbUnwind(legs, c).gain) < 0.011, both);
+  ok('equal depth: Polymarket still first', both && legs[both.first].venue === 'PM', both);
+  ok('otherwise the thinner book goes first, whichever venue', legs[d.arbUnwindLive(legs, [[{ price: 0.24, size: 300 }], pmDeep], c).first].venue === 'KS');
+}
+
+group('venues 30c+ apart are two different questions, not a trade');
+{
+  // 'Trump bans more news outlets from... - Before Oct 1, 2026', 2026-09-19 12:49Z: Polymarket
+  // 0.06/0.07 against Kalshi 0.75/0.85. The desk booked a $67.15 locked arb on it at 12:50.
+  const p = mk(0.06, 0.07, 0.75, 0.85);
+  const edgeA = 1 - (0.07 + (1 - 0.75) + pmv.feePerShare(0.07, cfg.pmFeeFallback) + ks.feePerContract(0.25, cfg.ksFeeRate, 'KXTEST'));
+  ok('without the veto it is a 60c+ "locked arb"', edgeA > 0.6 && edgeA > cfg.minArbEdge, edgeA);
+  const r = d.pairSignals(p, cfg);
+  ok('vetoed by name', r.veto === 'venues disagree 30c+: likely different questions', r.veto);
+  ok('...with no signal of any kind', r.signals.length === 0, r.signals.map((s) => s.type));
+  const s = d.scan([{ ...p, q: { ...p.q, t: 1e12 } }], cfg, 1e12);
+  ok('scan counts it on the ledger', s.rejects.get('venues disagree 30c+: likely different questions') === 1 && s.signals.length === 0, [...s.rejects]);
+  ok('...and never narrates it as the widest gap', s.widest === null, s.widest);
+  // an 80c-wide Kalshi book has a meaningless mid, and overlaps Polymarket: not this veto
+  ok('a wide book that overlaps the other venue is not vetoed', d.pairSignals(mk(0.06, 0.07, 0.08, 0.88), cfg).veto !== 'venues disagree 30c+: likely different questions');
+  // 29c between the books is still a pair the other rails judge
+  ok('29c apart is left to the other rails', d.pairSignals(mk(0.40, 0.41, 0.70, 0.71), cfg).veto !== 'venues disagree 30c+: likely different questions');
+  ok('the other direction is caught too', d.pairSignals(mk(0.75, 0.85, 0.06, 0.07), cfg).veto === 'venues disagree 30c+: likely different questions');
+}
+
 group('the Polymarket leg wins when both venues are similarly off fair');
 {
   // Same gap either way: PM 0.40/0.41 against KS 0.48/0.49 with equal volume puts fair in the
@@ -547,7 +602,7 @@ group('the settlement snipe: Polymarket has settled, Kalshi still offers the win
   ok('an empty Polymarket book (0/1) is not a settlement', d.snipeSignal(pair({ pmBid: 0, pmAsk: 1, ksBid: 0.49, ksAsk: 0.5 }), cfg, now) === null);
   ok('a one-sided 0.1/1 book is not a settlement either', d.snipeSignal(pair({ pmBid: 0.1, pmAsk: 1, ksBid: 0.12, ksAsk: 0.14 }), cfg, now) === null);
   const v1 = d.snipeSignal(pair({ pmBid: 0, pmAsk: 0.01, ksBid: 0.44, ksAsk: 0.47 }), cfg, now);
-  ok('Kalshi at 44c on a "settled" game is a mismatched pair: vetoed, not bought', v1 && v1.veto && /not the same game/.test(v1.veto), v1);
+  ok('Kalshi at 44c on a "settled" game (a mismatched pair, or a game not over): vetoed, not bought', v1 && v1.veto && /not the same game/.test(v1.veto), v1);
   const v2 = d.snipeSignal(pair({ pmBid: 0.99, pmAsk: 1, ksBid: 0.82, ksAsk: 0.86, ksAt: now - 60000 }), cfg, now);
   ok('a Kalshi quote a minute old is vetoed', v2 && /stale/.test(v2.veto), v2);
   const v3 = d.snipeSignal(pair({ pmBid: 0.99, pmAsk: 1, ksBid: 0.98, ksAsk: 0.99 }), cfg, now);

@@ -17,6 +17,7 @@
 // which rail stopped it" -- silent `continue`s made that unanswerable without a debugger.
 const ks = require('./venues/kalshi');
 const pm = require('./venues/polymarket');
+const { MAX_VENUE_DISAGREE } = require('./matcher');
 
 const r2 = (x) => Math.round(x * 100) / 100;
 
@@ -119,6 +120,22 @@ function pairSignals(p, cfg, now) {
   const out = { fair: null, best: null, veto: null, signals: [] };
   const fault = quoteFault(q);
   if (fault) { out.veto = fault; return out; }
+  // Two books 30c+ apart are two different questions, not a trade (2026-09-24). The fast matcher has
+  // always refused such a match (MAX_VENUE_DISAGREE), but the any-market scanner has no such check, and
+  // on 2026-09-19 at 12:50Z the desk booked a $67.15 "locked arb" on 'Trump bans more news outlets...
+  // Before Oct 1' at Polymarket 0.06/0.07 against Kalshi 0.75/0.85 -- flagged venues_disagree by the
+  // scorecard the same second. The Spotify pair (US chart against Kalshi's worldwide one) showed a
+  // 62c edge for 25 minutes the next night. Measured between the books, not the mids: one venue's
+  // bid over the other's ask. A book 80c wide has a meaningless mid and cannot trip this, while
+  // 0.75 bid against 0.07 offered can only mean the pair is wrong. (Not the matcher's mid test with
+  // both spreads under maxSpread: the press-ban Kalshi book was 10c wide, so that test would have let
+  // it through.) New entries only: a held position on the pair is marked, exited and settled exactly
+  // as before. anymarket.afterPricing asks this same function, so such a pair is no longer sent to
+  // the rules judge either -- the path that verified the press-ban pair a minute before it traded.
+  if (Math.max(q.ksBid - q.pmAsk, q.pmBid - q.ksAsk) > MAX_VENUE_DISAGREE + 1e-9) {
+    out.veto = 'venues disagree 30c+: likely different questions';
+    return out;
+  }
 
   const ref = p.ks && p.ks.ticker;
   const ksFeeYes = ks.feePerContract(q.ksAsk, cfg.ksFeeRate, ref);
@@ -351,6 +368,41 @@ function arbUnwind(legs, cfg) {
   return { gain, fee, bidSum, reason: `early unwind, bids sum ${bidSum.toFixed(3)}, +$${gain.toFixed(2)} over holding after $${fee.toFixed(2)} exit fee` };
 }
 
+// arbUnwind re-priced on the books a sale would actually walk, before anything is sold. arbUnwind
+// sums the two marks for the whole quantity -- a listing bid with no depth behind it, and for a
+// Polymarket leg whose pair has gone, Gamma's slow price. On 2026-09-23 it read "bids sum 1.030,
+// +$1.38 over holding" on Oscars Best Picture Noms - The Debut (187 lots): the Kalshi leg sold, the
+// Polymarket leg then failed 180 times in 45 minutes ("no bids inside limit") and finally went 5-7c
+// lower, and the group made -$8.75 against +$1.52 held to settlement. The three unwinds since sales
+// began walking the real book (#100, 2026-09-21) netted -$8.06 against holding.
+//
+// `ladders[i]` is leg i's exit ladder (engine.exitLadder): the OTHER side's asks, so an ask at a is
+// a sale at 1-a. Each is walked only down to mark - slipLimit, exactly as PaperBroker.sell walks it.
+// The quantity is what BOTH ladders can absorb, and each leg's fee is charged at its own average sale
+// price. Returns null when a ladder is missing, when that quantity is under the 5-lot floor, or when
+// the gain is under arbUnwindMargin a contract. `first` is the thinner leg, which RIGO sells first:
+// if that sale fails, nothing else has been sold and the arb is still whole.
+function arbUnwindLive(legs, ladders, cfg) {
+  if (legs.length !== 2 || !legs.every((l) => l.mark != null)) return null;
+  if (!Array.isArray(ladders) || ladders.length !== 2 || !ladders.every(Array.isArray)) return null;
+  const want = Math.min(legs[0].qty, legs[1].qty);
+  const inside = legs.map((l, i) => ladders[i].filter((a) => a.price <= 1 - (l.mark - cfg.slipLimit) + 1e-9));
+  const depth = inside.map((lv) => Math.floor(lv.reduce((a, x) => a + x.size, 0)));
+  const qty = Math.min(want, depth[0], depth[1]);
+  if (!(qty >= 5)) return null;
+  const px = inside.map((lv) => {
+    let left = qty, cost = 0;
+    for (const x of lv) { const take = Math.min(left, x.size); cost += take * x.price; left -= take; if (left <= 1e-9) break; }
+    return 1 - cost / qty;
+  });
+  const fee = legs.reduce((a, l, i) => a + (l.venue === 'KS' ? ks.fee(qty, px[i], cfg.ksFeeRate, l.ref) : r2(pm.fee(qty, px[i], Number.isFinite(l.feeRate) ? l.feeRate : cfg.pmFeeFallback))), 0);
+  const bidSum = px[0] + px[1];
+  const gain = r2((bidSum - 1) * qty - fee);
+  if (gain < cfg.arbUnwindMargin * qty) return null;
+  const first = depth[0] !== depth[1] ? (depth[0] < depth[1] ? 0 : 1) : (legs[1].venue === 'PM' ? 1 : 0);
+  return { qty, gain, fee, bidSum, first, reason: `early unwind of ${qty}${qty < want ? ` of ${want}` : ''}, live books sum ${bidSum.toFixed(3)}, +$${gain.toFixed(2)} over holding after $${fee.toFixed(2)} exit fee` };
+}
+
 // Which halt, if any, applies. The operator's latched halt outranks every automatic check.
 function riskState({ operatorHalt, age, drawdown, errs, mode, liveReady, cfg }) {
   if (operatorHalt) return operatorHalt;
@@ -536,9 +588,19 @@ function arbEdgeLive(signal, books, cfg) {
 // (tools/settle-lag.js). It is the one Kalshi-only edge the tape has shown, and the desk never took
 // it: in-play pairs are excluded from every other rule, and the pair was dropped the cycle Polymarket
 // closed. So: when Polymarket has settled, buy the winner on Kalshi at the ask -- if Kalshi already
-// agrees on the winner (a 44c book on a "settled" game is a mismatched pair, not an edge), the Kalshi
-// quote is fresh, and what is left after the fee clears the bar. Pure. Returns the signal, a { veto }
-// when Polymarket has settled and a gate said no, or null when there is nothing to say.
+// agrees on the winner (a 44c book on a "settled" game is a mismatched pair or a game still being
+// played, not an edge; the wrong-game case was the Rays-Yankees doubleheader on 2026-09-22, where
+// Polymarket's game-1 market paired with Kalshi's game 2), the Kalshi quote is fresh, and what is left
+// after the fee clears the bar. Pure. Returns the signal, a { veto } when Polymarket reads settled and
+// a gate said no, or null when there is nothing to say.
+//
+// A 99c/1.00 Polymarket reading is NOT a settlement, only a reason to ask (2026-09-24). On 2026-09-19
+// NC State v Vanderbilt read 0.99/1 for 2m15s from 20:13Z with Kalshi at 94/96, then traded back to
+// 86c and 4c; NC State lost (Kalshi finalized "no"), and this signal would have bought 100 at 96c.
+// Temple did the same that day. So this signal only says "look": KETT buys only once Polymarket's own
+// market record says closed or resolved (agents.js). Every snipe edge measured so far was seen while
+// Polymarket was still open, so the edge after a real close has to be measured again; the first
+// Sunday with the check (09-27) may show little or none.
 function snipeEdge(px, ref, cfg) { return 1 - px - ks.feePerContract(px, cfg.ksFeeRate, ref); }
 function snipeSignal(pair, cfg, now) {
   if (!cfg.snipe || !pair || pair.kind !== 'game' || !pair.inPlay || !pair.q) return null;
@@ -575,4 +637,4 @@ function keepClosedGamePairs(prev, pairs, cfg, now) {
   return kept;
 }
 
-module.exports = { fairValue, quoteFault, snipeEdge, snipeSignal, keepClosedGamePairs, convEdge, pairSignals, scan, liveWindow, exitIntent, gainLockIntent, arbUnwind, arbReturn, arbEdgeLive, riskState, biasFor, standingGap, gapUnseen, bookFull, persistFilter, sizePlan, rankSignals, pmRate };
+module.exports = { fairValue, quoteFault, snipeEdge, snipeSignal, keepClosedGamePairs, convEdge, pairSignals, scan, liveWindow, exitIntent, gainLockIntent, arbUnwind, arbUnwindLive, arbReturn, arbEdgeLive, riskState, biasFor, standingGap, gapUnseen, bookFull, persistFilter, sizePlan, rankSignals, pmRate };

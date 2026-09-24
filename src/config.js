@@ -53,11 +53,20 @@ module.exports = {
   //
   // 0.03 is not a tuned number, it is minGap -- the bar at which the desk itself calls a pair
   // interesting. A gap under minGap cannot produce a trade, so probing it answers a question
-  // nobody asked; a gap over it is exactly the case the probe exists to validate. Measured cost
-  // at this bar: ~6 probes/day, 13 API calls. The next step down is not a small one -- 0.02 takes
-  // 136 probes/day, a 20x jump, all of it on gaps the desk would refuse anyway.
+  // nobody asked; a gap over it is exactly the case the probe exists to validate. The next step
+  // down is not a small one -- 0.02 took 136 probes/day against 6 at 0.03, all of it on gaps the
+  // desk would refuse anyway.
+  //
+  // "~6 probes/day" was measured on the games-and-Fed book. Once the any-market scanner paired every
+  // category (2026-09-15) the same bar took 5,200-8,800 a day, two full order books each, 99% on the
+  // same ~150 long-dated event pairs every 600s -- 3,005 of 09-23's 5,206 on watch-only pairs that
+  // cannot trade. Since 2026-09-24 a pair is probed once per ET day, again the same day only if its
+  // gap has moved by probeMoveGap since its last probe, and never while it is watch-only: replayed
+  // over the 09-21..23 probe files that is 190-430 probes a day on 66-79 pairs (the files sample each
+  // gap only every 600s, so a little more on the box), against 5,200-6,400.
   probeGap: num('PROBE_GAP', 0.03),
-  probeEverySec: num('PROBE_EVERY_SEC', 600),   // per-pair cooldown, so one wide pair cannot spam
+  probeMoveGap: num('PROBE_MOVE_GAP', 0.01),    // how far a probed pair's gap must move to be probed again the same day
+  probeEverySec: num('PROBE_EVERY_SEC', 600),   // and never sooner than this, so one flickering pair cannot spam
   probesPerCycle: num('PROBES_PER_CYCLE', 2),   // bound the extra API calls per cycle
 
   // ---- MAKER desk (src/maker.js) ----
@@ -322,10 +331,16 @@ module.exports = {
   // Sunday of its own on the tape, which is also what says how long the window lasts and how deep it is.
   snipe: env('SNIPE', '1') !== '0',
   snipeMinEdge: num('SNIPE_MIN_EDGE', 0.02),          // per contract, net of Kalshi's fee
-  // Kalshi must already bid at least this for the winner. A 44c book on a "settled" game is a mismatched
-  // pair (the Yankees game on 2026-09-19 was a different game of the series), not an edge.
+  // Kalshi must already bid at least this for the winner. A 44c book on a "settled" game is not an edge.
+  // The row this bar was set on, Yankees v Diamondbacks at 2026-09-20 03:29Z, was NOT a different game:
+  // both venues had tracked each other at 40-44c until Polymarket's book alone went to 0/0.01. The real
+  // wrong-game case was the Rays-Yankees doubleheader on 2026-09-22, where Polymarket's game-1 market
+  // paired with Kalshi's game 2 (10c against 45c at 18:30Z).
   snipeMinKsPrice: num('SNIPE_MIN_KS_PRICE', 0.75),
-  snipePmBid: num('SNIPE_PM_BID', 0.99),              // Polymarket bidding this for the winner with nothing offered is a settlement
+  // Polymarket bidding this for the winner with nothing offered is a reason to ASK whether it has settled,
+  // not a settlement: NC State read 0.99/1 for 2m15s on 2026-09-19, traded back to 4c and lost. KETT
+  // buys only once Polymarket's market record says closed or resolved (agents.js, 2026-09-24).
+  snipePmBid: num('SNIPE_PM_BID', 0.99),
   snipeMaxKsAgeSec: num('SNIPE_MAX_KS_AGE_SEC', 30),  // the Kalshi quote must be this fresh (they are repriced every cycle)
   snipeHoldSec: num('SNIPE_HOLD_SEC', 300),           // how long HOLT keeps a game pair after Polymarket's listing drops it
   snipeMaxQty: Math.max(1, Math.round(num('SNIPE_MAX_QTY', 100))),

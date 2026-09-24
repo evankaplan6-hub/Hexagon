@@ -579,7 +579,13 @@ class Engine {
   // RIGO's await -- each minted a DIFFERENT idempotency key and sent a separate real sell for the
   // same contracts. Kalshi cannot dedupe two different client_order_ids. Paper hides it entirely:
   // PaperBroker.sell does no I/O, so the loop drains before anything can interleave.
-  async close(pos, px, reason, resolved = false, qty = pos.qty) {
+  //
+  // Returns { sold } with the contracts actually sold (0 when nothing was), so a caller selling one
+  // leg of a pair can size the other to match. `opts.unwind` is the first leg of an arb's early
+  // unwind (RIGO, 2026-09-24): a sale that fails or fills short is NOT flagged stuck, because the
+  // other leg is still held against it and the pair is still a hedge. Flagged, the orphan retry sold
+  // it every cycle whatever the other leg did -- how the Debut arb's Polymarket leg was hit 180 times.
+  async close(pos, px, reason, resolved = false, qty = pos.qty, opts = {}) {
     // An uncertain sell may have filled at the exchange. Do not turn its next scheduled RIGO pass
     // into a new client-order ID and a possible oversell; reconciliation owns this position now.
     if (pos.pendingExit) {
@@ -588,11 +594,12 @@ class Engine {
     }
     if (this.closing.has(pos.id)) return;
     this.closing.add(pos.id);
-    try { return await this._close(pos, px, reason, resolved, Math.max(1, Math.min(pos.qty, Math.floor(qty)))); }
+    try { return await this._close(pos, px, reason, resolved, Math.max(1, Math.min(pos.qty, Math.floor(qty))), opts); }
     finally { this.closing.delete(pos.id); }
   }
 
-  async _close(pos, px, reason, resolved = false, qty = pos.qty) {
+  async _close(pos, px, reason, resolved = false, qty = pos.qty, opts = {}) {
+    const hedged = !!opts.unwind;   // see close(): a short sale here leaves the leg as it was, not stuck
     let fill;
     if (resolved) fill = { filled: qty, avg: px, fee: 0, proceeds: r2(qty * px) };
     else {
@@ -624,14 +631,16 @@ class Engine {
           this.save(); // persist the local no-retry marker with the broker's pending intent now
           return;
         }
-        pos.orphan = true; this.journal(this, 'EXIT_FAIL', { id: pos.id, reason: String(e.message).slice(0, 120), attempt: pos.exitSeq });
-        if (this.due(`exit-fail-${pos.id}`, 120)) this.log('RIGO', 'PASS', null, `${pos.label}: exit failed (${e.message.slice(0, 80)}) \u00b7 flagged stuck, will retry`);
-        return;
+        if (!hedged) pos.orphan = true;
+        this.journal(this, 'EXIT_FAIL', { id: pos.id, reason: String(e.message).slice(0, 120), attempt: pos.exitSeq });
+        if (this.due(`exit-fail-${pos.id}`, 120)) this.log('RIGO', 'PASS', null, `${pos.label}: exit failed (${e.message.slice(0, 80)}) \u00b7 ${hedged ? 'unwind stopped, both legs kept' : 'flagged stuck, will retry'}`);
+        return { sold: 0 };
       }
       if (!fill.filled) {
-        pos.orphan = true; this.journal(this, 'EXIT_FAIL', { id: pos.id, reason: fill.reason || 'no fill', attempt: pos.exitSeq });
-        if (this.due(`exit-fail-${pos.id}`, 120)) this.log('RIGO', 'PASS', null, `${pos.label}: exit unfilled (${fill.reason || 'no fill'}) \u00b7 flagged stuck, will retry`);
-        return;
+        if (!hedged) pos.orphan = true;
+        this.journal(this, 'EXIT_FAIL', { id: pos.id, reason: fill.reason || 'no fill', attempt: pos.exitSeq });
+        if (this.due(`exit-fail-${pos.id}`, 120)) this.log('RIGO', 'PASS', null, `${pos.label}: exit unfilled (${fill.reason || 'no fill'}) \u00b7 ${hedged ? 'unwind stopped, both legs kept' : 'flagged stuck, will retry'}`);
+        return { sold: 0 };
       }
     }
     // A PARTIAL fill is not a close. `!fill.filled` above only catches a ZERO fill, so a sell that
@@ -648,7 +657,7 @@ class Engine {
     // the very next cycle -- the feature never once kept a runner.
     if (fill.filled < pos.qty) {
       const sold = fill.filled;
-      const stuck = sold < qty;
+      const stuck = sold < qty && !hedged;
       const costShare = r2(pos.cost * (sold / pos.qty));
       const pnl = r2(fill.proceeds - costShare);
       const before = pos.qty;
@@ -662,10 +671,10 @@ class Engine {
       this.journal(this, 'CLOSE_PARTIAL', { id: pos.id, group: pos.group, label: pos.label, venue: pos.venue, side: pos.side, sold, remaining: pos.qty, stuck, entry: pos.entry, exit: fill.avg, fee: fill.fee, proceeds: fill.proceeds, pnl, reason, attempt: pos.exitSeq, cash: this.state.cash });
       this.log('RIGO', 'SETTLE', pnl, `${pos.label} \u00b7 sold ${sold} of ${before} ${pos.side.toUpperCase()} @ ${pos.venue === 'PM' ? 'Polymarket' : 'Kalshi'} ${fill.avg.toFixed(3)} \u00b7 ${pos.qty} ${stuck ? 'left unsold, flagged stuck and retried' : 'kept'} \u00b7 ${reason}`);
       this.dirty = true;
-      return;
+      return { sold };
     }
     const idx = this.state.positions.indexOf(pos);
-    if (idx < 0) return;
+    if (idx < 0) return { sold: 0 };
     this.state.positions.splice(idx, 1);
     this.cooldown.set(pos.pairId, Date.now());
     this.state.cash = r2(this.state.cash + fill.proceeds);
@@ -697,6 +706,7 @@ class Engine {
     this.journal(this, resolved ? 'SETTLE' : 'CLOSE', { id: pos.id, group: pos.group, pairId: pos.pairId, label: pos.label, venue: pos.venue, side: pos.side, qty: pos.qty, entry: pos.entry, exit: fill.avg, fee: fill.fee, proceeds: fill.proceeds, pnl: exitPnl, legPnl: pnl, partialPnl, reason, strategy: pos.strategy, heldMs: Date.now() - pos.openedAt, cash: this.state.cash });
     this.log('RIGO', 'SETTLE', exitPnl, text);
     this.dirty = true;
+    return { sold: fill.filled };
   }
 
   // Manual kill switch, reachable only over POST /api/flatten with FLATTEN_TOKEN. Halting new
@@ -820,8 +830,23 @@ class Engine {
   async refreshPairPrices() {
     await Promise.all([this.refreshPmPairPrices(), this.refreshKsPairPrices()]);
   }
+  // The Polymarket half. Held Polymarket legs whose pair is gone are priced here too, as the Kalshi
+  // half already does for its open legs (2026-09-24). Without it they were marked from Gamma -- the
+  // listing, or pinPositions' /markets/{id} -- which lags the book by minutes: 8 of the 20 open arbs
+  // were off the whole 09-24 tape and about 5 more had dropped out of the priced pairs by afternoon,
+  // and the Debut arb's Polymarket leg was retried 180 times in 45 minutes at a Gamma price the book
+  // no longer had within 1c, after that price had started its early unwind. Token 0, written
+  // straight onto the market: legQuote flips it for a tokenIndex 1 leg. A token whose CLOB book has
+  // no bid is dropped by fetchPrices and keeps its Gamma price.
   async refreshPmPairPrices() {
-    const toks = [...new Set(this.pairs.map((p) => p.pm.tokenId).filter(Boolean))];
+    const paired = new Set(this.pairs.map((p) => p.pm.id));
+    const held = new Map();                            // pmId -> token 0, for legs no pair prices
+    for (const pos of this.state.positions) {
+      if (pos.venue !== 'PM' || paired.has(pos.pmId)) continue;
+      const tok = ((this.quotes.pm.get(pos.pmId) || {}).tokenIds || [])[0];
+      if (tok) held.set(pos.pmId, tok);
+    }
+    const toks = [...new Set([...this.pairs.map((p) => p.pm.tokenId), ...held.values()].filter(Boolean))];
     if (!toks.length) return;
     let prices;
     try { prices = await pm.fetchPrices(toks); }
@@ -833,6 +858,11 @@ class Engine {
       if (p.pm.tokenIndex === 0) { m.bestBid = live.bid; m.bestAsk = live.ask; }
       else { m.bestBid = 1 - live.ask; m.bestAsk = 1 - live.bid; }
       m.at = at;
+    }
+    for (const [id, tok] of held) {
+      const live = prices.get(tok), m = this.quotes.pm.get(id);
+      if (!live || !m) continue;
+      m.bestBid = live.bid; m.bestAsk = live.ask; m.at = at;
     }
   }
   // The Kalshi half. The fast listing (every open market in KS_SERIES) is only re-read every
@@ -1007,7 +1037,9 @@ class Engine {
       agents.mergeBrainSignals(this);
       if (this.any) this.any.afterPricing(this);   // ask the rules judge about watch-only pairs showing an edge
       this.recordTick(this); // durable tape of what BRAM just saw; never throws
-      await this.probe(this);  // full order books whenever a gap looks too good; never throws
+      // Full order books whenever a gap looks too good. Not awaited (2026-09-24): it never throws,
+      // it trades nothing, and waiting on its two book fetches held KETT back on ~2,600 cycles a day.
+      this.probe(this).catch(() => {});
       await agents.KETT(this);
       // the maker runs on its own cadence: requoting every cycle costs an API call per market and
       // buys nothing when the book has not moved

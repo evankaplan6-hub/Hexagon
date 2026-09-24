@@ -92,7 +92,7 @@ const cfg = (over = {}) => ({ ...baseCfg, dataDir: tmp, record: true, ...over })
       const E = fakeE([mkPair('e', 0.05)]);
       await p(E);
       clock += HOUR + 1000;
-      await p(fakeE([mkPair('e', 0.05)]));           // still firing (cooldown is 600s)
+      await p(fakeE([mkPair('e', 0.05)]));           // still there, already probed today
       ok('no darkness line while samples are landing', E.logs.length === 0, E.logs);
     }
 
@@ -112,9 +112,42 @@ const cfg = (over = {}) => ({ ...baseCfg, dataDir: tmp, record: true, ...over })
       ok('so the next-widest pair gets its turn', probed.join(',') === 'h,i', probed);
 
       probed = [];
-      clock += baseCfg.probeEverySec * 1000 + 1000;   // past the cooldown
+      clock += baseCfg.probeEverySec * 1000 + 1000;   // past the cooldown, same day, same gaps
       await p(fakeE(many));
-      ok('once the cooldown lapses the widest is eligible again', probed.join(',') === 'f,g', probed);
+      ok('a steady pair is not probed again the same day, cooldown or not', probed.length === 0, probed);
+    }
+
+    group('once per ET day, again only when the gap moves 1c, never while watch-only (2026-09-24)');
+    {
+      // 2026-09-23: 5,206 probes, 3,005 of them on watch-only pairs, KXBOND-30-ATJ alone 147 times
+      const noon = Date.parse('2026-09-23T16:00:00Z');   // 12:00 ET
+      clock = noon;
+      const p = makeProbe(cfg());
+      probed = [];
+      const watch = { ...mkPair('w', 0.05), watchOnly: 'unclear' };
+      await p(fakeE([watch]));
+      ok('a watch-only pair with a 5c gap is not probed', probed.length === 0, probed);
+      const steady = mkPair('s', 0.05);
+      await p(fakeE([steady]));
+      ok('a steady pair is probed once', probed.join(',') === 's', probed);
+      for (let i = 1; i <= 20; i++) { clock = noon + i * 11 * 60000; await p(fakeE([steady])); }
+      ok('...and not again across the next 3h40m of the same ET day', probed.join(',') === 's', probed);
+      clock += 11 * 60000;
+      await p(fakeE([mkPair('s', 0.059)]));
+      ok('0.9c wider is not enough', probed.join(',') === 's', probed);
+      await p(fakeE([mkPair('s', 0.06)]));
+      ok('1c wider than its last probe: probed again', probed.join(',') === 's,s', probed);
+      clock += 60000;
+      await p(fakeE([mkPair('s', 0.08)]));
+      ok('...but never inside probeEverySec, however far it moved', probed.join(',') === 's,s', probed);
+      clock += baseCfg.probeEverySec * 1000;
+      await p(fakeE([mkPair('s', 0.055)]));
+      ok('0.5c narrower is not enough either', probed.join(',') === 's,s', probed);
+      await p(fakeE([mkPair('s', 0.05)]));
+      ok('1c narrower than its last probe: probed again', probed.join(',') === 's,s,s', probed);
+      clock = Date.parse('2026-09-24T04:05:00Z');     // 00:05 ET: a new Eastern day
+      await p(fakeE([mkPair('s', 0.05)]));
+      ok('a new ET day: probed once more, gap unchanged', probed.join(',') === 's,s,s,s', probed);
     }
   } finally {
     Date.now = RealNow;

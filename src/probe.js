@@ -44,16 +44,31 @@ const ladder = (levels, n = 10) => (levels || []).slice(0, n).map((l) => [r3(l.p
 
 function makeProbe(cfg) {
   if (!cfg.record) return async () => {};       // probes ride along with the tape; off together
-  const last = new Map();                        // pairId -> last probe time
+  const last = new Map();                        // pairId -> { at, day, gap } of its last probe
   let warnedAt = 0;
   let firedAt = 0;                               // last time ANY probe was taken
   let startedAt = 0;                             // first cycle, so a fresh desk is not "dark for 1h"
-  let widestSeen = 0;                            // widest pre-game gap since the last dark report
+  let widestSeen = 0;                            // widest pre-game gap in the current dark window
+  let windowAt = 0;                              // when that window was last judged
+  // Is this pair worth another probe? Once per ET day, and again the same day only if its gap has
+  // MOVED by probeMoveGap since the last one -- the question is whether size sits behind a gap, and
+  // a steady gap answers it once. Never sooner than probeEverySec. The old rule was only the
+  // 600s cooldown: on 2026-09-23 that probed KXBOND-30-ATJ and KXPRESPERSON-28-AOCA 147 times each,
+  // 5,206 probes and ~10,400 order-book fetches on a CPU-capped box, for ~150 pairs whose answer
+  // had not changed since morning.
+  const fresh = (p, now, day) => {
+    const l = last.get(p.id);
+    if (!l) return true;
+    if (now - l.at < cfg.probeEverySec * 1000) return false;
+    return l.day !== day || Math.abs(Math.abs(p.q.ksMid - p.q.pmMid) - l.gap) >= cfg.probeMoveGap - 1e-9;
+  };
   return async (E) => {
     const now = Date.now();
     if (!startedAt) startedAt = now;
+    const day = ET_DAY.format(new Date(now));
+    for (const [id, l] of last) if (l.day !== day && now - l.at >= cfg.probeEverySec * 1000) last.delete(id);   // yesterday's are eligible anyway
     for (const p of E.pairs) {
-      if (p.inPlay || !p.q) continue;
+      if (p.inPlay || p.watchOnly || !p.q) continue;
       const g = Math.abs(p.q.ksMid - p.q.pmMid);
       if (g > widestSeen) widestSeen = g;
     }
@@ -68,8 +83,11 @@ function makeProbe(cfg) {
       // to 0.00c median and 0.00c max, which is also why there is no Kalshi equivalent of
       // refreshPairPrices: it would spend an API call per pair per cycle correcting nothing.
       .filter((p) => !p.inPlay)
+      // A watch-only pair cannot trade until its rules are verified, so the depth behind its gap
+      // answers nothing: 3,005 of 2026-09-23's 5,206 probes were on pairs vetoed 'rules unclear'.
+      .filter((p) => !p.watchOnly)
       .filter((p) => p.q && Math.abs(p.q.ksMid - p.q.pmMid) >= cfg.probeGap)
-      .filter((p) => now - (last.get(p.id) || 0) >= cfg.probeEverySec * 1000)
+      .filter((p) => fresh(p, now, day))
       .sort((a, b) => Math.abs(b.q.ksMid - b.q.pmMid) - Math.abs(a.q.ksMid - a.q.pmMid))
       .slice(0, cfg.probesPerCycle);            // bound the extra API calls per cycle
     // A probe that never fires is indistinguishable from a probe that keeps finding nothing, and
@@ -80,19 +98,25 @@ function makeProbe(cfg) {
     // end it, so the next miscalibration is a log line rather than an archaeology exercise.
     if (!due.length) {
       // measured from the last probe, or from boot if there has never been one -- otherwise a desk
-      // that started thirty seconds ago reports an hour of darkness
-      if (widestSeen && now - Math.max(firedAt, startedAt) > DARK_SEC * 1000 && E.due('probe-dark', DARK_SEC)) {
-        E.log('TESS', 'OPS', null, `probe has taken nothing in ${(DARK_SEC / 3600).toFixed(0)}h \u00b7 widest pre-game gap seen ${c(widestSeen)} against PROBE_GAP ${c(cfg.probeGap)}${widestSeen < cfg.probeGap ? ' \u00b7 the threshold is above anything this book offers' : ''}`);
-        widestSeen = 0;
+      // that started thirty seconds ago reports an hour of darkness. Only when nothing reached the
+      // bar: since a steady pair is probed once a day (2026-09-24), a quiet hour with gaps OVER it
+      // means they were already probed today, which is the instrument working, not dark.
+      // Each quiet hour is judged on its own widest gap, so one wide pair in the morning cannot
+      // silence the report for the rest of the day.
+      if (now - Math.max(firedAt, startedAt, windowAt) > DARK_SEC * 1000) {
+        if (widestSeen && widestSeen < cfg.probeGap && E.due('probe-dark', DARK_SEC)) {
+          E.log('TESS', 'OPS', null, `probe has taken nothing in ${(DARK_SEC / 3600).toFixed(0)}h \u00b7 widest pre-game gap seen ${c(widestSeen)} against PROBE_GAP ${c(cfg.probeGap)} \u00b7 the threshold is above anything this book offers`);
+        }
+        widestSeen = 0; windowAt = now;
       }
       return;
     }
-    firedAt = now;
+    firedAt = now; widestSeen = 0;
 
     const lines = [];
     for (const p of due) {
-      last.set(p.id, now);                       // stamp before the await: a failing pair must not
-      try {                                      // be retried every 15s
+      last.set(p.id, { at: now, day, gap: Math.abs(p.q.ksMid - p.q.pmMid) });   // stamp before the await: a
+      try {                                      // failing pair must not be retried every 15s
         const [pb, kb] = await Promise.all([pm.fetchBook(p.pm.tokenId), ks.fetchBook(p.ks.ticker)]);
         const q = p.q;
         lines.push(JSON.stringify({
