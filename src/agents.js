@@ -84,7 +84,8 @@ function HOLT(E) {
     if (dropped.length) txt += ` · −${dropped.length} closed`;
     if (rejected.length) {
       const figs = rejected.filter((r) => r.why === 'figures').length;
-      txt += ` · ${rejected.length} rejected (${rejected.length - figs} on 30c+ disagreement, ${figs} on a mismatched figure)`;
+      const times = rejected.filter((r) => r.why === 'start time').length;   // a doubleheader's other game (matcher.pickByStart)
+      txt += ` · ${rejected.length} rejected (${rejected.length - figs - times} on 30c+ disagreement, ${figs} on a mismatched figure${times ? `, ${times} on start time` : ''})`;
     }
     E.log('HOLT', 'SCAN', null, txt);
   }
@@ -94,7 +95,12 @@ function HOLT(E) {
   // smaller and nothing says which league left. That is how the NFL stayed unpaired for a season --
   // Kalshi naming teams by city, Polymarket by nickname, and no line anywhere saying so. One event
   // could be a postponement, so this asks for two.
-  const blind = (coverage || []).filter((c) => c.events >= 2 && c.matched === 0);
+  //
+  // Tennis is left out (2026-09-24). Polymarket lists a handful of each day's draw, and its
+  // Challenger matches share the atp- prefix with the main tour Kalshi lists, so "0 of 8 ATP matches
+  // paired" is an ordinary tennis day, not a renamed player: counted against the whole draw, the
+  // alarm would fire every day and teach whoever reads it to ignore it.
+  const blind = (coverage || []).filter((c) => c.events >= 2 && c.matched === 0 && !/^KX(ATP|WTA)MATCH$/.test(c.series));
   if (blind.length && E.due('holt-blind', 900)) {
     E.log('HOLT', 'SCAN', null, `${blind.map((c) => `${c.league} ${c.date}: 0 of ${c.events} games paired`).join(' · ')} · Polymarket is listing these games and none matched a Kalshi event, which is what a renamed team looks like`);
   }
