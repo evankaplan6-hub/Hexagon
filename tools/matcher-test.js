@@ -492,6 +492,20 @@ group('matchPairs: tennis is found by its slug, and an overnight match by Kalshi
   const r = matchPairs([korea], wta);
   ok('"Korea Open: Bondar vs Ruse" pairs with KXWTAMATCH-26SEP24BONRUS', r.pairs.length === 1 && r.pairs[0].ks.ticker === 'KXWTAMATCH-26SEP24BONRUS-BON' && /^WTA/.test(r.pairs[0].label), r);
   ok('...as a game, so it gets an in-play window', r.pairs[0] && r.pairs[0].kind === 'game');
+  // ...but watched, never traded: Polymarket pays 50-50 on a walkover, Kalshi a fair price, so a
+  // tennis game pair skipping the rules gate must not become a tradeable "locked" arb.
+  ok('...and watch-only, because the venues settle a walkover differently', r.pairs[0] && r.pairs[0].watchOnly === 'differ on a walkover');
+  {
+    const decide = require('../src/decide');
+    const cfg = require('../src/config');
+    // a 10c gap on tight books: a locked arb on any tradeable pair (decide-test's own fixture)
+    const q = { pmBid: 0.40, pmAsk: 0.41, ksBid: 0.50, ksAsk: 0.51, pmMid: 0.405, ksMid: 0.505, pmVol: 5e5, ksVol: 1e5, t: 1 };
+    const p = { ...r.pairs[0], q, inPlay: false, settlesAt: 2 * 86400000 };
+    const open = decide.scan([{ ...p, watchOnly: null }], cfg, 1);
+    const s = decide.scan([p], cfg, 1);
+    ok('the same pair without the flag would trade (the control)', open.signals.length === 1, { veto: [...open.veto] });
+    ok('the scan gives a tennis pair no signal and names the walkover', s.signals.length === 0 && /walkover/.test(s.veto.get(p.id) || ''), { veto: [...s.veto], n: s.signals.length });
+  }
   // the day-back is tennis only: an MLB game does not reach yesterday's event
   const mlbBack = matchPairs([pm({ slug: 'mlb-hou-phi-2026-09-09', question: 'Astros vs. Phillies', sport: 'moneyline', outcomes: ['Houston Astros', 'Philadelphia Phillies'], gameStart: '2026-09-09T23:05:00Z' })], mlbEvent('26SEP08', 'Houston Astros', 'Philadelphia Phillies'));
   ok('the day-back is for tennis only', mlbBack.pairs.length === 0, mlbBack.pairs);

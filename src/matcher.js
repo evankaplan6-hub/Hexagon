@@ -381,6 +381,13 @@ function matchPairs(pmList, ksList) {
       settlesAt: startMs(hit.ks.expectedExpiration) ?? startMs(hit.ks.closeTime),
       pm: { id: m.id, tokenIndex: hit.tokenIndex, tokenId: m.tokenIds[hit.tokenIndex], question: m.question, url: m.url },
       ks: { ticker: hit.ks.ticker, title: hit.ks.title, eventTicker: hit.ks.eventTicker, url: hit.ks.url },
+      // Tennis is watched, never traded. The two venues settle a match that never starts differently:
+      // Polymarket pays 50-50 on a walkover, Kalshi "a fair price" (the Davis Cup dead rubber of
+      // 2026-09-20, in tools/rules-test.js). So a tennis "locked" arb is not locked. The crawl's pair
+      // for the same match was watch-only 'rules unclear' for this reason, and a game pair skips the
+      // rules gate, so without this the fast matcher pairing tennis again (2026-09-24) would have
+      // quietly made those matches tradeable.
+      watchOnly: SPORT_KEY[series(hit.ks.ticker)] === 'tennis' ? 'differ on a walkover' : null,
     });
   }
   // ---------------------------------------------------------------- coverage
