@@ -1,7 +1,7 @@
 #!/bin/bash
 # Record the option chains into data/chains/ every weekday, so that in a year there is an options
-# history to test against. There is no way to buy one later: free historical chains do not exist,
-# and a day nobody recorded is gone.
+# history to test against. Free historical chains do not exist (full ones are sold; README.md's options
+# section says where and for how much), so a day nobody recorded can only be bought back.
 #
 # This installs a LaunchAgent: a per-user job macOS runs at 16:25, 20:00 and 09:45 local (or on
 # wake, if the Mac was asleep then). It runs tools/chain-record.js, which reads Cboe's free delayed

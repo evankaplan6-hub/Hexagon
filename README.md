@@ -1030,7 +1030,7 @@ RESEARCH ONLY. Nothing here talks to a broker, reads a key, or places an order.
 **The universe is fixed in `tools/stock-fetch.js`, before any result was seen**: 23 broad ETFs —
 the four index funds, the nine sector SPDRs, five bond funds, gold, silver, developed and emerging
 markets, REITs — plus Cboe's `^BXM` (buy-write) and `^PUT` (put-write) indexes, which are the only
-honest free proxy for an options-income strategy, since free historical option chains do not exist.
+honest free proxy for an options-income strategy, since no free source has full historical option chains.
 Picking single stocks from a 2026 list would have meant backtesting on the survivors.
 
 **The fill model.** A strategy decides on a day's close and trades at the **next day's open**. Every
@@ -1090,13 +1090,23 @@ so `tools/stock-fetch.js` asks for an explicit `period1`/`period2` window instea
 to every request on a **reused connection** while serving fresh ones immediately, which looks exactly
 like a rate limit and is not; the fetcher sends `connection: close`.
 
-## Options: writing down a history that nobody sells
+## Options: writing down a history that is not free
 
 The lab above has a hole it names itself: no real options. Free historical option chains do not
-exist — not cheaply, not anywhere — which is why an options-income strategy had to be stood in for
+exist — not at any useful size — which is why an options-income strategy had to be stood in for
 by Cboe's BXM and PUT indexes, two canned rules with one parameter setting each. Live chains, on the
-other hand, are free. So the only way to ever run an honest options backtest is to start writing the
-data down, and every day nobody does is a day that cannot be bought back later.
+other hand, are free. So the only free way to ever run an honest options backtest is to start writing
+the data down, and every day nobody does is a day that can only be bought back later, not re-fetched.
+
+Checked 2026-09-24, so the claim above is not taken on faith. Full chains are sold: Alpha Vantage's
+`HISTORICAL_OPTIONS` endpoint returns one end-of-day chain per symbol per date for 15+ years, with
+bid/ask and sizes, volume, open interest, IV and greeks, on any premium plan (from $49.99 a month, 75
+requests a minute; the free key is refused). One request is one symbol-day, so the six ETFs back 15
+years is about 23,000 requests: one month would fetch all of it. The free sources are thin or stale.
+DoltHub's `post-no-preference/options` is free and current since 2019 but has only SPY and DIA of the
+six, about 210 SPY contracts a day across four expiries (the tape keeps about 5,600 across 17) and
+no open interest or volume; Kaggle's SPY set and OptionsDX stop in 2023. None of them has the tape's
+several snapshots a day.
 
 ```bash
 node tools/chain-record.js                  # one snapshot of the six ETFs → data/chains/

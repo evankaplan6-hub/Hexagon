@@ -77,7 +77,8 @@ tools/            edge-scan, replay, maker-replay, maker-rank, pm-maker-scan, ma
                   stock-fetch + stock-lab (ETF strategy tournament on Yahoo daily bars, walk-forward vs SPY;
                   research only, no broker code -- nothing beat buy-and-hold),
                   chain-record (writes the option-chain tape to data/chains/ from Cboe's free delayed feed;
-                  read-only, no broker -- free historical chains do not exist, so the history has to be collected daily;
+                  read-only, no broker -- full historical chains are sold, not free (Alpha Vantage premium from $49.99/mo;
+                  DoltHub's free set has only SPY and DIA, thinly; checked 2026-09-24), so the history is collected daily;
                   ops/install-chains.sh schedules it on the Mac; on the box src/chainsched.js runs it inside the desk
                   (CHAINS=1 in fly.toml) and keeps only the newest 14 days there -- the Mac's tape is the archive),
                   option-history (daily bars + open interest of EXPIRED option contracts from ChartExchange, the six chain-tape ETFs, monthly
@@ -111,7 +112,7 @@ data/lab/         gitignored: series-busy.json + universe.json (cached listings)
 data/lab/whales/  gitignored: pool, fills, conditions, markets for tools/whale-lab.js
 data/stocks/bars/ gitignored: one Yahoo daily-bar file per ETF/index (tools/stock-fetch.js) for tools/stock-lab.js
 data/chains/      gitignored: the option-chain tape, chains-YYYY-MM-DD.jsonl + .seen.json (tools/chain-record.js).
-                  IRREPLACEABLE: nobody sells historical chains, so a lost day cannot be re-fetched (backed up hourly with the pull).
+                  IRREPLACEABLE for free: a lost day can only be bought back, never re-fetched (backed up hourly with the pull).
                   09-23 has no session quotes; the 09-24 09:45 ET lines are copies of 09-22 after-hours prices: filter on qt.
                   Each run leaves an ok/PROBLEM line in data/chains/chains.log and exits 1 on a PROBLEM
 data/options/history/  gitignored: the ChartExchange option history (tools/option-history.js), one JSON per underlying per expiry
