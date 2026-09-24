@@ -771,5 +771,154 @@ group('config: the brake is on by default only on a Fly machine');
   ok('TAPE_MIN_FREE_MB wins either way', knob({ TAPE_MIN_FREE_MB: '50' }) === 50 && knob({ FLY_MACHINE_ID: 'abcdef1234', TAPE_MIN_FREE_MB: '0' }) === 0);
 }
 
+// ================================================================ ops/run-pull.sh
+// The launcher itself, run with bash in a made-up checkout: a fake fly that only answers
+// `auth whoami`, a fake tools/fly-pull.js that writes one pull.log line the way the real one does,
+// and a made-up HOME whose iCloud Drive folder is a temp folder. The date is fixed with PULL_TODAY_ET.
+const { spawnSync } = require('child_process');
+const HAVE_BASH = fs.existsSync('/bin/bash') && fs.existsSync('/usr/bin/rsync');
+function pullJob(label, { icloud = true } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), `hexagon-runpull-${label}-`));
+  const w = (rel, body, mode) => { const f = path.join(root, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, body); if (mode) fs.chmodSync(f, mode); return f; };
+  w('ops/run-pull.sh', fs.readFileSync(path.join(__dirname, '..', 'ops', 'run-pull.sh')));
+  // the fake pull: FAKE_PULL_RC=1 is a failed run; every call is noted with its arguments
+  w('tools/fly-pull.js', `const fs = require('fs'), path = require('path');
+const a = path.join(__dirname, '..', 'data', 'fly', 'archive');
+fs.appendFileSync(path.join(__dirname, '..', 'pulls.txt'), process.argv.slice(2).join(' ') + '\\n');
+const rc = Number(process.env.FAKE_PULL_RC || 0);
+if (!process.argv.includes('--dry-run')) { fs.mkdirSync(a, { recursive: true }); fs.appendFileSync(path.join(a, 'pull.log'), process.env.FAKE_PULL_STAMP + (rc ? ' PROBLEM' : ' ok') + ' hexagon-desk copied 1 file\\n'); }
+process.exit(rc);
+`);
+  const fly = w('bin/fly', '#!/bin/sh\n[ "$1 $2" = "auth whoami" ] && exit 0\nexit 9\n', 0o755);
+  w('data/chains/chains-2026-09-23.jsonl', 'chain\n');
+  w('data/options/history/SPY/2026-10-16.json', '{}');
+  w('data/fly/archive/ticks-2026-09-22.jsonl', 'tape\n');
+  w('data/fly/archive/.ticks-2026-09-23.jsonl.123.part', 'half a tape');
+  w('data/chains/kalshi-private-key.pem', 'SECRET');
+  w('data/fly/archive/.env', 'SECRET=1');
+  w('.env', 'SECRET=1');
+  const home = path.join(root, 'home');
+  const cloud = path.join(home, 'Library', 'Mobile Documents', 'com~apple~CloudDocs');
+  if (icloud) fs.mkdirSync(cloud, { recursive: true });
+  const backup = path.join(cloud, 'Hexagon-backup');
+  const archive = path.join(root, 'data', 'fly', 'archive');
+  const read = (f) => { try { return fs.readFileSync(f, 'utf8'); } catch { return ''; } };
+  // `today` is the Eastern date the script believes; `stamp` is the UTC time the fake pull writes
+  const go = (args = [], { today = '2026-09-24', stamp = '2026-09-24T13:31:16Z', rc = 0 } = {}) => {
+    const r = spawnSync('/bin/bash', [path.join(root, 'ops', 'run-pull.sh'), ...args], {
+      encoding: 'utf8',
+      env: { HOME: home, PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`, FLY_BIN: fly, PULL_TODAY_ET: today, FAKE_PULL_STAMP: stamp, FAKE_PULL_RC: String(rc), PULL_NET_TRIES: '1' },
+    });
+    return { code: r.status, out: `${r.stdout}${r.stderr}` };
+  };
+  const pulls = () => read(path.join(root, 'pulls.txt')).split('\n').filter(Boolean);
+  const pullLog = () => read(path.join(archive, 'pull.log')).split('\n').filter(Boolean);
+  const backupLog = () => read(path.join(archive, 'backup.log')).split('\n').filter(Boolean);
+  const walk = (d) => (fs.existsSync(d) ? fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)).map((n) => `${e.name}/${n}`) : [e.name])).sort() : null);
+  return { root, cloud, backup, archive, go, pulls, pullLog, backupLog, walk, w, done: () => fs.rmSync(root, { recursive: true, force: true }) };
+}
+
+if (!HAVE_BASH) {
+  console.log('\nrun-pull.sh: skipped, no /bin/bash or /usr/bin/rsync here');
+} else {
+  group('run-pull.sh: the pull, then the backup of the three folders into iCloud Drive');
+  {
+    const j = pullJob('fresh');
+    const r = j.go();
+    ok('exits with the pull\'s code, 0', r.code === 0, r);
+    ok('the pull ran once, with --trim', JSON.stringify(j.pulls()) === '["--trim"]', j.pulls());
+    ok('chains, options and the archive are copied, each under its own name', JSON.stringify(j.walk(j.backup)) === JSON.stringify(['archive/pull.log', 'archive/ticks-2026-09-22.jsonl', 'chains/chains-2026-09-23.jsonl', 'options/history/SPY/2026-10-16.json']), j.walk(j.backup));
+    ok('no half-downloaded .part, no .env and no .pem goes to iCloud', !j.walk(j.backup).some((n) => /\.part$|\.env$|\.pem$/.test(n)), j.walk(j.backup));
+    ok('backup.log says ok, and pull.log gets no backup line on a good day', /^\S+Z ok backup copied data\/chains data\/options data\/fly\/archive/.test(j.backupLog()[0] || '') && j.pullLog().length === 1 && / ok hexagon-desk /.test(j.pullLog()[0]), [j.backupLog(), j.pullLog()]);
+    fs.rmSync(path.join(j.backup, 'chains', 'chains-2026-09-23.jsonl'));
+    fs.writeFileSync(path.join(j.root, 'data', 'chains', 'chains-2026-09-24.jsonl'), 'more\n');
+    fs.rmSync(path.join(j.root, 'data', 'fly', 'archive', 'ticks-2026-09-22.jsonl'));
+    const again = j.go(['--backup-only']);
+    ok('--backup-only runs no pull', again.code === 0 && j.pulls().length === 1, again);
+    ok('a file deleted on the Mac is not deleted from the backup (no --delete), a new one arrives', fs.existsSync(path.join(j.backup, 'archive', 'ticks-2026-09-22.jsonl')) && fs.existsSync(path.join(j.backup, 'chains', 'chains-2026-09-24.jsonl')), j.walk(j.backup));
+    j.done();
+  }
+
+  group('run-pull.sh: hourly, but once a day is done, a run does nothing and says nothing');
+  {
+    const j = pullJob('twice');
+    j.go();
+    const logs = [j.pullLog().join('\n'), j.backupLog().join('\n')];
+    const r = j.go();
+    ok('the second run the same day exits 0 at once', r.code === 0 && r.out === '' && j.pulls().length === 1, r);
+    ok('...and writes no line anywhere', JSON.stringify([j.pullLog().join('\n'), j.backupLog().join('\n')]) === JSON.stringify(logs));
+    const next = j.go([], { today: '2026-09-25', stamp: '2026-09-25T13:30:40Z' });
+    ok('the next Eastern day pulls and backs up again', next.code === 0 && j.pulls().length === 2 && j.backupLog().length === 2, [next, j.pulls()]);
+    j.done();
+
+    // 22:00 in New York on the 23rd is 02:00Z on the 24th: that pull was yesterday's, not today's
+    const e = pullJob('evening');
+    e.w('data/fly/archive/pull.log', '2026-09-24T02:00:00Z ok hexagon-desk copied 0 files\n');
+    e.w('data/fly/archive/backup.log', '2026-09-24T13:00:00Z ok backup copied data/chains\n');
+    e.go();
+    ok('a pull line from 02:00Z is the Eastern day before: the pull runs', e.pulls().length === 1, e.pulls());
+    e.done();
+
+    const p = pullJob('lastfailed');
+    p.w('data/fly/archive/pull.log', '2026-09-24T13:31:16Z ok hexagon-desk copied 1 file\n2026-09-24T14:31:16Z PROBLEM hexagon-desk FAILED: could not list the box\n');
+    p.w('data/fly/archive/backup.log', '2026-09-24T14:31:20Z ok backup copied data/chains\n');
+    const pr = p.go([], { stamp: '2026-09-24T15:31:16Z' });
+    ok('an ok earlier in the day does not count when the last pull line is a PROBLEM: it pulls again', pr.code === 0 && p.pulls().length === 1, pr);
+    ok('...and the backup, already done today, is not done again', p.backupLog().length === 1, p.backupLog());
+    p.done();
+  }
+
+  group('run-pull.sh: the backup runs even when the pull fails, and a failed backup is its own problem');
+  {
+    const j = pullJob('pullfails');
+    const r = j.go([], { rc: 1, stamp: '2026-09-24T13:31:16Z' });
+    ok('exits with the pull\'s code, 1', r.code === 1, r);
+    ok('...but the chain tape was still backed up', fs.existsSync(path.join(j.backup, 'chains', 'chains-2026-09-23.jsonl')) && j.backupLog().length === 1, j.walk(j.backup));
+    ok("the pull's PROBLEM stays the last line of pull.log, not hidden by the backup", / PROBLEM hexagon-desk /.test(j.pullLog().slice(-1)[0]), j.pullLog());
+    const r2 = j.go([], { stamp: '2026-09-24T14:30:40Z' });
+    ok('the next hour pulls again, and does not back up twice', r2.code === 0 && j.pulls().length === 2 && j.backupLog().length === 1, [r2, j.backupLog()]);
+    j.done();
+
+    const n = pullJob('noicloud', { icloud: false });
+    const nr = n.go();
+    const last = n.pullLog().slice(-1)[0] || '';
+    ok('no iCloud Drive: the pull still counts, exit 0', nr.code === 0 && n.pulls().length === 1, nr);
+    ok('...and no fake iCloud folder is made on the Mac', !fs.existsSync(n.cloud), n.walk(path.join(n.root, 'home')));
+    ok('pull.log gets its own PROBLEM line, which does not say the box went unpulled', / PROBLEM backup run-pull\.sh: iCloud Drive is not at /.test(last) && !/NOT pulled/.test(last) && /Fly box pull is separate/.test(last), last);
+    ok('backup.log has the same PROBLEM', / PROBLEM backup /.test(n.backupLog()[0] || ''), n.backupLog());
+    fs.mkdirSync(n.cloud, { recursive: true });
+    const nr2 = n.go();
+    ok('the next hour: the pull (ok today) is skipped, the backup is tried again and goes through', nr2.code === 0 && n.pulls().length === 1 && / ok backup copied /.test(n.backupLog().slice(-1)[0]), [nr2, n.pulls(), n.backupLog()]);
+    ok("pull.log's last line says the backup is mended, so the daily check stops flagging it", / ok backup run-pull\.sh: the backup that failed above has gone through now$/.test(n.pullLog().slice(-1)[0]), n.pullLog());
+    ok('...and the pull check still reads past it to the pull line: the next run is quiet', n.go().out === '' && n.pulls().length === 1);
+    const bo = pullJob('backuponly-noicloud', { icloud: false });
+    ok('--backup-only exits non-zero when the backup fails (how install-pull.sh tests it)', bo.go(['--backup-only']).code === 1 && bo.pulls().length === 0);
+    bo.done();
+    n.done();
+  }
+
+  group('run-pull.sh: a dry run copies nothing and writes nothing, and always runs');
+  {
+    const j = pullJob('dry');
+    j.go();
+    const before = [j.pullLog().length, j.backupLog().length];
+    const r = j.go(['--dry-run']);
+    ok('the pull is asked for its plan even after a done day', r.code === 0 && j.pulls().slice(-1)[0] === '--trim --dry-run', [r, j.pulls()]);
+    ok('the backup only says what it would copy', /would copy data\/chains data\/options data\/fly\/archive to .*Hexagon-backup/.test(r.out), r.out);
+    ok('no line in either log', JSON.stringify([j.pullLog().length, j.backupLog().length]) === JSON.stringify(before));
+    j.done();
+  }
+}
+
+group('the schedule: every hour at :30, and the installer tests the backup from a bare environment');
+{
+  const plist = fs.readFileSync(path.join(__dirname, '..', 'ops', 'com.hexagon.pull.plist'), 'utf8');
+  const cal = plist.slice(plist.indexOf('<key>StartCalendarInterval</key>'));
+  const dict = cal.slice(0, cal.indexOf('</dict>') + 7);
+  ok('one calendar entry, Minute 30 and no Hour', /<key>StartCalendarInterval<\/key>\s*<dict>\s*<key>Minute<\/key>\s*<integer>30<\/integer>\s*<\/dict>/.test(dict) && !/<key>Hour<\/key>/.test(plist), dict);
+  const inst = fs.readFileSync(path.join(__dirname, '..', 'ops', 'install-pull.sh'), 'utf8');
+  ok('install-pull.sh runs the backup from env -i before installing', /env -i HOME="\$HOME"[^\n]*\\\n\s*\/bin\/bash "\$HEXDIR\/ops\/run-pull\.sh" --backup-only/.test(inst) && inst.indexOf('--backup-only') < inst.indexOf('launchctl load'), null);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
