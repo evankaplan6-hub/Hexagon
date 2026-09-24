@@ -32,7 +32,9 @@ npm run reset                                 # wipe the paper account
 - Live mode is Kalshi-only and has never been exercised with a funded account. Treat
   `src/broker.js` live paths as untested.
 - Secrets live in `.env` and `kalshi-private-key.pem`. Both are gitignored. Never commit them,
-  print their values, or send them anywhere.
+  print their values, or send them anywhere. The one sanctioned copy is `ops/backup-secrets.sh`
+  (run by Evan in a terminal): an AES-256 encrypted image in iCloud Drive, under a passphrase only
+  he types. Never supply, store or generate that passphrase.
 - The server binds `127.0.0.1` because `/api/positions` and the activity log are unauthenticated.
   Do not bind it to `0.0.0.0` casually.
 - The desk trading rarely — or not at all — is correct behavior, not a bug. Real cross-venue
@@ -101,10 +103,11 @@ data/fly/box-now/ gitignored: the latest state.json + unarchived journals, copie
                   replaced each run, not an archive
 ops/              Fly deploy, launchd desk autostart (not installed), the tape pull (ops/install-pull.sh: hourly at :30 since 2026-09-24,
                   skipped once the day's pull and backup are ok; the same job backs up data/chains, data/options and data/fly/archive
-                  to iCloud Drive/Hexagon-backup, no --delete, no secrets -- .env and the .pem need their own backup, e.g. Time Machine).
+                  to iCloud Drive/Hexagon-backup, no --delete, no secrets). .env and the .pem: ops/backup-secrets.sh, by hand (encrypted image, Evan's passphrase).
                   The option-history job (ops/install-history.sh) was removed 2026-09-24 with ops/uninstall-history.sh: the key had expired.
                   ops/daily-check.sh is the daily trust routine (read-only on the box): pull alive, ledger-check --box --venues, pnl-report
-                  + fillcheck, restarts (tools/restarts.js), CPU steal/pressure + disk + probe files, the chain tape (chain-record --check).
+                  + fillcheck, restarts (tools/restarts.js), CPU steal/pressure + disk + probe files, the chain tape (chain-record --check),
+                  and whether the encrypted secrets image is older than .env or the key.
                   The box also has a disk brake (TAPE_MIN_FREE_MB) that trims its oldest tapes if the pull stops
 data/             gitignored: state.json, journal-*.jsonl, ticks-*.jsonl, desk.log
 data/lab/         gitignored: series-busy.json + universe.json (cached listings) and markets.jsonl (hourly bars)
@@ -130,5 +133,5 @@ the fast working copy.
   `git worktree list` is the only honest record of which exist. `.claude/` is gitignored.
 - Remote `origin` is `git@github.com:evankaplan6-hub/Hexagon.git` (added 2026-09-12, SSH).
   `data/`, `.env`, and `*.pem` are gitignored. Since 2026-09-24 the pull job copies `data/chains`,
-  `data/options` and `data/fly/archive` to iCloud Drive/Hexagon-backup; `.env`, the `.pem` and the
-  rest of `data/` exist only in this working copy — back them up separately (e.g. Time Machine).
+  `data/options` and `data/fly/archive` to iCloud Drive/Hexagon-backup; `.env` and the `.pem` go
+  there only inside `ops/backup-secrets.sh`'s encrypted image; the rest of `data/` exists only here.

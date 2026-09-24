@@ -1,5 +1,5 @@
 #!/bin/bash
-# The daily trust routine: six questions about the Fly box and the Mac's tapes, one screen, nothing changed on the box.
+# The daily trust routine: seven questions about the Fly box and the Mac's tapes, one screen, nothing changed on the box.
 #
 #   bash ops/daily-check.sh
 #
@@ -27,6 +27,9 @@
 #                                         2026-09-24; a total that keeps growing means it has stopped)
 #   6. is the option-chain tape alive?    tools/chain-record.js --check on this Mac: the last chains.log
 #                                         line, the newest Cboe stamp per symbol, the last finished weekday
+#   7. are the secrets backed up?         the newest encrypted image ops/backup-secrets.sh left in iCloud
+#                                         Drive/Hexagon-backup/secrets, against the dates of .env and the
+#                                         Kalshi key (file dates only: nothing is opened)
 #
 # Nothing on the box is changed. What it writes on the Mac: step 2 copies the box's state.json and
 # the journals the archive lacks into data/fly/box-now, replacing the copies from the previous run
@@ -78,6 +81,30 @@ say "6. the option-chain tape on this Mac: the last run, the newest Cboe stamp p
 # Read-only (tools/chain-record.js --check). Added 2026-09-24: Cboe's feed froze from the 09-22
 # evening, 09-23 has no session quotes at all, and nothing here said so for a day and a half.
 node tools/chain-record.js --check || bad=$((bad + 1))
+
+say "7. the secrets backup: the newest encrypted image of .env and the Kalshi key, against both files"
+# ops/backup-secrets.sh, run by hand (it needs a passphrase typed at a prompt, so nothing schedules
+# it). Nothing is opened: the image is dated by its own name (hexagon-secrets-YYYY-MM-DD-HHMMSS.dmg,
+# given only once its check passed), which still works when iCloud has moved it off the Mac and left
+# a .hexagon-secrets-….dmg.icloud placeholder; the secrets are compared by file date only. The key is
+# found the way backup-secrets.sh finds it: KALSHI_PRIVATE_KEY_PATH in .env, path only.
+SECRETS="$HOME/Library/Mobile Documents/com~apple~CloudDocs/Hexagon-backup/secrets"
+newest="$( { ls -A "$SECRETS" 2>/dev/null || true; } | sed -n 's/^\.\{0,1\}hexagon-secrets-\([0-9-]\{17\}\)\.dmg\(\.icloud\)\{0,1\}$/\1/p' | sort | tail -1)"
+if [ -z "$newest" ]; then
+  echo "PROBLEM: no checked secrets image in $SECRETS -- run: bash ops/backup-secrets.sh"; bad=$((bad + 1))
+else
+  made="$(date -j -f '%Y-%m-%d-%H%M%S' "$newest" +%s 2>/dev/null || echo 0)"
+  echo "newest image: hexagon-secrets-$newest.dmg, $(( ( $(date +%s) - made ) / 86400 )) day(s) old"
+  key="$( { grep -E '^[[:space:]]*(export[[:space:]]+)?KALSHI_PRIVATE_KEY_PATH[[:space:]]*=' "$HEXDIR/.env" 2>/dev/null || true; } | tail -1 | cut -d= -f2- |
+    sed -e 's/[[:space:]]#.*$//' -e 's/^[[:space:]"'"'"']*//' -e 's/[[:space:]"'"'"']*$//' -e "s#^~#$HOME#")"
+  key="${key:-kalshi-private-key.pem}"
+  case "$key" in /*) ;; *) key="$HEXDIR/$key" ;; esac
+  stale=""
+  for f in "$HEXDIR/.env" "$key"; do
+    [ -f "$f" ] && [ "$(stat -f %m "$f")" -gt "$made" ] && stale="$stale $(basename "$f")"
+  done
+  if [ -n "$stale" ]; then echo "PROBLEM: changed since that image:$stale -- run: bash ops/backup-secrets.sh"; bad=$((bad + 1)); fi
+fi
 
 printf '\n%s\n' "$([ "$bad" = 0 ] && echo 'every step answered, nothing flagged' || echo "$bad step(s) flagged a problem: read up")"
 exit "$bad"

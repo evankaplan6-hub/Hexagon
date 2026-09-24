@@ -1352,9 +1352,23 @@ trimmed (09-10 to 09-21) existed only on this Mac. After the pull, whether or no
 `iCloud Drive/Hexagon-backup`: no `--delete`, so a file removed here is kept there; no `.part`
 files; never `.env` or a `.pem`; and only into an iCloud Drive that exists. A failed copy writes its
 own `PROBLEM backup` line to `pull.log` and `backup.log` and is tried again the next hour; a good one
-writes an `ok` line to `backup.log`. `.env` and `kalshi-private-key.pem` are **not** in it and still
-need a backup of their own, such as Time Machine on an external disk. `ops/uninstall-pull.sh` stops
-the backup along with the pull and leaves the iCloud copy in place.
+writes an `ok` line to `backup.log`. `.env` and `kalshi-private-key.pem` are **not** in it: a secret
+does not go to anyone's cloud in the clear. `ops/uninstall-pull.sh` stops the backup along with the
+pull and leaves the iCloud copy in place.
+
+**The secrets (since 2026-09-24).** `bash ops/backup-secrets.sh`, run by hand in a terminal, seals
+`.env` and the Kalshi key (wherever `KALSHI_PRIVATE_KEY_PATH` points) in an AES-256 encrypted disk
+image in `iCloud Drive/Hexagon-backup/secrets/hexagon-secrets-<date>.dmg`. The passphrase is typed at
+hdiutil's own prompt, so nothing in the repo ever holds it, and that is also why nothing schedules
+it. It then opens the image once more (the passphrase a third time) and checks both files byte for
+byte. Until that check passes the image is named `unchecked-…`, so an interrupted or failed run never
+counts as a backup. Keep the
+passphrase in the Passwords app: an image nobody can open is not a backup. Run it again whenever
+`.env` or the key changes. Daily-check step 7 compares the newest image's date with both files and
+says when. To restore: open the newest `hexagon-secrets-*.dmg` (not an `unchecked-` one), type the passphrase, copy both files back into
+`~/Hexagon`, and `chmod 600` them. Every secret in it can also be reissued at its source, and the
+box's `DASH_PASS` and `FLATTEN_TOKEN` live in Fly's secrets, so the image saves an afternoon of
+re-keying, not money.
 
 ## Honest notes
 - Paper results are not predictive. Cross-venue gaps on liquid pre-game and macro markets are usually 0 to 1c, so expect the desk to spend most of its time researching and to trade rarely. That is correct behavior, not a bug.
