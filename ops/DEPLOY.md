@@ -238,8 +238,8 @@ running. `TAPE_MIN_FREE_MB=0` turns the brake off. It is off by default anywhere
 
 **Do not put the Kalshi private key on a cloud box to run live.** A key sitting on a rented
 machine, reachable by a web process, is a different risk from a key on a laptop — and the desk has
-not earned it: the paper books have lost money (2026-09-10 → 09-24 realised: convergence −$643,
-locked arbs −$222, maker −$792; `tools/pnl-report.js`), so there is no edge to fund. If that changes, the right shape is a separate, locked-down machine that runs no
+not earned it: the paper books have lost money (2026-09-10 → 09-24 17:58Z realised: convergence −$643,
+locked arbs −$222, maker −$852; `tools/pnl-report.js`), so there is no edge to fund. If that changes, the right shape is a separate, locked-down machine that runs no
 web server at all, not this one with more environment variables. That includes putting the key
 there just for the trade socket: the socket is a Mac-side improvement, and the cloud box keeps
 polling — the tape reports `tape: polling` on its dashboard, and that is the intended state.

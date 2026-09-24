@@ -441,9 +441,9 @@ wrong, all fixed the same day:
   showed a 61c arb when Kalshi's bid jumped to 0.75 on 40 contracts against Polymarket's 0.06/0.07.
   The scanner put it to the Claude rules judge, which answered `same` fifteen seconds later, and the
   desk booked $67.15 on it a minute after that. Now a pair whose books are more than 30c apart at their
-  nearest prices (one venue's bid over the other's ask by more than `MAX_VENUE_DISAGREE`) is not sent
-  to the judge, and `decide.pairSignals` vetoes it for every pair as `venues disagree 30c+: likely
-  different questions` (new entries only; exits, marks and settlement are untouched). The test is on
+  nearest prices (one venue's bid over the other's ask by more than `MAX_VENUE_DISAGREE`, a constant
+  in `src/matcher.js`, not a setting) is not sent to the judge, and `decide.pairSignals` vetoes it
+  for every pair as `venues disagree 30c+: likely different questions` (new entries only; exits, marks and settlement are untouched). The test is on
   the books, not the mids: Kalshi's book was 10c wide that minute, and a test gated on narrow books
   would have let it through, while an 80c-wide book that overlaps the other venue does not trip it.
 - **The US chart is not the worldwide chart.** "Top US Spotify Artist 2026" paired with Kalshi's
@@ -485,11 +485,11 @@ only once it says `closed` or `resolved`, and not when the record says the other
 lookup is a pass, logged at most once a minute (`KETT PASS ... has not closed the market`). Every edge
 in the study above was measured *before* Polymarket closed the market, so it has to be measured again
 after the close, and the snipe may now fire rarely or never: the pair is kept only `SNIPE_HOLD_SEC`
-(300s) past Polymarket's last 99c reading, and if Polymarket only marks a game closed once it is
-formally resolved, the two never meet. That fails safe (no trade, never a wrong one). Judge it on
-Sunday 2026-09-27, and read a silent Sunday as "the window closes before Polymarket does", not as
-"no edge". The "different game" case the Kalshi price floor was written for turned out to be the
-Rays-Yankees doubleheader on 09-22 (Polymarket's game 1 paired with Kalshi's game 2, 10c against
+(300s) after Polymarket's listing drops it, and if Polymarket marks the market closed only once it is
+formally resolved, later than that window, the two never meet. That fails safe (no trade, never a
+wrong one). Judge it on Sunday 2026-09-27, and read a silent Sunday as "the window closes before
+Polymarket does", not as "no edge". The "different game" case the Kalshi price floor was written
+for turned out to be the Rays-Yankees doubleheader on 09-22 (Polymarket's game 1 paired with Kalshi's game 2, 10c against
 45c), which the matcher now refuses by start time (*Wrong games* above); the Yankees v Diamondbacks
 row the floor was set on was the same game.
 
@@ -572,7 +572,7 @@ rail (`maker.fairSide`, `MAKER_FAIR_RAIL`): a side that would trade against Poly
 rested. It stops the bleeding on the paired book; it does not make the book profitable, and nothing
 else tried on that tape (mid velocity, book lean, flow direction, spread, quote age, inventory, fill
 size) did either. Since 2026-09-24 the rail ignores a pair whose venues sit more than 30c apart
-(`MAX_VENUE_DISAGREE`): that is two different questions, not a fair price (90c against 44.5c gives
+(the matcher's 30c bar): that is two different questions, not a fair price (90c against 44.5c gives
 no fair value).
 
 One thing it is careful about. The crawl excluded Sports until 2026-09-19, so a listed sports series
@@ -1249,7 +1249,7 @@ If the cap resets daily at ~800 calls, that is five to eight SPY expiries a day 
 years fit in the fortnight; if it does not reset, `history.log` will say `STOPPED` after 0 pulled
 on every run and the trial's whole yield is the one expiry above. Either way the files are the
 irreplaceable kind once the key is gone, so `data/options/history/` belongs in the same backup as
-`data/chains/`: since 2026-09-24 both go to iCloud Drive with the hourly pull (*The daily check*).
+`data/chains/`: since 2026-09-24 both go to iCloud Drive with the hourly pull (*The pull and the backup*).
 
 **How it ended (2026-09-23, the same evening).** The cap was not the last word: by 22:40Z every call
 answered HTTP 401 "Expired", and it still did the next morning. The trial did not run its fortnight,
