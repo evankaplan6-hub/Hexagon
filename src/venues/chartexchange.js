@@ -6,7 +6,7 @@
 // volume, dark-pool prints, borrow fees, failures-to-deliver, Reddit mentions, an option-chain
 // summary (max pain, put/call) and -- the one thing that matters to this repo -- DAILY BARS AND OPEN
 // INTEREST FOR EVERY OPTION CONTRACT, INCLUDING EXPIRED ONES, back to 2021 on SPY. That is the
-// history README.md's options section says nobody sells, and tools/option-history.js writes it
+// history README.md's options section says is not free, and tools/option-history.js writes it
 // down while the key lasts. The subscription is a 14-day Tier 3 trial to 2026-10-07 (.env says so),
 // which is why everything here is a tool or an Ask-panel lookup and nothing in the trading loop
 // depends on it: the desk trades prediction markets and must run exactly the same without this key.

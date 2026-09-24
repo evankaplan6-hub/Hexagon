@@ -166,7 +166,7 @@ pull() {
 
 # --- the backup ------------------------------------------------------------------------------------
 # Until 2026-09-24 nothing on this Mac was backed up anywhere: no Time Machine disk, no iCloud copy.
-# The chain tape (nobody sells historical chains), the one ChartExchange expiry (the key is dead)
+# The chain tape (no free source has its history), the one ChartExchange expiry (the key is dead)
 # and every tick tape the box has since trimmed (09-10 to 09-21 on 09-24) existed only here. So after
 # every pull these three folders are copied into iCloud Drive, which syncs them off the Mac.
 #   - no --delete: a file lost or deleted here never takes its backup with it;
