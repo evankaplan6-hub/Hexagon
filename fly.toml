@@ -74,7 +74,7 @@ primary_region = "iad"          # Ashburn, Virginia — close to the exchange, a
   # markets it keeps, and Kalshi filters /events by nothing that tracks volume. Skipping events that
   # kept nothing last time would save at most ~25% of the Kalshi half, for a two-step crawl. So it
   # runs half as often: a new election, award or season market is paired up to 90 minutes after it
-  # lists, and the maker's crawl-fed universe (MAKER_WIDEN) is refreshed as often.
+  # lists.
   DISCOVER_EVERY_MIN = "90"
   # Raised from the 3% default (src/config.js) on 2026-09-17: the desk hit 3% intraday and TESS
   # correctly halted new risk, but 3% of a $10k paper account is $300 -- tight enough that one bad
@@ -130,8 +130,9 @@ primary_region = "iad"          # Ashburn, Virginia — close to the exchange, a
 # of fills) pushed a loop past the 300s watchdog: 5 restarts on 2026-09-22. The crawl is not the
 # steady load -- a local run with this env spent 36 MB/min of JSON with no crawl in it, 40% of it
 # the Gamma top-500 listing every 15s and 25% the maker's trade poll every 2s. 2x doubles the cap
-# to 12.5% for about $0.72 a month more. If the box is still held back, the next step is fetching
-# that Gamma listing less often, not turning off WHALE_WATCH or RECORD_MAKER (~5% between them).
+# to 12.5% for about $0.72 a month more. That Gamma listing is read every 120s since #109 (and
+# Kalshi's fast listing since #111); steal read 0% on 2026-09-24. If the box is held back again, look
+# there before turning off WHALE_WATCH or RECORD_MAKER (~5% between them).
 [[vm]]
   size = "shared-cpu-2x"
   memory = "512mb"              # the tick recorder and journals are the only real consumers

@@ -27,17 +27,19 @@ module.exports = {
   chainsKeepDays: num('CHAINS_KEEP_DAYS', 14),
   // ChartExchange (src/venues/chartexchange.js): read-only market data behind a paid key --
   // quotes, short volume, dark-pool prints, max pain, and the historical option bars
-  // tools/option-history.js archives. A trial to 2026-10-07. Only the Ask panel reads it inside
-  // the desk; nothing in the trading loop does, so an empty key changes no trade.
+  // tools/option-history.js archives. The trial key has answered HTTP 401 Expired since the evening
+  // of 2026-09-23, so nothing here answers until a paid key is set. Only the Ask panel reads it
+  // inside the desk; nothing in the trading loop does, so an empty key changes no trade.
   chartexchangeKey: env('CHARTEXCHANGE_API_KEY', '').trim(),
   // Any-market pairs are recorded on change plus this heartbeat (src/recorder.js says why).
   recordHeartbeatMin: num('RECORD_HEARTBEAT_MIN', 15),
   // The tape's emergency brake (src/recorder.js). When free space under dataDir falls below this,
   // the recorder deletes the OLDEST ticks-*.jsonl files -- never today's, never a journal -- until
-  // it is back above. On the Fly box's 1GB volume the tape fills the disk in about two weeks, and
-  // a full disk stops the journal too. The normal route off the box is the Mac's daily
-  // tools/fly-pull.js, which deletes only what it has copied and verified; this fires only if that
-  // has stopped running, so what it deletes may never have reached the Mac. 0 turns it off.
+  // it is back above. On the Fly box's 1GB volume the tape (about 90-130 MB a day since 2026-09-19)
+  // fills the disk in about a week, and a full disk stops the journal too. The normal route off the
+  // box is the Mac's hourly tools/fly-pull.js, which deletes only what it has copied and verified;
+  // this fires only if that has stopped running, so what it deletes may never have reached the Mac.
+  // 0 turns it off.
   // On by default only on a Fly machine (Fly sets FLY_MACHINE_ID in every one): on the Mac the
   // tapes under data/ exist nowhere else and no pull archives them, so there it stays off unless
   // TAPE_MIN_FREE_MB is set on purpose.
@@ -126,6 +128,9 @@ module.exports = {
   // these leave the universe on 2026-10-27 and are worked off reduce-only from then.
   // KXMANCHINCOMBO is dated in its own ticker (-26NOV03) and KXPRIMARYTURNOUT has no open market,
   // so neither is listed. KXGOVBAL is Italy's budget balance, not an election.
+  // Keyed by SERIES, not event: after 2026-11-03 every market in these series reads as past (refused,
+  // and crossed out if held) until this map is updated, and a later-cycle event listed in one of them
+  // (a CONTROLS-2028 market) is treated as 2026-11-03 too.
   makerEventDates: env('MAKER_EVENT_DATES', 'SENATE*,GOVPARTY*,CONTROLS,CONTROLH,KXBALANCEPOWERCOMBO,KXBLUETSUNAMICOMBO,KXHOUSERACE,KXRHOUSESEATS=2026-11-03')
     .split(';').map((g) => g.split('=').map((x) => x.trim())).filter((g) => g.length === 2 && /^\d{4}-\d{2}-\d{2}$/.test(g[1]))
     .flatMap(([list, date]) => list.split(',').map((p) => p.trim()).filter(Boolean).map((p) => [p, date])),
@@ -517,7 +522,8 @@ module.exports = {
   // universe
   // The any-market scanner (src/anymarket.js): every category on both venues, not just the games and
   // Fed brackets below. Discovery crawls both venues every DISCOVER_EVERY_MIN off the 15s cycle
-  // (~65 Kalshi calls, ~20 Polymarket), and every cycle reprices only the matched markets. A pair
+  // (paced Kalshi pages, about two minutes on the box; see DISCOVER_GAP_MS below), and every cycle
+  // reprices only the matched markets. A pair
   // trades only once its resolution rules are verified to match (src/rules.js); the rest are
   // priced and recorded as watch-only.
   anyMarkets: env('ANY_MARKETS', '1') !== '0',
@@ -550,7 +556,7 @@ module.exports = {
   // heap on a 512 MB box. It roughly doubles the crawl and still fits.
   // Note what this does NOT do: nothing in the rules allowlist (src/rules.js) is a sports family, so
   // every new pair lands `unclear` and is watch-only. A sports pair can only begin trading if the
-  // Claude rules judge upgrades it, which needs RULES_CHECK and a key and is capped by ASK_DAILY_USD.
+  // Claude rules judge upgrades it, which needs RULES_CHECK and a key and is capped by RULES_DAILY_USD.
   // Set DISCOVER_EXCLUDE_KS=Sports and DISCOVER_EXCLUDE_PM=Sports,Esports to put the wall back.
   discoverExcludeKs: env('DISCOVER_EXCLUDE_KS', '').split(',').map((s) => s.trim()).filter(Boolean),
   discoverExcludePm: env('DISCOVER_EXCLUDE_PM', '').split(',').map((s) => s.trim()).filter(Boolean),

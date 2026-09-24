@@ -84,6 +84,24 @@ before funding anything.
   leg pays a taker fee on the way out. The old `bidSum > 1.005` test ignored that fee and unwound
   three pairs on the cloud box for $1–3 each that would have settled for $2–6. `decide.arbUnwind`
   now requires `(bidSum − 1) × qty − fee` to clear `ARB_UNWIND_MARGIN` (0.5c) a contract.
+  **And the marks are only the question; the live books are the answer (2026-09-24).** The Debut arb
+  on 09-23 unwound on marks its books could not pay: it made −$8.75 against +$1.52 for holding, with
+  180 `EXIT_FAIL`s on a naked Polymarket leg, and the three unwinds since #100 netted −$8.06 against
+  holding. Now, once `arbUnwind` says look, RIGO reads both exit ladders (at most once a minute per
+  arb) and `decide.arbUnwindLive` walks each down to its mark less `SLIP_LIMIT`, takes the quantity
+  both can absorb, charges each leg's fee at its own average fill, and passes (the legs stay whole)
+  unless that still clears the margin on at least 5 contracts. RIGO sells the **thinner leg first**
+  (Polymarket on a tie); the other leg then sells exactly as many as the first did, and only its own
+  shortfall is flagged stuck (`orphanQty`) and retried, never the part that is still hedged.
+- **A held Polymarket leg is marked from its order book, even after its pair is gone
+  (2026-09-24).** Matched pairs were always repriced from the CLOB, but a leg whose pair had dropped
+  out of the matched set fell back to Gamma's listing price, which goes stale (a 0.72/0.73 listing
+  against a 0.78/0.80 book); about 13 of 20 open arbs were being marked that way on 09-24. Those legs
+  are now priced in the same CLOB call, as the Kalshi half already was.
+- **Venues 30c or more apart are two different questions** (`venues disagree 30c+`, 2026-09-24):
+  `decide.pairSignals` emits nothing for a pair where one venue's bid is over the other's ask by more
+  than 30c. New entries only. The press-ban arb and the US Spotify chart are the cases (*Look-alikes
+  the rules judge was shown*).
 - On a fee-free Polymarket market, the directional leg of a convergence trade already lands on Polymarket whenever the venues are
   similarly off fair: `convEdge` nets each venue's fees, and Polymarket's is zero, so it wins by
   exactly the Kalshi round trip. Pinned by a test rather than a rule.
@@ -129,20 +147,34 @@ BRAM RESEARCH  gate ledger over 19 pairs · 8 gap under minGap · 6 mid outside 
 - **The maker's market data shares the file** (`src/makertape.js`, `RECORD_MAKER=0` turns it off).
   Lines with an `mk` field and no `pair`: `b` is the top of the book with both sizes, written on
   change and once a minute otherwise (`hb:1`); `p` is a print with the exchange's own timestamp;
-  `q` is our resting quote and inventory; `g` marks a hole in what was observed (a stop, a failed
+  `q` is our resting quote and inventory (with `"ro":1` since 2026-09-24 when the quote is
+  reduce-only, so a replay clips its fills at flat the way the desk does); `g` marks a hole in what was observed (a stop, a failed
   data round, a skipped poll, a lost write, and the return after one), because a stop withdraws
   every quote and a replay that read only `b`/`p`/`q` would see the last quote rest straight through it. Nothing new is fetched: the maker already reads these
   every two seconds and used to discard them. They exist so `tools/maker-replay.js` can replace
-  its reconstructed touch and guessed queue with the real ones. About 20 MB a day; the disk brake
-  and the daily pull already cover the file. `tools/replay.js` and `tools/history-scan.js` skip
+  its reconstructed touch and guessed queue with the real ones. About 25 MB a day (09-23); the disk
+  brake and the pull already cover the file. `tools/replay.js` and `tools/history-scan.js` skip
   lines without a `pair`.
 - Append-only, never rewritten, rotating by filename at Eastern midnight. A failed write logs once
   (rate-limited) and the cycle continues; the tape can never halt the desk.
-- Roughly 60–80 MB per day at 19–45 pairs. **Nothing prunes these files.** `data/` is gitignored, so
-  they stay local. Set `RECORD=0` in `.env` to turn the recorder off.
+- About 85–130 MB a day since 2026-09-19, when sports joined the crawl (several hundred pairs over a
+  day, plus ~25 MB of maker lines). On the Mac nothing prunes them; on the box `tools/fly-pull.js
+  --trim` keeps the newest three days and the disk brake (`TAPE_MIN_FREE_MB`) trims more if the pull
+  stops. `data/` is gitignored, so they stay local. Set `RECORD=0` in `.env` to turn the recorder off.
 
 ## Dashboard
 Balance history with settlement bars, activity log with per-agent color and P&L, venue feed (top Polymarket, top Kalshi, matched pairs with live gap), a pixel trading floor whose six agents animate when their desk is running, agent cards, and an open-positions table. It updates over Server-Sent Events every 2 seconds.
+
+**The stream is slim and gzipped (2026-09-24).** Every open tab was sent the whole 494 KB desk snapshot
+every two seconds, uncompressed (Fly compresses `/api/state` but not an event stream): about 21 GB a
+day per tab, and 295 KB of each frame was the maker's 5,000 one-minute equity samples and the
+account's balance history, series that gain one point a minute. The stream's frames now leave both
+out, and the page fetches them from `GET /api/history` (behind the same login) at start and every 60
+seconds, as it does `/api/volume`. `/api/state` still answers everything, for the tools. The stream
+goes through one gzip per tab (`src/sse.js`, level 1, flushed after every frame so each arrives
+whole): a 248 KB frame comes to about 53 KB. The chart line and the wall's *Today* both end on the
+live value from the latest frame, so the history being up to a minute old does not show. A tab left
+open across that deploy had no history until it was reloaded.
 
 **Indicator panes.** The large P&L chart has an Indicators switch (on by default, remembered in the browser) that adds two panes under the price, on the same time axis and zoom. *Momentum* is MACD 12/26/9 on the P&L, counted in candles, so it follows the chosen candle size; it answers "is the last stretch running ahead of the last few hours", which the candles alone cannot. *Maker P&L not yet banked* is the maker's whole P&L less its realised P&L (`e - c` in `maker.hist`): the gain or loss on contracts still held, which goes away if the marks move before the desk gets out. (`m` in that history is the marked value of the inventory, not a profit.) The Fly box's realised total still carries a fixed error of about $7 from the bookkeeping bug fixed on 2026-09-12, so the page measures that gap from the live book (each market's mark less its cost) and takes it off every sample. The taker's positions are not in it. Both panes only describe the desk; nothing trades off them. The small floor chart and the phone card have no room for them.
 
@@ -228,6 +260,16 @@ trade, so probing it validates nothing, and a gap over it is exactly the case th
 for. Measured cost at that bar is ~6 probes/day — 13 API calls. The step down to 2c is a 20×
 jump to 136 probes/day, all of it on gaps the desk would refuse anyway.
 
+**Then it fired 5,000 times a day (fixed 2026-09-24).** Once the any-market scanner paired every
+category (2026-09-15), the same 3c bar took 5,200 to 8,800 probes a day, two full order books each,
+99% of them the same ~150 long-dated event pairs every 600 seconds, and 3,005 of 09-23's 5,206 on
+watch-only pairs that cannot trade. Now a watch-only pair is never probed, a pair is probed once per
+ET day and again that day only if its gap has moved by `PROBE_MOVE_GAP` (1c) since, never sooner than
+`PROBE_EVERY_SEC`, and the cycle no longer waits for the probe before KETT acts. Replayed over the
+09-21 to 09-23 probe files that is 190 to 430 probes a day on 66 to 79 pairs. The darkness line below
+now speaks only when nothing reached `PROBE_GAP`, since a gap already probed today is the probe
+working.
+
 And because a probe that never fires looks identical to a probe that keeps finding nothing, TESS
 now reports the difference:
 
@@ -256,9 +298,10 @@ HOLT's fast matcher pairs eleven Kalshi series (Fed decisions and ten game serie
 banks, Treasury yields, awards, charts, deadlines, world events — comes from the **any-market
 scanner** (`src/anymarket.js`), in two speeds:
 
-- **discover**, every `DISCOVER_EVERY_MIN` (20), off the cycle: crawl every open non-sports event on
-  both venues (`src/discovery.js`, ~65 Kalshi and ~20 Polymarket calls, about 10 seconds), match
-  outcomes (`src/match-any.js`), and give each pair a rules verdict (`src/rules.js`).
+- **discover**, every `DISCOVER_EVERY_MIN` (20 by default, 90 on the box), off the cycle: crawl every
+  open event on both venues, sports included since 2026-09-19 (`src/discovery.js`, Kalshi pages spaced
+  `DISCOVER_GAP_MS` apart; on the box ~43,000 Kalshi and ~15,000 Polymarket markets in about two
+  minutes on 2026-09-24), match outcomes (`src/match-any.js`), and give each pair a rules verdict (`src/rules.js`).
 - **refresh**, every cycle: reprice only the matched markets — one Kalshi call per 100 tickers, one
   Polymarket CLOB call per 200 tokens. A market that fails to reprice keeps its old time, and its
   pair goes stale rather than trading on an old price.
@@ -346,7 +389,9 @@ shape across tennis, NCAAF, MLS, Serie A and League of Legends — 68 pairs that
 
 **None of them trade.** Nothing in the rules allowlist is a sports family, so every one lands
 `unclear` and is watch-only. A sports pair can only begin trading if the Claude rules judge upgrades
-it, which needs `RULES_CHECK`, a key, and stays under `ASK_DAILY_USD`.
+it, which needs `RULES_CHECK`, a key, and stays under `RULES_DAILY_USD` ($1 a day; `ASK_DAILY_USD` is
+the Ask panel's own cap and does not touch this). A pair whose venues sit more than 30c apart is never
+put to the judge at all (*Look-alikes* below).
 
 `tools/ufc-scan.js` prices a card on both venues by hand, cross-venue and within Kalshi, and flags a
 pair only when it clears both venues' fees. On UFC 331 it found no pre-fight arb at all — six of
@@ -356,7 +401,59 @@ still offered him at 93c, worth ~6.7c net, for about 90 seconds. Note that Gamma
 `bestAsk` go stale during a fast move (83/85 against a real book of 86/91), so that scan reads the
 CLOB directly; trading the listing price would have chased an arb that was not there.
 
-## The MAKER desk (07)
+### Wrong games: doubleheaders, team names, the sport, tennis (2026-09-24)
+
+The fast matcher pairs a game by the two team names and the US/Eastern date. Four ways that went
+wrong, all fixed the same day:
+
+- **A doubleheader paired game 1 with game 2.** On 2026-09-22 Polymarket's Rays-Yankees game 1
+  (17:05Z) paired with Kalshi's game 2 (`KXMLBGAME-26SEP221905TBNYYG2`): the matcher took the first
+  event whose names matched on the date, and neither venue writes "Game 1/2" where it reads. The desk
+  booked a $183.40 "locked" arb across two different games, which both legs lose when the Rays drop
+  game 1 and take game 2, as they did; only an early unwind (+$5.17) saved it, and the real game 2
+  went unpaired for a day. The matcher now collects every candidate event and, with two or more, takes
+  the one whose ticker start time (the HHMM in the Kalshi ticker, read as US/Eastern) is nearest
+  Polymarket's `gameStart`, within 120 minutes; with none carrying a time it refuses. A single
+  candidate has a looser 150-minute bound, still under a doubleheader's gap (360 minutes that day), so
+  Polymarket's game 1 cannot fall back to Kalshi's game 2 once Kalshi's game 1 has closed. Refusals are
+  logged as `start time`, and HOLT's scan line counts them apart from 30c disagreements (`N on start
+  time`). The cost: a lone pair drops if Polymarket moves `gameStart` by more than 2.5 hours (a long
+  rain delay) while Kalshi's ticker keeps the old time. NFL, NCAAF, soccer and tennis tickers carry no
+  time, so a single candidate there pairs as before and two on one date are refused.
+- **The White Sox and the Athletics never paired.** Kalshi names them "Chicago WS" and "A's"; none of
+  the 154 `KXMLBGAME` pairs on the 09-10 to 09-24 tapes was either team's. An alias for Kalshi's MLB
+  sides fixes both, and "Chicago WS" still never pairs with the Cubs.
+- **The sport was guessed from the names.** Valorant, League of Legends and cricket moneylines were
+  filed as college football, which made HOLT's renamed-team alarm fire eight times on 09-24 for "NCAAF
+  0 of 6". The league now comes from Polymarket's slug prefix first (`cfb`, `mlb`, `nfl`, `nba`, `atp`,
+  `wta`, `epl`, `ucl`, `mls`, `lal`), and a prefix it does not know adds nothing.
+- **Tennis stopped pairing after 09-13**, when Polymarket dropped "ATP" from its questions. It is found
+  by the `atp-`/`wta-` prefix again, looks one ET day back as well (the overnight Asian swing), and is
+  left out of the blind-league alarm, since Polymarket lists only a few matches of each draw and its
+  Challengers share the `atp-` prefix. **Tennis pairs are watch-only** (`differ on a walkover`):
+  Polymarket pays 50-50 on a walkover and Kalshi "a fair price" (the Davis Cup case in
+  `tools/rules-test.js`), so a tennis "locked" arb is not locked. Game pairs skip the rules gate, which
+  is why the matcher marks them itself.
+
+### Look-alikes the rules judge was shown (2026-09-24)
+
+- **A 30c gap is a different question, not an arb.** On 2026-09-19 the watch-only press-ban pair
+  showed a 61c arb when Kalshi's bid jumped to 0.75 on 40 contracts against Polymarket's 0.06/0.07.
+  The scanner put it to the Claude rules judge, which answered `same` fifteen seconds later, and the
+  desk booked $67.15 on it a minute after that. Now a pair whose books are more than 30c apart at their
+  nearest prices (one venue's bid over the other's ask by more than `MAX_VENUE_DISAGREE`) is not sent
+  to the judge, and `decide.pairSignals` vetoes it for every pair as `venues disagree 30c+: likely
+  different questions` (new entries only; exits, marks and settlement are untouched). The test is on
+  the books, not the mids: Kalshi's book was 10c wide that minute, and a test gated on narrow books
+  would have let it through, while an 80c-wide book that overlaps the other venue does not trip it.
+- **The US chart is not the worldwide chart.** "Top US Spotify Artist 2026" paired with Kalshi's
+  worldwide `KXTOPARTIST` and was allowlisted `same` (Bad Bunny 0.006 against 0.83, a 62c signal for 25
+  minutes on 09-20). The event gate now refuses a Spotify, Netflix, Google or YouTube title where only
+  one side names the US (Billboard's charts are the US ones on both venues, so it is left alone), and
+  the `KXTOPARTIST` allowlist refuses a Polymarket title with a standalone US, U.S., USA or United
+  States.
+- **Qualifying is not winning.** `qualify` is an event family now, so Kalshi's "qualify for Euro
+  2028" no longer pairs with Polymarket's Euro 2028 winner (94c apart on 09-23).
 
 ## The settlement snipe
 
@@ -374,14 +471,29 @@ after the settlement and nobody knows how long Kalshi stayed under par or how de
 
 Since 2026-09-23 (`SNIPE=1`, paper): when Polymarket has settled a game and Kalshi still offers the
 winner, KETT buys it on Kalshi at the ask, up to `SNIPE_MAX_QTY`, if Kalshi already bids at least
-`SNIPE_MIN_KS_PRICE` for that winner (a 44c book on a "settled" game was a different game of a
-series, not an edge), the Kalshi quote is under `SNIPE_MAX_KS_AGE_SEC` old, and the live book still
+`SNIPE_MIN_KS_PRICE` for that winner (a 44c book on a "settled" game is not an edge), the Kalshi quote is under `SNIPE_MAX_KS_AGE_SEC` old, and the live book still
 clears `SNIPE_MIN_EDGE` after the fee. HOLT keeps a game pair Polymarket's listing has dropped for
 `SNIPE_HOLD_SEC`, flagged `pmGone` on the tape, with its Kalshi side still repricing, and game rows
 now carry Kalshi's top-of-book sizes. The position is held to Kalshi's settlement like any other.
-It is the only Kalshi-only edge the tape has shown; the first Sunday with the hold in place says
-what it is worth. Two things it is not: an in-play strategy (it acts after the final whistle), and
-anything to do with the maker.
+It is the only Kalshi-only edge the tape has shown. Two things it is not: an in-play strategy (it
+acts after the final whistle), and anything to do with the maker.
+
+**A 99c bid is not a settlement (2026-09-24).** On 09-19 NC State read 0.99/1 on Polymarket for 2m15s
+with Kalshi at 94/96, then traded back down to 4c and lost: the first version would have bought 100 at
+96c. So a 99c reading is now only the reason to ask. KETT fetches Polymarket's market record and buys
+only once it says `closed` or `resolved`, and not when the record says the other side won; a failed
+lookup is a pass, logged at most once a minute (`KETT PASS ... has not closed the market`). Every edge
+in the study above was measured *before* Polymarket closed the market, so it has to be measured again
+after the close, and the snipe may now fire rarely or never: the pair is kept only `SNIPE_HOLD_SEC`
+(300s) past Polymarket's last 99c reading, and if Polymarket only marks a game closed once it is
+formally resolved, the two never meet. That fails safe (no trade, never a wrong one). Judge it on
+Sunday 2026-09-27, and read a silent Sunday as "the window closes before Polymarket does", not as
+"no edge". The "different game" case the Kalshi price floor was written for turned out to be the
+Rays-Yankees doubleheader on 09-22 (Polymarket's game 1 paired with Kalshi's game 2, 10c against
+45c), which the matcher now refuses by start time (*Wrong games* above); the Yankees v Diamondbacks
+row the floor was set on was the same game.
+
+## The MAKER desk (07)
 
 Everything above this line TAKES liquidity: buy the ask, sell the bid, pay a taker fee both ways.
 That is roughly a 4c round trip against venues that disagree by about half a cent, which is why
@@ -424,13 +536,14 @@ numbers.
 
 ### The universe was a hand-written list, and that was the ceiling
 
-The desk chose its markets from `MAKER_SERIES`: 39 series, typed out by hand, one listing call each.
+The desk chose its markets from `MAKER_SERIES`: 38 series, typed out by hand, one listing call each.
 Kalshi runs **13,929 series whose `fee_type` is plain `quadratic`** and therefore charge makers
 nothing. The desk was looking at 0.3% of them, and no amount of tuning the ranking changes what is
 not in the pool.
 
-The any-market scanner already walks every open non-sports Kalshi event every `DISCOVER_EVERY_MIN`
-— 41,155 markets over 66 pages in about five seconds — and then throws the crawl away. So the wide
+The any-market scanner already walked every open non-sports Kalshi event every `DISCOVER_EVERY_MIN`
+(measured 2026-09-16, before sports was added: 41,155 markets over 66 pages) and then threw the crawl
+away. So the wide
 universe costs **no call of its own**: `src/maker.js candidatesFrom` filters that same crawl with the
 same cheap filters the series scan used (fee-free series, price in band, spread at least a tick,
 `MAKER_MIN_VOL24` traded in 24h, at least `MAKER_MIN_DAYS_TO_CLOSE` to run).
@@ -458,16 +571,19 @@ event: fills placed with it marked flat, fills placed against it lost, every day
 rail (`maker.fairSide`, `MAKER_FAIR_RAIL`): a side that would trade against Polymarket is not
 rested. It stops the bleeding on the paired book; it does not make the book profitable, and nothing
 else tried on that tape (mid velocity, book lean, flow direction, spread, quote age, inventory, fill
-size) did either.
+size) did either. Since 2026-09-24 the rail ignores a pair whose venues sit more than 30c apart
+(`MAX_VENUE_DISAGREE`): that is two different questions, not a fair price (90c against 44.5c gives
+no fair value).
 
 One thing it is careful about. The crawl excluded Sports until 2026-09-19, so a listed sports series
 was missing from it for a reason that was not merit; those few series were still scanned by name,
 which kept the pool a superset of the old one. Sports is crawled now (see *Fights, and the wall
-around sports* below), so the exception is gone and the maker sees sports like anything else — but
+around sports* above), so the exception is gone and the maker sees sports like anything else — but
 `MAKER_MIN_DAYS_TO_CLOSE` (7) keeps it away from a fight or a game settling that night, which is a
 coin flip and not a spread. And if the scanner is off, or
-its last crawl is older than two intervals, the desk falls back to the 39-series scan rather than
-quoting off stale tickers. `MAKER_WIDEN=0` turns the whole thing off.
+its last crawl is older than two intervals, the desk falls back to the 38-series scan rather than
+quoting off stale tickers. `MAKER_WIDEN=0` turns the whole thing off (off on the box since
+2026-09-23, `fly.toml`).
 
 ### Where the surviving edge actually lives
 
@@ -644,7 +760,7 @@ the real income is the daily liquidity-rewards pool, whose split is undisclosed.
 CLOB measured is `polymarket.com`'s, which US persons cannot trade on, and `polymarket.us` lists
 none of these markets. `ops/pm-maker-2026-09-12.md` has the table and the reasoning.
 
-### Three things that were tested and not built
+### Two things that were tested and not built
 
 **Inventory skew.** The desk rests at the touch on both sides and only withdraws a side at the cap.
 Standard market-making says lean: when short, bid higher and offer higher so the next fill reduces
@@ -681,6 +797,56 @@ can only ever halt earlier, and the two agree exactly on a book that has never b
 
 **Paper only.** What no simulation here can model: our own size changing other people's behaviour,
 and Kalshi's real queue at our price level.
+
+### A halted maker still settles and re-marks (2026-09-24)
+
+A drawdown halt, or the taker's halt, used to freeze the book where it stood: no settlement, no new
+marks. Now it runs a hold round once a minute: every quote is withdrawn, but the held markets' books
+are read, anything finalized is settled (`halted, still settling ...` in the log) and equity is
+re-marked. No scan, no quotes. And `POST /api/resume` now actually lifts a maker drawdown halt: it
+starts the drawdown over from the equity at that moment, where before it re-tripped at once on the
+frozen equity. Only the operator halt (`/api/flatten`) still stops everything at once.
+
+### Reduce-only quotes stop at flat (2026-09-24)
+
+A quote resting only to work a position off (a pinned market, a gain lock, a book in the tails or
+under the minimum spread) carries `reduceOnly`, on `m.quotes` and as `"ro":1` on the tape's `q`
+line, and `maker.fillsFrom` clips each fill on it to what is still held. Before, a sweep through it
+filled whatever it filled: between the `MAKER_WIDEN=0` deploy (09-23 18:50Z) and 18:05Z on 09-24,
+3,010 of the 6,203 contracts traded on work-off markets opened new positions instead of closing old
+ones (`KXRT-PRI-90` went from short 87 to long 99 in one round), about $58 of loss.
+`tools/fillcheck.js` and `tools/maker-replay.js` replay the same clip; a tape written before the
+flag replays as it did, and the fill check on 09-22 to 09-23 still matches the journal within 0.5%.
+A book under the 1c minimum spread now keeps its reducing side too, as the tails already did (`... ·
+reducing only` in the reason); seven held markets (268 contracts, `CONTROLH-2026` at ±100 since
+09-19) had had no quote at all. A flat market in either case still quotes nothing.
+
+### Election markets leave before election night (`MAKER_EVENT_DATES`, 2026-09-24)
+
+Some series name no date in their tickers, so the 7-day rail (`MAKER_MIN_DAYS_TO_CLOSE`) could not
+see that they settle on 2026-11-03: `SENATE*`, `GOVPARTY*`, `CONTROLS`, `CONTROLH`,
+`KXBALANCEPOWERCOMBO`, `KXBLUETSUNAMICOMBO`, `KXHOUSERACE` and `KXRHOUSESEATS` held 1,964 of the
+maker's 4,682 contracts on 09-24. The map gives them that date, so they leave the universe on 10-27
+and are worked off reduce-only, and whatever is still held `MAKER_EVENT_CROSS_DAYS` (1) before the
+date is crossed out at the touch as a `MAKER_FLATTEN` (reason `event Nh away`), paying the taker
+fee: at most about $35 on 09-24's contracts, against positions that go to 0 or 1 overnight. It fires
+around 23:59Z on 2026-11-02. Three limits: it does not fire while the maker is halted (the hold
+round quotes and crosses nothing), so a halt that day carries the inventory into the night; it
+crosses the whole position at the top-of-book price whatever size is shown there, so that day's
+paper P&L is somewhat kind; and the date is keyed by **series**, so a later-cycle event in one of
+them (a `CONTROLS-2028` market) is treated as 2026-11-03 too. **After 2026-11-03 the map has to be
+updated**: until it is, every market in those series reads as past, is refused, and is crossed out
+if held.
+
+### One loss limit per event (`MAKER_EVENT_MAX_LOSS`, 2026-09-24)
+
+On an event Kalshi marks mutually exclusive (one market wins, or none), the maker could carry two
+capped bets on the same outcome: `SENATETX-26` held +100 D and −100 R, −$115.40 if R wins. A side is
+now not rested when a fill would take the event's worst settlement past `MAKER_EVENT_MAX_LOSS`
+(default one capped market, $100) and make it worse than it already is (`... would deepen <EVENT>
+past -$100.00` in the reason); the side that shrinks the market's own position always stays. Where
+the crawl does not say whether an event is mutually exclusive, the listed series read `/events` once
+every six hours (about 38 calls). Events that are not mutually exclusive are left alone.
 
 ## What else was tried
 
@@ -800,6 +966,15 @@ naming the board the wallet ranks best on. Each line has the size, side and pric
 Kalshi price of the same outcome where HOLT has matched the market, and whether the game had
 already started. Each bet is also appended to `data/whales-YYYY-MM-DD.jsonl`. Both sides of one
 market are flagged as a hedge. **It never trades.** Turn it off with `WHALE_WATCH=0`.
+
+**A bet on a decided market is recorded, not called (`WHALE_MAX_PX`, 2026-09-24).** From 09-16 to
+09-23, 243 of the 1,652 callouts (15%, about 30 a day) were wallets buying at 95c or more: "No" on a
+Fed 50bp move at 99c, a tennis player at 98c mid-match. That is collecting the last cents of a decided
+market, not a view, and it buried the real calls. Every bet is still written to `whales-*.jsonl`
+first (the lab and the Ask panel read it), so the file is every bet *seen*, not every bet called; the
+floor line and the panel skip it when both the price and the wallet's average price are at
+`WHALE_MAX_PX` (0.95) or dearer. The average keeps a position built lower and pushed over the bar by
+one dear fill on the floor: 47 of the 243, so 196 go quiet. A value above 1 turns the filter off.
 
 Whether it should trade is what `tools/whale-lab.js` answers. The pool is 305 wallets from the
 sports leaderboards by profit *and* by volume. The test covers 671k fills from 2026-08-02 → 09-13
@@ -970,6 +1145,35 @@ stalled feed and a market that genuinely has not moved all collapse to the same 
 nothing new — instead of filling the tape with copies of Friday that a reader would have to detect
 and drop later.
 
+**And by Cboe's stamp as well (2026-09-24), because the hash alone let a frozen feed through.** Cboe
+stopped rebuilding its files after the evening of 2026-09-22: every stamp read 2026-09-22 23:29 to
+09-23 03:56 UTC (the 09-22 after-hours session, ET) for a day and a half. The 09-23 16:25 ET run
+failed on all six symbols and still exited 0. The hash is taken after the date filter, so when an
+expiry rolled off at midnight the same frozen file hashed differently, and the 09-24 09:45 ET run
+wrote 70 lines, every one a copy of a 09-22 after-hours line, as that morning's chains; the box's
+recorder wrote the same copy (1,608,644 bytes) and its tabs read "70 lines, 16,096 contracts". Now:
+
+- the chain is compared expiry by expiry as well as whole, so an expiry rolling off (or a new one
+  coming inside 70 days) no longer makes an old file look new;
+- Cboe's stamp (`qt`) is kept in `.seen.json` beside the hash, and an unchanged symbol whose file
+  still carries the stamp the last run saw is skipped as `STALE: Cboe file still stamped <qt>` (the
+  box's schedule reports a run where every symbol was stale as `stale`, having written nothing);
+- every run appends one `ok` or `PROBLEM` line to `data/chains/chains.log` and exits 1 on a PROBLEM,
+  so launchd shows it: a failed symbol or a stamp over 3 hours old on a weekday run from 16:00 ET, or
+  a stamp older than the last weekday's close on any other run. A weekday market holiday raises it
+  too, by design. A run where every symbol failed is tried twice more a minute apart, and `fetch
+  failed` names its cause (`ECONNRESET` and the like);
+- `node tools/chain-record.js --check` (read-only; step 6 of `ops/daily-check.sh`) prints the last
+  `chains.log` line, the newest stamp per symbol and its age, and whether the last finished weekday
+  has quotes stamped that day. It can cry wolf after a Mac that slept through the evening: that
+  day's closing chain is then written into the next day's file, and `--check` looks only in the
+  day's own file.
+
+**What that leaves on the tape.** 2026-09-23 has no session quotes at all; that day is lost and
+cannot be fetched from anyone. The 09-24 09:45 ET lines, on the Mac and on the box, are copies of
+the 09-22 after-hours prices. Nothing was deleted, so **filter on `qt`, not on `t` or the file's
+date**: a backtest should key each line by (`sym`, `exp`, `qt`) and drop repeats.
+
 **There is nothing to conclude from this yet, and that is the point.** It is a year of patience
 before it can answer anything. What it will eventually be able to answer is the question the ETF lab
 could only gesture at with two Cboe indexes: whether any rule for selling options beats simply owning
@@ -978,8 +1182,8 @@ the underlying, after real spreads, on months it never saw.
 ### The half that turned out to be for sale: ChartExchange
 
 The section above opens with "free historical option chains do not exist", and that stands. But on
-2026-09-23 a fortnight's trial of [ChartExchange](https://chartexchange.com)'s API (Tier 3, to
-2026-10-07; the key is `CHARTEXCHANGE_API_KEY` in `.env`, read-only, no account behind it) turned up
+2026-09-23 a fortnight's trial of [ChartExchange](https://chartexchange.com)'s API (Tier 3, meant to
+run to 2026-10-07 but expired the same evening, see *How it ended*; the key is `CHARTEXCHANGE_API_KEY` in `.env`, read-only, no account behind it) turned up
 the other half of the same data: **the daily bar and open interest of every listed option contract,
 expired ones included**, from the last week of May 2021. Not chains — no bid, no ask, no greeks, and a
 day the contract did not trade has no bar at all — but five years of real prints on the contracts
@@ -1034,7 +1238,7 @@ contracts, 5 of them the source would not serve).
 daily chore of the Mac's, like the chain tape:
 
 ```bash
-bash ops/install-history.sh                # four runs a day until 2026-10-07 (undo: uninstall-history.sh)
+bash ops/install-history.sh                # was four runs a day; the key expired 09-23 and the job was removed 09-24 (uninstall-history.sh)
 tail data/options/history/history.log      # one line per run
 ```
 
@@ -1045,15 +1249,16 @@ If the cap resets daily at ~800 calls, that is five to eight SPY expiries a day 
 years fit in the fortnight; if it does not reset, `history.log` will say `STOPPED` after 0 pulled
 on every run and the trial's whole yield is the one expiry above. Either way the files are the
 irreplaceable kind once the key is gone, so `data/options/history/` belongs in the same backup as
-`data/chains/`.
+`data/chains/`: since 2026-09-24 both go to iCloud Drive with the hourly pull (*The daily check*).
 
 **How it ended (2026-09-23, the same evening).** The cap was not the last word: by 22:40Z every call
 answered HTTP 401 "Expired", and it still did the next morning. The trial did not run its fortnight,
 and its whole yield is the one expiry above. The first run to meet that spent 67 calls being refused
 once per expiry, so a 401 is now flagged `expired` by the client and stops a run on the first call,
-the way the cap does; `history.log` says `STOPPED (... HTTP 401: Expired)`. The launchd job is one
-refused call four times a day until `ops/uninstall-history.sh` is run. A paid key, if there is ever
-one, resumes from what is on disk.
+the way the cap does; `history.log` says `STOPPED (... HTTP 401: Expired)`. After that the launchd
+job was one refused call four times a day, and it was removed on 2026-09-24 with
+`ops/uninstall-history.sh` (which leaves `data/options/history/` alone). A paid key, if there is ever
+one, resumes from what is on disk: `bash ops/install-history.sh` puts the job back.
 
 **What ChartExchange is not, here.** Its dividend history stops in mid-2021 (SPY's last entry is
 June 2021), so its bars cannot be dividend-adjusted and `tools/stock-fetch.js` keeps Yahoo for the
@@ -1085,13 +1290,60 @@ flatten and resume, never rewritten. `state.json` stays the fast working copy, b
 bash ops/daily-check.sh
 ```
 
-One screen, read-only, five questions about the Fly box: did the morning pull run; does the ledger
-add up (`tools/ledger-check.js --box --venues`: the journal rebuilds the state line by line and every
-settlement agrees with the venues); what each book has realised (`tools/pnl-report.js`); how many
-times the watchdog restarted the desk yesterday and today; and whether the box is starved
-(`/proc/pressure/cpu`), which commit it runs and how much of `/data` is free. First run,
-2026-09-21: 159 settlements, 159 agree; 29 restarts on the 20th, 7 on the 21st. The exit code is the
-number of steps that flagged something. It also runs `tools/fillcheck.js` on the newest pulled day.
+One screen, read-only, six steps, and nothing on the box is changed. The exit code is the number of
+steps that flagged something.
+
+1. **Did the pull run?** The last line of `data/fly/archive/pull.log` and its age.
+2. **Does the ledger add up?** `tools/ledger-check.js --box --venues`: the journal rebuilds the state
+   line by line, and every settlement agrees with the venues. It copies the box's `state.json` and the
+   journals the archive lacks into `data/fly/box-now`, replacing its own copies from the last run
+   (the only thing the check writes, besides one line of `data/fly/archive/fillcheck.jsonl`).
+3. **What has each book realised?** `tools/pnl-report.js`, from the archive plus `box-now` (the
+   archive wins a day both have), so today is today's journal and not the tail of yesterday's; the
+   newest row says `so far, through HH:MMZ`. Since 2026-09-24 it books every arb leg's `CLOSE`,
+   `SETTLE` and `CLOSE_PARTIAL`, a convergence bet's partial sale and the maker's flattens, where it had
+   counted arbs only from `ARB_UNWOUND`/`ARB_SETTLED` (which exist since 2026-09-12) and missed three
+   Fed groups (+$6.61): 16 groups and −$228.67 became 19 and −$222.06, and the taker total matches
+   `state.json`. Then `tools/fillcheck.js` on the newest pulled day (3b).
+4. **Was every restart explained?** `tools/restarts.js`, yesterday and today (ET). Since 2026-09-24
+   `server.js` journals `START` at boot (with the build sha), `STOP` when a signal ends it (a deploy)
+   and `CRASH` with the handler and the first 800 characters of the stack from its last-resort
+   handlers; the engine already wrote `WATCHDOG` before exiting on a stall. A `START` whose previous
+   lifecycle line (looked for across every journal on hand) is none of those is an unexplained
+   restart: an OOM kill or a heap abort, which run no handler. Before this a crash was one console
+   line, gone from `fly logs` in about 30 minutes, and the check counted `WATCHDOG` lines only. It
+   exits 1 on a crash or an unexplained restart. None of the new kinds moves money.
+5. **Is the box starved?** From `/proc/stat` since boot, the desk's share of the CPU and **steal**,
+   the time Fly held it back for being over its cap (the number to read: ~50% on shared-cpu-1x on
+   2026-09-22); then `/proc/pressure/cpu`, the commit it runs, `/data` free, and the probe files'
+   total (the pull trims them since 2026-09-24, so a total that keeps growing means it has stopped).
+6. **Is the option-chain tape alive?** `node tools/chain-record.js --check` on the Mac (*Options*
+   above).
+
+First run, 2026-09-21: 159 settlements, 159 agree; 29 watchdog restarts on the 20th, 7 on the 21st.
+
+### The pull and the backup
+
+`ops/install-pull.sh` installs a LaunchAgent that runs `ops/run-pull.sh` **every hour at :30**
+(since 2026-09-24; it was 09:30 and 13:30). 9 of the 21 runs from 09-15 had failed, most of them
+started in a two-second battery DarkWake and frozen when the Mac fell back asleep, with one retry a
+day. A run exits at once, writing nothing, when `pull.log`'s last pull line and `backup.log`'s last
+line are both `ok` and dated today (Eastern), so a good day costs one run. The pull
+(`tools/fly-pull.js --trim`) copies every closed day into `data/fly/archive`, then deletes box tick
+tapes **and probe files** older than three Eastern days, each only once its Mac copy has the box's
+sha256 (probe files were never deleted before: 14 of them, about 50 MB, on 09-24). A failed download
+is tried three times, 30 seconds apart, and now blocks only its own file's delete, not the whole trim.
+
+**The backup (installed and first run 2026-09-24).** Nothing was backed up before: no Time Machine
+disk, no iCloud copy, and the chain tape, the one ChartExchange expiry and the box tapes already
+trimmed (09-10 to 09-21) existed only on this Mac. After the pull, whether or not it worked,
+`run-pull.sh` copies `data/chains`, `data/options` and `data/fly/archive` with `rsync -a` into
+`iCloud Drive/Hexagon-backup`: no `--delete`, so a file removed here is kept there; no `.part`
+files; never `.env` or a `.pem`; and only into an iCloud Drive that exists. A failed copy writes its
+own `PROBLEM backup` line to `pull.log` and `backup.log` and is tried again the next hour; a good one
+writes an `ok` line to `backup.log`. `.env` and `kalshi-private-key.pem` are **not** in it and still
+need a backup of their own, such as Time Machine on an external disk. `ops/uninstall-pull.sh` stops
+the backup along with the pull and leaves the iCloud copy in place.
 
 ## Honest notes
 - Paper results are not predictive. Cross-venue gaps on liquid pre-game and macro markets are usually 0 to 1c, so expect the desk to spend most of its time researching and to trade rarely. That is correct behavior, not a bug.
@@ -1107,7 +1359,7 @@ src/agents.js          the six desks (I/O and sequencing)
 src/decide.js          the decision core: pure gate/rank/size/exit logic, no I/O and no clock
 src/matcher.js         cross-venue matching: Fed brackets and games, every cycle
 src/anymarket.js       the any-market scanner: discover off the cycle, reprice matched pairs in it
-src/discovery.js       crawls every open non-sports event on both venues
+src/discovery.js       crawls every open event on both venues (sports included)
 src/match-any.js       the same outcome in any category: names, deadlines, thresholds on their tick
 src/rules.js           the rules gate: same / different / unclear, and the cached Claude check
 src/broker.js          paper broker + live Kalshi adapter
@@ -1116,7 +1368,8 @@ src/tape.js            the maker's batched market data: the trade tape (socket f
 src/kalshi-ws.js       Kalshi's trade channel over WebSocket, dependency-free and read-only
 src/whales.js          whale watch: top wallets' big bets on Polymarket's leaderboards, called out on the floor (never trades)
 src/ask.js             the Ask panel: a read-only Claude tool loop over the desk, with its own daily ceiling
-src/ask-tools.js       the Ask panel's ten read-only tools (whitelisted fields, bounded output, secrets scrubbed)
+src/ask-tools.js       the Ask panel's eleven read-only tools (whitelisted fields, bounded output, secrets scrubbed)
+src/sse.js             the dashboard's event stream: one gzip per tab, flushed after every frame
 public/                dashboard (index.html, style.css, app.js; vendor/ holds TradingView Lightweight Charts, which draws the P&L chart)
 data/state.json        persisted account (created on first run)
 data/ticks-*.jsonl     tick tape, one line per priced pair per cycle (RECORD=1)
@@ -1131,28 +1384,12 @@ tools/option-history.js  daily bars and open interest of expired option contract
 tools/stock-fetch.js   daily bars for a fixed list of 23 ETFs and three Cboe indexes, from Yahoo's public chart endpoint
 tools/stock-lab.js     the ETF lab: stock/ETF strategies tuned on older years, scored on newer ones against owning SPY
 tools/fly-pull.js      copy the Fly box's finished days to data/fly/archive, verify, then trim old box tapes (ops/DEPLOY.md)
-tools/test.js          every suite in one command (npm test)
-tools/decide-test.js   assertions for the taker decision core
-tools/probe-test.js    assertions for the thin-market probe (stubbed venues, frozen clock)
-tools/maker-test.js    assertions for the maker core: quoting, queue, fills, realised P&L
-tools/fillcheck-test.js  assertions for the fill check's replay: round order, the queue, restarts, the warm-up day, the reasons
-tools/makerdesk-test.js  assertions for the maker's loop: restart, empty universe, settlement, reduce-only, gain lock, cooling
-tools/broker-test.js   assertions for fills, incl. the live Kalshi order path (no network)
-tools/fees-test.js     assertions for what each venue charges: Polymarket per market, Kalshi per series
-tools/match-any-test.js  assertions for any-market matching on real venue text, every near-miss included
-tools/rules-test.js    assertions for the rules gate: same rules, look-alikes, and the cached Claude check
-tools/discovery-test.js  assertions for the any-market crawl: paging, backoff, partial results, the fetcher
-tools/anymarket-test.js  assertions for the scanner: discover off the cycle, reprice in it, only verified pairs trade
-tools/matcher-test.js  assertions for cross-venue matching
-tools/stream-test.js   assertions for the trade socket and the tape's fallback to the poll
-tools/engine-test.js   assertions for the ledger: operator latch, partial exits, and close serialization
-tools/lab-test.js      assertions for the lab's fees, fills, settlement, and that no strategy sees the result
-tools/stock-lab-test.js  assertions for the ETF lab: next-open fills, costs per side, metric arithmetic, no peeking
-tools/whale-test.js    assertions for what counts as a whale bet, said once across a restart, and what copying pays
-tools/http-test.js     assertions for the Kalshi pacer
-tools/disk-test.js     assertions for the tape pull and the box's disk brake: nothing deleted before it is copied and verified
-tools/ask-test.js      assertions for the Ask loop: request shape, tool results, budget ceiling, append-only chats, route locks, no secret in any output
-tools/askui-test.js    assertions for the Ask drawer's answer formatting: everything escaped, only light markdown comes back
+tools/pnl-report.js    realised P&L per book from the pulled journals (archive + data/fly/box-now)
+tools/ledger-check.js  rebuilds both books from the journals and compares them with state.json (--box, --venues)
+tools/restarts.js      START/STOP/WATCHDOG/CRASH per Eastern day, and every restart nothing explains
+tools/chain-record.js  the option-chain tape from Cboe's delayed feed → data/chains/ (--check: is it alive?)
+tools/test.js          every suite in one command (npm test): its SUITES list names each tools/<name>-test.js
+                       and what it covers, and a *-test.js file missing from that list fails the run
 tools/golden.js        fixed-fixture output diff, for refactors meant to change nothing
 ```
 
@@ -1161,14 +1398,16 @@ tape and a synthetic clock (`tools/replay.js`) instead of a network and a wall c
 guard it, and both are worth running after any change to the gates:
 
 ```bash
-npm test                      # all 1698 assertions across twenty suites
+npm test                      # every suite listed in tools/test.js
 node tools/maker-test.js      # ...or one suite at a time while working on one file
 ```
 
-Coverage follows the money, which took a while to admit. **The taker desk has never traded** — in
-both journal days on disk every fill is a `MAKER_FILL`, 94 of them, and the taker book is empty.
-The maker desk is the only code here that has ever moved a contract, and it was the code without
-tests. `src/maker.js` is now the maker's `decide.js`: `desiredQuotes`, `fillsFrom` and `applyFill`
+Coverage follows the money, which took a while to admit. When these tests were written
+(2026-09-11) the taker desk had never traded: in both journal days on disk every fill was a
+`MAKER_FILL`, 94 of them, and the taker book was empty. The maker desk was the only code here that
+had ever moved a contract, and it was the code without tests. (The taker has traded since: 73
+convergence bets and 19 locked arbs closed by 2026-09-24, and the maker still does almost all the
+volume.) `src/maker.js` is now the maker's `decide.js`: `desiredQuotes`, `fillsFrom` and `applyFill`
 are pure, and `makerdesk.js` is the I/O around them.
 
 ### The realised-P&L bug those tests found
@@ -1218,10 +1457,6 @@ Named here rather than left in a transcript. None are reachable today; all are r
 - **`liveBalance` is fetched, streamed to the dashboard, and never constrains sizing.** In live mode
   the desk would size off `state.cash` — the paper-initialised balance — not the money actually at
   the exchange. This is a blocker for funding the account, not a bug in paper.
-- **Same-date bucketing cannot separate the two games of a doubleheader** unless the venues label
-  them. The figure guard rejects "Game 1" against "Game 2" per candidate and keeps searching, so a
-  labelled pair still finds its own row; two unlabelled games on one date are indistinguishable to
-  the bucket.
 - **A market whose listing reports zero top-of-book size is logged as a queue that clears
   instantly** — `clear` is depth over contract rate, so no depth reads as `0.0h` in the scan line.
   Cosmetic as of the re-scored ranking: the book is picked by trade rate, which never reads `depth`,

@@ -18,7 +18,7 @@ to Fly once tests pass (paper only; see ops/DEPLOY.md → Auto-deploy).
 ## Running it
 
 ```bash
-npm test                                      # ~2500 assertions, no network, no clock
+npm test                                      # every suite in tools/test.js's SUITES, no network, no clock
 node server.js                                # paper account, live market data → localhost:8787
 DEMO=1 DATA_DIR=./data-demo node server.js    # synthetic fills/settles, separate account
 npm run reset                                 # wipe the paper account
@@ -41,18 +41,23 @@ npm run reset                                 # wipe the paper account
 ## Layout
 
 ```
-server.js         HTTP + SSE server, .env loader, live-mode gate
+server.js         HTTP + SSE server, .env loader, live-mode gate; journals START/STOP/CRASH
+src/sse.js        the dashboard stream: slim frames (no P&L histories; GET /api/history has them), gzipped per tab
 src/config.js     all tunables          src/engine.js    state, cash, positions, cycle loop
 src/decide.js     pure decision core: gates, ranking, sizing, exits, the settlement snipe (no I/O, no clock)
 src/agents.js     the six desks         src/matcher.js   cross-venue matching (Fed + games, every cycle)
 src/anymarket.js  any-market scanner: src/discovery.js crawls both venues (sports included since 2026-09-19), src/match-any.js pairs any
                   category, src/rules.js decides which pairs' resolution rules match (only those trade)
 src/broker.js     paper broker + live Kalshi adapter
-src/makerdesk.js  the maker's loop: universe from the any-market crawl (MAKER_WIDEN, no extra calls),
-                  trade-rate probe, run-over gate; src/maker.js holds the pure decisions
+src/makerdesk.js  the maker's loop: universe from MAKER_SERIES (38 listed series; MAKER_WIDEN=1 adds the crawl's
+                  fee-free markets, off on the box since 2026-09-23), trade-rate probe, run-over gate, the fair rail
+                  (MAKER_FAIR_RAIL), reduce-only quotes that stop at flat, a hold round while halted, the event
+                  dates (MAKER_EVENT_DATES: midterm series crossed out 2026-11-02; update the map after 11-03) and the
+                  event loss limit (MAKER_EVENT_MAX_LOSS); src/maker.js holds the pure decisions
 src/venues/       Polymarket (Gamma + CLOB) and Kalshi public data; cboe.js (delayed option quotes for the chain tape);
-                  chartexchange.js (read-only market data behind CHARTEXCHANGE_API_KEY, a trial to 2026-10-07 whose key answered "401 Expired" from the evening of 2026-09-23: quotes, short volume,
-                  dark pool, max pain, and the historical option bars; only the Ask panel and tools/ read it, never the trading loop)
+                  chartexchange.js (read-only market data behind CHARTEXCHANGE_API_KEY; the trial key has answered "401 Expired" since the evening
+                  of 2026-09-23, so nothing answers until a paid key is set: quotes, short volume, dark pool, max pain, the historical
+                  option bars; only the Ask panel and tools/ read it, never the trading loop)
 src/watchdog.js   stall watchdog: exits the desk when the taker or maker loop finishes no round (WATCHDOG_SEC)
 src/volume.js     the desk's own trading volume by the minute (fed by the journal, rebuilt from it; /api/volume) for the chart's bars
 src/recorder.js   tick tape writer      public/          dashboard (lookout.html: the same desk as one painted room, read-only)
@@ -60,7 +65,8 @@ src/recorder.js   tick tape writer      public/          dashboard (lookout.html
                                                           (large chart: momentum + maker not-yet-banked panes, describe only)
 src/tape.js       maker market data     src/kalshi-ws.js Kalshi trade socket (read-only; needs the key, else the tape polls)
 src/makertape.js  records the maker's book, prints and quotes into the ticks-*.jsonl tape (RECORD_MAKER=0 off)
-src/whales.js     whale watch: top wallets' big bets on Polymarket's sports/politics/economics/crypto/culture/tech/finance boards (advisory, never trades; WHALE_WATCH=0 off)
+src/whales.js     whale watch: top wallets' big bets on Polymarket's sports/politics/economics/crypto/culture/tech/finance boards (advisory, never trades;
+                  WHALE_WATCH=0 off; a bet at WHALE_MAX_PX 0.95+ is recorded but not called)
 src/ask.js        the dashboard Ask panel: read-only Claude tool loop (src/ask-tools.js), ASK_DAILY_USD ceiling; needs ANTHROPIC_API_KEY
 tools/            edge-scan, replay, maker-replay, maker-rank, pm-maker-scan, maker-report, fillcheck (files only: replays the maker's own tape against its journal, and says what each missed fill was),
                   maker-slice (the same replay cut by market/side/run-over/price/hour, plus a stand-aside rail scored on it; the four-day verdict is in its header),
@@ -76,22 +82,28 @@ tools/            edge-scan, replay, maker-replay, maker-rank, pm-maker-scan, ma
                   (CHAINS=1 in fly.toml) and keeps only the newest 14 days there -- the Mac's tape is the archive),
                   option-history (daily bars + open interest of EXPIRED option contracts from ChartExchange, the six chain-tape ETFs, monthly
                   expiries from 2021-07, strikes ±10% of the 70-day close range → data/options/history/<SYM>/; resumable, --repair for
-                  contracts the source refused; gitignored and worth backing up once the trial key is gone),
+                  contracts the source refused; one SPY expiry on disk, irreplaceable now that the key is gone, backed up with the pull),
                   weather-fetch + weather-lab (Kalshi daily-high-temperature markets vs the public forecast; no edge, out of sample),
                   favorites-check (one preset rule on older settled markets from lab-fetch --historical; the non-Sports favourite lead did not replicate),
-                  pnl-report (one-screen realised P&L per book from data/fly/archive journals; --marks prices held maker inventory),
+                  pnl-report (one-screen realised P&L per book from data/fly/archive + data/fly/box-now, every arb leg counted;
+                  --marks prices held maker inventory), restarts (START/STOP/WATCHDOG/CRASH per ET day, and restarts nothing explains),
                   ledger-check (does the ledger add up: rebuilds both books from the journals and compares them with
                   state.json line by line; --box checks the Fly box, --venues checks every settlement against the venues),
-                  fly-pull (copies the box's finished days to data/fly/archive, verifies, then trims old box tapes)
-                  tests: test.js (npm test) + decide/probe/watchdog/maker/makerdesk/broker/fees/matcher/match-any/rules/discovery/anymarket/stream/engine/brain/lab/stock-lab/chains/whale/http/disk/ask/askui/fillcheck-test.js
+                  fly-pull (copies the box's finished days to data/fly/archive, verifies, then trims old box tapes and probe files)
+                  tests: test.js (npm test) runs the suites in its SUITES list, one tools/<name>-test.js each; a *-test.js
+                  file missing from that list fails the run, so add every new suite there
 data/fly/         gitignored: journals, state and tick tapes copied down from the Fly box, plus
                   kstrades.jsonl (the trade history maker-replay scores against) and
                   rank-listing.json + rank-trades.jsonl (the 440-market pool maker-rank scores).
                   That snapshot is frozen at 2026-09-12; new copies from the box go in data/fly/archive/
-ops/              Fly deploy, launchd desk autostart (not installed), the daily tape pull (ops/install-pull.sh; installed on the Mac 2026-09-14),
-                  and the option-history pull (ops/install-history.sh: four runs a day on the trial key's allowance, installed 2026-09-23;
-                  the key expired the same evening, so each run is one refused call and one STOPPED line; uninstall it).
-                  ops/daily-check.sh is the daily trust routine (read-only): pull alive, ledger-check --box --venues, pnl-report, restarts, CPU pressure.
+data/fly/box-now/ gitignored: the latest state.json + unarchived journals, copied by ledger-check --box (the daily check);
+                  replaced each run, not an archive
+ops/              Fly deploy, launchd desk autostart (not installed), the tape pull (ops/install-pull.sh: hourly at :30 since 2026-09-24,
+                  skipped once the day's pull and backup are ok; the same job backs up data/chains, data/options and data/fly/archive
+                  to iCloud Drive/Hexagon-backup, no --delete, no secrets -- .env and the .pem need their own backup, e.g. Time Machine).
+                  The option-history job (ops/install-history.sh) was removed 2026-09-24 with ops/uninstall-history.sh: the key had expired.
+                  ops/daily-check.sh is the daily trust routine (read-only on the box): pull alive, ledger-check --box --venues, pnl-report
+                  + fillcheck, restarts (tools/restarts.js), CPU steal/pressure + disk + probe files, the chain tape (chain-record --check).
                   The box also has a disk brake (TAPE_MIN_FREE_MB) that trims its oldest tapes if the pull stops
 data/             gitignored: state.json, journal-*.jsonl, ticks-*.jsonl, desk.log
 data/lab/         gitignored: series-busy.json + universe.json (cached listings) and markets.jsonl (hourly bars)
@@ -99,9 +111,11 @@ data/lab/         gitignored: series-busy.json + universe.json (cached listings)
 data/lab/whales/  gitignored: pool, fills, conditions, markets for tools/whale-lab.js
 data/stocks/bars/ gitignored: one Yahoo daily-bar file per ETF/index (tools/stock-fetch.js) for tools/stock-lab.js
 data/chains/      gitignored: the option-chain tape, chains-YYYY-MM-DD.jsonl + .seen.json (tools/chain-record.js).
-                  IRREPLACEABLE: nobody sells historical chains, so a lost day cannot be re-fetched -- back it up
+                  IRREPLACEABLE: nobody sells historical chains, so a lost day cannot be re-fetched (backed up hourly with the pull).
+                  09-23 has no session quotes; the 09-24 09:45 ET lines are copies of 09-22 after-hours prices: filter on qt.
+                  Each run leaves an ok/PROBLEM line in data/chains/chains.log and exits 1 on a PROBLEM
 data/options/history/  gitignored: the ChartExchange option history (tools/option-history.js), one JSON per underlying per expiry
-data/whales-*.jsonl  gitignored: every bet whale watch announced, for scoring once they settle
+data/whales-*.jsonl  gitignored: every bet whale watch saw (near-settled ones, WHALE_MAX_PX, are not announced), for scoring once they settle
 ```
 
 `data/journal-YYYY-MM-DD.jsonl` is the append-only truth; `state.json` trims itself and is only
@@ -114,5 +128,6 @@ the fast working copy.
   its own session worktrees under `.claude/worktrees/` and they come and go with the sessions, so
   `git worktree list` is the only honest record of which exist. `.claude/` is gitignored.
 - Remote `origin` is `git@github.com:evankaplan6-hub/Hexagon.git` (added 2026-09-12, SSH).
-  `data/`, `.env`, and `*.pem` are gitignored, so the working copy is still the only place those
-  exist — back them up separately.
+  `data/`, `.env`, and `*.pem` are gitignored. Since 2026-09-24 the pull job copies `data/chains`,
+  `data/options` and `data/fly/archive` to iCloud Drive/Hexagon-backup; `.env`, the `.pem` and the
+  rest of `data/` exist only in this working copy — back them up separately (e.g. Time Machine).

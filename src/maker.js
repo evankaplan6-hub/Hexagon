@@ -223,11 +223,12 @@ function settlePosition(pos, yesPx) {
 // ---------------------------------------------------------------- the candidate universe
 // Which markets this desk may quote, out of a list of Kalshi markets someone else already fetched.
 //
-// The desk's universe was a hand-written list of 39 series (MAKER_SERIES) listed one call each. That
+// The desk's universe was a hand-written list of 38 series (MAKER_SERIES) listed one call each. That
 // list, not the code, was the ceiling: Kalshi runs 13,929 series whose fee_type is plain `quadratic`
 // and therefore charge makers nothing, and the desk looked at 0.3% of them. The any-market scanner
-// already walks every open non-sports event every DISCOVER_EVERY_MIN -- 41,155 markets over 66 pages
-// in about five seconds -- so the wide universe costs no call of its own; this filters that crawl.
+// already walked every open non-sports event every DISCOVER_EVERY_MIN (measured 2026-09-16, before
+// sports was added: 41,155 markets over 66 pages), so the wide universe costs no call of its own;
+// this filters that crawl. MAKER_WIDEN=0 turns it off, as the box has since 2026-09-23.
 //
 // Measured on 2026-09-16, the same cheap filters over the crawl pass 123 markets across 73 series
 // against 39 from the series list, and 37 of the 38 listed series are in it anyway. The bar that

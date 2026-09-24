@@ -790,6 +790,8 @@ const deferred = () => { let release; const p = new Promise((res) => { release =
     ok('maker_status: inventory and an hourly trend', mk.markets[0].ticker === 'KXB' && mk.markets[0].contractsHeld === 12 && mk.pnlTrendLast12h.length === 3, mk);
     const wb = JSON.parse(outputs.whale_bets[1]);
     ok('whale_bets: a recorded day', wb.found && wb.bets[0].who === 'whale' && wb.bets[0].size === '$12000.00', wb);
+    const wmp = tools.RUN.settings(E, { contains: 'whale_max_px' });
+    ok('settings: WHALE_MAX_PX, the price a whale bet is recorded at but not called, can be read', wmp.settings.length === 1 && wmp.settings[0].setting === 'WHALE_MAX_PX' && typeof E.cfg.whaleMaxPx === 'number' && wmp.settings[0].value === E.cfg.whaleMaxPx, wmp.settings);
     ok('docs: four sections of the real README still fit the bound, so the JSON closes', outputs.docs[2].length <= tools.MAX_OUT && !/cut here/.test(outputs.docs[2]), outputs.docs[2].length);
     const d = JSON.parse(outputs.docs[2]);
     ok('docs: finds the flatten and resume section', d.sections.some((s) => /Operating it/.test(s.heading)), d.sections.map((s) => s.heading));
