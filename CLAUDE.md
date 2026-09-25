@@ -43,6 +43,13 @@ npm run reset                                 # wipe the paper account
   `SNIPE=0`), Evan's call after every book lost on paper. Open arbs and maker inventory run to
   settlement. Do not turn a book back on unasked; the one pending check is the snipe on Sunday
   09-27's tape (`node tools/settle-lag.js --day 2026-09-27`, README → the settlement snipe).
+- **No TradingView data in Hexagon.** Evan's TradingView account (the official MCP connector, tools
+  `mcp-tv-*`/`mcp-watchlist-*`, added 2026-09-25, and his chart in Chrome) is for him to read in chat,
+  under the `tradingview-web-master` skill (repo `~/Downloads/stack`). TradingView's Terms §3 allow
+  display only, with no redistribution, and its ban policy covers scripts and bots on his paid account.
+  So no TradingView value goes into `data/`, a tape or lab, a committed file, the dashboard, the Ask
+  panel or a loop, and no Hexagon code calls a TradingView server. The vendored Lightweight Charts
+  library is unrelated: it draws the desk's own numbers, makes no requests, and keeps its logo.
 
 ## Layout
 
