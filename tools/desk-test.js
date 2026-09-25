@@ -10,6 +10,7 @@ const F = require('../src/desk/feeds');
 const broker = require('../src/desk/broker');
 const B = require('../src/desk/books');
 const { Desk } = require('../src/desk/engine');
+const { upDay, deskConfig, fakeMarket } = require('./desk-fixture');
 
 let pass = 0, fail = 0;
 const ok = (name, cond, got) => {
@@ -139,16 +140,7 @@ const near = (name, got, want, tol = 1e-6) => ok(`${name} (want ~${want})`, Numb
   ok('full to full does not', !B.needsRebalance(1, 1, 0.1));
 }
 
-// the 12:30 test and the trigger, on a made-up up day: a steady climb from 700
-function upDay({ to = 12 * 60 + 30, slope = 0.02, drops = {} } = {}) {
-  const ones = [];
-  let px = 700;
-  for (let m = 571; m <= to; m++) {
-    const o = px; px = drops[m] != null ? drops[m] : px + slope;
-    ones.push({ m, o, h: Math.max(o, px) + 0.01, l: Math.min(o, px) - 0.01, c: px, v: 1000 });
-  }
-  return ones;
-}
+// the 12:30 test and the trigger, on a made-up up day: a steady climb from 700 (tools/desk-fixture.js)
 {
   const bars = F.fiveMinute(upDay()), vw = F.vwapSeries(bars);
   eq('9:30 to 12:25 is 36 five-minute bars', bars.length, 36);
@@ -199,45 +191,10 @@ function upDay({ to = 12 * 60 + 30, slope = 0.02, drops = {} } = {}) {
 // ------------------------------------------------------------------ the engine, on a fake market
 async function engineTests() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-test-'));
-  const cfg = {
-    dataDir: dir, buildSha: '',
-    desk: {
-      on: true, cryptoUsd: 9000, stocksUsd: 10000, optionsUsd: 1000, coins: ['BTC-USD', 'ETH-USD', 'SOL-USD'],
-      cryptoVolTarget: 0.4, cryptoLookback: 30, stockSym: 'SPY', stockVolTarget: 0.15, stockLookback: 20,
-      rebalBand: 0.1, cryptoFeeBps: 40, stockFeeBps: 0, optionFee: 0.03, options: true, maxDailyDdPct: 0.05, everySec: 10,
-    },
-  };
+  const cfg = deskConfig(dir);
   let T = clock.etToUtc('2026-09-23T12:31:00');        // a Wednesday
-  const W = {};
-  const uday = (t) => new Date(t).toISOString().slice(0, 10);
-  // crypto: 60 finished days to yesterday, alternating 3% moves (about 57% a year: a 0.70 weight)
-  const cryptoDaily = (px) => { const out = []; const y = Date.parse(`${uday(T - 86400000)}T00:00:00Z`); let c = px; for (let i = 59; i >= 0; i--) { c = c * Math.exp(i % 2 ? 0.03 : -0.03); out.push({ day: uday(y - i * 86400000), t: y - i * 86400000, o: c, h: c, l: c, c, v: 1 }); } return out; };
-  W.ticks = { 'BTC-USD': { bid: 84000, ask: 84000.01, last: 84000, at: T }, 'ETH-USD': { bid: 2700, ask: 2700.05, last: 2700, at: T }, 'SOL-USD': { bid: 200, ask: 200.01, last: 200, at: T } };
-  W.daily = { 'BTC-USD': cryptoDaily(84000), 'ETH-USD': cryptoDaily(2700), 'SOL-USD': cryptoDaily(200) };
-  W.books = {};
-  for (const [id, t] of Object.entries(W.ticks)) W.books[id] = { bids: [{ price: t.bid, size: 1e6 }], asks: [{ price: t.ask, size: 1e6 }] };
-  // SPY: 30 calm sessions to Tuesday with a 6-point range (ATR 6), and today's minute bars
-  const spyDaily = [];
-  for (let i = 30, day = '2026-09-22'; i > 0; i--, day = clock.prevTradingDay(day)) spyDaily.unshift({ day, o: 700, h: 703 + (i % 2), l: 697 + (i % 2), c: 700 + (i % 2), v: 1 });
-  W.spyDaily = spyDaily;
-  const setMinutes = (to, drops) => {
-    const ones = upDay({ to, drops });
-    W.intra = { day: '2026-09-23', bars: ones.map((b) => ({ ...b, day: '2026-09-23', t: clock.etToUtc(`2026-09-23T${String(Math.floor(b.m / 60)).padStart(2, '0')}:${String(b.m % 60).padStart(2, '0')}:00`) })) };
-    const last = ones[ones.length - 1];
-    W.quote = { sym: 'SPY', bid: last.c - 0.01, ask: last.c + 0.01, last: last.c, prevClose: 700, open: 700, at: T - 60000, fileAt: T };
-  };
+  const { W, feeds, setMinutes, call } = fakeMarket(() => T);
   setMinutes(12 * 60 + 30);
-  W.chain = null;
-  const feeds = {
-    stats: { ok: 0, err: 0, lastError: null, bytes: 0 },
-    async ticker(id) { return W.ticks[id]; },
-    async book(id) { return W.books[id]; },
-    async cryptoDaily(id) { return W.daily[id]; },
-    async quote() { return W.quote; },
-    async intraday() { return W.intra; },
-    async daily() { return W.spyDaily; },
-    async expiry(sym, day) { return W.chain && W.chain.expiry === day ? W.chain : null; },
-  };
   const desk = new Desk(cfg, { feeds, now: () => T, legacy: () => ({ note: 'winding down: 3 held', lastCycleAt: T }) });
   desk.quiet = true;
 
@@ -268,7 +225,6 @@ async function engineTests() {
   // round 3: 12:36. The 12:30 bar closed at a new high above VWAP: buy the 705 call at 0.10, two of them.
   T = clock.etToUtc('2026-09-23T12:36:00');
   setMinutes(12 * 60 + 35);
-  const call = (k, bid, ask, high) => ({ osi: `SPY260923C00${k}000`, strike: k, right: 'C', bid, ask, bidSz: 100, askSz: 100, high });
   W.chain = { expiry: '2026-09-23', spot: 703.7, calls: [call(704, 0.3, 0.31, 0.5), call(705, 0.09, 0.1, 0.15), call(706, 0.04, 0.05, 0.1)], puts: [] };
   await desk.step();
   const lots = b.options.lots;

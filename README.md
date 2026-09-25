@@ -1430,8 +1430,9 @@ flatten and resume, never rewritten. `state.json` stays the fast working copy, b
 bash ops/daily-check.sh
 ```
 
-One screen, read-only, six steps, and nothing on the box is changed. The exit code is the number of
-steps that flagged something.
+One screen, read-only, eight steps, and nothing on the box is changed. The exit code is the number of
+steps that flagged something. Steps 1 to 7 are the prediction-market desk and the box; step 8 is the
+stocks, crypto and options desk.
 
 1. **Did the pull run?** The last line of `data/fly/archive/pull.log` and its age.
 2. **Does the ledger add up?** `tools/ledger-check.js --box --venues`: the journal rebuilds the state
@@ -1459,6 +1460,16 @@ steps that flagged something.
    total (the pull trims them since 2026-09-24, so a total that keeps growing means it has stopped).
 6. **Is the option-chain tape alive?** `node tools/chain-record.js --check` on the Mac (*Options*
    above).
+7. **Are the secrets backed up?** The newest encrypted image `ops/backup-secrets.sh` left in iCloud
+   Drive, against the dates of `.env` and the Kalshi key (file dates only: nothing is opened).
+8. **Is the stocks, crypto and options desk well?** `tools/desk-check.js --box` copies the box's
+   `/data/desk` into `data/fly/desk-now` and answers four things: its loop recorded a minute in the
+   last ten; each book did today's check (crypto after 00:30 UTC, SPY on a trading day after 10:15 ET,
+   the options book's 12:30 verdict by 1:00); its journal, replayed with the engine's own rounding,
+   rebuilds every book's cash, holdings, realised P&L and fees to the penny; and each book against
+   simply holding. What the bots flagged in the last day (a feed that did not load, a halt) is listed
+   as a note; a round that threw is a problem. First run, 2026-09-25: the ledger exact, crypto checked,
+   nothing flagged.
 
 First run, 2026-09-21: 159 settlements, 159 agree; 29 watchdog restarts on the 20th, 7 on the 21st.
 
