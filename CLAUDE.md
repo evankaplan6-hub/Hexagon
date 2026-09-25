@@ -137,7 +137,8 @@ tools/            edge-scan, replay, maker-replay, maker-rank, pm-maker-scan, ma
                   --marks prices held maker inventory), restarts (START/STOP/WATCHDOG/CRASH per ET day, and restarts nothing explains),
                   ledger-check (does the ledger add up: rebuilds both books from the journals and compares them with
                   state.json line by line; --box checks the Fly box, --venues checks every settlement against the venues),
-                  fly-pull (copies the box's finished days to data/fly/archive, verifies, then trims old box tapes and probe files)
+                  fly-pull (copies the box's finished days to data/fly/archive, verifies, then trims old box tapes and probe files;
+                  the desk's journals in /data/desk go to data/fly/archive/desk/ and, like every journal, are never trimmed)
                   tests: test.js (npm test) runs the suites in its SUITES list, one tools/<name>-test.js each; a *-test.js
                   file missing from that list fails the run, so add every new suite there
 data/fly/         gitignored: journals, state and tick tapes copied down from the Fly box, plus
@@ -158,8 +159,10 @@ ops/              Fly deploy, launchd desk autostart (not installed), the tape p
                   options desk (tools/desk-check.js --box).
                   The box also has a disk brake (TAPE_MIN_FREE_MB) that trims its oldest tapes if the pull stops
 data/             gitignored: state.json, journal-*.jsonl, ticks-*.jsonl, desk.log (the prediction-market desk)
-data/desk/        gitignored: the stocks, crypto and options desk's state.json and journal-*.jsonl. The pull job
-                  does not copy it yet (it lists only /data's top level): on the box it lives only there
+data/desk/        gitignored: the stocks, crypto and options desk's state.json and journal-*.jsonl. From the box's
+                  /data/desk the hourly pull copies each finished Eastern day's journal to data/fly/archive/desk/ (since
+                  2026-09-25; sha256-verified, never deleted from the box, backed up to iCloud with the archive); its
+                  state.json reaches the Mac only in data/fly/desk-now/, desk-check --box's copy, replaced each run
 data/crypto/bars/ gitignored: Coinbase daily candles for tools/crypto-lab.js; re-fetchable
 data/lab/         gitignored: series-busy.json + universe.json (cached listings) and markets.jsonl (hourly bars)
                   for tools/lab.js; markets-volume-picked.jsonl is the biased first sample, kept as the counterexample

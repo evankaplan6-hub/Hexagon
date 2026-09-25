@@ -14,13 +14,18 @@
 //   node tools/fly-pull.js --trim --dry-run    print what it would copy and delete; change nothing
 //   flags: --app hexagon-desk   --dest data/fly/archive   --keep 3
 //
+// What it copies: the prediction-market desk's dated files in /data itself (ticks, journal, whales,
+// probes), and since 2026-09-25 the stocks, crypto and options desk's journals in /data/desk
+// (src/desk/engine.js), into archive/desk/. A file is named by its path under /data, so the desk's
+// are "desk/journal-YYYY-MM-DD.jsonl" and go through the same plan, copy and checks as the others.
+//
 // The rules, all decided in planPull (pure, tested in tools/disk-test.js):
 //   - a file is copied only once its Eastern day is over (today's files are still being written);
 //   - a copy lands under a temp name and is renamed into place only after its sha256 matches the
 //     box's; a local file that differs and is NOT just an older, shorter copy is never overwritten;
-//   - a delete needs a ticks-*.jsonl or probes-*.jsonl outside the --keep window AND a local copy
-//     whose sha256 equals the box's sha256 from this same run. Journals, whales and state.json are
-//     never deleted, and neither is anything of today's;
+//   - a delete needs a ticks-*.jsonl or probes-*.jsonl in /data itself, outside the --keep window,
+//     AND a local copy whose sha256 equals the box's sha256 from this same run. Journals (the
+//     desk's too), whales and state.json are never deleted, and neither is anything of today's;
 //   - a copy that fails blocks the delete of its own file only; a listing it cannot vouch for, or a
 //     box that did not say its own date, means no deletes at all this run. The trim can wait a day.
 //
@@ -41,8 +46,9 @@ const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 const { ET_DAY } = require('../src/recorder');
 
-const DATED = /^(ticks|journal|whales|probes)-(\d{4}-\d{2}-\d{2})\.jsonl$/;
-// what --trim may delete from the box once the Mac has it: the tapes and the probe files
+// what is copied, by its path under /data: the dated files in /data, and the desk's journals in /data/desk
+const DATED = /^(ticks|journal|whales|probes|desk\/journal)-(\d{4}-\d{2}-\d{2})\.jsonl$/;
+// what --trim may delete from the box once the Mac has it: the tapes and the probe files in /data itself
 const TRIMMED = /^(ticks|probes)-(\d{4}-\d{2}-\d{2})\.jsonl$/;
 // a download that fails is tried this many times in all, each from an empty temp file: on 2026-09-23
 // an awake Mac lost the connection 80 MB into a 123 MB tape, and the next try would have been hours away
@@ -54,6 +60,8 @@ const mb = (b) => (b / MB).toFixed(1);
 const BOX_DIR = '/data';
 const USAGE = 'usage: node tools/fly-pull.js [--trim] [--dry-run] [--keep 3] [--app hexagon-desk] [--dest data/fly/archive]';
 const byName = (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+// the name column of the per-file lines: the longest name, desk/journal-YYYY-MM-DD.jsonl, and a space
+const COL = 30;
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 // '2026-09-14' + n days, as a date string. Pure calendar arithmetic on UTC midnight, so no DST.
@@ -63,9 +71,10 @@ function addDays(day, n) {
 }
 
 // ---------------------------------------------------------------- the decision, with no I/O
-// boxFiles:   [{ name, size, sha256 }] from the box (sha256 is null for today's files: not hashed)
-// localFiles: [{ name, size, sha256, notPrefix? }] from --dest. `notPrefix` is set by the caller
-//             once it has downloaded the box file and found the local copy is not its start.
+// boxFiles:   [{ name, size, sha256 }] from the box (sha256 is null for today's files: not hashed).
+//             `name` is the path under /data: 'ticks-2026-09-14.jsonl', 'desk/journal-2026-09-14.jsonl'
+// localFiles: [{ name, size, sha256, notPrefix? }] from --dest, named the same way. `notPrefix` is set
+//             by the caller once it has downloaded the box file and found the local copy is not its start.
 // Returns:
 //   copy             [{ name, size, sha256, reason: 'missing' | 'partial' }]
 //   have             names already archived with a matching sha256
@@ -107,7 +116,7 @@ function planPull(boxFiles, localFiles, { todayET, keep = 3, trim = false } = {}
       plan.conflicts.push({ name: f.name, why: l.notPrefix ? 'the Mac copy differs and is not just an older, shorter copy of the box file' : 'the Mac copy differs and is not shorter than the box file' });
       state = 'conflict';
     }
-    if ((kind !== 'ticks' && kind !== 'probes') || !TRIMMED.test(f.name)) continue;   // journals, whales: never deleted
+    if ((kind !== 'ticks' && kind !== 'probes') || !TRIMMED.test(f.name)) continue;   // journals (the desk's too), whales: never deleted
     if (day >= cutoff) { plan.keptOnBox.push(f.name); continue; }
     if (!trim) continue;
     if (state === 'have') plan.delete.push(entry);
@@ -129,30 +138,40 @@ function planPull(boxFiles, localFiles, { todayET, keep = 3, trim = false } = {}
 // so a Mac clock running a few minutes fast across Eastern midnight must not turn the tape still
 // being written into a closed day. (The same formatter options as src/recorder.js's ET_DAY; it
 // cannot be required from here, the source travels alone. `nowMs` is for the tests' fake box.)
+//
+// It lists `dir` and then its desk/ folder, naming a file there by its path under `dir`
+// ('desk/journal-2026-09-14.jsonl'): /data/desk on the box, archive/desk on the Mac. Only journals
+// are taken from desk/ (its state.json is tools/desk-check.js --box's to copy, into
+// data/fly/desk-now), and a desk/ that is not there yet, because the desk has written nothing,
+// lists as empty.
 function listDir({ dir, todayET, only, nowMs }) {
   const fs = require('fs'), path = require('path'), crypto = require('crypto');
-  const RE = /^(ticks|journal|whales|probes)-(\d{4}-\d{2}-\d{2})\.jsonl$/;
+  // [a folder under `dir`, the names in it that are ours]
+  const AREAS = [['', /^(ticks|journal|whales|probes)-(\d{4}-\d{2}-\d{2})\.jsonl$/], ['desk', /^(journal)-(\d{4}-\d{2}-\d{2})\.jsonl$/]];
   const own = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' })
     .format(new Date(nowMs == null ? Date.now() : nowMs));
   const today = todayET && todayET < own ? todayET : own;
   const want = only ? new Set(only) : null;
   const buf = Buffer.alloc(1 << 20);
   const files = [];
-  let names = [];
-  try { names = fs.readdirSync(dir).sort(); } catch (e) { if (e.code !== 'ENOENT') throw e; }
-  for (const name of names) {
-    const m = RE.exec(name);
-    if (!m || (want && !want.has(name))) continue;
-    const full = path.join(dir, name);
-    const st = fs.statSync(full);
-    if (!st.isFile()) continue;
-    if (m[2] >= today) { files.push({ name, size: st.size, sha256: null }); continue; }
-    const h = crypto.createHash('sha256');
-    let size = 0;
-    const fd = fs.openSync(full, 'r');
-    try { for (let n; (n = fs.readSync(fd, buf, 0, buf.length, null)) > 0; size += n) h.update(buf.subarray(0, n)); }
-    finally { fs.closeSync(fd); }
-    files.push({ name, size, sha256: h.digest('hex') });
+  for (const [sub, RE] of AREAS) {
+    let names = [];
+    try { names = fs.readdirSync(path.join(dir, sub)).sort(); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    for (const base of names) {
+      const m = RE.exec(base);
+      const name = sub ? `${sub}/${base}` : base;
+      if (!m || (want && !want.has(name))) continue;
+      const full = path.join(dir, name);
+      const st = fs.statSync(full);
+      if (!st.isFile()) continue;
+      if (m[2] >= today) { files.push({ name, size: st.size, sha256: null }); continue; }
+      const h = crypto.createHash('sha256');
+      let size = 0;
+      const fd = fs.openSync(full, 'r');
+      try { for (let n; (n = fs.readSync(fd, buf, 0, buf.length, null)) > 0; size += n) h.update(buf.subarray(0, n)); }
+      finally { fs.closeSync(fd); }
+      files.push({ name, size, sha256: h.digest('hex') });
+    }
   }
   let freeBytes = null, totalBytes = null;
   try { const s = fs.statfsSync(dir); freeBytes = s.bavail * s.bsize; totalBytes = s.blocks * s.bsize; } catch { /* not every filesystem says */ }
@@ -389,13 +408,13 @@ function run(argv, { now = () => new Date(), fly = findFly(), cwd = process.cwd(
 
   if (opts.dryRun) {
     out(`would copy ${plural(plan.copy.length, 'file')} / ${mb(plan.copy.reduce((a, f) => a + f.size, 0))} MB into ${shown}`);
-    for (const f of plan.copy) out(`  ${f.name.padEnd(26)} ${mb(f.size).padStart(7)} MB  ${f.reason === 'partial' ? 'the Mac copy is shorter: replaced only if it is the start of this one' : 'not on the Mac yet'}`);
+    for (const f of plan.copy) out(`  ${f.name.padEnd(COL)} ${mb(f.size).padStart(7)} MB  ${f.reason === 'partial' ? 'the Mac copy is shorter: replaced only if it is the start of this one' : 'not on the Mac yet'}`);
     if (plan.have.length) out(`already on the Mac and identical: ${plural(plan.have.length, 'file')}`);
     if (plan.open.length) out(`still being written today, left alone: ${plan.open.join(', ')}`);
     if (opts.trim) {
       const del = [...plan.delete, ...plan.deleteAfterCopy].sort(byName);
       out(`would delete ${plural(del.length, 'tape or probe file')} / ${mb(del.reduce((a, f) => a + f.size, 0))} MB from the box${plan.deleteAfterCopy.length ? ', each only after its copy verifies' : ''}`);
-      for (const f of del) out(`  ${f.name.padEnd(26)} ${mb(f.size).padStart(7)} MB`);
+      for (const f of del) out(`  ${f.name.padEnd(COL)} ${mb(f.size).padStart(7)} MB`);
       out(`kept on the box: tapes and probes from ${plan.cutoff} on${plan.keptOnBox.length ? ` (${plan.keptOnBox.join(', ')})` : ''}, today's files, and every journal and whales file`);
     }
     return finish(problems.length ? `dry run found ${plural(problems.length, 'problem')}; nothing was changed` : 'dry run: nothing was changed');
@@ -411,16 +430,20 @@ function run(argv, { now = () => new Date(), fly = findFly(), cwd = process.cwd(
   const notPrefix = new Set(), failedCopy = new Set();
   if (plan.copy.length) {
     try {
-      fs.mkdirSync(dest, { recursive: true });
-      // temp files a killed run left behind; nothing else in the folder is shaped like this
-      for (const n of fs.readdirSync(dest)) {
-        if (/^\.(ticks|journal|whales|probes)-\d{4}-\d{2}-\d{2}\.jsonl\.\d+\.part$/.test(n)) { try { fs.unlinkSync(path.join(dest, n)); } catch { /* next run */ } }
+      // every folder a copy lands in (the archive, and archive/desk for the desk's journals), and in
+      // each the temp files a killed run left behind; nothing else in them is shaped like this
+      for (const dir of new Set(plan.copy.map((f) => path.dirname(path.join(dest, f.name))))) {
+        fs.mkdirSync(dir, { recursive: true });
+        for (const n of fs.readdirSync(dir)) {
+          if (/^\.(ticks|journal|whales|probes)-\d{4}-\d{2}-\d{2}\.jsonl\.\d+\.part$/.test(n)) { try { fs.unlinkSync(path.join(dir, n)); } catch { /* next run */ } }
+        }
       }
     } catch (e) { prepFailed = true; problem(`could not prepare ${shown}: ${e.message}`); }
   }
   for (const f of prepFailed ? [] : plan.copy) {
     const final = path.join(dest, f.name);
-    const tmp = path.join(dest, `.${f.name}.${process.pid}.part`);
+    // beside the file it becomes, so the rename below stays inside one folder
+    const tmp = path.join(path.dirname(final), `.${path.basename(final)}.${process.pid}.part`);
     try {
       // each try starts from nothing: fly refuses to overwrite, and a half-written temp file is
       // just removed rather than resumed (a byte-offset resume over `fly ssh console` would trust
@@ -434,7 +457,7 @@ function run(argv, { now = () => new Date(), fly = findFly(), cwd = process.cwd(
           break;
         } catch (e) {
           if (attempt >= GET_TRIES) throw e;
-          out(`  retry    ${f.name.padEnd(26)} try ${attempt} of ${GET_TRIES} failed (${e.message}); trying again`);
+          out(`  retry    ${f.name.padEnd(COL)} try ${attempt} of ${GET_TRIES} failed (${e.message}); trying again`);
           pause(retryPauseMs);
         }
       }
@@ -446,7 +469,7 @@ function run(argv, { now = () => new Date(), fly = findFly(), cwd = process.cwd(
       }
       fs.renameSync(tmp, final);
       copied++; copiedBytes += f.size;
-      out(`  copied   ${f.name.padEnd(26)} ${mb(f.size).padStart(7)} MB  sha256 matches the box`);
+      out(`  copied   ${f.name.padEnd(COL)} ${mb(f.size).padStart(7)} MB  sha256 matches the box`);
     } catch (e) {
       try { fs.unlinkSync(tmp); } catch { /* never got that far */ }
       failedCopy.add(f.name);
@@ -480,7 +503,7 @@ function run(argv, { now = () => new Date(), fly = findFly(), cwd = process.cwd(
       try {
         runFly(fly, ['ssh', 'console', '-q', ...pin(opts.app, machine), '-C', `rm -- ${BOX_DIR}/${f.name}`], 2 * 60000);
         deleted++; deletedBytes += f.size;
-        out(`  deleted  ${f.name.padEnd(26)} ${mb(f.size).padStart(7)} MB  from the box (the Mac copy is identical)`);
+        out(`  deleted  ${f.name.padEnd(COL)} ${mb(f.size).padStart(7)} MB  from the box (the Mac copy is identical)`);
       } catch (e) { problem(`${f.name}: delete on the box failed: ${e.message}`); }
     }
     if (deleted) {

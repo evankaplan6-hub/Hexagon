@@ -145,6 +145,38 @@ group('planPull: probe files are trimmed exactly like tick tapes (2026-09-24: ~6
   ok('names that are not exactly probes-YYYY-MM-DD.jsonl are ignored outright', odd.copy.length + odd.deleteAfterCopy.length === 0, odd);
 }
 
+group("planPull: the stocks, crypto and options desk's journals (/data/desk, 2026-09-25) are copied like any journal and never deleted");
+{
+  const box = [
+    { name: 'desk/journal-2026-09-10.jsonl', size: 10, sha256: H('1') },
+    { name: 'desk/journal-2026-09-13.jsonl', size: 20, sha256: H('2') },
+    { name: `desk/journal-${TODAY}.jsonl`, size: 5, sha256: null },
+    { name: 'journal-2026-09-13.jsonl', size: 30, sha256: H('3') },   // the prediction-market desk's, the same day
+    { name: 'desk/state.json', size: 900, sha256: H('4') },
+    { name: 'desk/state.json.tmp', size: 900, sha256: H('5') },
+  ];
+  const fresh = planPull(box, [], { todayET: TODAY, keep: 1, trim: true });
+  ok('the closed desk journals are copied, under their desk/ names', JSON.stringify(names(fresh.copy)) === '["desk/journal-2026-09-10.jsonl","desk/journal-2026-09-13.jsonl","journal-2026-09-13.jsonl"]', names(fresh.copy));
+  ok('...and never marked for deletion, not even with --keep 1', fresh.delete.length === 0 && fresh.deleteAfterCopy.length === 0 && fresh.keptOnBox.length === 0, fresh);
+  ok("today's desk journal is open, not copied", JSON.stringify(fresh.open) === JSON.stringify([`desk/journal-${TODAY}.jsonl`]), fresh.open);
+  ok("the desk's state.json is not the pull's to move", ![...names(fresh.copy), ...fresh.open, ...names(fresh.errors)].some((n) => n.startsWith('desk/state')), fresh);
+  const archived = planPull(box, box.filter((f) => f.sha256).map((f) => ({ ...f })), { todayET: TODAY, keep: 1, trim: true });
+  ok('archived and identical: nothing to copy, and still nothing deleted', archived.have.length === 3 && archived.copy.length === 0 && archived.delete.length === 0, archived);
+  const other = planPull(box, [{ name: 'journal-2026-09-13.jsonl', size: 30, sha256: H('3') }], { todayET: TODAY, keep: 1, trim: true });
+  ok("the other desk's journal of the same day is a different file: having it does not count for the desk's", JSON.stringify(other.have) === '["journal-2026-09-13.jsonl"]' && names(other.copy).includes('desk/journal-2026-09-13.jsonl'), other);
+  const partial = planPull(box, [{ name: 'desk/journal-2026-09-13.jsonl', size: 12, sha256: H('9') }], { todayET: TODAY, keep: 1, trim: true });
+  ok('a shorter Mac copy is re-copied as a possible partial, and not deleted after', (partial.copy.find((f) => f.name === 'desk/journal-2026-09-13.jsonl') || {}).reason === 'partial' && partial.deleteAfterCopy.length === 0, partial);
+  const stranger = planPull(box, [{ name: 'desk/journal-2026-09-13.jsonl', size: 20, sha256: H('9') }], { todayET: TODAY, keep: 1, trim: true });
+  ok('a Mac copy that differs and is not shorter is a conflict, never overwritten', JSON.stringify(names(stranger.conflicts)) === '["desk/journal-2026-09-13.jsonl"]' && !names(stranger.copy).includes('desk/journal-2026-09-13.jsonl'), stranger);
+  const noHash = planPull([{ name: 'desk/journal-2026-09-13.jsonl', size: 20, sha256: null }], [], { todayET: TODAY, keep: 1, trim: true });
+  ok('a closed desk journal the box gave no hash for is an error, like any other', noHash.errors.length === 1 && noHash.copy.length === 0, noHash);
+  const odd = ['desk/ticks-2026-09-10.jsonl', 'desk/probes-2026-09-10.jsonl', 'desk/whales-2026-09-10.jsonl', 'desk/journal-2026-09-10.jsonl.bak',
+    'desk/../journal-2026-09-10.jsonl', 'desk//journal-2026-09-10.jsonl', '/desk/journal-2026-09-10.jsonl', 'desk/x/journal-2026-09-10.jsonl',
+    'Desk/journal-2026-09-10.jsonl', 'other/journal-2026-09-10.jsonl', 'desk/journal-2026-9-10.jsonl', 'desk\\journal-2026-09-10.jsonl'];
+  const oddPlan = planPull(odd.map((name) => ({ name, size: 1, sha256: H('e') })), [], { todayET: TODAY, keep: 1, trim: true });
+  ok('from desk/ only journals, and only by exactly that path: anything else is ignored outright', oddPlan.copy.length + oddPlan.have.length + oddPlan.open.length + oddPlan.errors.length + oddPlan.deleteAfterCopy.length === 0, oddPlan);
+}
+
 group('planPull: a dry run is just the plan -- pure, repeatable, inputs untouched');
 {
   const box = [{ name: 'ticks-2026-09-10.jsonl', size: 1000, sha256: H('a') }, { name: 'journal-2026-09-10.jsonl', size: 10, sha256: H('b') }];
@@ -188,6 +220,30 @@ group('listDir: sizes and hashes of closed days, today listed but not hashed');
   ok("a caller's clock running ahead does not get today's tape hashed as a closed day", ahead['ticks-2026-09-14.jsonl'].sha256 === null && ahead['ticks-2026-09-13.jsonl'].sha256 === sha('yesterday\n'), ahead);
   const behind = Object.fromEntries(listDir({ dir, todayET: '2026-09-13', nowMs: NOW }).files.map((f) => [f.name, f]));
   ok("...and a caller's clock running behind is heeded too: the earlier today wins", behind['ticks-2026-09-13.jsonl'].sha256 === null, behind);
+  ok('a folder with no desk/ in it (the desk has written nothing yet) lists as it always did', r.files.every((f) => !f.name.startsWith('desk/')) && r.files.length === 3, r.files);
+}
+
+group("listDir: the desk's journals in desk/, named by their path");
+{
+  const dir = path.join(tmpRoot, 'list-desk');
+  fs.mkdirSync(path.join(dir, 'desk'), { recursive: true });
+  const put = (name, body) => fs.writeFileSync(path.join(dir, name), body);
+  put('journal-2026-09-13.jsonl', 'the other desk\n');
+  put('desk/journal-2026-09-13.jsonl', 'desk yesterday\n');
+  put(`desk/journal-${TODAY}.jsonl`, 'desk today\n');
+  put('desk/state.json', '{}');
+  put('desk/state.json.tmp', '{}');
+  put('desk/ticks-2026-09-13.jsonl', 'not a kind the desk keeps\n');
+  fs.mkdirSync(path.join(dir, 'desk', 'journal-2026-09-12.jsonl'));   // a directory with a journal's name
+  const r = listDir({ dir, todayET: TODAY, nowMs: NOW });
+  const by = Object.fromEntries(r.files.map((f) => [f.name, f]));
+  ok('a closed desk journal is listed as desk/journal-..., with its real sha256 and size', by['desk/journal-2026-09-13.jsonl'] && by['desk/journal-2026-09-13.jsonl'].sha256 === sha('desk yesterday\n') && by['desk/journal-2026-09-13.jsonl'].size === 15, by);
+  ok("...beside the other desk's journal of the same day, under its own name", by['journal-2026-09-13.jsonl'] && by['journal-2026-09-13.jsonl'].sha256 === sha('the other desk\n'), by);
+  ok("today's desk journal is listed with no hash", by[`desk/journal-${TODAY}.jsonl`] && by[`desk/journal-${TODAY}.jsonl`].sha256 === null, by);
+  ok('from desk/ only journals: not its state.json, not a tape, not a directory', JSON.stringify(Object.keys(by).filter((n) => n.startsWith('desk/')).sort()) === JSON.stringify(['desk/journal-2026-09-13.jsonl', `desk/journal-${TODAY}.jsonl`]), Object.keys(by));
+  ok('`only` takes the desk/ names', JSON.stringify(listDir({ dir, todayET: TODAY, nowMs: NOW, only: ['desk/journal-2026-09-13.jsonl'] }).files.map((f) => f.name)) === '["desk/journal-2026-09-13.jsonl"]');
+  const shipped = eval(`(${listDir.toString()})`);
+  ok('...and it still runs from its own source text, with no closure', JSON.stringify(shipped({ dir, todayET: TODAY, nowMs: NOW }).files) === JSON.stringify(r.files));
 }
 
 group('isBytePrefix');
@@ -395,6 +451,75 @@ group('run --trim: old probe files leave the box once copied and verified, today
   ok('...each after its copy landed on the Mac', ['10', '11'].every((d) => fs.readFileSync(path.join(s.dest, `probes-2026-09-${d}.jsonl`), 'utf8') === `probe ${d}\n`.repeat(30)));
   ok("the box keeps the 12th, 13th and today's probes", ['12', '13'].every((d) => s.onBox().includes(`probes-2026-09-${d}.jsonl`)) && s.onBox().includes(`probes-${TODAY}.jsonl`), s.onBox());
   ok("today's probe file is not even copied", !s.onMac().includes(`probes-${TODAY}.jsonl`), s.onMac());
+}
+
+// The stocks, crypto and options desk (src/desk/engine.js) writes /data/desk/state.json and one
+// journal per Eastern day beside it. Until 2026-09-25 the listing never looked in there, so those
+// journals lived only on the box.
+const withDesk = (label) => {
+  const s = scene(label);
+  fs.mkdirSync(path.join(s.box, 'desk'));
+  for (const d of ['12', '13']) s.put(`desk/journal-2026-09-${d}.jsonl`, `desk journal ${d}\n`.repeat(5));
+  s.put(`desk/journal-${TODAY}.jsonl`, 'desk still writing\n');
+  s.put('desk/state.json', '{"version":1}');
+  s.put('desk/state.json.tmp', '{"vers');
+  s.onDesk = () => fs.readdirSync(path.join(s.box, 'desk')).sort();
+  s.onMacDesk = () => (fs.existsSync(path.join(s.dest, 'desk')) ? fs.readdirSync(path.join(s.dest, 'desk')).sort() : null);
+  s.readDesk = (name) => { try { return fs.readFileSync(path.join(s.dest, 'desk', name), 'utf8'); } catch { return null; } };
+  return s;
+};
+
+group("run --trim: the desk's closed journals come down into archive/desk, and nothing in /data/desk is deleted");
+{
+  const s = withDesk('desk');
+  // a temp file a killed run left in archive/desk
+  fs.mkdirSync(path.join(s.dest, 'desk'), { recursive: true });
+  fs.writeFileSync(path.join(s.dest, 'desk', '.journal-2026-09-12.jsonl.999.part'), 'half');
+  const deskBefore = s.onDesk();
+  const code = s.go(['--trim']);
+  const text = s.lines.join('\n');
+  const calls = s.log();
+  ok('exits 0', code === 0, { code, text });
+  ok('archive/desk holds the two closed desk journals and nothing else', JSON.stringify(s.onMacDesk()) === '["journal-2026-09-12.jsonl","journal-2026-09-13.jsonl"]', s.onMacDesk());
+  ok('...byte-identical to the box', ['12', '13'].every((d) => s.readDesk(`journal-2026-09-${d}.jsonl`) === `desk journal ${d}\n`.repeat(5)));
+  ok('...each fetched from /data/desk, pinned to the machine that was listed', JSON.stringify(calls.filter((c) => c.op === 'get' && c.name.startsWith('desk/')).map((c) => `${c.name} ${c.machine}`)) === '["desk/journal-2026-09-12.jsonl abcdef1234","desk/journal-2026-09-13.jsonl abcdef1234"]', calls);
+  ok("the killed run's temp file in archive/desk is cleared, and no new one is left", !s.onMacDesk().some((n) => n.endsWith('.part')), s.onMacDesk());
+  ok("the other desk's files still land in the archive itself", fs.existsSync(path.join(s.dest, 'journal-2026-09-13.jsonl')) && fs.existsSync(path.join(s.dest, 'ticks-2026-09-12.jsonl')) && !fs.existsSync(path.join(s.dest, 'state.json')), s.onMac());
+  ok("/data/desk is exactly as it was: its journals, today's and its state.json all stay on the box", JSON.stringify(s.onDesk()) === JSON.stringify(deskBefore), s.onDesk());
+  ok('the tapes are trimmed as always, the 10th and 11th, and nothing else is removed', JSON.stringify(calls.filter((c) => c.op === 'rm').map((c) => c.name)) === '["ticks-2026-09-10.jsonl","ticks-2026-09-11.jsonl"]', calls);
+  ok('pull.log counts them with the rest: 9 files', /ok hexagon-desk copied 9 files/.test(fs.readFileSync(path.join(s.dest, 'pull.log'), 'utf8')), fs.readFileSync(path.join(s.dest, 'pull.log'), 'utf8'));
+  const again = s.go(['--trim']);
+  ok('a second run the same day has nothing to do', again === 0 && s.log().every((c) => c.op === 'list'), s.log());
+
+  // the next Eastern day the 14th's journal is closed, so it comes down, and only it
+  const next = s.go(['--trim'], {}, NOW + 24 * 3600000);
+  ok("the next day the 14th's desk journal is closed, and comes down whole", next === 0 && s.readDesk(`journal-${TODAY}.jsonl`) === 'desk still writing\n', { next, lines: s.lines });
+  ok('...on its own: the desk days already archived are not fetched again', JSON.stringify(s.log().filter((c) => c.op === 'get' && c.name.startsWith('desk/')).map((c) => c.name)) === JSON.stringify([`desk/journal-${TODAY}.jsonl`]), s.log());
+  ok('...and still nothing in /data/desk leaves the box', JSON.stringify(s.onDesk()) === JSON.stringify(deskBefore), s.onDesk());
+}
+
+group("run --trim --dry-run: the desk's journals are on the copy list and never on the delete list");
+{
+  const s = withDesk('desk-dry');
+  const code = s.go(['--trim', '--dry-run']);
+  const text = s.lines.join('\n');
+  const from = s.lines.findIndex((l) => /^would delete/.test(l)), to = s.lines.findIndex((l) => /^kept on the box/.test(l));
+  ok('exits 0, and says it would copy 9 files, the two desk journals among them', code === 0 && /would copy 9 files/.test(text) && /desk\/journal-2026-09-12\.jsonl/.test(text) && /desk\/journal-2026-09-13\.jsonl/.test(text), text);
+  ok('the delete list has only the two tapes', from >= 0 && to > from && JSON.stringify(s.lines.slice(from + 1, to).map((l) => l.trim().split(/\s+/)[0])) === '["ticks-2026-09-10.jsonl","ticks-2026-09-11.jsonl"]', s.lines);
+  ok('nothing changes on either side', s.log().every((c) => c.op === 'list') && s.onMac() === null, { log: s.log(), mac: s.onMac() });
+}
+
+group('run --trim: a desk journal that will not download');
+{
+  const s = withDesk('desk-getfail');
+  const code = s.go(['--trim'], { FAKE_FAIL_GET: 'desk/journal-2026-09-13.jsonl' });
+  const text = s.lines.join('\n');
+  ok('exits non-zero, and names it', code === 1 && /desk\/journal-2026-09-13\.jsonl: copy failed after 3 tries/.test(text), text);
+  ok('no half copy and no temp file is left in archive/desk; the 12th, which copied, is there', JSON.stringify(s.onMacDesk()) === '["journal-2026-09-12.jsonl"]', s.onMacDesk());
+  ok('the tapes are still trimmed: a failed copy blocks only its own file', JSON.stringify(s.log().filter((c) => c.op === 'rm').map((c) => c.name)) === '["ticks-2026-09-10.jsonl","ticks-2026-09-11.jsonl"]', s.log());
+  ok('pull.log records a PROBLEM', /PROBLEM/.test(fs.readFileSync(path.join(s.dest, 'pull.log'), 'utf8')));
+  const later = s.go(['--trim']);
+  ok('the next run fetches it and is clean again', later === 0 && s.readDesk('journal-2026-09-13.jsonl') === 'desk journal 13\n'.repeat(5), { later, lines: s.lines });
 }
 
 group('run --trim: a listing that does not name its machine copies, but never deletes');
@@ -795,6 +920,8 @@ process.exit(rc);
   w('data/options/history/SPY/2026-10-16.json', '{}');
   w('data/fly/archive/ticks-2026-09-22.jsonl', 'tape\n');
   w('data/fly/archive/.ticks-2026-09-23.jsonl.123.part', 'half a tape');
+  w('data/fly/archive/desk/journal-2026-09-22.jsonl', 'desk journal\n');   // the stocks, crypto and options desk's, since 2026-09-25
+  w('data/fly/archive/desk/.journal-2026-09-23.jsonl.123.part', 'half a journal');
   w('data/chains/kalshi-private-key.pem', 'SECRET');
   w('data/fly/archive/.env', 'SECRET=1');
   w('.env', 'SECRET=1');
@@ -828,7 +955,7 @@ if (!HAVE_BASH) {
     const r = j.go();
     ok('exits with the pull\'s code, 0', r.code === 0, r);
     ok('the pull ran once, with --trim', JSON.stringify(j.pulls()) === '["--trim"]', j.pulls());
-    ok('chains, options and the archive are copied, each under its own name', JSON.stringify(j.walk(j.backup)) === JSON.stringify(['archive/pull.log', 'archive/ticks-2026-09-22.jsonl', 'chains/chains-2026-09-23.jsonl', 'options/history/SPY/2026-10-16.json']), j.walk(j.backup));
+    ok('chains, options and the archive are copied, each under its own name, the desk journals in archive/desk included', JSON.stringify(j.walk(j.backup)) === JSON.stringify(['archive/desk/journal-2026-09-22.jsonl', 'archive/pull.log', 'archive/ticks-2026-09-22.jsonl', 'chains/chains-2026-09-23.jsonl', 'options/history/SPY/2026-10-16.json']), j.walk(j.backup));
     ok('no half-downloaded .part, no .env and no .pem goes to iCloud', !j.walk(j.backup).some((n) => /\.part$|\.env$|\.pem$/.test(n)), j.walk(j.backup));
     ok('backup.log says ok, and pull.log gets no backup line on a good day', /^\S+Z ok backup copied data\/chains data\/options data\/fly\/archive/.test(j.backupLog()[0] || '') && j.pullLog().length === 1 && / ok hexagon-desk /.test(j.pullLog()[0]), [j.backupLog(), j.pullLog()]);
     ok('...stamped by the same fixed clock that picks the day, not the real one (2026-09-25: the day was fixed and the stamp was not)', (j.backupLog()[0] || '').startsWith('2026-09-24T13:31:16Z ok backup '), j.backupLog());
