@@ -32,7 +32,11 @@ set -euo pipefail
 HEXDIR="$(cd "$(dirname "$0")/.." && pwd)"
 ARCHIVE="$HEXDIR/data/fly/archive"
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
-utc() { date -u '+%Y-%m-%dT%H:%M:%S'; }
+# PULL_NOW (a UTC instant, 2026-09-24T13:31:16Z) only exists so tools/disk-test.js can fix the clock.
+# It stamps every line this script writes AND picks the Eastern day those lines are checked against
+# (below), so a test cannot fix one and leave the other on the real clock. Until 2026-09-25 only the
+# day was fixed: the backup line took the real time, and the test failed from the next midnight on.
+utc() { if [ -n "${PULL_NOW:-}" ]; then printf '%s\n' "${PULL_NOW%Z}"; else date -u '+%Y-%m-%dT%H:%M:%S'; fi; }
 
 DRY=0; BACKUP_ONLY=0
 PASS=()
@@ -67,14 +71,18 @@ fi
 
 # --- is today's work already done? ---------------------------------------------------------------
 # pull.log and backup.log stamp each line in UTC; "today" is the Eastern day, the one fly-pull closes.
-# PULL_TODAY_ET only exists so tools/disk-test.js can fix the date.
-TODAY_ET="${PULL_TODAY_ET:-$(TZ=America/New_York date +%F)}"
 et_day() {
   local ep
   # BSD date on the Mac; GNU date where the tests run on Linux
   ep="$(date -j -u -f '%Y-%m-%dT%H:%M:%S' "${1%Z}" +%s 2>/dev/null || date -u -d "$1" +%s 2>/dev/null)" || return 0
   TZ=America/New_York date -r "$ep" +%F 2>/dev/null || TZ=America/New_York date -d "@$ep" +%F
 }
+if [ -n "${PULL_NOW:-}" ]; then
+  TODAY_ET="$(et_day "$PULL_NOW")"
+  [ -n "$TODAY_ET" ] || { echo "PULL_NOW=$PULL_NOW is not a UTC instant like 2026-09-24T13:31:16Z" >&2; exit 2; }
+else
+  TODAY_ET="$(TZ=America/New_York date +%F)"
+fi
 # $1 the log, $2 an awk condition picking the lines that count: is the last of them ok and today's?
 ok_today() {
   [ -f "$1" ] || return 1
