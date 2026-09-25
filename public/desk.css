@@ -1,6 +1,653 @@
-/* The stocks, crypto and options floor: only what style.css (the prediction-market floor's sheet,
-   which this page shares) does not already have. */
+/* The stocks, crypto and options floor's own stylesheet (the page at /).
 
+   Until 2026-09-25 this page loaded the prediction-market floor's style.css and added this file on
+   top. The rules below are the ones it used from there, moved here in their original order; the
+   rest of style.css was /pm's alone and stays with it, so /pm and its sheet can retire together. */
+
+:root {
+  --bg: #090a0d; --panel: #0f1116; --panel2: #13161d; --line: #1d212a; --line2: #262b36;
+  --text: #e6e8ee; --muted: #737a88; --dim: #3d4350;
+  --green: #22c55e; --red: #ef4444; --amber: #d4a72c; --blue: #3b82f6; --pink: #ec4899;
+  /* the five boards on the floor are one instrument panel: same hairline, same
+     label colour, same body text, whatever each of them is saying */
+  --brd-rule: rgba(140,168,210,.10); --brd-rule2: rgba(140,168,210,.20);
+  --brd-label: #67718a; --brd-body: #aab2c0; --brd-bright: #eef1f6;
+  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sans: 'Inter', system-ui, -apple-system, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); font: 12px/1.45 var(--mono); }
+a { color: inherit; text-decoration: none; }
+a:hover { text-decoration: underline; }
+.wrap { max-width: 1440px; margin: 0 auto; padding: 14px 16px 40px; display: flex; flex-direction: column; gap: 12px; }
+
+/* ---- the header -------------------------------------------------------------------------- */
+
+/* It used to be eight facts set at one size, one weight and one colour, with the single caveat
+   that matters -- DEMO QUOTES -- dressed exactly like the uptime. Three levels now: the desk's
+   state, which is the only thing a glance is asking; the mode it is in; and the running counts,
+   which are reference and are allowed to look like it. */
+header { display: flex; align-items: center; gap: 16px; padding: 6px 2px; }
+.brand { display: flex; align-items: center; gap: 12px; flex: none; }
+h1 { font: 800 22px/1 var(--sans); margin: 0; letter-spacing: -0.01em; white-space: nowrap; }
+
+.pill { display: inline-flex; align-items: center; gap: 8px; flex: none; padding: 5px 12px 5px 10px; border-radius: 999px;
+  font: 700 11px/1 var(--sans); letter-spacing: .1em; text-transform: uppercase;
+  background: rgba(255,255,255,.04); border: 1px solid #222b3a; color: #9aa3b3; }
+.pill i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; flex: none; }
+.pill.good { color: #4ade80; background: rgba(34,197,94,.10); border-color: rgba(34,197,94,.28); }
+.pill.warn { color: #e8c35a; background: rgba(212,167,44,.10); border-color: rgba(212,167,44,.28); }
+.pill.bad  { color: #fca5a5; background: rgba(239,68,68,.12); border-color: rgba(239,68,68,.32); }
+.pill .mode { font: 600 10px/1 var(--mono); letter-spacing: .08em; text-transform: none; color: #6b7384;
+  padding-left: 8px; border-left: 1px solid rgba(255,255,255,.10); }
+.pill .mode.real { color: #fca5a5; }
+@media (max-width: 560px) { .pill .mode { display: none; } h1 { font-size: 15px; }
+}
+.pill .why { font: 400 10px/1 var(--sans); letter-spacing: 0; text-transform: none; color: #d9a3a8; max-width: 26ch;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.meta { display: flex; gap: 14px; font: 10px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--dim); }
+.meta span { display: inline-flex; align-items: baseline; gap: 5px; flex: none; }
+.meta b { font: 600 12px/1 var(--mono); letter-spacing: 0; color: #8b93a3; }
+.meta b.pos { color: #6ee7a0; } .meta b.neg { color: #fca5a5; }
+
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+.ph { display: flex; justify-content: space-between; align-items: center; padding: 9px 12px; border-bottom: 1px solid var(--line); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text); font-weight: 700; }
+.ph i { color: var(--amber); font-style: normal; margin-right: 6px; font-size: 8px; vertical-align: 1px; }
+.ph span:last-child { color: var(--muted); font-weight: 400; }
+
+/* The floor is the hero now, so give it room -- but cap the height so it cannot push the desk's
+   actual numbers below the fold on a short window. The canvas carries its own device-resolution
+   backing store (see floorCtx in app.js); `pixelated` keeps the block art hard-edged, it is no
+   longer being asked to hide an upscale. */
+/* The floor IS the page. It is sized to the viewport rather than to the content, because as long
+   as the document has anything to scroll the wheel keeps reaching it -- and a list inside a canvas
+   can never win that fight. Nothing sits below it now. */
+/* The canvas takes the width it is given and derives its own height from the room's shape, so the
+   panel ends exactly where the room ends -- no dead band inside the border. floorCtx still enforces
+   a single uniform scale internally, so a stylesheet can never stretch the room again. */
+/* Fill the box in BOTH directions and let floorCtx do the fitting.
+   Deriving height from width via aspect-ratio made the canvas taller than the viewport on any wide
+   window: the panel clipped the overflow, and what got clipped was the bottom of the room -- the
+   P&L chart and the activity tape. The room's proportions are enforced in JS with a single uniform
+   scale and centred letterboxing, so handing the canvas a box of any shape is safe, and the whole
+   floor is always on screen. */
+#floorc { display: block; background: #0b0e14; image-rendering: pixelated;
+  width: 100%; height: 100%; flex: 1 1 auto; min-height: 0; }
+
+.pos { color: var(--green); } .neg { color: var(--red); }
+
+footer { color: var(--dim); font-size: 10px; text-align: center; padding-top: 6px; }
+
+@media (max-width: 1000px) { .meta { display: none; }
+}
+
+#floorc { touch-action: none; }   /* the canvas handles its own wheel; do not let the page steal it */
+
+/* No page scroll: the floor is sized to fit, so the only things that scroll are the lists on it. */
+html, body { height: 100%; overflow: hidden; }
+.wrap { height: 100%; max-width: 1900px; padding: 8px 12px 10px; gap: 8px; justify-content: center; }
+header { padding: 2px 2px 0; flex: 0 0 auto; }
+h1 { font-size: 18px; }
+.brand svg { width: 26px; height: 26px; }
+/* The floor takes every pixel the header leaves, and the canvas takes every pixel of that -- as
+   large as it can be in both directions while keeping its shape. */
+#floor { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+#floor .ph { flex: 0 0 auto; }
+footer { display: none; }
+
+/* ---- page chrome refresh ------------------------------------------------- */
+
+/* The floor is doing the work now, so everything around it should recede: a thinner header, a
+   softer frame, and a background that is not the same flat black as the room inside it. */
+body {
+  background:
+    radial-gradient(1200px 600px at 50% -10%, #101725 0%, transparent 60%),
+    #06080c;
+}
+h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, #eef1f6, #a8b0c0);
+     -webkit-background-clip: text; background-clip: text; color: transparent; }
+.brand svg polygon { stroke: #55617a; }
+.brand svg polygon:last-child { fill: #6b7488; }
+
+#floor {
+  border-color: #1a2233;
+  border-radius: 8px;
+  box-shadow: 0 18px 50px -20px rgba(0,0,0,0.9), inset 0 1px 0 rgba(255,255,255,0.04);
+  background: #070a10;
+}
+#floor .ph {
+  border-bottom-color: #161d2b;
+  background: linear-gradient(180deg, #0d1119, #0a0d14);
+  letter-spacing: 0.18em;
+}
+#floor .ph i { color: #d4a72c; }
+#floorc { border-radius: 0; }
+.mobile-title, #mobile-summary { display: none; }
+
+/* ---- the three views ------------------------------------------------------ */
+
+/* an explicit `display` beats the [hidden] attribute's own display:none, so the panel has to say it
+   again -- without this the Stocks panel sits under the tabs while the Floor is the chosen view */
+#assetview[hidden], #floor[hidden] { display: none; }
+
+/* ---- notices over the floor ---------------------------------------------- */
+
+/* The room stays a canvas; the words on it are HTML so they render at a size a person can read.
+   app.js (placeFx) positions everything from the room's own drawing coordinates. */
+.stage { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
+  /* how tall the feed is, and so how much of the panel the floor keeps. app.js overrides it on the
+     element itself when the handle is dragged, and remembers it. */
+  --feedh: clamp(150px, 24vh, 280px); }
+/* the handle between the two: a hairline at rest, the feed's own border doing the dividing */
+#split { flex: none; position: relative; z-index: 3; height: 9px; margin-bottom: -9px; cursor: row-resize; touch-action: none; }
+#split::after { content: ''; position: absolute; left: 50%; top: 3px; width: 46px; height: 3px; margin-left: -23px;
+  border-radius: 2px; background: #243047; opacity: 0; transition: opacity .15s; }
+#split:hover::after, #split:focus-visible::after, .stage.sizing #split::after { opacity: 1; background: #3a4e72; }
+#split:focus-visible { outline: none; }
+.stage.sizing { cursor: row-resize; user-select: none; }
+.stage.sizing #fx, .stage.sizing #feedlist { pointer-events: none; }
+#fx { position: absolute; inset: 0; pointer-events: none; overflow: hidden; font-family: var(--sans); transition: opacity .4s; }
+#fx.stale { opacity: .3; }
+
+.nametag { position: absolute; transform: translate(-50%, -50%); font: 700 0.6em/1 var(--mono); letter-spacing: .1em;
+  color: #8a7a62; padding: .2em .38em .18em; border-radius: 3px; white-space: nowrap;
+  background: #1c1610; border: 1px solid #4a3d2c; box-shadow: inset 0 1px 0 rgba(255,255,255,.05), 0 1px 2px rgba(0,0,0,.6); }
+.nametag.on { color: var(--c, var(--text)); border-color: color-mix(in srgb, var(--c, #888) 55%, #4a3d2c);
+  text-shadow: 0 0 6px color-mix(in srgb, var(--c, #888) 60%, transparent); }
+/* the desk's light: a glow that breathes while the desk is working */
+@media (prefers-reduced-motion: no-preference) {
+  #status .st.good i { animation: breathe 1.8s ease-in-out infinite; }
+  @keyframes breathe { 0%, 100% { box-shadow: 0 0 4px 1px currentColor; opacity: .75; } 50% { box-shadow: 0 0 12px 4px currentColor; opacity: 1; } }
+}
+
+.bub { position: absolute; z-index: 2; width: max-content; padding: .45em .7em .5em; border-radius: 8px;
+  background: rgba(10, 13, 20, .94); border: 1px solid #262e3d; border-top: 2px solid var(--c);
+  color: #d5dae3; font-size: 1em; line-height: 1.3; box-shadow: 0 6px 18px -6px rgba(0,0,0,.9); }
+.bub small { display: block; margin-top: .15em; font-size: .82em; color: #8a93a3; }
+/* The bubble says who is talking, so the name tag under the bot can step out of its way rather
+   than be covered by it. */
+.bub .who { margin-right: .55em; font: 700 .76em var(--mono); letter-spacing: .1em; }
+/* One line, always: the lane above the bots is one line deep, and the boards behind it are not
+   something a bubble may lean on. `clip` rather than `hidden` so the backstop cannot eat the
+   bubble's own tail, which is drawn outside the box. */
+.bub { white-space: nowrap; overflow: clip; overflow-clip-margin: 12px; }
+.bub.up { transform: translate(-50%, -100%); }
+.bub.up::after { content: ''; position: absolute; left: 50%; bottom: -6px; margin-left: -5px; border: 5px solid transparent;
+  border-top-color: #262e3d; border-bottom: 0; }
+.bub.side::after { content: ''; position: absolute; left: -6px; top: .8em; border: 5px solid transparent; border-right-color: #262e3d; border-left: 0; }
+.bub.side.flip::after { left: auto; right: -6px; border-right-color: transparent; border-left: 5px solid #262e3d; }
+.bub.lv-quiet { color: #9aa3b3; font-size: .9em; border-top-width: 1px; background: rgba(10, 13, 20, .82); }
+.bub.lv-trade { color: #fff; font-weight: 600; border-color: #2f3a4d; border-top-color: var(--c); }
+.bub.lv-warn { color: #fecaca; font-weight: 600; background: rgba(40, 10, 14, .95); border-color: #6b1f27; border-top-color: var(--red); }
+.bub.lv-warn small { color: #d9a3a8; font-weight: 400; }
+.bub.pop { animation: pop .35s ease-out; }
+@keyframes pop { 0% { opacity: 0; margin-top: 6px; } 100% { opacity: 1; margin-top: 0; } }
+
+/* The room keeps its shape and takes the top; the feed takes whatever height is left below it, and
+   never less than a few readable lines. On a wide, short window the room letterboxes instead. */
+/* The room draws itself as wide as the box it is handed (floorCtx picks the drawing width from the
+   box's own shape), so the box no longer has to be a fixed 480:262 -- which is what left two black
+   bars down the sides of a wide window. The feed takes a share of the height; the room takes the
+   rest, whatever shape that is. */
+.room { position: relative; flex: 1 1 auto; min-height: 0; width: 100%;
+  /* The drawing width has a floor (ROOM_W_MIN), so a box taller than the narrowest room shape
+     letterboxes again -- top and bottom this time, which is what a phone was getting. Cap the box
+     at that shape and give the height back to the feed, which can use it. */
+  max-height: calc((100vw - 28px) / 1.9); }
+/* Portrait: the room has hit that cap and there is height left over, so the feed takes it rather
+   than leaving a hole under the floor. Landscape keeps the feed a fixed band and gives the room
+   everything else. */
+@media (max-aspect-ratio: 1/1) { #feed { flex: 1 1 auto; height: auto; min-height: var(--feedh); }
+}
+/* The feed's band is the room's size dial, and it was set too generously. The room is drawn at a
+   fixed height in drawing units, so its scale is simply the pixel height it is handed -- every pixel
+   the feed gives back makes the whole cast bigger. Coming down from 250 to 200 on a laptop makes the
+   bots 8% larger and, because a taller box is a less extreme shape, closes most of the empty floor
+   that was left beside the desks. The feed scrolls and loses nothing but two rows at rest. */
+/* 2026-09-19: the desks were shrunk (ROOM_H/WALL_H in app.js) and the feed took the height back. */
+#feed { flex: 0 0 auto; height: var(--feedh); display: flex; flex-direction: column; font-size: 14px; font-family: var(--sans);
+  background: #070a10; border-top: 1px solid #1a2233; border-radius: 0 0 7px 7px; overflow: hidden; }
+#feed .fh { flex: none; display: flex; align-items: baseline; gap: 1em; padding: .7em 1em .4em; font: 700 .72em/1.2 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: #6b7384; }
+/* The two views of this band -- the log, and what the desk is watching -- as tabs rather than a
+   second panel: a market list that pushed the log off the page would be a worse trade than a
+   click. Styled as the header they replaced, so the band still reads as one label at rest. */
+#feed .fh { flex-wrap: wrap; row-gap: .3em; }
+#feed .ftab { padding: 0 0 .3em; border: 0; border-bottom: 2px solid transparent; background: none; cursor: pointer;
+  white-space: nowrap; font: inherit; letter-spacing: inherit; text-transform: inherit; color: #545c6b; }
+#feed .ftab:hover { color: #8b93a3; }
+#feed .ftab.on { color: #c3c9d4; border-bottom-color: #3b82f6; }
+#feed .ftab:focus-visible { outline: 2px solid #3b82f6; outline-offset: 2px; }
+/* what the filter took out, so a shorter log never reads as a quieter desk */
+#feed .fnote { margin-left: auto; white-space: nowrap; font-weight: 400; letter-spacing: .06em; color: #4b5261; text-transform: none; }
+#feed .fnote:empty { display: none; }
+
+/* ---- the market list: what the desk is watching on one subject ------------ */
+
+#marketlist { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 .6em .5em;
+  scrollbar-width: thin; scrollbar-color: #262b36 transparent; font-size: .88em; }
+#marketlist .mcols, #marketlist .mlist li { display: grid; grid-template-columns: 1fr 5.8em 5.8em 4.6em 3.4em; gap: .5em; align-items: baseline; padding: .3em .3em; }
+/* the two venue columns are headed by their full names, so the prices under them never have to be
+   explained; the heading is the one line here allowed to be narrower than its column */
+#marketlist .mcols { position: sticky; top: 0; z-index: 1; background: #070a10; color: #545c6b;
+  font: 700 .74em/1.2 var(--mono); letter-spacing: .05em; text-transform: uppercase; border-bottom: 1px solid var(--brd-rule2); }
+#marketlist .mlist { list-style: none; margin: 0; padding: 0; }
+#marketlist .mlist li { border-bottom: 1px solid rgba(255,255,255,.04); line-height: 1.3; }
+#marketlist .nm { min-width: 0; color: #c3c9d4; white-space: nowrap; overflow: hidden; }
+#marketlist .nm i { font-style: normal; color: #7a8292; }
+#marketlist .v { font: .95em var(--mono); color: #aab2c0; text-align: right; }
+#marketlist .g { font: 600 .95em var(--mono); color: #7a8292; text-align: right; }
+#marketlist .g.wide { color: #e8c35a; }
+#marketlist .g.none { font-weight: 400; color: #4b5261; }
+/* held / in play / watch only: the three facts that change what a row MEANS */
+#marketlist .nm em { font-style: normal; margin-left: .5em; padding: .05em .4em; border-radius: 3px;
+  font: 700 .74em/1.5 var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+#marketlist .nm em.hold { color: #d4a72c; background: rgba(212,167,44,.12); }
+#marketlist .nm em.live { color: #fca5a5; background: rgba(239,68,68,.12); }
+#marketlist .nm em.mk { color: #9dc0fb; background: rgba(59,130,246,.12); }
+#marketlist .mnone { margin: .8em .6em; color: #7a8292; font-family: var(--sans); line-height: 1.5; }
+#marketlist .mnone b { color: #aab2c0; font-family: var(--mono); }
+#marketlist .mnone em { font-style: italic; }
+#feedlist { flex: 1 1 auto; min-height: 0; list-style: none; margin: 0; padding: 0 .6em .5em; overflow-y: auto; overscroll-behavior: contain;
+  scrollbar-width: thin; scrollbar-color: #262b36 transparent; }
+#feedlist li { display: grid; grid-template-columns: 3.4em 3.6em 1fr auto; gap: .5em; align-items: baseline;
+  padding: .28em .3em; border-bottom: 1px solid rgba(255,255,255,.04); font-size: .88em; line-height: 1.3; }
+#feedlist .ft { font: .85em var(--mono); color: #4b5261; }
+#feedlist .fa { font: 700 .8em var(--mono); }
+#feedlist .fs { color: #c3c9d4; min-width: 0; }
+#feedlist .fs small { display: block; color: #7a8292; font-size: .88em; }
+#feedlist .fp { font: 600 .9em var(--mono); }
+#feedlist .lv-quiet .fs { color: #7a8292; }
+#feedlist .lv-trade .fs { color: #fff; font-weight: 600; }
+#feedlist .lv-warn .fs { color: #fca5a5; font-weight: 600; }
+
+/* The line at the top of the feed is the thing being said right now. Give it the weight of a
+   caption on a broadcast -- its own space, its speaker's colour down the edge, and an entrance --
+   and let everything below it read as the history it is. This is where the long sentences went
+   when the bubbles were cut to one short line each. */
+#feedlist li:first-child { position: relative; font-size: 1.02em; padding: .6em .3em .6em .8em;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--a, #6b7384) 12%, transparent), transparent 55%);
+  border-bottom-color: rgba(255,255,255,.09); animation: capin .32s ease-out; }
+#feedlist li:first-child::before { content: ''; position: absolute; left: 0; top: .45em; bottom: .45em;
+  width: 2px; border-radius: 2px; background: var(--a, #6b7384); }
+#feedlist li:first-child .fs { color: #eef1f6; }
+#feedlist li:first-child.lv-quiet .fs { color: #aeb6c4; }
+@media (prefers-reduced-motion: no-preference) { @keyframes capin { from { opacity: 0; transform: translateY(-5px); } }
+}
+
+#floor-meta.alert { color: #fecaca; background: rgba(239, 68, 68, .14); border: 1px solid #6b1f27; padding: 3px 10px;
+  border-radius: 999px; letter-spacing: .02em; text-transform: none; font: 600 12px var(--sans); text-align: right; max-width: 75%; }
+#floor-meta.alert small { color: #d9a3a8; font-weight: 400; font-size: 11px; margin-left: 6px; }
+
+/* ---- status board on the left wall ---------------------------------------
+   State, then what the desk is doing now, then the last thing it did, with the
+   standing facts pinned to the bottom under a rule so the gap above them reads
+   as a footer rather than as a board that ran out of things to say. */
+
+#status { position: absolute; box-sizing: border-box; padding: .7em .85em .6em; overflow: hidden;
+  display: flex; flex-direction: column; color: var(--brd-body); line-height: 1.35; font-variant-numeric: tabular-nums; }
+#status > * { flex: none; }
+/* on a small board the mode has nowhere to go: it wraps to its own line rather than being sliced */
+#status .st { display: flex; flex-wrap: wrap; align-items: center; gap: .3em .5em; padding-bottom: .5em;
+  border-bottom: 1px solid var(--brd-rule);
+  font: 700 1.15em/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+#status .st i { width: .48em; height: .48em; border-radius: 50%; background: currentColor; box-shadow: 0 0 7px currentColor; flex: none; }
+#status .st em { margin-left: auto; font: 600 .6em/1 var(--mono); font-style: normal; letter-spacing: .16em; color: var(--brd-label); }
+#status .st em.real { color: var(--red); }
+#status .st.good { color: var(--green); } #status .st.warn { color: var(--amber); } #status .st.bad { color: var(--red); }
+#status p { margin: .55em 0 0; }
+#status .alarm { color: var(--brd-bright); font-weight: 600; }
+/* Two figures, each set large over a small word, side by side in hairline tiles. */
+#status .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: .45em; margin: .7em 0 0; }
+#status .tiles > div { display: flex; flex-direction: column; gap: .3em; min-width: 0; padding: .55em .6em .5em;
+  border: 1px solid var(--brd-rule); border-radius: 6px; background: rgba(140,168,210,.035); }
+#status .tiles b { font: 700 1.45em/1 var(--sans); letter-spacing: -.02em; color: var(--brd-bright); }
+#status .tiles span { font: 500 .74em/1.2 var(--sans); color: #8892a3; }
+#status .tiles .off b { color: #5d6678; }
+#status .pairs, #status .near, #status .room, #status .next { display: flex; flex-direction: column; gap: .22em; margin: .7em 0 0; min-width: 0; }
+/* how much room is left before each of the desk's own limits */
+#status .rr { display: flex; flex-wrap: wrap; gap: .2em .9em; font-size: .86em; color: #8892a3; }
+#status .rr b { font-weight: 700; color: var(--brd-bright); }
+/* why the desk is not trading: the gap it can see, and the gap it needs */
+#status .nx { font-size: .92em; color: #aeb6c4; }
+#status .nx b { font-weight: 700; color: var(--brd-bright); }
+#status .nx.good b { color: #6ee7a0; }
+#status .nn { font-size: .82em; color: #8892a3; }
+#status .nn i { font-style: normal; color: #6f7788; }
+/* where the money is: a label and its figure on one line, on hairlines, like a statement */
+#status .mny { display: flex; flex-direction: column; margin: .7em 0 0; }
+#status .mny div { display: flex; justify-content: space-between; align-items: baseline; gap: .6em;
+  padding: .34em 0; border-top: 1px solid var(--brd-rule); }
+#status .mny div:last-child { border-bottom: 1px solid var(--brd-rule); }
+#status .mny dt { font: 500 .8em/1 var(--sans); color: #8892a3; white-space: nowrap; }
+#status .mny dd { margin: 0; font: 600 .95em/1 var(--mono); color: var(--brd-bright); white-space: nowrap; }
+#status .lh { font: 600 .64em/1.2 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--brd-label); }
+#status .dim { margin-top: auto; padding-top: .5em; border-top: 1px solid var(--brd-rule);
+  font: .62em/1.5 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--brd-label); }
+#status.compact .extra, #status.compact .dim { display: none; }
+
+/* ---- alert: the pill in the floor's title bar opens the decision panel ---- */
+
+#floor-meta.alert { cursor: pointer; }
+#floor-meta.alert .open { margin-left: 8px; color: #fff; font-weight: 700; }
+
+/* ---- wall screen: one number, a few positions, details on click ---------- */
+
+#wall { position: absolute; z-index: 1; pointer-events: auto; box-sizing: border-box; padding: .75em 1em .6em; overflow: hidden;
+  display: flex; flex-direction: column; color: var(--brd-body); font-family: var(--sans); line-height: 1.35;
+  font-variant-numeric: tabular-nums; }
+#wall button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
+#wall .wh { display: flex; justify-content: space-between; align-items: center; gap: .8em; flex: none;
+  padding-bottom: .45em; border-bottom: 1px solid var(--brd-rule);
+  font: 600 .72em/1 var(--mono); letter-spacing: .16em; text-transform: uppercase; color: var(--brd-label); }
+#wall .wh span:first-child { color: #9aa4ba; }
+#wall .wh b.pos, #wall .wh b.neg { margin-right: .55em; font-weight: 700; }
+#wall .wback { font: 600 1em var(--mono) !important; letter-spacing: .08em; color: #9cc3f0 !important; }
+#wall .wbig { flex: none; margin-top: .1em; font: 800 2.1em/1.05 var(--sans); letter-spacing: -.03em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+#wall .wsub { flex: none; margin: .3em 0 0; font-size: .74em; color: var(--brd-label); }
+/* the split under the number: a two-line statement, label left and figure right, on hairlines */
+#wall .wstats { flex: none; display: flex; flex-direction: column; margin: .8em 0 .4em; font-size: .92em; }
+#wall .wstats div { display: flex; justify-content: space-between; align-items: baseline; gap: .8em; padding: .34em 0; border-top: 1px solid var(--brd-rule); }
+#wall:not(.wide) .wstats .x { display: none; }
+#wall .wstats div:last-child { border-bottom: 1px solid var(--brd-rule); }
+/* stacked above the list there is no height for a statement: the two figures sit on one line */
+#wall:not(.wide) .wstats { flex-direction: row; gap: 1.4em; margin: .45em 0 .3em; }
+#wall:not(.wide) .wstats div { justify-content: flex-start; gap: .45em; padding: 0; border: 0; }
+/* Too short to stack a hero digit, its label and a breakdown above the list and still show any
+   positions: drop to one line -- the number alone, no subtitle, no Maker/Cross-venue split (both
+   are still one click away by opening a position or reading the header stats elsewhere). */
+#wall.compact .wnum { display: flex; align-items: baseline; gap: .5em; }
+#wall.compact .wbig { margin-top: 0; font-size: 1.3em; }
+#wall.compact .wsub, #wall.compact .wstats { display: none; }
+#wall .wstats dt { font: 500 .8em/1 var(--sans); color: #8892a3; }
+#wall .wstats dd { margin: 0; font: 600 .95em/1 var(--mono); color: #d5dae3; }
+/* Wide and shallow: the number takes a column of its own and the book takes the rest, instead of
+   the book being squeezed into whatever height is left under the number. */
+#wall .wbody { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; margin-top: .5em; }
+#wall.wide .wbody { flex-direction: row; gap: 1.2em; align-items: stretch; }
+#wall .wnum { flex: none; }
+#wall.wide .wnum { min-height: 0; overflow: hidden; }
+#wall .wstats dt, #wall .wstats dd { white-space: nowrap; }
+#wall.wide .wnum { width: 27%; max-width: 15em; min-width: 11em; padding-right: 1.2em; border-right: 1px solid var(--brd-rule); }
+/* min-height:0 matters here specifically: in the tall (not .wide) layout #wall.wbody is a column
+   flex container, so wbook's height is its main axis and a flex item's default min-height is its
+   content size. Without this it never shrank to the space actually left for it, so it overflowed
+   the room's fixed-size box instead of asking .wlist below to scroll -- the extra rows were simply
+   clipped by #wall's own overflow:hidden, unreachable by any scroll. */
+#wall .wbook { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+/* The header row is the sort control, Finder- or TradingView-style: click a column to sort by it,
+   click the active one again to flip the arrow. Type sorts maker rows apart from arbs; Side groups long, short and both. */
+/* Same font-size as a row (.88em), so the em-sized columns, gap and padding come out the same width
+   and each heading sits over its column; the labels are made smaller one level down. */
+#wall .wcols { flex: none; display: grid; grid-template-columns: minmax(0, 1fr) 5.4em 5.4em 5.6em; gap: .8em; align-items: center;
+  padding: 0 .35em .5em .75em; margin-bottom: .2em; border-bottom: 1px solid var(--brd-rule);
+  font: 600 .88em/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--brd-label); }
+#wall .wcols > * { font-size: .91em; }
+#wall .wcols button { display: inline-flex; align-items: center; gap: .3em; padding: .3em 0; margin: -.3em 0; }
+#wall .wcols button:hover { color: #cdd6e6; }
+#wall .wcols button.on { color: #dceaff; }
+#wall .wcols button[data-wcol="pl"], #wall .wcols button[data-wcol="value"] { justify-content: flex-end; text-align: right; }
+#wall .wcols i { font-style: normal; font-size: .9em; }
+#wall .val { font: 500 .92em var(--mono); text-align: right; color: #aeb6c4; }
+#wall .wlist { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #243047 transparent; }
+/* A position is a row with a side: the tint down its left edge says long or short before the words do. */
+#wall .wr { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 5.4em 5.4em 5.6em; gap: .8em; align-items: first baseline; width: 100%;
+  padding: .26em .35em .26em .75em; font-size: .88em; border-bottom: 1px solid var(--brd-rule); border-radius: 5px; }
+#wall .wr::before { content: ''; position: absolute; left: 0; top: .4em; bottom: .4em; width: 2px; border-radius: 2px; background: var(--brd-rule2); }
+#wall .wr.long::before { background: rgba(34,197,94,.65); }
+#wall .wr.short::before { background: rgba(239,68,68,.65); }
+#wall .wr.arb::before { background: rgba(125,170,255,.65); }
+#wall .wr:hover { background: rgba(120,160,230,.07); }
+/* One row, one line. A 60-character market name used to wrap every row onto two and the book
+   turned into a ragged paragraph; the overflow fades rather than ending in an ellipsis. */
+#wall .wr .nm { color: #e2e6ee; min-width: 0; white-space: nowrap; overflow: hidden; }
+/* one line, cut at whole words by fitWords in app.js -- never an ellipsis, never a fade */
+.fitw { display: block; min-width: 0; white-space: nowrap; overflow: hidden; }
+.fitw [hidden] { display: none; }
+#wall .sd { justify-self: start; font: 600 .66em/1 var(--mono); letter-spacing: .1em; padding: .35em .55em; border-radius: 999px; white-space: nowrap; }
+#wall .sd.long { color: #6ee7a0; background: rgba(34,197,94,.10); }
+#wall .sd.short { color: #fca5a5; background: rgba(239,68,68,.10); }
+#wall .sd.arb { color: #a9c6ff; background: rgba(125,170,255,.12); }
+#wall .pl { font: 600 .92em var(--mono); text-align: right; }
+#wall .wempty { color: #7a8497; margin: .7em 0; }
+#wall .wtitle { flex: none; margin-top: .55em; font: 700 1.35em/1.25 var(--sans); letter-spacing: -.01em; color: #fff; }
+#wall .wq { flex: none; margin: .25em 0 .5em; font-size: .8em; color: #7a8497; }
+#wall .wfacts { flex: none; display: grid; grid-template-columns: auto 1fr; gap: .35em .9em; margin: 0; font-size: .88em; }
+#wall .wfacts dt { color: var(--brd-label); } #wall .wfacts dd { margin: 0; color: #d5dae3; }
+#wall .wread { flex: none; margin: .7em 0 0; padding-top: .55em; border-top: 1px solid var(--brd-rule); color: #aeb6c4; font-size: .9em; }
+#wall .wread.warn { color: #e8c35a; } #wall .wread.bad { color: #fca5a5; }
+#wall .wlog { flex: 1 1 auto; min-height: 0; overflow-y: auto; list-style: none; margin: .5em 0 0; padding: 0; font-size: .86em; }
+#wall .wlog li { display: grid; grid-template-columns: 3.2em 1fr; gap: .6em; padding: .36em 0; border-bottom: 1px solid var(--brd-rule); }
+#wall .wlog .t { font: .85em var(--mono); color: #4f5a6e; }
+#wall .wlog .lv-quiet { color: #8a93a3; } #wall .wlog .lv-trade { color: #fff; font-weight: 600; } #wall .wlog .lv-warn { color: #fca5a5; }
+
+/* ---- fills board and clock -----------------------------------------------
+   The tape used to be green on green on green, which made a list of trades
+   into a wash. The side is a tint down the edge and one coloured word; the
+   rest of the row is the same body type as every other board. */
+
+#tape { position: absolute; z-index: 1; pointer-events: auto; box-sizing: border-box; padding: .7em .75em .6em; display: flex; flex-direction: column;
+  font-family: var(--sans); color: var(--brd-body); overflow: hidden; font-variant-numeric: tabular-nums; }
+#tape .th { flex: none; display: flex; justify-content: space-between; align-items: center; gap: .6em; padding: 0 0 .45em;
+  border-bottom: 1px solid var(--brd-rule);
+  font: 600 .72em/1 var(--mono); letter-spacing: .16em; text-transform: uppercase; color: var(--brd-label); }
+#tape .th > span:first-child { color: #9aa4ba; }
+#tape .tbody { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+#tape ol { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; list-style: none; margin: 0; padding: 0; }
+#tape li { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: .6em; row-gap: .12em; align-items: baseline;
+  padding: .42em .3em .42em .65em; border-bottom: 1px solid var(--brd-rule); }
+#tape li::before { content: ''; position: absolute; left: 0; top: .4em; bottom: .4em; width: 2px; border-radius: 2px; }
+#tape li.buy::before { background: rgba(34,197,94,.6); }
+#tape li.sell::before { background: rgba(239,68,68,.6); }
+#tape .act { font-size: .9em; color: var(--brd-bright); font-weight: 600; white-space: nowrap; }
+#tape .act b { font-weight: 700; }
+#tape .act i { font-style: normal; font-weight: 500; color: #8892a3; }
+
+#tape li.buy .act b { color: #6ee7a0; } #tape li.sell .act b { color: #fca5a5; }
+#tape .px { font: 600 .86em var(--mono); color: #d5dae3; text-align: right; }
+#tape .nm { font-size: .78em; color: #79839a; min-width: 0; }
+#tape .nm i { font-style: normal; }
+#tape .ago { font: .7em var(--mono); color: #5a6478; text-align: right; white-space: nowrap; }
+/* the clock in the header: minutes are the fact, seconds the pulse */
+#tape .tclock { display: flex; align-items: baseline; gap: .35em; letter-spacing: 0; text-transform: none; }
+#tape .tclock b { font: 600 1.55em/1 var(--mono); color: #99a3b7; font-variant-numeric: tabular-nums; }
+#tape .tclock b .sec { color: #59627a; }
+#tape .tclock b.on { color: #34d399; } #tape .tclock b.on .sec { color: rgba(52,211,153,.55); }
+#tape .tclock small { font: 600 .8em/1 var(--mono); letter-spacing: .12em; color: #59627a; }
+/* A scrolling board that ends mid-row looks broken rather than long. When there is more below,
+   the last strip fades -- set by placeBoards, which is the only place that knows it overflows. */
+#tape.more ol, #wall.more .wlist { -webkit-mask-image: linear-gradient(#000 calc(100% - 1.5em), transparent);
+  mask-image: linear-gradient(#000 calc(100% - 1.5em), transparent); }
+#tape .none { color: #5a6478; text-align: center; margin: auto 0; font-size: .9em; }
+#tape .none[hidden], #tape ol[hidden] { display: none; }
+#wall .wr .nm i { font-style: normal; color: var(--brd-label); font-size: .85em; }
+#wall .wrecap { flex: none; list-style: none; margin: .7em 0 0; padding: .55em 0 0; border-top: 1px solid var(--brd-rule); font-size: .92em; color: #c9cfd9; }
+#wall .wrecap li { padding: .24em 0; }
+#wall .wrecap b { font-family: var(--mono); font-weight: 600; }
+#tape li[data-t], #tape li[data-f] { cursor: pointer; border-radius: 5px; }
+#tape li[data-t]:hover, #tape li[data-f]:hover, #tape li.on { background: rgba(80,200,120,.10); }
+
+/* ---- P&L chart (small on the floor, large on the wall) -------------------
+   Four rows, each with one job: which series, the number, the plot, the range.
+   The change over the range used to sit at the bottom next to the range buttons,
+   where it read as a caption; it belongs beside the number it is a change in. */
+
+#chart { position: absolute; z-index: 1; pointer-events: auto; box-sizing: border-box; padding: .7em .8em .6em; }
+.pnl { display: flex; flex-direction: column; font-family: var(--sans); color: var(--brd-body); user-select: none;
+  font-variant-numeric: tabular-nums; }
+/* the chart opened large, over the page */
+#chartbig { position: fixed; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center;
+  padding: 24px; background: rgba(4,6,10,.72); }
+#chartbig[hidden] { display: none; }
+#chartbig .cbbox { display: flex; flex-direction: column; width: min(1100px, 100%); height: min(640px, 100%);
+  box-sizing: border-box; padding: 16px 20px 12px; border-radius: 12px; background: #0b0f17;
+  border: 1px solid var(--brd-rule2); box-shadow: 0 20px 60px rgba(0,0,0,.55); color: var(--brd-body); font: 15px/1.35 var(--sans); }
+#chartbig .cbh { flex: none; display: flex; justify-content: space-between; align-items: center; gap: .8em;
+  font: 600 .72em/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--brd-label); }
+#chartbig .cbback { font: 600 1em var(--mono); letter-spacing: .08em; color: #9cc3f0; background: none; border: 0; padding: .3em 0; cursor: pointer; }
+#chartbig .pnl.big { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; margin-top: .6em; }
+#chartbig .pnl.big .seg button { font-size: .8em; padding: .4em .95em; }
+/* touch has no drag-to-measure, so a phone does not advertise it */
+@media (max-width: 640px) { #chartbig { padding: 8px; } #chartbig .cbbox { height: min(460px, 100%); padding: 12px; } #chartbig .cbh span { display: none; }
+}
+.pnl button { font: inherit; background: none; border: 0; cursor: pointer; color: inherit; padding: 0; }
+.pnl .ct, .pnl .cb { flex: none; display: flex; align-items: center; gap: .5em; }
+/* the stand's title row is a board header like the others: same type, same rule under it */
+#chart .ct { padding-bottom: .45em; border-bottom: 1px solid var(--brd-rule); }
+#chart .ctitle { font: 600 .72em/1 var(--mono); letter-spacing: .16em; text-transform: uppercase; color: #9aa4ba; }
+#chart .chead { margin-top: .5em; }
+.pnl .seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 999px;
+  background: rgba(255,255,255,.035); border: 1px solid var(--brd-rule2); }
+/* #wall button resets every button on the wall screen, so these need the id to win there too */
+.pnl .seg button, #wall .pnl .seg button { font: 600 .82em/1 var(--sans); color: #7a8497; padding: .36em .5em; border-radius: 999px; }
+.pnl .seg button.on, #wall .pnl .seg button.on { background: #212b3c; color: var(--brd-bright);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.05); }
+.pnl .seg button:hover:not(.on), #wall .pnl .seg button:hover:not(.on) { color: #c9cfd9; }
+.pnl .seg button:disabled, #wall .pnl .seg button:disabled { color: #3e4655; cursor: default; opacity: .55; }
+/* a 6px glyph is not a button: the padding is the hit target, not decoration */
+.pnl .cx { margin-left: auto; padding: .2em .35em !important; color: var(--brd-label) !important; font-size: 1em !important; line-height: 1; }
+.pnl .cx:hover { color: #9cc3f0 !important; }
+.pnl .cx ~ .cx { margin-left: 0; }
+/* the candle size: a button that cycles on the small chart, a row of buttons on the large one */
+/* ranges and candle size share the bottom row */
+.pnl .cb { flex-wrap: wrap; row-gap: .35em; }
+.pnl .seg button, #wall .pnl .seg button { white-space: nowrap; }
+/* the headline: what it is worth now, and how far that has moved over the range */
+.pnl .chead { flex: none; display: flex; align-items: baseline; gap: .6em; margin: .4em 0 .05em; min-width: 0; overflow: hidden; }
+.pnl .cv { font: 700 1.5em/1 var(--mono); letter-spacing: -.02em; }
+.pnl.big .cv { font-size: 2.4em; }
+.pnl .cd { margin-left: auto; font: 600 .7em/1 var(--mono); color: var(--brd-label); white-space: nowrap; }
+.pnl.big .cd { font-size: .95em; }
+.pnl .cplot { position: relative; flex: 1 1 auto; min-height: 0; margin: .3em 0 .4em; cursor: crosshair; touch-action: none; }
+/* clicked: the plot is outlined, and the trackpad zooms it */
+.pnl .cplot { border-radius: 4px; transition: box-shadow .15s; }
+.pnl .cr { margin-left: auto; min-width: 0; overflow: hidden; white-space: nowrap;
+  font: .68em/1 var(--mono); color: #7a8497; text-align: right; }
+.pnl.big .cr, .pnl.big .ctip { font-size: .85em; }
+.pnl .cr b { font-weight: 700; }
+
+/* ---- Ask: a question box for the desk ------------------------------------ */
+
+/* A drawer, not a page: the floor keeps running beside it. On a wide window the page makes room
+   for it (the room re-fits, nothing is hidden behind the drawer); on a narrower one it lies over
+   the right-hand boards; on a phone it is a sheet from the bottom. Same palette as the alert panel. */
+:root { --askw: 420px; }
+.hside { display: flex; align-items: center; gap: 16px; min-width: 0; }
+/* Below that it lies over the right of the floor, so it is narrower, and the two things on the floor
+   that need a person are moved clear of it: the alert pill (the title bar's right edge stops short of
+   the drawer) and the alert panel (squeezed into the part of the room still showing). */
+@media (min-width: 641px) and (max-width: 899px) {
+  :root { --askw: 360px; }
+}
+/* The Ask button takes header room the meta strip used to have. When the strip is too long (a halt
+   with a long reason, alerts, DEMO) it is clipped from the left -- Day and Uptime go first, the
+   Position/HALT end stays -- instead of wrapping the title onto two lines and taking height from
+   the floor. */
+.hside .meta { min-width: 0; overflow: hidden; white-space: nowrap; justify-content: flex-end; }
+.hside .meta > span { flex: none; }
+
+/* phone: a sheet from the bottom, most of the screen, with a big close target */
+@media (max-width: 640px), (max-width: 900px) and (max-height: 500px) {
+  /* Mobile is an information dashboard, not a scaled-down control room. Let the document scroll,
+     keep all touch targets readable, and replace the canvas wall with a compact state summary. */
+  html, body { height: auto; min-height: 100%; overflow-x: hidden; overflow-y: auto; }
+  body { min-height: 100dvh; }
+  .wrap { width: 100%; height: auto; min-height: 100dvh; padding: max(8px, env(safe-area-inset-top)) 8px max(12px, env(safe-area-inset-bottom)); gap: 8px; justify-content: flex-start; }
+  header { min-height: 44px; gap: 8px; padding: 1px 4px; }
+  .brand { gap: 8px; min-width: 0; }
+  .brand svg { width: 24px; height: 24px; }
+  h1 { font-size: 17px; }
+  .hside { margin-left: auto; gap: 7px; }
+  .pill { gap: 6px; padding: 5px 9px 5px 8px; font-size: 10px; }
+
+  #floor { flex: none; min-height: 0; overflow: visible; }
+  #floor .ph { min-height: 36px; padding: 8px 10px; }
+  .desktop-title { display: none; }
+  .mobile-title { display: inline; }
+  #floor-meta { max-width: 54%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #floor-meta.alert { padding: 2px 7px; font-size: 10px; }
+  #floor-meta.alert small, #floor-meta.alert .open { display: none; }
+
+  #mobile-summary { display: block; padding: 12px; background: #080c13; border-bottom: 1px solid #1a2233; font-family: var(--sans); }
+  .m-label { display: block; margin-bottom: 5px; color: #67718a; font: 700 9px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; }
+  .m-hero { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+  .m-hero strong { display: block; font: 700 28px/1 var(--mono); letter-spacing: -.04em; }
+  .m-hero > div > small { display: block; margin-top: 5px; color: #6f788a; font-size: 11px; }
+  .m-state { display: inline-flex; align-items: center; gap: 6px; padding: 6px 8px; border: 1px solid #293244; border-radius: 999px; color: #9aa3b3; font: 700 9px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; white-space: nowrap; }
+  .m-state > i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; box-shadow: 0 0 7px currentColor; }
+  .m-state > small { padding-left: 6px; border-left: 1px solid rgba(255,255,255,.1); color: #687185; font-size: 8px; }
+  .m-state.good { color: #4ade80; border-color: rgba(34,197,94,.28); background: rgba(34,197,94,.08); }
+  .m-state.warn { color: #e8c35a; border-color: rgba(212,167,44,.28); }
+  .m-state.bad { color: #fca5a5; border-color: rgba(239,68,68,.32); }
+
+  .m-chart { height: 150px; margin-top: 9px; padding: 10px; border: 1px solid #1c2535; border-radius: 8px; background: rgba(255,255,255,.015); box-sizing: border-box; }
+  .m-chart .ct { gap: 6px; }
+  /* the card above already says "All paper trades"; the chart's own title would say it twice */
+  .m-chart .ctitle { display: none; }
+  .m-chart .ct { justify-content: flex-end; }
+  .m-chart .seg button { min-height: 24px; }
+  .m-chart .cplot { min-height: 58px; }
+  .m-chart .cplot { touch-action: pan-y; cursor: default; }
+
+  .m-fill { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; align-items: center; margin-top: 10px; padding: 10px; border: 1px solid #1c2535; border-radius: 8px; background: rgba(255,255,255,.015); }
+  .m-fill b { color: #eef1f6; font-size: 13px; }
+  .m-fill p { min-width: 0; margin: 0; color: #aeb6c4; font-size: 11px; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
+  .m-fill p small { display: block; color: #59647a; }
+  .m-fill.empty { grid-template-columns: 1fr; }
+
+  .m-agents { display: flex; align-items: center; gap: 10px; margin-top: 11px; }
+  .m-agents > .m-label { flex: none; margin: 0; }
+  .m-agents > div { display: flex; flex: 1 1 auto; justify-content: space-between; gap: 4px; min-width: 0; }
+  .m-agent { display: inline-flex; align-items: center; gap: 3px; color: #566073; font: 700 8px/1 var(--mono); }
+  .m-agent i { width: 5px; height: 5px; border-radius: 50%; background: #394255; }
+  .m-agent.on { color: #aeb6c4; }
+  .m-agent.on i { background: var(--agent); box-shadow: 0 0 6px var(--agent); }
+
+  .stage { display: block; min-height: 0; }
+  .room, #split { display: none; }
+  #feed { height: min(390px, 48dvh); min-height: 260px; border-top: 0; border-radius: 0 0 7px 7px; font-size: 13px; }
+  #feed .fh { padding: 12px 11px 6px; }
+  #feedlist { padding: 0 7px 8px; }
+  #feedlist li { grid-template-columns: 3em 3.3em minmax(0, 1fr) auto; gap: 5px; padding: 7px 4px; line-height: 1.35; }
+  #feedlist li:first-child { padding: 10px 4px 10px 9px; font-size: 1em; }
+  #feedlist .fs { overflow-wrap: anywhere; }
+  #marketlist { padding: 0 7px 8px; font-size: 13px; }
+  #marketlist .mcols { display: none; }
+  #marketlist .mlist li { grid-template-columns: 4.6em 4.6em 4.6em 1fr; grid-template-areas: 'nm nm nm nm' 'pm ks gap lk'; gap: 2px 6px; padding: 8px 4px; }
+  #marketlist .nm { grid-area: nm; margin-bottom: 3px; white-space: normal; }
+  #marketlist .v, #marketlist .g { text-align: left; }
+  /* the prices need saying on a phone: there is no column heading left to say it */
+  #marketlist .v.pm::before { content: 'PM '; color: #545c6b; }   /* under 16px, iOS zooms the whole page when the box takes focus */
+  .hside { gap: 10px; }
+}
+
+/* A phone turned sideways has width but almost no height after Safari's two toolbars. Put the
+   overview and activity beside each other; stacking them would merely replace a crushed canvas
+   with a page that needs several screens of scrolling. */
+@media (max-width: 900px) and (max-height: 500px) {
+  html, body { height: 100%; overflow: hidden; }
+  body { min-height: 0; }
+  .wrap { height: 100dvh; min-height: 0; padding: 4px max(8px, env(safe-area-inset-right)) 6px max(8px, env(safe-area-inset-left)); gap: 4px; }
+  header { min-height: 36px; }
+  #floor { display: grid; grid-template-columns: minmax(310px, 42%) minmax(0, 1fr); grid-template-rows: 32px auto minmax(0, 1fr); flex: 1 1 auto; min-height: 0; }
+  #floor .ph { grid-column: 1 / -1; grid-row: 1; min-height: 32px; padding: 6px 10px; }
+  #mobile-summary { grid-column: 1; grid-row: 3; min-height: 0; overflow-y: auto; padding: 10px; border-right: 1px solid #1a2233; border-bottom: 0; }
+  .stage { grid-column: 2; grid-row: 3; min-width: 0; min-height: 0; }
+  #split { display: none; }
+  .m-hero strong { font-size: 23px; }
+  .m-hero > div > small { margin-top: 3px; }
+  .m-state { padding: 5px 7px; }
+  .m-chart { height: 128px; margin-top: 8px; padding: 8px; }
+  .m-chart .cplot { min-height: 42px; }
+  .m-fill { margin-top: 8px; padding: 8px; }
+  .m-agents { margin-top: 8px; }
+  #feed { width: 100%; height: 100%; min-height: 0; border-left: 0; border-radius: 0 0 7px; }
+  #feed .fh { padding: 9px 10px 5px; }
+  #feedlist li { grid-template-columns: 2.8em 3.2em minmax(0, 1fr) auto; padding: 5px 3px; }
+  #feedlist li:first-child { padding: 7px 3px 7px 8px; }
+}
+
+/* ---- what only this desk has (desk.css before the split) ------------------------------------ */
 /* the way to the prediction-market desk's own floor, while it winds down: the lookout link's look */
 #pmlink { flex: none; font: 600 10px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: #b79cf0;
   border: 1px solid #2c2440; border-radius: 999px; padding: 7px 12px; white-space: nowrap; }
