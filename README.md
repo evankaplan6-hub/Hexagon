@@ -2,17 +2,81 @@
 
 [![test](https://github.com/evankaplan6-hub/Hexagon/actions/workflows/test.yml/badge.svg)](https://github.com/evankaplan6-hub/Hexagon/actions/workflows/test.yml)
 
-A six-agent prediction-market trading desk that prices the same events across **Polymarket** and **Kalshi**, trades the disagreements, and streams everything to a live dashboard. Zero npm dependencies (the dashboard's chart is one vendored file, TradingView Lightweight Charts); Node 20+.
+A paper trading desk for **stocks, crypto and options**. Six bots run three books on free public prices -- crypto live from Coinbase, SPY and its same-day options from Cboe -- and stream everything to a live trading floor. Zero npm dependencies (the chart is one vendored file, TradingView Lightweight Charts); Node 20+. **Paper only: nothing here can place a real order.**
+
+It started on 2026-09-10 as a prediction-market desk trading the gaps between Polymarket and Kalshi. Fifteen days of paper said there was no edge after fees (-$1,753 on $10,000, every book lost), so since 2026-09-25 that desk opens no new trades and runs what it holds to settlement, on its own floor at `/pm`. Everything from [The prediction-market desk](#the-prediction-market-desk-winding-down) down is that desk's record.
 
 ```bash
-cd hexagon
-node server.js            # paper account on live market data  →  http://localhost:8787
-DEMO=1 DATA_DIR=./data-demo node server.js   # synthetic Kalshi noise so you can watch fills/settles (separate account file)
+node server.js            # both desks on live market data  ->  http://localhost:8787  (and /pm)
+npm test                  # every suite, no network, no clock
+node tools/crypto-lab.js --fetch && node tools/crypto-lab.js   # the evidence behind the crypto book
 ```
 
-Copy `.env.example` to `.env` to change anything. State persists in `data/state.json`; `npm run reset` wipes the paper account.
+Copy `.env.example` to `.env` to change anything. The desk keeps its ledger in `data/desk/state.json` and every fill, rebalance and 12:30 verdict in `data/desk/journal-YYYY-MM-DD.jsonl`.
 
-## What it actually does
+## The stocks, crypto and options desk
+
+### The three books
+
+| Book | Holds | Rule | Checked | Paper cash |
+|---|---|---|---|---|
+| Crypto | BTC, ETH, SOL, a third each | hold each coin sized to swing about 40% a year: weight = min(1, 40% / its 30-day volatility) | once a day, after midnight UTC | $10,000 |
+| Stocks | SPY | the same at 15% a year, on 20 sessions | once a trading day, after the open | $10,000 |
+| Options | SPY same-day calls or puts | the afternoon trend-day rules, below | every five-minute bar, 12:30 to 3:15 | $1,000 |
+
+Each book keeps its own cash and is scored against simply holding what it trades, from its first trade: the wall screen says "holding would be ..." beside every book, and the chart draws holding as a dashed line. A book trades only when its target moves 10 points from the last one it traded to (0.72 becoming 0.83) or goes back to full size, so prices drifting never trade on their own. Rarely trading is normal here, as it was on the old desk.
+
+### Why these rules
+
+Nothing clever survived testing, so the books run the one thing that did.
+
+- **Stocks.** The ETF lab ([Stocks and ETFs](#stocks-and-etfs-the-same-lab-a-bigger-market), below) tried twelve strategies on 23 ETFs and nothing beat holding SPY out of sample. Volatility targeting was the one thing that improved anything: maximum drawdown 33.7% down to 18.7% and a better Sharpe, for 2.6 points of return a year. The stocks book is that rule with that lab's settings.
+- **Crypto.** `tools/crypto-lab.js` runs fixed rules, the same settings on every coin, on Coinbase's daily candles: decide on the UTC close, trade at the next open, pay a fee on every trade.
+
+  ```
+  2022-01-01 to 2026-09-24, 0.40% a side   BTC              ETH              SOL              LTC
+  hold                                     13.6% dd -67.0%  -6.4% dd -74.0%  -7.7% dd -94.4%  -13.9% dd -73.0%
+  volTarget 40%  (the book)                15.2% dd -54.9%   5.4% dd -56.6%  10.6% dd -64.5%    1.7% dd -57.1%
+  sma 50                                   14.0% dd -54.8%  21.0% dd -44.4%  30.8% dd -65.2%  -38.5% dd -93.6%
+  momentum 56d                             16.0% dd -52.0%  15.7% dd -59.7%   9.4% dd -77.8%  -11.0% dd -70.7%
+  ```
+
+  Volatility targeting beat holding on all four coins, with smaller drawdowns, and still did at 0.80% a side (`--bps 80`). The trend rules won big on one coin and lost big on the next. It is not magic: from 2024, in bitcoin's run, holding BTC did better (28.7% against 25.8% a year; `--from 2024-01-01`).
+- **Options.** Evan's own afternoon pattern, written down as rules in the investment stack (`~/Downloads/stack`, `strategies/2026-09-23-spy-0dte-afternoon-paper-test.md`) and ported line for line from its checker, `trend_day_check.py`. At 12:30 SPY must be at least half an ATR14 from the open, on the trend side of VWAP, and not have given back half its move. From 12:30 to 2:45 the first five-minute close at a new high (low) on the trend side of VWAP buys a call (put) 1 to 2 points out, priced $0.07 to $0.25, two contracts at $0.12 or less. One sells at 2x, the other at 3x; everything goes on a five-minute close back through VWAP, or at 3:15; one re-entry, only after a target hit; no trade on a 1 PM close. The stack's backtest found about one trend day in seven and too few trades to judge the rules; this book runs them every trading day so the sample grows on its own. It is small on purpose: at most two contracts a trade.
+
+### Fills, fees and the 15-minute delay
+
+- Crypto buys walk Coinbase's real order book, so a big order pays for its size, plus 0.40% of the notional (`DESK_CRYPTO_FEE_BPS`).
+- SPY fills at the bid or the ask, in fractional shares, with no commission.
+- Options fill at the bid or the ask, capped at the size shown, plus $0.03 a contract (`DESK_OPTION_FEE`). A target is a resting limit: it fills when the bid reaches it, or when the contract prints there after it was bought.
+- **Cboe's free feed is about 15 minutes late**, and the desk trades on it as exactly that: the price it decides on is the price it fills at, so a stock or option result is honest, just 15 minutes behind. It never buys off a tape that has stopped: after the close the SPY book waits for the next session rather than buy the 3:59 price at 4:30.
+- TESS stops all new buying for the rest of the Eastern day once the whole desk is down 5% (`DESK_MAX_DAILY_DD`). Selling is never blocked.
+
+### The bots
+
+| Bot | Job |
+|---|---|
+| HOLT | fetches every price: Coinbase each round, SPY's quote and minute bars while the tape runs |
+| ILSA | measures how hard each market has been swinging |
+| TESS | risk: stale prices, the daily loss limit, the market calendar |
+| RIGO | marks every holding and takes the options book's exits |
+| BRAM | decides what each book should hold; runs the 12:30 test and watches for the trigger |
+| KETT | fills every order at the real bid and ask, fees included |
+| PRED | the prediction-market desk, winding down: its P&L and what it still holds |
+
+The floor at `/` is the old floor's room and cast with new boards: the status board (is it working, the market clock, the options book's day), the wall screen (the three books, each holding, and what holding would have made; click a book or a bot), the fills, and the P&L chart. The Markets tab under it lists each market's price, how hard it swings, and how much the book wants to hold.
+
+### What it does not do
+
+It has no broker. Nothing in `src/desk/` can reach Robinhood, Public, Webull, Coinbase or any exchange, and nothing should without an explicit decision to build it. Evan's real accounts belong to the investment stack (`~/Downloads/stack`), read-only, and every real order is his to place.
+
+---
+
+## The prediction-market desk (winding down)
+
+> Since 2026-09-25 this desk opens no new trades. Its arbs settle by mid-October and its maker contracts as late as December, on its own floor at `/pm` (still reachable from the new floor's header). What follows is its record, kept as it was written.
+
+## What the prediction-market desk does
 
 Every 15 seconds the engine prices every matched pair fresh -- Polymarket from the CLOB order book, Kalshi by ticker -- then runs the desks in order below. The two listings pairs are matched from are re-read every two minutes: the top 300 Polymarket markets by volume (`PM_UNIVERSE`, `PM_LIST_EVERY_SEC`) and every open market in 11 Kalshi series (Fed decisions, ATP/WTA, MLB, NFL, NBA, NCAAF, MLS, EPL, UCL, La Liga; `KS_SERIES`, `KS_LIST_EVERY_SEC`). Both were read every cycle until 2026-09-22, when they were half of everything the desk downloaded on a box pinned at its CPU cap.
 
@@ -1442,7 +1506,16 @@ re-keying, not money.
 
 ## Layout
 ```
-server.js              HTTP + SSE server, .env loader, live-mode gate
+                       the stocks, crypto and options desk
+src/desk/engine.js     the three books' ledgers, the six bots' jobs, data/desk/, the floor's snapshot
+src/desk/books.js      the rules, pure: volatility targeting, and the SPY same-day options rules
+src/desk/feeds.js      Coinbase (live) and Cboe (15 minutes late): parsers, fetches, bars, VWAP, ATR14
+src/desk/broker.js     paper fills: the book or the touch, fees per asset; no live broker
+src/desk/clock.js      the NYSE calendar: sessions, holidays, 1 PM closes
+public/desk.*          the floor at /
+tools/crypto-lab.js    the evidence for the crypto book's rule (Coinbase daily candles)
+                       the prediction-market desk (winding down), and everything both share
+server.js              HTTP + SSE server for both desks, .env loader, live-mode gate
 src/config.js          all tunables
 src/engine.js          state, cash, positions, cycle loop, snapshot
 src/agents.js          the six desks (I/O and sequencing)
@@ -1460,7 +1533,7 @@ src/whales.js          whale watch: top wallets' big bets on Polymarket's leader
 src/ask.js             the Ask panel: a read-only Claude tool loop over the desk, with its own daily ceiling
 src/ask-tools.js       the Ask panel's eleven read-only tools (whitelisted fields, bounded output, secrets scrubbed)
 src/sse.js             the dashboard's event stream: one gzip per tab, flushed after every frame
-public/                dashboard (index.html, style.css, app.js; vendor/ holds TradingView Lightweight Charts, which draws the P&L chart)
+public/                the prediction-market floor at /pm (index.html, app.js); style.css is shared with desk.html; vendor/ holds TradingView Lightweight Charts, which draws both P&L charts
 data/state.json        persisted account (created on first run)
 data/ticks-*.jsonl     tick tape, one line per priced pair per cycle (RECORD=1)
 tools/maker-replay.js  the maker desk against Kalshi's own trade history, same pure functions as live

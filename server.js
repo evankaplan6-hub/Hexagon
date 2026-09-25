@@ -8,6 +8,7 @@ const crypto = require('crypto');
 require('./src/env').loadEnv(path.join(__dirname, '.env'));
 const cfg = require('./src/config');
 const { Engine } = require('./src/engine');
+const { Desk } = require('./src/desk/engine');
 const { actionRefusal, rebindRefusal, routeAsk } = require('./src/ask');
 const chaintape = require('./src/chaintape');
 const { crashRecord } = require('./src/journal');
@@ -26,11 +27,37 @@ if (cfg.mode === 'live') {
 }
 
 const engine = new Engine(cfg);
+// The stocks, crypto and options desk (src/desk/), the desk's main work since 2026-09-25. It shares
+// this process with the prediction-market desk above and nothing else: its own ledger under
+// data/desk/, its own journal, its own loop, and no broker at all -- paper only whatever MODE says.
+// The prediction-market desk keeps running until its last positions settle; PRED, the new floor's
+// seventh desk, is this one-line summary of it.
+function pmSummary() {
+  const s = engine.state, m = s.maker || {};
+  const mk = Object.values(m.markets || {});
+  const now = Date.now();
+  const next = s.positions.map((p) => p.settlesAt).filter((t) => Number.isFinite(t) && t > now).sort((a, b) => a - b)[0] || null;
+  const groups = new Set(s.positions.map((p) => p.group || p.id)).size;
+  const contracts = mk.reduce((a, x) => a + Math.abs(x.inv || 0), 0);
+  const pnl = Math.round(((engine.equity() - s.initial) + (Number.isFinite(m.equity) ? m.equity - cfg.initialBalance : 0)) * 100) / 100;
+  return {
+    pnl, groups, held: mk.filter((x) => x.inv).length, contracts, nextSettle: next, lastCycleAt: engine.beat.taker, url: '/pm',
+    note: groups || contracts ? `winding down: ${groups} arb${groups === 1 ? '' : 's'}, ${contracts.toLocaleString()} held` : 'all settled',
+  };
+}
+// A desk that cannot load its ledger stays down with the reason in the log, and the page falls back
+// to the prediction-market floor: its positions still have to settle.
+let desk = null;
+if (cfg.desk.on) {
+  try { desk = new Desk(cfg, { legacy: pmSummary }); }
+  catch (e) { console.error(`stocks/crypto/options desk not started: ${e.message}`); }
+}
 // START, STOP and CRASH in the journal (src/journal.js says why): a restart the desk did not ask
 // for has to be countable the next morning, not just visible in a log that rolls over in half an
 // hour. Never in the way of starting or exiting: the journal already swallows a failed write.
 const lifecycle = (kind, payload) => { try { engine.journal(engine, kind, payload); } catch { /* the exit still happens */ } };
 const clients = new Set();
+const deskClients = new Set();
 const PUBLIC = path.join(__dirname, 'public');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json' };
 
@@ -227,6 +254,16 @@ function handle(req, res) {
       })
       .catch((e) => { res.writeHead(500); res.end(String(e.message).slice(0, 200)); });
   }
+  // The stocks, crypto and options desk: its snapshot, its P&L history, and its own stream.
+  if (desk && p === '/api/desk/state') return json(res, desk.snapshot());
+  if (desk && p === '/api/desk/history') return json(res, desk.pnlHistory());
+  if (desk && p === '/api/desk/stream') {
+    const client = sse.openStream(req, res);
+    client.send(sse.frame(desk.snapshot()));
+    deskClients.add(client);
+    req.on('close', () => { deskClients.delete(client); client.close(); });
+    return;
+  }
   if (p === '/api/state') return json(res, engine.snapshot());
   if (p === '/api/pairs') return json(res, engine.pairs.map((x) => ({ ...x, q: x.q || null })));
   // Every market the desk is watching on one subject: MLB, UFC, Elections, Weather. The state
@@ -296,7 +333,9 @@ function handle(req, res) {
     req.on('close', () => { clients.delete(client); client.close(); });
     return;
   }
-  const rel = p === '/' ? '/index.html' : p;
+  // The floor at / is the stocks, crypto and options desk; the prediction-market desk's own page,
+  // unchanged, is at /pm while it winds down.
+  const rel = p === '/' ? (desk ? '/desk.html' : '/index.html') : p === '/pm' ? '/index.html' : p;
   const file = path.join(PUBLIC, path.normalize(rel));
   if (!file.startsWith(PUBLIC) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
     res.writeHead(404); return res.end('not found');
@@ -322,6 +361,11 @@ setInterval(() => {
   const payload = sse.frame(engine.snapshot({ histories: false }));
   for (const c of clients) c.send(payload);
 }, 2000);
+setInterval(() => {
+  if (!desk || !deskClients.size) return;
+  const payload = sse.frame(desk.snapshot());
+  for (const c of deskClients) c.send(payload);
+}, 2000);
 
 // Loopback by default: /api/positions and the whole activity log are unauthenticated, and on a
 // live account that is not something to hand the local network. BIND_HOST=0.0.0.0 to override.
@@ -330,14 +374,17 @@ server.listen(cfg.port, cfg.bindHost, () => {
 });
 
 engine.start().catch((e) => { console.error('engine failed to start:', e); lifecycle('CRASH', crashRecord('engine.start', e)); process.exit(1); });
+// Its own start, and a failure there is its own: the prediction-market desk keeps settling either way.
+// Not a CRASH line in the journal: the process carries on, and tools/restarts.js counts CRASH as a restart.
+if (desk) desk.start().catch((e) => { console.error('desk failed to start:', e); });
 // The chain recorder's schedule (CHAINS=1: the box, which has no cron). A child process, so
 // nothing it does can stall a desk loop or take the desk down with it.
 if (cfg.chains) require('./src/chainsched').start({ dataDir: cfg.dataDir, keepDays: cfg.chainsKeepDays });
 
 // A deploy stops the desk with SIGTERM, so STOP is what tells a deploy's restart from a crash's.
-for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { lifecycle('STOP', { signal: sig }); engine.save(); console.log('\nstate saved, bye'); process.exit(0); });
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { lifecycle('STOP', { signal: sig }); engine.save(); if (desk) desk.save(); console.log('\nstate saved, bye'); process.exit(0); });
 // Whatever else gets past every catch above still exits (Fly restarts the desk), but with the
 // ledger saved first rather than losing the last ten seconds of it -- the same courtesy a signal gets.
 for (const ev of ['uncaughtException', 'unhandledRejection']) {
-  process.on(ev, (e) => { console.error(`${ev}:`, (e && e.stack) || e); lifecycle('CRASH', crashRecord(ev, e)); try { engine.save(); } catch { /* nothing left to save with */ } process.exit(1); });
+  process.on(ev, (e) => { console.error(`${ev}:`, (e && e.stack) || e); lifecycle('CRASH', crashRecord(ev, e)); try { engine.save(); } catch { /* nothing left to save with */ } try { if (desk) desk.save(); } catch { /* same */ } process.exit(1); });
 }

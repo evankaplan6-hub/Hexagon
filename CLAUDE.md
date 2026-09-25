@@ -4,27 +4,43 @@
 until 2026-09-10; it was moved here with its full git history. There is no other Hexagon
 checkout — if you find a reference to `~/claude/hexagon` anywhere, it is stale.
 
-**The Hexagon** is a six-agent prediction-market trading desk that prices the same events on
-Polymarket and Kalshi, trades the disagreements, and streams to a live dashboard.
+**The Hexagon** is a paper trading desk for **stocks, crypto and options**, its main scope since
+2026-09-25: six bots run three paper books on free public prices -- crypto (BTC, ETH, SOL, live from
+Coinbase), stocks (SPY) and options (SPY same-day), both from Cboe about 15 minutes late -- and stream
+them to a live trading floor at `/`. The code is `src/desk/`; README's first section explains it.
+
+It began as a six-agent prediction-market desk that priced the same events on Polymarket and Kalshi and
+traded the disagreements. That desk still runs in the same process, opens no new trades, and carries
+its last positions to settlement (arbs by mid-October, maker contracts as late as December) on its own
+floor at `/pm`. Everything below that names Polymarket, Kalshi, the maker, arbs, pairs or the tick tape
+is that desk; its code retires once its last position settles.
 Node 20+, **zero npm dependencies** — that is deliberate, do not add packages. (The one file of
 third-party code is the dashboard's chart library, TradingView Lightweight Charts, vendored as a single
 file in `public/vendor/` on 2026-09-19 at Evan's request; see `public/vendor/README.md`. It is not a
 package and nothing installs it. Do not add others without asking.)
 
-Read `README.md` before changing anything; it explains the strategy, the fee math, and why
-the venue gap is not the edge. `ops/DEPLOY.md` covers cloud deployment (Fly app `hexagon-desk`). Merging to `main` auto-deploys
+Read `README.md` before changing anything. Its first section is the stocks, crypto and options desk:
+the three books, the lab result behind each rule, the fill model and the 15-minute delay. The rest is
+the prediction-market desk's record, including the fee math and why the venue gap was not the edge.
+`ops/DEPLOY.md` covers cloud deployment (Fly app `hexagon-desk`, which runs both desks). Merging to `main` auto-deploys
 to Fly once tests pass (paper only; see ops/DEPLOY.md → Auto-deploy).
 
 ## Running it
 
 ```bash
 npm test                                      # every suite in tools/test.js's SUITES, no network, no clock
-node server.js                                # paper account, live market data → localhost:8787
-DEMO=1 DATA_DIR=./data-demo node server.js    # synthetic fills/settles, separate account
-npm run reset                                 # wipe the paper account
+node server.js                                # both desks, paper, live market data → localhost:8787 (the desk) and /pm
+node tools/crypto-lab.js --fetch && node tools/crypto-lab.js   # the evidence for the crypto book's rule
+DEMO=1 DATA_DIR=./data-demo node server.js    # the prediction-market desk on synthetic fills/settles, separate account
+npm run reset                                 # wipe the prediction-market paper account (the desk's is data/desk/state.json)
 ```
 
 ## Safety invariants — do not cross these without being asked explicitly
+
+- **The stocks, crypto and options desk is paper only and has no broker.** `src/desk/` prices orders
+  against public data and writes its own ledger (`data/desk/`); there is no code path to Robinhood,
+  Public, Webull, Coinbase or any exchange, whatever `MODE` says. Do not add one unasked. Real orders
+  are Evan's to place by hand (the investment stack, `~/Downloads/stack`), and Claude never places one.
 
 - `.env` is currently `MODE=paper`, `DEMO=0`, `LIVE_CONFIRM=` (empty). **Never** flip `MODE`,
   `DEMO`, or `LIVE_CONFIRM` on your own. Live mode risks real money and the server is designed
@@ -39,8 +55,8 @@ npm run reset                                 # wipe the paper account
   Do not bind it to `0.0.0.0` casually.
 - The desk trading rarely — or not at all — is correct behavior, not a bug. Real cross-venue
   gaps on liquid markets are usually 0–1c.
-- Since 2026-09-25 the box opens **no new trades** (fly.toml: `CONVERGE=0`, `ARBS=0`, `MAKER_QUOTE=0`,
-  `SNIPE=0`), Evan's call after every book lost on paper. Open arbs and maker inventory run to
+- Since 2026-09-25 the **prediction-market** desk opens **no new trades** (fly.toml: `CONVERGE=0`, `ARBS=0`, `MAKER_QUOTE=0`,
+  `SNIPE=0`), Evan's call after every book lost on paper; the same day the desk's scope moved to stocks, crypto and options. Open arbs and maker inventory run to
   settlement. Do not turn a book back on unasked; the one pending check is the snipe on Sunday
   09-27's tape (`node tools/settle-lag.js --day 2026-09-27`, README → the settlement snipe).
 - **No TradingView data in Hexagon.** Evan's TradingView account (the official MCP connector, tools
@@ -54,7 +70,20 @@ npm run reset                                 # wipe the paper account
 ## Layout
 
 ```
-server.js         HTTP + SSE server, .env loader, live-mode gate; journals START/STOP/CRASH
+                  THE STOCKS, CRYPTO AND OPTIONS DESK (the main scope since 2026-09-25; paper only, no broker)
+src/desk/engine.js  the desk: three books' ledgers, the six bots' jobs (HOLT prices, ILSA volatility, TESS risk,
+                  RIGO marks and option exits, BRAM signals, KETT fills; PRED is the prediction-market desk
+                  winding down), data/desk/state.json + journal-YYYY-MM-DD.jsonl, the page's snapshot
+src/desk/books.js   the rules, pure: volatility targeting (crypto 40%/30 days, SPY 15%/20 sessions, 10-point band)
+                  and the SPY same-day options rules ported from the stack's trend_day_check.py
+src/desk/feeds.js   Coinbase (live) and Cboe (15 min late) parsers + fetches; five-minute bars, VWAP, ATR14
+src/desk/broker.js  paper fills: crypto walks Coinbase's book + 0.40%, SPY at the touch, options at the touch + $0.03
+src/desk/clock.js   NYSE sessions, holidays and 1 PM closes through 2027 (TESS warns when the list runs out)
+public/desk.*     the floor at /: the same room and bots as the old floor, boards for the three books
+tools/crypto-lab.js the evidence for the crypto book (Coinbase daily candles → data/crypto/bars/); tests:
+                  tools/desk-test.js, tools/crypto-lab-test.js
+                  THE PREDICTION-MARKET DESK (winding down: no new trades, positions ride to settlement; floor at /pm)
+server.js         HTTP + SSE server for both desks, .env loader, live-mode gate; journals START/STOP/CRASH
 src/sse.js        the dashboard stream's per-tab gzip, flushed per frame (the frames leave out the P&L histories via engine.snapshot; GET /api/history serves them)
 src/config.js     all tunables          src/engine.js    state, cash, positions, cycle loop
 src/decide.js     pure decision core: gates, ranking, sizing, exits, the settlement snipe (no I/O, no clock)
@@ -122,7 +151,10 @@ ops/              Fly deploy, launchd desk autostart (not installed), the tape p
                   + fillcheck, restarts (tools/restarts.js), CPU steal/pressure + disk + probe files, the chain tape (chain-record --check),
                   and whether the encrypted secrets image is older than .env or the key.
                   The box also has a disk brake (TAPE_MIN_FREE_MB) that trims its oldest tapes if the pull stops
-data/             gitignored: state.json, journal-*.jsonl, ticks-*.jsonl, desk.log
+data/             gitignored: state.json, journal-*.jsonl, ticks-*.jsonl, desk.log (the prediction-market desk)
+data/desk/        gitignored: the stocks, crypto and options desk's state.json and journal-*.jsonl. The pull job
+                  does not copy it yet (it lists only /data's top level): on the box it lives only there
+data/crypto/bars/ gitignored: Coinbase daily candles for tools/crypto-lab.js; re-fetchable
 data/lab/         gitignored: series-busy.json + universe.json (cached listings) and markets.jsonl (hourly bars)
                   for tools/lab.js; markets-volume-picked.jsonl is the biased first sample, kept as the counterexample
 data/lab/whales/  gitignored: pool, fills, conditions, markets for tools/whale-lab.js

@@ -1,0 +1,40 @@
+/* The stocks, crypto and options floor: only what style.css (the prediction-market floor's sheet,
+   which this page shares) does not already have. */
+
+/* the way to the prediction-market desk's own floor, while it winds down: the lookout link's look */
+#pmlink { flex: none; font: 600 10px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: #b79cf0;
+  border: 1px solid #2c2440; border-radius: 999px; padding: 7px 12px; white-space: nowrap; }
+#pmlink:hover { color: #e4d8ff; border-color: #4a3a70; text-decoration: none; }
+#pmlink .sm { display: none; }
+@media (max-width: 640px), (max-width: 900px) and (max-height: 500px) {
+  #pmlink { padding: 6px 9px; letter-spacing: .08em; }
+  #pmlink .lg { display: none; } #pmlink .sm { display: inline; }
+}
+
+/* A book is a heading row over its holdings: its colour down the left edge, its name in full white,
+   and the holdings under it stepped in. */
+#wall .wr.bk { margin-top: .35em; font-weight: 600; background: rgba(255,255,255,.018); }
+#wall .wr.bk::before { background: var(--bk); width: 3px; }
+#wall .wr.bk .nm > .l1 > span:first-child { color: #fff; }
+#wall .wr.hold { padding-left: 1.6em; font-size: .84em; }
+#wall .wr.hold::before { left: .75em; }
+#wall .wr .nm i { font-style: normal; color: #7a8497; }
+#wall .wlog .wsubl { color: #7a8497; font-size: .92em; }
+#wall .wread a { color: #b79cf0; }
+#wall .wq { line-height: 1.45; }
+#wall .wfacts { margin-top: .4em; }
+
+/* the tape's P&L on a sale */
+#tape .px .pos { color: #6ee7a0; } #tape .px .neg { color: #fca5a5; }
+
+/* phones: one card per book under the headline */
+.m-books { display: none; }
+@media (max-width: 640px), (max-width: 900px) and (max-height: 500px) {
+  .m-books { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: 13px; border: 1px solid #1c2535; border-radius: 8px; overflow: hidden; }
+  .m-book { position: relative; min-width: 0; padding: 9px 8px 8px 12px; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+  .m-book + .m-book { border-left: 1px solid #1c2535; }
+  .m-book::before { content: ''; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px; border-radius: 2px; background: var(--bk); }
+  .m-book span { display: block; color: #67718a; font: 700 8px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+  .m-book b { display: block; margin-top: 5px; font: 700 15px/1 var(--mono); }
+  .m-book small { display: block; margin-top: 4px; color: #737d90; font-size: 9px; line-height: 1.3; }
+}

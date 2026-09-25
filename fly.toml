@@ -115,6 +115,11 @@ primary_region = "iad"          # Ashburn, Virginia — close to the exchange, a
   # up to ~5 MB, so only the newest CHAINS_KEEP_DAYS days are kept. The Mac's tape keeps every day.
   CHAINS = "1"
   CHAINS_KEEP_DAYS = "14"
+  # The stocks, crypto and options desk (src/desk/), the main work since 2026-09-25, runs in this same
+  # process on src/config.js's own defaults: crypto, SPY and SPY same-day options, paper only, no
+  # broker behind it. Its ledger and journal are /data/desk/, and its floor is the page at /; the
+  # prediction-market floor above moved to /pm. "0" would leave only the prediction-market desk.
+  DESK = "1"
 
 # The stall watchdog (src/watchdog.js, WATCHDOG_SEC) ends the process when the desk's loops stop
 # finishing rounds, and this is what brings it back. Fly's default is on-failure with ten retries,
