@@ -76,6 +76,13 @@ module.exports = {
   // charge makers nothing -- on series that DO charge makers the fee is ~73% of the profit, so the
   // filter is hard rather than a preference. Candidates are screened for that at startup.
   makerEnabled: env('MAKER', '1') !== '0',
+  // Quoting on or off with the desk itself left running (2026-09-25). Off, the maker places no quote
+  // and takes on nothing new, but still settles and re-marks what it holds once a minute (the hold
+  // round a halt uses), so its inventory rides to settlement instead of freezing on the books the way
+  // MAKER=0 leaves it. Nothing is latched: switching it back on needs no /api/resume. The verdict
+  // that switched it off on the box: fifteen days of paper, -$888 realised on 98,785 contracts, and
+  // its own fills worth 0.6-1.2c a contract less 30 minutes later on every day of tape (09-19 to 09-23).
+  makerQuoting: env('MAKER_QUOTE', '1') !== '0',
   // Every liquid plain-`quadratic` series found by an exchange-wide screen: 38 series carrying 91
   // markets that clear the desk's own volume and mid filters. Candidates only -- the desk ranks
   // them by 24h volume and quotes the top makerMarkets, because flow is the revenue.
@@ -318,6 +325,11 @@ module.exports = {
   // -$637 (-$293 of it fees), and every gate added since only made it lose more slowly. The tape
   // still prices and records every pair as before, so the book can be re-scored without trading.
   convergeEnabled: env('CONVERGE', '1') !== '0',
+  // The locked-arb book on or off, the same way (2026-09-25). Off, no new arb opens; the ones held
+  // still run to settlement or the early unwind, and every pair is still priced, so the ledger says
+  // what the arb would have been. The verdict that switched it off on the box: 19 groups, -$222; the
+  // 13 clean ones earned $16.55 between them, and five pairs whose venues settled differently lost $244.
+  arbsEnabled: env('ARBS', '1') !== '0',
   minArbEdge: num('MIN_ARB_EDGE', 0.01),
   minGap: num('MIN_GAP', 0.03),
   // Required profit per contract on a convergence trade, NET of the spread paid on the way

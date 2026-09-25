@@ -500,6 +500,12 @@ group('a locked arb has to be worth the wait');
   const late = d.pairSignals(arbPair(NOW + 20000 * DAY), cfg, NOW);
   ok('the same edge settling decades out is not an arb signal', !late.signals.some((x) => x.type === 'arb'), late.signals);
   ok('...and says why', late.arbVeto === 'arb return under hurdle', late);
+  // ARBS=0 on the box since 2026-09-25: the book is off, the pair is still priced
+  const off = d.pairSignals(arbPair(NOW + 10 * DAY), { ...cfg, arbsEnabled: false }, NOW);
+  ok('with the arb book switched off, the arb taken above is not a signal', !off.signals.some((x) => x.type === 'arb'), off.signals);
+  ok('...and says the switch is why', off.arbVeto === 'arb book off', off);
+  const scOff = d.scan([{ ...arbPair(NOW + 10 * DAY), q: { ...arbPair(0).q, t: NOW } }], { ...cfg, maxSpread: 0, arbsEnabled: false }, NOW);
+  ok('...and so does the ledger', scOff.rejects.get('arb book off') === 1, [...scOff.rejects]);
   const sc = d.scan([{ ...arbPair(NOW + 20000 * DAY), q: { ...arbPair(0).q, t: NOW } }], { ...cfg, maxSpread: 0 }, NOW);
   ok('the ledger reports the hurdle, not the convergence gate, when an arb existed', sc.rejects.get('arb return under hurdle') === 1, [...sc.rejects]);
   ok('without a settlement time the hurdle is not applied', d.pairSignals({ ...arbPair(NaN) }, cfg, NOW).signals[0].type === 'arb');

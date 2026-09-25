@@ -454,6 +454,13 @@ function makeMakerDesk(cfg, deps = {}) {
     // A halt means stop QUOTING. Existing inventory is still settled and marked (the hold round);
     // withdrawing quotes is the maker equivalent of KETT standing down.
     if (E.halt || S.halted) { await hold(E, S, withdraw); return; }
+    // Quoting switched off (config.makerQuoting): the same hold round, but no halt is latched, so the
+    // switch alone turns it back on.
+    if (!cfg.makerQuoting) {
+      if (E.due('makr-quote-off', 3600)) E.log('MAKR', 'OPS', null, 'quoting off (MAKER_QUOTE=0) · no new quotes; held inventory is settled and re-marked once a minute until each market settles');
+      await hold(E, S, withdraw);
+      return;
+    }
     // The scan costs 38 series listings plus 40 trade-rate probes -- about 23 seconds, against a
     // 15-second tick. Awaiting it made the whole desk skip ticks every fifteen minutes, taker side
     // included. The first one has to block (there is nothing to quote yet); after that it runs in
@@ -740,7 +747,8 @@ function makeMakerDesk(cfg, deps = {}) {
       };
     }).sort((a, b) => (b.quoting - a.quoting) || (b.fills - a.fills) || Math.abs(b.inv) - Math.abs(a.inv));
     return {
-      cash: S.cash, equity: S.equity, realized: S.realized || 0, fills: S.fills || 0, halted: S.halted || null,
+      cash: S.cash, equity: S.equity, realized: S.realized || 0, fills: S.fills || 0,
+      halted: S.halted || (cfg.makerQuoting ? null : 'quoting switched off (MAKER_QUOTE=0) · held contracts ride to settlement'),
       lastFill: S.lastFill || null,
       // a fill from before titles rode on fills is named from the ledger, which keeps every market's words
       recent: (S.recent || []).slice(0, 12).map((f) => (f.title || !(S.markets[f.ticker] || {}).title ? f
