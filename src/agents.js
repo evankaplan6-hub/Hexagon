@@ -191,7 +191,7 @@ function TESS(E) {
   const budget = E.budget();
   E.touch('TESS', halt ? `HALT ${halt}` : `budget ${money(budget)}`);
   if (!halt && E.due('tess-log', 180)) {
-    E.log('TESS', 'OPS', null, `data age ${Math.round(age)}s, window is clean · ${E.state.positions.filter((p) => p.strategy !== 'arb').length}/${E.cfg.maxOpenPositions} bets, ${new Set(E.state.positions.filter((p) => p.strategy === 'arb').map((p) => p.group)).size}/${E.cfg.maxArbGroups} arbs open · per-trade budget ${money(budget)} · day ${dd >= 0 ? '−' : '+'}${(Math.abs(dd) * 100).toFixed(2)}% · ${errs} api errs/5m`);
+    E.log('TESS', 'OPS', null, `data age ${Math.round(age)}s, window is clean · ${E.state.positions.filter((p) => p.strategy !== 'arb').length}/${E.cfg.maxOpenPositions} bets${E.cfg.convergeEnabled === false ? ' (book off)' : ''}, ${new Set(E.state.positions.filter((p) => p.strategy === 'arb').map((p) => p.group)).size}/${E.cfg.maxArbGroups} arbs open${E.cfg.arbsEnabled === false ? ' (book off)' : ''} · per-trade budget ${money(budget)} · day ${dd >= 0 ? '−' : '+'}${(Math.abs(dd) * 100).toFixed(2)}% · ${errs} api errs/5m`);
   }
 }
 

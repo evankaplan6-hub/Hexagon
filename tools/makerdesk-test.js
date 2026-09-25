@@ -23,7 +23,7 @@ const r2 = (x) => Math.round(x * 100) / 100;
 const T0 = Date.parse('2026-09-21T15:00:00Z');
 // every tunable a test leans on is pinned here, so an env var on the machine cannot move a result
 const cfg = (over = {}) => ({
-  ...base, makerEnabled: true, makerStream: false, makerWiden: true, makerSeries: [], discoverEveryMin: 20,
+  ...base, makerEnabled: true, makerQuoting: true, makerStream: false, makerWiden: true, makerSeries: [], discoverEveryMin: 20,
   makerMarkets: 24, makerCap: 100, makerSoftCap: 0.5, makerParticipation: 0.10, makerMinSpread: 0.01,
   makerMinVol24: 5000, makerMinTradesPerDay: 10, makerMinDaysToClose: 7, makerRateProbe: 80,
   makerMinMid: 0.08, makerMaxMid: 0.92, makerEverySec: 2, makerTapePages: 5,
@@ -378,6 +378,37 @@ const scans = (E) => E.logs.filter((l) => l.kind === 'SCAN' && /^(quoting|no mar
     const peak = r.S.peak;
     r.desk.resume(r.E);
     ok('a resume that clears some other halt does not move the maker\'s peak', r.S.peak === peak);
+  }
+
+  group('quoting switched off: nothing quoted, held inventory still settled and re-marked, no halt latched');
+  {
+    // MAKER_QUOTE=0 on the box since 2026-09-25. MAKER=0 returns before the hold round and would
+    // freeze the held contracts on the books; this switch keeps settling and marking them.
+    const r = rig({ over: { makerQuoting: false }, crawl: [listed('KXTEST-A')], markets: {
+      'KXOLD-L': held({ series: 'KXOLD', inv: 50, cost: 20, mid: 0.40, quotes: { bid: null, ask: 0.41 } }),
+      'KXOLD-D': held({ series: 'KXOLD', inv: -40, cost: -16, mid: 0.40 }),      // short 40 at 40c, about to resolve NO
+    }, state: { cash: 9980, equity: 10000, peak: 10000 } });
+    const L = r.S.markets['KXOLD-L'], D = r.S.markets['KXOLD-D'];
+    r.tape.bk.set('KXTEST-A', book(0.44, 100, 0.45, 100));
+    r.tape.bk.set('KXOLD-L', book(0.30, 50, 0.32, 50));
+    r.tape.bk.set('KXOLD-D', book(0.01, 50, 0.03, 50));
+    r.tape.mk.set('KXOLD-D', { status: 'finalized', result: 'no', settlementValue: 0 });
+    r.tape.trades = [print('KXOLD-L', 0.41, 500, 'bid')];                    // a lift where the saved offer rested
+    await r.round();
+    ok('the saved quote is withdrawn and no market is quoted', L.quotes.ask === null && L.quotes.bid === null && !r.S.markets['KXTEST-A'] && r.desk.snapshot(r.E).quoting === 0, { q: L.quotes, markets: Object.keys(r.S.markets) });
+    ok('no universe scan, no probe, no prints asked for, no fill', scans(r.E) === 0 && r.calls.length === 0 && r.tape.asked.length === 0 && L.inv === 50 && !r.E.journalled.some((j) => j.kind === 'MAKER_FILL'), { calls: r.calls, asked: r.tape.asked });
+    ok('a held market that finalized is settled: short 40 on NO books +$16', D.inv === 0 && D.realized === 16 && r.E.journalled.some((j) => j.kind === 'MAKER_SETTLE' && j.ticker === 'KXOLD-D'), D);
+    ok('the rest is re-marked at its book', Math.abs(L.mid - 0.31) < 1e-9 && r.S.equity === r2(9980 + 50 * 0.31), { mid: L.mid, equity: r.S.equity });
+    ok('no halt is latched, and the dashboard still says why it is stopped', r.S.halted == null && /MAKER_QUOTE=0/.test(r.desk.snapshot(r.E).halted || '') && !r.E.journalled.some((j) => j.kind === 'MAKER_HALT'), { halted: r.S.halted, snap: r.desk.snapshot(r.E).halted });
+    r.tape.bk.set('KXOLD-L', book(0.20, 50, 0.22, 50));
+    await r.round(60000);
+    ok('a minute on it is re-marked at the new book, and the log line is not repeated', Math.abs(L.mid - 0.21) < 1e-9 && r.E.logs.filter((l) => /quoting off \(MAKER_QUOTE=0\)/.test(l.text)).length === 1, { mid: L.mid, logs: r.E.logs.map((l) => l.text) });
+    // switched back on: the same ledger, a desk built with the default, and no /api/resume
+    const back = rig({ state: { ...r.S } });
+    back.tape.bk.set('KXOLD-L', book(0.20, 50, 0.22, 50));
+    await back.round();
+    const L2 = back.S.markets['KXOLD-L'];
+    ok('switched back on, it quotes again with no resume: the held long is offered, reduce-only', back.S.halted == null && L2.quotes.ask === 0.22 && L2.quotes.bid === null && L2.quotes.reduceOnly === true, { halted: back.S.halted, q: L2.quotes });
   }
 
   group('an event with a configured date is crossed out the day before it');

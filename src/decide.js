@@ -156,6 +156,9 @@ function pairSignals(p, cfg, now) {
     if (!kept.length) out.arbVeto = 'arb return under hurdle';
     arbs = kept;
   }
+  // The book itself may be switched off (config.arbsEnabled). Last, so an arb that would have been
+  // taken is still priced and the veto names the switch rather than a gate it never reached.
+  if (arbs.length && cfg.arbsEnabled === false) { out.arbVeto = 'arb book off'; arbs = []; }
 
   const gap = q.ksMid - q.pmMid; // + => Kalshi rich, Polymarket cheap
   const fair = fairValue(q, cfg);

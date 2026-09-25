@@ -39,6 +39,10 @@ npm run reset                                 # wipe the paper account
   Do not bind it to `0.0.0.0` casually.
 - The desk trading rarely — or not at all — is correct behavior, not a bug. Real cross-venue
   gaps on liquid markets are usually 0–1c.
+- Since 2026-09-25 the box opens **no new trades** (fly.toml: `CONVERGE=0`, `ARBS=0`, `MAKER_QUOTE=0`,
+  `SNIPE=0`), Evan's call after every book lost on paper. Open arbs and maker inventory run to
+  settlement. Do not turn a book back on unasked; the one pending check is the snipe on Sunday
+  09-27's tape (`node tools/settle-lag.js --day 2026-09-27`, README → the settlement snipe).
 
 ## Layout
 

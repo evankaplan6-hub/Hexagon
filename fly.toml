@@ -89,10 +89,25 @@ primary_region = "iad"          # Ashburn, Virginia — close to the exchange, a
   # The convergence book is off on the box since 2026-09-21. The verdict from the journals,
   # 2026-09-10 to 09-21: 72 convergence bets closed, 3 winners, -$637 (-$293 of it fees), and the
   # gates added on the 18th and 19th only slowed the bleeding (-$10, -$61, -$10 a day). Open
-  # positions are still marked and taken to their exits; the locked-arb book and the maker keep
-  # trading; every pair is still priced and written to the tape, so the book can be re-scored
-  # from the tape without paying for another week of it. Set to "1" to turn it back on.
+  # positions are still marked and taken to their exits; every pair is still priced and written
+  # to the tape, so the book can be re-scored from the tape without paying for another week of it.
+  # Set to "1" to turn it back on.
   CONVERGE = "0"
+  # No new trades of any kind since 2026-09-25, Evan's call after fifteen days of paper: every book
+  # lost (all-in -$1,753 on $10,000), the fixes only made the losses smaller, and no study on fresh
+  # data found an edge after fees (README). Nothing was sold: the 20 locked arbs run to settlement
+  # (30-year Treasury 09-30 first, CPI mid-October), and the maker's held contracts are settled and
+  # re-marked once a minute until each market ends. The box keeps recording the tape, the chains
+  # and whale watch, and the dashboard stays up. Set any of these to "1" to turn that book back on;
+  # MAKER_QUOTE latches nothing, so no /api/resume is needed.
+  #   ARBS=0         no new locked arb (19 groups closed, -$222; five mismatched pairs lost $244)
+  #   MAKER_QUOTE=0  the maker quotes nothing (-$888 on 98,785 contracts; fills 0.6-1.2c worse at 30 min)
+  #   SNIPE=0        the settlement snipe never fired; Sunday 09-27's tape still answers it
+  #                  (node tools/settle-lag.js --day 2026-09-27), and it comes back only if Kalshi
+  #                  stays 2c+ under par for minutes after Polymarket closes, with size at the touch
+  ARBS = "0"
+  MAKER_QUOTE = "0"
+  SNIPE = "0"
   # The option-chain recorder runs inside the desk here (src/chainsched.js) since 2026-09-23: the
   # box has no cron, so its Stocks and Options tabs had read an empty folder since they shipped.
   # Same tool, same three Eastern times as the Mac's launchd job, weekdays only, as a child
