@@ -1480,7 +1480,8 @@ First run, 2026-09-21: 159 settlements, 159 agree; 29 watchdog restarts on the 2
 started in a two-second battery DarkWake and frozen when the Mac fell back asleep, with one retry a
 day. A run exits at once, writing nothing, when `pull.log`'s last pull line and `backup.log`'s last
 line are both `ok` and dated today (Eastern), so a good day costs one run. The pull
-(`tools/fly-pull.js --trim`) copies every closed day into `data/fly/archive`, then deletes box tick
+(`tools/fly-pull.js --trim`) copies every closed day into `data/fly/archive` (the stocks, crypto and
+options desk's journals, from `/data/desk`, into `data/fly/archive/desk/` since 2026-09-25), then deletes box tick
 tapes **and probe files** older than three Eastern days, each only once its Mac copy has the box's
 sha256 (probe files were never deleted before: 14 of them, about 50 MB, on 09-24). A failed download
 is tried three times, 30 seconds apart, and now blocks only its own file's delete, not the whole trim.

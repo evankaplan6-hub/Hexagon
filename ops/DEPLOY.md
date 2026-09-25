@@ -167,12 +167,13 @@ that never reached the Mac is lost after about six. A full disk stops the journa
 too, not just the tape. Nothing on the box reads old tapes, so they move to the Mac.
 
 **On the Mac, hourly until the day is done: `tools/fly-pull.js`.** It copies every finished
-Eastern day (tapes, journals, whales, probes) into `data/fly/archive/`. Each file downloads under a
+Eastern day (tapes, journals, whales, probes) into `data/fly/archive/`, and since 2026-09-25 the
+stocks, crypto and options desk's journals from `/data/desk` into `data/fly/archive/desk/`. Each file downloads under a
 temp name and is kept only if its sha256 matches the box's; a dropped download is tried three times
 in all, 30 seconds apart, from an empty temp file. With `--trim` it then deletes box tapes and probe
 files older than the newest 3 Eastern days (today counts as one), but only files whose Mac copy
 matched in that same run (probe files since 2026-09-24: 14 of them, about 50 MB, had never been
-deleted). It never deletes journals, whales, `state.json` or anything of today's. A failed copy
+deleted). It never deletes journals (the desk's included), whales, `state.json` or anything of today's. A failed copy
 keeps only its own file on the box (since 2026-09-24; before, one failed download stopped every
 delete, and on 09-22 and 09-23 two already-copied tapes stayed on the box while free space fell to
 411 MB). A listing that fails, or a box that does not say its date, still deletes nothing that
