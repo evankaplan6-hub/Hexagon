@@ -24,6 +24,9 @@
       <!-- the one thing a glance is asking: is the desk working, and with whose money -->
       <div class="pill" id="deskstate"></div>
       <div class="meta" id="meta"></div>
+      <!-- The desk's main floor since 2026-09-25: stocks, crypto and options. This page is the
+           prediction-market desk, which opens no new trades and runs its positions to settlement. -->
+      <a id="desklink" href="/" title="The desk's main floor: stocks, crypto and options">Stocks · crypto · options</a>
       <!-- the same desk drawn as one painted room; read-only, like everything on this page -->
       <a id="lookoutlink" href="lookout.html" title="The same desk, seen from the lookout">Lookout</a>
       <!-- outside #meta on purpose: the meta strip hides on narrow screens, the Ask button must not -->
@@ -36,8 +39,8 @@
     </div>
   </header>
 
-  <!-- Three views, and the floor is the one that opens. The desk trades prediction markets and that
-       is what the room shows; Stocks and Options are the other half of the research -- the ETF
+  <!-- Three views, and the floor is the one that opens. This desk traded prediction markets and that
+       is what the room shows (winding down since 2026-09-25; the stocks, crypto and options desk is at /); Stocks and Options are the other half of the research -- the ETF
        underlyings and the option-chain tape (tools/chain-record.js), whose history is not free,
        so the desk writes its own. Nothing in those two tabs trades, and the desk holds no position
        in any of it. Switching hides the floor rather than shrinking it: a half-size room reads as

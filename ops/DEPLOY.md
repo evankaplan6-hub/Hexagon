@@ -1,6 +1,8 @@
 # Running the desk in the cloud
 
-The desk runs on a Fly.io box (app `hexagon-desk`). The Mac's launchd autostart
+The desk runs on a Fly.io box (app `hexagon-desk`): since 2026-09-25 that is two desks in one process,
+the stocks, crypto and options desk (`src/desk/`, its floor at `/`, its ledger in `/data/desk/`) and
+the prediction-market desk winding down to settlement (its floor at `/pm`). The Mac's launchd autostart
 (`ops/install-autostart.sh`) exists but is not installed: a desk on the Mac stops when the machine
 sleeps, and the one thing this strategy needs is **days of uninterrupted tape**.
 
@@ -101,7 +103,9 @@ Works on a $5 VPS, a Raspberry Pi, or anything that runs Docker. Keep the region
 ## Checking on it
 
 ```bash
-fly logs                        # live
+fly logs                        # live; the stocks, crypto and options desk's lines start "desk "
+curl -s -u "hexagon:$DASH_PASS" https://hexagon-desk.fly.dev/api/desk/state | python3 -c 'import json,sys; s=json.load(sys.stdin); print(s["pnl"], [(b["key"], b["pnl"], b["benchPnl"]) for b in s["books"]])'
+fly ssh console -C "tail -n 20 /data/desk/journal-$(TZ=America/New_York date +%F).jsonl"   # today's fills and verdicts on the box
 node tools/fillcheck.js         # on the Mac, from the pulled tape: does the ledger fill the way its tape says, and where the rest goes
 fly ssh console -C "node tools/maker-report.js"
 ```

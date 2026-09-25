@@ -607,6 +607,33 @@ module.exports = {
   // ticker instead (Engine.refreshKsPairPrices). 0 = every cycle.
   ksListEverySec: Math.max(0, num('KS_LIST_EVERY_SEC', 120)),
 
+  // The stocks, crypto and options desk (src/desk/): the desk's main work since 2026-09-25. Paper
+  // only, and not a switch away from it: src/desk/ has no broker and no order path to one, whatever
+  // MODE says. Each book keeps its own cash; the options book is small because its rules risk at
+  // most two contracts a trade. The two volatility targets and lookbacks are the labs' own picks
+  // (src/desk/books.js says which lab and what it found); the fees are src/desk/broker.js's.
+  desk: {
+    on: env('DESK', '1') !== '0',
+    cryptoUsd: num('DESK_CRYPTO_USD', 10000),
+    stocksUsd: num('DESK_STOCKS_USD', 10000),
+    optionsUsd: num('DESK_OPTIONS_USD', 1000),
+    coins: env('DESK_COINS', 'BTC-USD,ETH-USD,SOL-USD').split(',').map((s) => s.trim()).filter(Boolean),
+    cryptoVolTarget: num('DESK_CRYPTO_VOL', 0.40),
+    cryptoLookback: num('DESK_CRYPTO_LOOKBACK', 30),
+    // not a setting: the options book's rules are written in SPY points, and both books read one SPY feed
+    stockSym: 'SPY',
+    stockVolTarget: num('DESK_STOCK_VOL', 0.15),
+    stockLookback: num('DESK_STOCK_LOOKBACK', 20),
+    rebalBand: num('DESK_REBAL_BAND', 0.10),
+    cryptoFeeBps: num('DESK_CRYPTO_FEE_BPS', 40),
+    stockFeeBps: num('DESK_STOCK_FEE_BPS', 0),
+    optionFee: num('DESK_OPTION_FEE', 0.03),
+    options: env('DESK_OPTIONS', '1') !== '0',
+    // no new buying for the rest of the Eastern day past this loss on the whole desk; selling is never blocked
+    maxDailyDdPct: num('DESK_MAX_DAILY_DD', 0.05),
+    everySec: Math.max(5, num('DESK_EVERY_SEC', 10)),
+  },
+
   // live
   kalshiKeyId: env('KALSHI_API_KEY_ID', ''),
   kalshiKeyPath: env('KALSHI_PRIVATE_KEY_PATH', ''),

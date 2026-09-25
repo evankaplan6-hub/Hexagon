@@ -1,7 +1,7 @@
 {
   "name": "the-hexagon",
   "version": "1.0.0",
-  "description": "Six-agent prediction-market trading desk (Polymarket x Kalshi) with a live dashboard. Zero dependencies.",
+  "description": "Paper trading desk for stocks, crypto and options: six bots, three books, a live trading floor. Zero dependencies.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
