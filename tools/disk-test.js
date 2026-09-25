@@ -774,7 +774,8 @@ group('config: the brake is on by default only on a Fly machine');
 // ================================================================ ops/run-pull.sh
 // The launcher itself, run with bash in a made-up checkout: a fake fly that only answers
 // `auth whoami`, a fake tools/fly-pull.js that writes one pull.log line the way the real one does,
-// and a made-up HOME whose iCloud Drive folder is a temp folder. The date is fixed with PULL_TODAY_ET.
+// and a made-up HOME whose iCloud Drive folder is a temp folder. The clock is fixed with PULL_NOW, which
+// stamps the script's own lines and picks its Eastern day, so no case depends on the day it runs.
 const { spawnSync } = require('child_process');
 const HAVE_BASH = fs.existsSync('/bin/bash') && fs.existsSync('/usr/bin/rsync');
 function pullJob(label, { icloud = true } = {}) {
@@ -803,11 +804,11 @@ process.exit(rc);
   const backup = path.join(cloud, 'Hexagon-backup');
   const archive = path.join(root, 'data', 'fly', 'archive');
   const read = (f) => { try { return fs.readFileSync(f, 'utf8'); } catch { return ''; } };
-  // `today` is the Eastern date the script believes; `stamp` is the UTC time the fake pull writes
-  const go = (args = [], { today = '2026-09-24', stamp = '2026-09-24T13:31:16Z', rc = 0 } = {}) => {
+  // `now` is the UTC instant the script and the fake pull both believe; its Eastern date is the script's today
+  const go = (args = [], { now = '2026-09-24T13:31:16Z', rc = 0 } = {}) => {
     const r = spawnSync('/bin/bash', [path.join(root, 'ops', 'run-pull.sh'), ...args], {
       encoding: 'utf8',
-      env: { HOME: home, PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`, FLY_BIN: fly, PULL_TODAY_ET: today, FAKE_PULL_STAMP: stamp, FAKE_PULL_RC: String(rc), PULL_NET_TRIES: '1' },
+      env: { HOME: home, PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`, FLY_BIN: fly, PULL_NOW: now, FAKE_PULL_STAMP: now, FAKE_PULL_RC: String(rc), PULL_NET_TRIES: '1' },
     });
     return { code: r.status, out: `${r.stdout}${r.stderr}` };
   };
@@ -830,6 +831,7 @@ if (!HAVE_BASH) {
     ok('chains, options and the archive are copied, each under its own name', JSON.stringify(j.walk(j.backup)) === JSON.stringify(['archive/pull.log', 'archive/ticks-2026-09-22.jsonl', 'chains/chains-2026-09-23.jsonl', 'options/history/SPY/2026-10-16.json']), j.walk(j.backup));
     ok('no half-downloaded .part, no .env and no .pem goes to iCloud', !j.walk(j.backup).some((n) => /\.part$|\.env$|\.pem$/.test(n)), j.walk(j.backup));
     ok('backup.log says ok, and pull.log gets no backup line on a good day', /^\S+Z ok backup copied data\/chains data\/options data\/fly\/archive/.test(j.backupLog()[0] || '') && j.pullLog().length === 1 && / ok hexagon-desk /.test(j.pullLog()[0]), [j.backupLog(), j.pullLog()]);
+    ok('...stamped by the same fixed clock that picks the day, not the real one (2026-09-25: the day was fixed and the stamp was not)', (j.backupLog()[0] || '').startsWith('2026-09-24T13:31:16Z ok backup '), j.backupLog());
     fs.rmSync(path.join(j.backup, 'chains', 'chains-2026-09-23.jsonl'));
     fs.writeFileSync(path.join(j.root, 'data', 'chains', 'chains-2026-09-24.jsonl'), 'more\n');
     fs.rmSync(path.join(j.root, 'data', 'fly', 'archive', 'ticks-2026-09-22.jsonl'));
@@ -847,7 +849,7 @@ if (!HAVE_BASH) {
     const r = j.go();
     ok('the second run the same day exits 0 at once', r.code === 0 && r.out === '' && j.pulls().length === 1, r);
     ok('...and writes no line anywhere', JSON.stringify([j.pullLog().join('\n'), j.backupLog().join('\n')]) === JSON.stringify(logs));
-    const next = j.go([], { today: '2026-09-25', stamp: '2026-09-25T13:30:40Z' });
+    const next = j.go([], { now: '2026-09-25T13:30:40Z' });
     ok('the next Eastern day pulls and backs up again', next.code === 0 && j.pulls().length === 2 && j.backupLog().length === 2, [next, j.pulls()]);
     j.done();
 
@@ -862,7 +864,7 @@ if (!HAVE_BASH) {
     const p = pullJob('lastfailed');
     p.w('data/fly/archive/pull.log', '2026-09-24T13:31:16Z ok hexagon-desk copied 1 file\n2026-09-24T14:31:16Z PROBLEM hexagon-desk FAILED: could not list the box\n');
     p.w('data/fly/archive/backup.log', '2026-09-24T14:31:20Z ok backup copied data/chains\n');
-    const pr = p.go([], { stamp: '2026-09-24T15:31:16Z' });
+    const pr = p.go([], { now: '2026-09-24T15:31:16Z' });
     ok('an ok earlier in the day does not count when the last pull line is a PROBLEM: it pulls again', pr.code === 0 && p.pulls().length === 1, pr);
     ok('...and the backup, already done today, is not done again', p.backupLog().length === 1, p.backupLog());
     p.done();
@@ -871,11 +873,11 @@ if (!HAVE_BASH) {
   group('run-pull.sh: the backup runs even when the pull fails, and a failed backup is its own problem');
   {
     const j = pullJob('pullfails');
-    const r = j.go([], { rc: 1, stamp: '2026-09-24T13:31:16Z' });
+    const r = j.go([], { rc: 1, now: '2026-09-24T13:31:16Z' });
     ok('exits with the pull\'s code, 1', r.code === 1, r);
     ok('...but the chain tape was still backed up', fs.existsSync(path.join(j.backup, 'chains', 'chains-2026-09-23.jsonl')) && j.backupLog().length === 1, j.walk(j.backup));
     ok("the pull's PROBLEM stays the last line of pull.log, not hidden by the backup", / PROBLEM hexagon-desk /.test(j.pullLog().slice(-1)[0]), j.pullLog());
-    const r2 = j.go([], { stamp: '2026-09-24T14:30:40Z' });
+    const r2 = j.go([], { now: '2026-09-24T14:30:40Z' });
     ok('the next hour pulls again, and does not back up twice', r2.code === 0 && j.pulls().length === 2 && j.backupLog().length === 1, [r2, j.backupLog()]);
     j.done();
 
