@@ -1,5 +1,6 @@
 #!/bin/bash
-# The daily trust routine: seven questions about the Fly box and the Mac's tapes, one screen, nothing changed on the box.
+# The daily trust routine: eight questions about the Fly box and the Mac's tapes, one screen, nothing changed on the box.
+# Steps 1-7 are about the prediction-market desk and the box; step 8 is the stocks, crypto and options desk.
 #
 #   bash ops/daily-check.sh
 #
@@ -30,10 +31,15 @@
 #   7. are the secrets backed up?         the newest encrypted image ops/backup-secrets.sh left in iCloud
 #                                         Drive/Hexagon-backup/secrets, against the dates of .env and the
 #                                         Kalshi key (file dates only: nothing is opened)
+#   8. is the stocks, crypto and          tools/desk-check.js --box: its loop recorded a minute lately, each
+#      options desk well?                 book did today's check (crypto after midnight UTC, SPY after the
+#                                         open, the options book's 12:30 verdict), its journal rebuilds
+#                                         state.json to the penny, and each book against simply holding
 #
 # Nothing on the box is changed. What it writes on the Mac: step 2 copies the box's state.json and
 # the journals the archive lacks into data/fly/box-now, replacing the copies from the previous run
-# (ledger-check --box), and step 3b appends one line to data/fly/archive/fillcheck.jsonl. Steps 3
+# (ledger-check --box), step 3b appends one line to data/fly/archive/fillcheck.jsonl, and step 8
+# copies /data/desk (the new desk's state.json and journals) into data/fly/desk-now, replacing the last. Steps 3
 # and 4 read data/fly/box-now next to the archive, so "today" is today's journal and not the tail
 # of yesterday's. It reads no secret and cannot place an order. The pull itself stays with its own
 # job (ops/install-pull.sh); this only says whether that job is alive.
@@ -105,6 +111,10 @@ else
   done
   if [ -n "$stale" ]; then echo "PROBLEM: changed since that image:$stale -- run: bash ops/backup-secrets.sh"; bad=$((bad + 1)); fi
 fi
+
+say "8. the stocks, crypto and options desk: alive, today's checks, the ledger against its journal, each book against holding"
+# Read-only on the box (tools/desk-check.js --box): lists /data/desk and copies it down, nothing else.
+node tools/desk-check.js --box || bad=$((bad + 1))
 
 printf '\n%s\n' "$([ "$bad" = 0 ] && echo 'every step answered, nothing flagged' || echo "$bad step(s) flagged a problem: read up")"
 exit "$bad"

@@ -48,6 +48,7 @@ const SUITES = [
   ['themes', 'what a market is about: leagues off the series, the tickers that only look like one, and the page filter built on it'],
   ['desk', 'the stocks, crypto and options desk: the market calendar, the feeds, paper fills, both rules, and whole rounds of a trading day'],
   ['crypto-lab', "the crypto lab: next-open fills, the cost of a trade, the rebalance band, and the desk's own volatility rule"],
+  ['desk-check', "the desk's daily check: a real day replays to the penny, every drift named, alive and today's checks at any hour of the week"],
 ];
 
 let failed = 0, totalPassed = 0;

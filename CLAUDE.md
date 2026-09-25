@@ -80,8 +80,11 @@ src/desk/feeds.js   Coinbase (live) and Cboe (15 min late) parsers + fetches; fi
 src/desk/broker.js  paper fills: crypto walks Coinbase's book + 0.40%, SPY at the touch, options at the touch + $0.03
 src/desk/clock.js   NYSE sessions, holidays and 1 PM closes through 2027 (TESS warns when the list runs out)
 public/desk.*     the floor at /: the same room and bots as the old floor, boards for the three books
-tools/crypto-lab.js the evidence for the crypto book (Coinbase daily candles → data/crypto/bars/); tests:
-                  tools/desk-test.js, tools/crypto-lab-test.js
+tools/crypto-lab.js the evidence for the crypto book (Coinbase daily candles → data/crypto/bars/)
+tools/desk-check.js step 8 of the daily check: the desk's loop alive, each book's check done today, its journal
+                  rebuilding state.json to the penny, each book against holding (--box copies /data/desk first);
+                  tests: tools/desk-test.js, tools/crypto-lab-test.js, tools/desk-check-test.js (tools/desk-fixture.js
+                  is their shared fake market, not a suite)
                   THE PREDICTION-MARKET DESK (winding down: no new trades, positions ride to settlement; floor at /pm)
 server.js         HTTP + SSE server for both desks, .env loader, live-mode gate; journals START/STOP/CRASH
 src/sse.js        the dashboard stream's per-tab gzip, flushed per frame (the frames leave out the P&L histories via engine.snapshot; GET /api/history serves them)
@@ -143,13 +146,16 @@ data/fly/         gitignored: journals, state and tick tapes copied down from th
                   That snapshot is frozen at 2026-09-12; new copies from the box go in data/fly/archive/
 data/fly/box-now/ gitignored: the latest state.json + unarchived journals, copied by ledger-check --box (the daily check);
                   replaced each run, not an archive
+data/fly/desk-now/ gitignored: the box's /data/desk (the new desk's state.json + every journal), copied by
+                  desk-check --box (daily check step 8); replaced each run, not an archive
 ops/              Fly deploy, launchd desk autostart (not installed), the tape pull (ops/install-pull.sh: hourly at :30 since 2026-09-24,
                   skipped once the day's pull and backup are ok; the same job backs up data/chains, data/options and data/fly/archive
                   to iCloud Drive/Hexagon-backup, no --delete, no secrets). .env and the .pem: ops/backup-secrets.sh, by hand (encrypted image, Evan's passphrase).
                   The option-history job (ops/install-history.sh) was removed 2026-09-24 with ops/uninstall-history.sh: the key had expired.
                   ops/daily-check.sh is the daily trust routine (read-only on the box): pull alive, ledger-check --box --venues, pnl-report
                   + fillcheck, restarts (tools/restarts.js), CPU steal/pressure + disk + probe files, the chain tape (chain-record --check),
-                  and whether the encrypted secrets image is older than .env or the key.
+                  whether the encrypted secrets image is older than .env or the key, and (step 8) the stocks, crypto and
+                  options desk (tools/desk-check.js --box).
                   The box also has a disk brake (TAPE_MIN_FREE_MB) that trims its oldest tapes if the pull stops
 data/             gitignored: state.json, journal-*.jsonl, ticks-*.jsonl, desk.log (the prediction-market desk)
 data/desk/        gitignored: the stocks, crypto and options desk's state.json and journal-*.jsonl. The pull job
