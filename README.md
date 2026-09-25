@@ -1524,7 +1524,8 @@ src/desk/books.js      the rules, pure: volatility targeting, and the SPY same-d
 src/desk/feeds.js      Coinbase (live) and Cboe (15 minutes late): parsers, fetches, bars, VWAP, ATR14
 src/desk/broker.js     paper fills: the book or the touch, fees per asset; no live broker
 src/desk/clock.js      the NYSE calendar: sessions, holidays, 1 PM closes
-public/desk.*          the floor at /
+public/desk.*          the floor at /: desk.html, desk.js, and desk.css, its own sheet built on tokens.css
+public/tokens.css      the desk's design tokens: colours named by job (every text colour 4.5:1 or better), type, space, radius, shadow
 tools/crypto-lab.js    the evidence for the crypto book's rule (Coinbase daily candles)
                        the prediction-market desk (winding down), and everything both share
 server.js              HTTP + SSE server for both desks, .env loader, live-mode gate
@@ -1545,7 +1546,7 @@ src/whales.js          whale watch: top wallets' big bets on Polymarket's leader
 src/ask.js             the Ask panel: a read-only Claude tool loop over the desk, with its own daily ceiling
 src/ask-tools.js       the Ask panel's eleven read-only tools (whitelisted fields, bounded output, secrets scrubbed)
 src/sse.js             the dashboard's event stream: one gzip per tab, flushed after every frame
-public/                the prediction-market floor at /pm (index.html, app.js); style.css is shared with desk.html; vendor/ holds TradingView Lightweight Charts, which draws both P&L charts
+public/                the prediction-market floor at /pm (index.html, app.js, style.css: /pm's alone since 2026-09-25, so it retires with /pm); vendor/ holds TradingView Lightweight Charts, which draws both P&L charts
 data/state.json        persisted account (created on first run)
 data/ticks-*.jsonl     tick tape, one line per priced pair per cycle (RECORD=1)
 tools/maker-replay.js  the maker desk against Kalshi's own trade history, same pure functions as live

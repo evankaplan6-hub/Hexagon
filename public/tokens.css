@@ -10,7 +10,6 @@
   /* ---- surfaces, darkest first */
   --bg-0: #080a0f;                    /* the page, the floor's frame, the feed */
   --bg-1: #0e121a;                    /* raised off the page: the chart dialog, the floor's title bar */
-  --bg-2: #151b26;                    /* raised further */
   --room: #0b0e14;                    /* the room's backdrop; desk.js fills the canvas with it too */
   --glass: rgba(10, 13, 20, .94);     /* a speech bubble over the room */
   --bad-glass: rgba(40, 10, 14, .95); /* a bubble saying something is wrong */
@@ -49,7 +48,6 @@
 
   /* ---- washes and edges for tinted chips and badges, mixed from the colours above */
   --gain-wash: color-mix(in srgb, var(--gain) 10%, transparent);
-  --loss-wash: color-mix(in srgb, var(--loss) 10%, transparent);
   --ok-wash: color-mix(in srgb, var(--ok) 10%, transparent);
   --ok-edge: color-mix(in srgb, var(--ok) 30%, transparent);
   --warn-wash: color-mix(in srgb, var(--warn) 10%, transparent);
