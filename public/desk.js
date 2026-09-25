@@ -38,11 +38,18 @@
   // the cent, an option to the cent of a dollar per share
   const px = (p) => (!Number.isFinite(p) ? '—' : p >= 1000 ? `$${p.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : p >= 1 ? `$${p.toFixed(2)}` : `$${p.toFixed(p < 0.1 ? 3 : 2)}`);
   const qtyTxt = (q, book) => (book === 'crypto' ? String(+(+q).toFixed(q >= 1 ? 4 : 6)) : book === 'stocks' ? `${+(+q).toFixed(3)}` : String(q));
-  const agentColor = (k) => (S && S.agents.find((a) => a.key === k) || {}).color || '#888';
+  const agentColor = (k) => (S && S.agents.find((a) => a.key === k) || {}).color || 'var(--ink-3)';
   const CYCLE = { HOLT: 0, ILSA: 1, TESS: 2, RIGO: 3, BRAM: 4, KETT: 5, PRED: 6 };
   const isActive = (a) => { const dt = S.now - a.lastActive - (CYCLE[a.key] || 0) * 900; return dt >= 0 && dt < 3200; };
   const bookOf = (k) => (S && S.books || []).find((b) => b.key === k) || null;
-  const BOOK_COLOR = { crypto: '#f59e0b', stocks: '#3b82f6', options: '#a855f7' };
+  const BOOK_COLOR = { crypto: 'var(--book-crypto)', stocks: 'var(--book-stocks)', options: 'var(--book-options)' };
+  // tokens.css, read once for the two things that cannot take a var(): the chart library and the canvas
+  const TOK = (() => {
+    const cs = getComputedStyle(document.documentElement), t = {};
+    for (const k of ['room', 'ink-1', 'ink-2', 'ink-3', 'gain', 'loss', 'bad', 'rule-1']) t[k] = cs.getPropertyValue(`--${k}`).trim();
+    return t;
+  })();
+  const withAlpha = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16}, ${(n >> 8) & 255}, ${n & 255}, ${a})`; };
   const ROLE = {
     HOLT: 'fetches every price: Coinbase live, Cboe 15 minutes late',
     ILSA: 'measures how hard each market has been swinging',
@@ -170,7 +177,7 @@
     RW = Math.round(Math.max(ROOM_W_MIN, Math.min(ROOM_W_MAX, ROOM_H * (w / h))));
     const ctx = cv.getContext('2d');
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = '#0b0e14'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = TOK.room; ctx.fillRect(0, 0, w, h);
     const scale = Math.min(w / RW, h / ROOM_H);
     floorBox.scale = scale / dpr;
     floorBox.ox = (w - RW * scale) / 2 / dpr;
@@ -200,7 +207,7 @@
     }
     for (let k = 1, y = WALL_H; y < ROOM_H; k++) { y = WALL_H + Math.pow(k, 1.55) * 3.1; pxl(ctx, 0, y, RW, 0.5, '#141c29'); }
     ctx.restore();
-    if (!S) { text(ctx, 'CONNECTING TO THE DESK', VPX, WALL_H / 2, '#4b5563', 8, 'center'); return; }
+    if (!S) { text(ctx, 'CONNECTING TO THE DESK', VPX, WALL_H / 2, TOK['ink-3'], 8, 'center'); return; }
 
     glow(ctx, VPX, 58, Math.max(210, RW * 0.42), '#1b3a6b', 0.55);
     glow(ctx, 64, 80, 95, '#14304f', 0.30);
@@ -330,9 +337,9 @@
     chartBox = { x: L.chart.x + 1, y: L.chart.y + 1, w: L.chart.w - 2, h: L.chart.h - 2 };
     if (stale()) {
       ctx.save(); ctx.globalAlpha = 0.55; ctx.fillStyle = '#05070c'; ctx.fillRect(0, 0, RW, ROOM_H); ctx.restore();
-      pxl(ctx, VPX - 90, WALL_H - 4, 180, 16, '#1a0d0f'); pxl(ctx, VPX - 90, WALL_H - 4, 180, 1, '#ef4444');
-      text(ctx, 'NO SIGNAL FROM THE DESK', VPX, WALL_H, '#f87171', 7, 'center');
-      text(ctx, 'this page is showing the last state it received', VPX, WALL_H + 7, '#7f1d1d', 5, 'center');
+      pxl(ctx, VPX - 90, WALL_H - 4, 180, 16, '#1a0d0f'); pxl(ctx, VPX - 90, WALL_H - 4, 180, 1, TOK.bad);
+      text(ctx, 'NO SIGNAL FROM THE DESK', VPX, WALL_H, TOK.bad, 7, 'center');
+      text(ctx, 'this page is showing the last state it received', VPX, WALL_H + 7, TOK['ink-2'], 5, 'center');
     }
   }
 
@@ -647,8 +654,8 @@
     if (!LW) return null;
     const c = LW.createChart(el.querySelector('.cplot'), {
       autoSize: true, handleScroll: false, handleScale: false,
-      layout: { background: { type: LW.ColorType.Solid, color: 'transparent' }, textColor: '#657086', fontFamily: "'JetBrains Mono', ui-monospace, Menlo, monospace", fontSize: 9, attributionLogo: true },
-      grid: { vertLines: { visible: false }, horzLines: { color: 'rgba(140,168,210,.07)' } },
+      layout: { background: { type: LW.ColorType.Solid, color: 'transparent' }, textColor: TOK['ink-3'], fontFamily: "'JetBrains Mono', ui-monospace, Menlo, monospace", fontSize: 9, attributionLogo: true },
+      grid: { vertLines: { visible: false }, horzLines: { color: TOK['rule-1'] } },
       rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.12, bottom: 0.1 } },
       timeScale: { visible: big, borderVisible: false, timeVisible: true, secondsVisible: false, fixLeftEdge: true, fixRightEdge: true },
       localization: { timeFormatter: (sec) => new Date(sec * 1000).toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) },
@@ -656,8 +663,8 @@
     });
     const desk = c.addSeries(LW.AreaSeries, { lineWidth: big ? 3 : 2, priceLineVisible: false, lastValueVisible: big, crosshairMarkerRadius: 3,
       priceFormat: { type: 'custom', minMove: 0.01, formatter: (v) => signed(v) } });
-    const hold = c.addSeries(LW.LineSeries, { color: '#8792a8', lineWidth: 1, lineStyle: LW.LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
-    desk.createPriceLine({ price: 0, color: '#44526b', lineWidth: 1, lineStyle: LW.LineStyle.Dashed, axisLabelVisible: false });
+    const hold = c.addSeries(LW.LineSeries, { color: TOK['ink-3'], lineWidth: 1, lineStyle: LW.LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+    desk.createPriceLine({ price: 0, color: withAlpha(TOK['ink-3'], 0.45), lineWidth: 1, lineStyle: LW.LineStyle.Dashed, axisLabelVisible: false });
     return { c, desk, hold };
   }
   function drawChart(el) {
@@ -677,8 +684,8 @@
     const bySec = new Map();
     for (const [t, v, hv] of pts) bySec.set(Math.floor(t / 1000), [v, hv]);
     const rows = [...bySec.entries()].sort((a, b) => a[0] - b[0]);
-    const col = up ? '#22c55e' : '#ef4444';
-    p.plot.desk.applyOptions({ lineColor: col, topColor: up ? 'rgba(34,197,94,.22)' : 'rgba(239,68,68,.22)', bottomColor: 'rgba(0,0,0,0)' });
+    const col = up ? TOK.gain : TOK.loss;
+    p.plot.desk.applyOptions({ lineColor: col, topColor: withAlpha(col, 0.22), bottomColor: 'rgba(0,0,0,0)' });
     p.plot.desk.setData(rows.map(([t, [v]]) => ({ time: t, value: v })));
     p.plot.hold.setData(rows.filter(([, [, hv]]) => hv != null).map(([t, [, hv]]) => ({ time: t, value: hv })));
     p.plot.c.timeScale().fitContent();
@@ -788,7 +795,7 @@
     if (sp) rows.push({ name: 'SPY', sub: `S&P 500 ETF · ${S.market && S.market.delayMin != null ? `${S.market.delayMin} min late` : '15 min late'}`, price: px(sp.bid || sp.last), chg: chg(sp.last, sp.prevClose), vol: sp.vol, want: sp.want });
     const head = '<div class="mcols"><span>Market</span><span style="text-align:right">Price</span><span style="text-align:right">Today</span><span style="text-align:right">Swings</span><span style="text-align:right">Target</span></div>';
     const list = rows.map((x) => `<li><span class="nm">${esc(x.name)} <i>${esc(x.sub)}</i></span><span class="v">${x.price}</span>` +
-      `<span class="g ${x.chg == null ? 'none' : ''}" style="color:${x.chg == null ? '' : x.chg >= 0 ? '#6ee7a0' : '#fca5a5'}">${x.chg == null ? '—' : `${x.chg >= 0 ? '+' : ''}${(x.chg * 100).toFixed(2)}%`}</span>` +
+      `<span class="g ${x.chg == null ? 'none' : x.chg >= 0 ? 'pos' : 'neg'}">${x.chg == null ? '—' : `${x.chg >= 0 ? '+' : ''}${(x.chg * 100).toFixed(2)}%`}</span>` +
       `<span class="v">${Number.isFinite(x.vol) ? pct(x.vol) : '—'}</span><span class="v">${Number.isFinite(x.want) ? pct(x.want) : '—'}</span></li>`).join('');
     const note = `<p class="mnone">"Swings" is how much the market has moved in a year, measured over the last ${S.cfg ? '30 days for crypto and 20 sessions for SPY' : 'few weeks'}. "Target" is how much of its slot the book wants to hold: less when it swings more. Options today: <b>${esc(optionsLine())}</b>.</p>`;
     $('marketlist').innerHTML = `${head}<ol class="mlist">${list}</ol>${note}`;

@@ -5,7 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The Hexagon</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@600;700;800&display=swap" rel="stylesheet">
+<!-- every weight desk.css uses, 400 to 800, as one variable file per family (tools/tokens-test.js checks) -->
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400..800&family=Inter:wght@400..800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="tokens.css">
 <link rel="stylesheet" href="desk.css">
 </head>
 <body>
@@ -14,9 +16,9 @@
   <header>
     <div class="brand">
       <svg viewBox="0 0 40 40" width="34" height="34" aria-hidden="true">
-        <polygon points="20,3 35,11.5 35,28.5 20,37 5,28.5 5,11.5" fill="none" stroke="#8b93a3" stroke-width="2"/>
-        <polygon points="20,10 29,15 29,25 20,30 11,25 11,15" fill="none" stroke="#8b93a3" stroke-width="1.5"/>
-        <polygon points="20,15.5 24.5,18 24.5,22 20,24.5 15.5,22 15.5,18" fill="#8b93a3"/>
+        <polygon points="20,3 35,11.5 35,28.5 20,37 5,28.5 5,11.5" fill="none" stroke="currentColor" stroke-width="2"/>
+        <polygon points="20,10 29,15 29,25 20,30 11,25 11,15" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <polygon points="20,15.5 24.5,18 24.5,22 20,24.5 15.5,22 15.5,18" fill="currentColor"/>
       </svg>
       <h1>The Hexagon</h1>
     </div>
