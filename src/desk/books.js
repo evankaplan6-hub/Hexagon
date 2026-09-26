@@ -95,7 +95,7 @@ function trendTest(bars, vwap, atr, R = ZERO) {
   const sideOk = dir === 'up' ? c > vwap[i] : c < vwap[i];
   const big = Math.abs(move) >= R.trendAtr * atr;
   const pass = big && sideOk && retr < 0.5;
-  const why = pass ? '' : !big ? `moved ${(Math.abs(move) / atr).toFixed(2)} ATR, needs ${R.trendAtr}`
+  const why = pass ? '' : !big ? `moved ${(Math.abs(move) / atr).toFixed(2)} ATR, needs ${R.trendAtr.toFixed(2)}`
     : !sideOk ? `12:30 close is on the wrong side of VWAP` : `gave back ${Math.round(retr * 100)}% of the move`;
   return {
     status: pass ? 'pass' : 'fail', dir, open: o, c1230: c, move, atr, moveAtr: Math.abs(move) / atr,

@@ -14,8 +14,14 @@
   let S = null;
 
   // ------------------------------------------------------------ formatting
-  const money = (x, d = 2) => `$${Math.abs(x).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d })}`;
-  const signed = (x, d = 2) => `${x >= 0 ? '+' : '-'}${money(x, d)}`;
+  // One way to write a number everywhere on the page: a true minus, a plus only when there is something
+  // to be plus about, thousands separators, cents on money and prices, and each coin to its own
+  // decimals. Zero is neither a gain nor a loss: no sign, and the neutral ink rather than the green.
+  const MINUS = '\u2212';
+  const money = (x, d = 2) => `$${Math.abs(x).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d })}`;
+  const isZero = (x, d = 2) => Math.abs(x) < 0.5 / 10 ** d;
+  const signed = (x, d = 2) => (isZero(x, d) ? money(0, d) : `${x > 0 ? '+' : MINUS}${money(x, d)}`);
+  const tone = (x, d = 2) => (isZero(x, d) ? 'zero' : x > 0 ? 'pos' : 'neg');
   const r2 = (x) => Math.round(x * 100) / 100;
   const pct = (x, d = 0) => `${(x * 100).toFixed(d)}%`;
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -36,8 +42,12 @@
   };
   // a price the way its market quotes it: coins in dollars and cents (or more for small coins), SPY to
   // the cent, an option to the cent of a dollar per share
-  const px = (p) => (!Number.isFinite(p) ? '—' : p >= 1000 ? `$${p.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : p >= 1 ? `$${p.toFixed(2)}` : `$${p.toFixed(p < 0.1 ? 3 : 2)}`);
-  const qtyTxt = (q, book) => (book === 'crypto' ? String(+(+q).toFixed(q >= 1 ? 4 : 6)) : book === 'stocks' ? `${+(+q).toFixed(3)}` : String(q));
+  const px = (p) => (!Number.isFinite(p) ? '—' : p >= 1 ? `$${p.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : `$${p.toFixed(p < 0.1 ? 3 : 2)}`);
+  // a coin to the decimals its price needs: a thousandth of a bitcoin is $80, of a SOL twelve cents
+  const COIN_DP = { 'BTC-USD': 6, 'ETH-USD': 4, 'SOL-USD': 2 };
+  const qtyTxt = (q, book, sym) => (book === 'crypto'
+    ? (+q).toLocaleString('en-US', { minimumFractionDigits: COIN_DP[sym] ?? 6, maximumFractionDigits: COIN_DP[sym] ?? 6 })
+    : book === 'stocks' ? `${+(+q).toFixed(3)}` : String(q));
   const agentColor = (k) => (S && S.agents.find((a) => a.key === k) || {}).color || 'var(--ink-3)';
   const CYCLE = { HOLT: 0, ILSA: 1, TESS: 2, RIGO: 3, BRAM: 4, KETT: 5, PRED: 6 };
   const isActive = (a) => { const dt = S.now - a.lastActive - (CYCLE[a.key] || 0) * 900; return dt >= 0 && dt < 3200; };
@@ -60,6 +70,67 @@
     PRED: 'the prediction-market desk: no new trades, its positions riding to settlement',
   };
 
+  // ------------------------------------------------------------ rendering that keeps what a person is doing
+  // The stream lands every two seconds, and replacing a board's HTML each time threw away whatever a
+  // person had focused, hovered or selected on it (the review's B5). morph() patches the page into the
+  // new HTML instead, so an element that is still there stays the same element. A child is matched by
+  // its data-k when it has one, and one marked data-keep (the phone's chart) is left alone entirely.
+  function morph(el, html) {
+    const t = document.createElement('template');
+    t.innerHTML = html;
+    patch(el, t.content);
+  }
+  const sameNode = (x, y) => x.nodeType === y.nodeType && x.nodeName === y.nodeName
+    && (x.nodeType !== 1 || x.getAttribute('data-k') === y.getAttribute('data-k'));
+  function patch(a, b) {
+    const want = [...b.childNodes];
+    for (let i = 0; i < want.length; i++) {
+      const y = want[i], x = a.childNodes[i];
+      if (!x) { a.appendChild(y); continue; }
+      if (!sameNode(x, y)) { a.replaceChild(y, x); continue; }
+      if (x.nodeType !== 1) { if (x.nodeValue !== y.nodeValue) x.nodeValue = y.nodeValue; continue; }
+      if (y.hasAttribute('data-keep')) continue;
+      for (const { name, value } of [...y.attributes]) if (x.getAttribute(name) !== value) x.setAttribute(name, value);
+      for (const { name } of [...x.attributes]) if (!y.hasAttribute(name)) x.removeAttribute(name);
+      patch(x, y);
+    }
+    while (a.childNodes.length > want.length) a.removeChild(a.lastChild);
+  }
+  // One line, cut at whole words: words go from the end of the dim part first, then from the name
+  // (never below one word), and a line never ends on a joining word. Ported from /pm's app.js, where
+  // .fitw began; this page used the class without ever calling it, so its rows were sliced through a
+  // letter or a figure ("holding would be +$1" for +$14.19; the review's B7).
+  const fitMemo = new Map();
+  const TRAIL = /(\s+(of|the|a|an|in|on|at|by|for|from|to|and|or|with|vs\.?|as|than|that|would|be|needs?|-|–|·))+$/i;
+  const tidyEnd = (t) => t.replace(/[\s,;:·\-–(\[]+$/, '').replace(TRAIL, '').replace(/[\s,;:·\-–(\[]+$/, '');
+  function fitWords(line) {
+    const w = line.clientWidth;
+    if (!w || line.scrollWidth <= w + 1) return;
+    const parts = [...line.children].filter((c) => c.tagName === 'SPAN' || c.tagName === 'I');
+    const els = parts.length ? parts : [line];
+    const full = els.map((e) => e.textContent);
+    const key = `${full.join('\u0001')}|${w}|${getComputedStyle(line).fontSize}`;
+    const put = (texts) => els.forEach((e, i) => { e.textContent = texts[i]; e.hidden = !texts[i]; });
+    if (fitMemo.has(key)) { put(fitMemo.get(key)); return; }
+    const texts = full.slice();
+    for (let guard = 0; guard < 80 && line.scrollWidth > w + 1; guard++) {
+      let i = -1;   // the last part that can still give up a word
+      for (let k = texts.length - 1; k >= 0 && i < 0; k--) {
+        if (k > 0 ? texts[k].replace(/^\s*·\s*/, '').trim() : texts[k].trim().split(/\s+/).length > 1) i = k;
+      }
+      if (i < 0) break;
+      const prefix = i > 0 && /^\s*·\s*/.test(texts[i]) ? ' · ' : '';
+      const body = texts[i].replace(/^\s*·\s*/, '').trim().split(/\s+/);
+      body.pop();
+      const next = tidyEnd(body.join(' '));
+      texts[i] = next ? prefix + next : '';
+      put(texts);
+    }
+    if (fitMemo.size > 800) fitMemo.clear();
+    fitMemo.set(key, texts);
+  }
+  const fitAll = (root) => root.querySelectorAll('.fitw').forEach(fitWords);
+
   // ------------------------------------------------------------ header
   let lastFrameAt = 0;
   const STALE_MS = 12000;
@@ -71,11 +142,14 @@
     const [state, cls] = deskState();
     const pill = $('deskstate');
     pill.className = `pill ${cls}`;
-    pill.innerHTML = `<i></i>${esc(state)}${S.halt ? `<span class="why">${esc(String(S.halt))}</span>` : ''}<span class="mode">Paper</span>`;
+    morph(pill, `<i></i>${esc(state)}${S.halt ? `<span class="why">${esc(String(S.halt))}</span>` : ''}<span class="mode">Paper</span>`);
+    // a background tab says how the desk is doing, not just its name
+    const title = Number.isFinite(S.pnl) ? `${signed(S.pnl)} · ${state} · The Hexagon` : 'The Hexagon';
+    if (document.title !== title) document.title = title;
     const held = (S.books || []).reduce((a, b) => a + b.rows.filter((r) => r.qty > 0).length, 0);
     const day = Math.floor((S.now - S.startedAt) / 86400000) + 1;
     const fact = (k, v, c) => `<span>${k}<b class="${c || ''}">${v}</b></span>`;
-    $('meta').innerHTML = fact('day', day) + fact('held', held) + fact('market', S.market ? (S.market.open ? 'open' : 'closed') : '—');
+    morph($('meta'), fact('day', day) + fact('held', held) + fact('market', S.market ? (S.market.open ? 'open' : 'closed') : '—'));
     const L = S.legacy;
     const pmHtml = `<span class="lg">Prediction markets${L ? (L.groups || L.contracts ? ' · winding down' : ' · settled') : ''}</span><span class="sm">Pred. mkts</span>`;
     if ($('pmlink').innerHTML !== pmHtml) $('pmlink').innerHTML = pmHtml;
@@ -397,7 +471,7 @@
     }
     const list = $('feedlist'), top = list.scrollTop;
     list.innerHTML = rows.map(({ e, s }) => {
-      const pl = (e.kind === 'FILL' || e.kind === 'SETTLE') && e.pnl != null ? `<span class="fp ${e.pnl >= 0 ? 'pos' : 'neg'}">${signed(e.pnl)}</span>` : '';
+      const pl = (e.kind === 'FILL' || e.kind === 'SETTLE') && e.pnl != null ? `<span class="fp ${tone(e.pnl)}">${signed(e.pnl)}</span>` : '';
       return `<li class="lv-${s.level}" style="--a:${agentColor(e.agent)}"><span class="ft">${hhmm(e.t)}</span><span class="fa" style="color:${agentColor(e.agent)}">${e.agent}</span>` +
         `<span class="fs">${esc(s.text)}${s.sub && s.level !== 'quiet' ? `<small>${esc(s.sub)}</small>` : ''}</span>${pl}</li>`;
     }).join('') || '<li class="lv-quiet"><span class="fs">Waiting for the first desk round</span></li>';
@@ -492,8 +566,8 @@
     switch (d.status) {
       case 'waiting': return 'waiting for the 12:30 test';
       case 'armed': return `trend day ${d.dir} (${d.test ? d.test.moveAtr.toFixed(2) : '?'} ATR): watching for a new ${up ? 'high' : 'low'} until 2:45`;
-      case 'no-trade': return `no trade today: ${d.why || 'not a trend day'}`;
-      case 'early-close': return 'no trade today: a 1 PM close';
+      case 'no-trade': return `no trade: ${d.why || 'not a trend day'}`;
+      case 'early-close': return 'no trade: a 1 PM close';
       case 'done': return `done for today after ${d.entries} trade${d.entries === 1 ? '' : 's'}`;
       default: return d.status;
     }
@@ -525,20 +599,31 @@
   }
 
   // ------------------------------------------------------------ the wall screen: the books
-  let wallKey = '', tapeKey = '', tapeHtml = '', clockTxt = '', wallWide = false;
+  let wallKey = '', tapeKey = '', clockTxt = '', wallWide = false;
+  // The wall's size comes from the room's drawing, not from what it has to hold, so a small room
+  // steps it down rather than clipping it (the review's B3): with the number in its own column, the
+  // per-book split under it goes first, then the line under the number. A small wall with the number
+  // on top is .compact, which keeps the three books and leaves their holdings one click away.
+  function fitWall(el) {
+    el.classList.remove('short', 'shorter');
+    const num = el.querySelector('.wnum');
+    if (!num || !wallWide) return;
+    if (num.scrollHeight > num.clientHeight + 1) el.classList.add('short');
+    if (num.scrollHeight > num.clientHeight + 1) el.classList.add('shorter');
+  }
   const sideTag = (txt, cls) => `<span class="sd ${cls || 'long'}">${esc(txt)}</span>`;
-  const plCell = (v) => (Number.isFinite(v) ? `<span class="pl ${v >= 0 ? 'pos' : 'neg'}">${signed(v)}</span>` : '<span class="pl">—</span>');
+  const plCell = (v) => (Number.isFinite(v) ? `<span class="pl ${tone(v)}">${signed(v)}</span>` : '<span class="pl">—</span>');
   function holdingRow(b, r) {
     const tag = b.key === 'options' ? sideTag(`${r.qty} × ${px(r.px)}`, 'long')
       : Number.isFinite(r.target) ? sideTag(`${Math.round(r.target * 100)}%`, 'long') : sideTag('cash', 'arb');
     const sub = b.key === 'options' ? r.label
-      : `${r.qty > 0 ? `${qtyTxt(r.qty, b.key)} ${b.key === 'crypto' ? r.name : 'sh'} at ${px(r.px)}` : `not held yet, ${px(r.px)}`}${Number.isFinite(r.vol) ? ` · swings ${pct(r.vol)}` : ''}`;
-    return `<button class="wr long hold" data-b="${b.key}"><span class="nm"><span class="l1 fitw"><span>${esc(r.name)}</span><i> · ${esc(sub)}</i></span></span>${tag}<span class="val">${money(r.value || 0, 0)}</span>${plCell(r.pnl)}</button>`;
+      : `${r.qty > 0 ? `${qtyTxt(r.qty, b.key, r.sym)} ${b.key === 'crypto' ? r.name : 'sh'} at ${px(r.px)}` : `not held yet, ${px(r.px)}`}${Number.isFinite(r.vol) ? ` · swings ${pct(r.vol)}` : ''}`;
+    return `<button class="wr long hold" data-b="${b.key}" data-k="hold:${b.key}:${esc(r.sym)}"><span class="nm"><span class="l1 fitw"><span>${esc(r.name)}</span><i> · ${esc(sub)}</i></span></span>${tag}<span class="val">${money(r.value || 0, 0)}</span>${plCell(r.pnl)}</button>`;
   }
   const heldIn = (b) => b.rows.filter((r) => r.qty > 0).length;
   function bookRow(b) {
-    const vs = b.bench != null ? `holding would be ${signed(b.benchPnl)}` : b.key === 'options' ? optionsLine() : 'starts at its first trade';
-    return `<button class="wr bk" data-b="${b.key}" style="--bk:${BOOK_COLOR[b.key]}"><span class="nm"><span class="l1 fitw"><span>${esc(b.name)}</span><i> · ${esc(vs)}</i></span></span>` +
+    const vs = b.bench != null ? `holding ${signed(b.benchPnl)}` : b.key === 'options' ? optionsLine() : 'starts at its first trade';
+    return `<button class="wr bk" data-b="${b.key}" data-k="book:${b.key}" style="--bk:${BOOK_COLOR[b.key]}"><span class="nm"><span class="l1 fitw"><span>${esc(b.name)}</span><i> · ${esc(vs)}</i></span></span>` +
       `${sideTag(heldIn(b) ? `${heldIn(b)} held` : 'flat', heldIn(b) ? 'long' : 'arb')}<span class="val">${money(b.equity, 0)}</span>${plCell(b.pnl)}</button>`;
   }
   function wallHome() {
@@ -546,9 +631,9 @@
     const bench = books.filter((b) => b.bench != null);
     const benchPnl = bench.length ? r2(bench.reduce((a, b) => a + b.benchPnl, 0)) : null;
     const booksPnl = bench.length ? r2(bench.reduce((a, b) => a + b.pnl, 0)) : null;
-    const stat = (label, v, c) => `<div class="${c || ''}"><dt>${label}</dt><dd class="${v >= 0 ? 'pos' : 'neg'}">${signed(v)}</dd></div>`;
+    const stat = (label, v, c) => `<div class="${c || ''}"><dt>${label}</dt><dd class="${tone(v)}">${signed(v)}</dd></div>`;
     const fees = r2(books.reduce((a, b) => a + (b.fees || 0), 0));
-    const num = `<div class="wbig ${S.pnl >= 0 ? 'pos' : 'neg'}">${signed(S.pnl)}</div>` +
+    const num = `<div class="wbig ${tone(S.pnl)}">${signed(S.pnl)}</div>` +
       `<div class="wsub">all three books, marked now · started with ${money(S.initial, 0)}</div>` +
       `<dl class="wstats">${S.today != null ? stat('Today', S.today) : ''}` +
       `${benchPnl != null ? stat('vs holding', r2(booksPnl - benchPnl)) : ''}` +
@@ -565,7 +650,7 @@
     const b = bookOf(key);
     let h = `<div class="wh"><button class="wback" data-back="1">‹ Back</button><span style="color:${BOOK_COLOR[key]}">${b ? esc(b.name) : ''} book</span></div>`;
     if (!b) return h + '<p class="wempty">No such book.</p>';
-    h += `<div class="wbig ${b.pnl >= 0 ? 'pos' : 'neg'}">${signed(b.pnl)}</div><div class="wsub">on ${money(b.initial, 0)} · worth ${money(b.equity)} now</div>`;
+    h += `<div class="wbig ${tone(b.pnl)}">${signed(b.pnl)}</div><div class="wsub">on ${money(b.initial, 0)} · worth ${money(b.equity)} now</div>`;
     h += `<p class="wq">${esc(b.rule)}</p>`;
     const facts = [
       ['Holding instead', b.bench != null ? `${signed(b.benchPnl)} (${money(b.bench)})` : key === 'options' ? 'not a thing to hold' : 'starts at the first trade'],
@@ -597,7 +682,7 @@
     if (a.key === 'PRED') {
       const P = S.legacy;
       if (!P) return h + '<p class="wempty">The prediction-market desk is not running in this process.</p>';
-      h += `<div class="wbig ${P.pnl >= 0 ? 'pos' : 'neg'}">${signed(P.pnl)}</div><div class="wsub">all its paper books, marked now · no new trades since 2026-09-25</div>`;
+      h += `<div class="wbig ${tone(P.pnl)}">${signed(P.pnl)}</div><div class="wsub">all its paper books, marked now · no new trades since 2026-09-25</div>`;
       h += `<dl class="wfacts"><dt>Still open</dt><dd>${P.groups} arb${P.groups === 1 ? '' : 's'} and ${P.contracts.toLocaleString()} maker contracts in ${P.held} markets</dd>` +
         `<dt>Next settles</dt><dd>${P.nextSettle ? new Date(P.nextSettle).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}</dd></dl>`;
       return h + `<p class="wread">Its own floor is still at <a href="/pm">/pm</a> until the last position settles.</p>`;
@@ -608,8 +693,8 @@
     const f = (S.fills || []).find((x) => x.id === id);
     let h = `<div class="wh"><button class="wback" data-back="1">‹ Back</button><span>${f ? `${esc(cap(f.book))} book · ${ago(f.at)}` : ''}</span></div>`;
     if (!f) return h + '<p class="wempty">That trade is no longer on the board.</p>';
-    h += `<div class="wtitle">${f.side === 'buy' ? 'Bought' : 'Sold'} ${qtyTxt(f.qty, f.book)} ${esc(f.label)}</div>`;
-    if (f.pnl != null) h += `<div class="wbig ${f.pnl >= 0 ? 'pos' : 'neg'}">${signed(f.pnl)}</div><div class="wsub">made or lost on this sale, fees included</div>`;
+    h += `<div class="wtitle">${f.side === 'buy' ? 'Bought' : 'Sold'} ${qtyTxt(f.qty, f.book, f.sym)} ${esc(f.label)}</div>`;
+    if (f.pnl != null) h += `<div class="wbig ${tone(f.pnl)}">${signed(f.pnl)}</div><div class="wsub">made or lost on this sale, fees included</div>`;
     h += `<ul class="wrecap"><li>At ${px(f.px)}${f.book === 'options' ? ' a share, 100 shares a contract' : ''}: ${money(f.value)}${f.fee ? `, plus ${money(f.fee)} in fees` : ''}.</li><li>Why: ${esc(f.why || '—')}.</li></ul>`;
     return h;
   }
@@ -656,12 +741,20 @@
       autoSize: true, handleScroll: false, handleScale: false,
       layout: { background: { type: LW.ColorType.Solid, color: 'transparent' }, textColor: TOK['ink-3'], fontFamily: "'JetBrains Mono', ui-monospace, Menlo, monospace", fontSize: 9, attributionLogo: true },
       grid: { vertLines: { visible: false }, horzLines: { color: TOK['rule-1'] } },
-      rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.12, bottom: 0.1 } },
+      // a label at the plot's edge is drawn whole or not at all, never cut in half; the bottom margin
+      // is set in drawChart from the plot's height, to keep the line clear of the licence's logo
+      rightPriceScale: { borderVisible: false, entireTextOnly: true, scaleMargins: { top: 0.12, bottom: 0.12 } },
       timeScale: { visible: big, borderVisible: false, timeVisible: true, secondsVisible: false, fixLeftEdge: true, fixRightEdge: true },
       localization: { timeFormatter: (sec) => new Date(sec * 1000).toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) },
       crosshair: { mode: LW.CrosshairMode.Magnet, horzLine: { visible: big, labelVisible: big } },
     });
-    const desk = c.addSeries(LW.AreaSeries, { lineWidth: big ? 3 : 2, priceLineVisible: false, lastValueVisible: big, crosshairMarkerRadius: 3,
+    // Above zero the line and its fill are the gain colour, below it the loss colour, whatever the
+    // range: it used to take one colour from whether P&L rose over the range, so a losing desk could
+    // be drawn green and switching the range could turn the same book red (the review's B6).
+    const desk = c.addSeries(LW.BaselineSeries, { baseValue: { type: 'price', price: 0 },
+      topLineColor: TOK.gain, topFillColor1: withAlpha(TOK.gain, 0.22), topFillColor2: withAlpha(TOK.gain, 0.02),
+      bottomLineColor: TOK.loss, bottomFillColor1: withAlpha(TOK.loss, 0.02), bottomFillColor2: withAlpha(TOK.loss, 0.22),
+      lineWidth: big ? 3 : 2, priceLineVisible: false, lastValueVisible: big, crosshairMarkerRadius: 3,
       priceFormat: { type: 'custom', minMove: 0.01, formatter: (v) => signed(v) } });
     const hold = c.addSeries(LW.LineSeries, { color: TOK['ink-3'], lineWidth: 1, lineStyle: LW.LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
     desk.createPriceLine({ price: 0, color: withAlpha(TOK['ink-3'], 0.45), lineWidth: 1, lineStyle: LW.LineStyle.Dashed, axisLabelVisible: false });
@@ -673,19 +766,22 @@
     const pts = chartSeries();
     const last = pts.length ? pts[pts.length - 1][1] : (S ? S.pnl : 0);
     const first = pts.length ? pts[0][1] : last;
-    const up = last >= first;
-    el.querySelector('.cv').innerHTML = `<span class="${last >= 0 ? 'pos' : 'neg'}">${signed(last || 0)}</span>`;
+    morph(el.querySelector('.cv'), `<span class="${tone(last || 0)}">${signed(last || 0)}</span>`);
     el.querySelector('.cd').textContent = pts.length > 1 ? `${signed(last - first)} over ${chart.range === 'All' ? 'all of it' : chart.range}` : '';
     const lastHold = [...pts].reverse().find((x) => x[2] != null);
-    el.querySelector('.cr').innerHTML = lastHold ? `<span title="The dashed line: every book simply holding what it trades, from its first trade">holding: <b class="${lastHold[2] >= 0 ? 'pos' : 'neg'}">${signed(lastHold[2])}</b></span>` : '';
+    morph(el.querySelector('.cr'), lastHold ? `<span title="The dashed line: every book simply holding what it trades, from its first trade">holding: <b class="${tone(lastHold[2])}">${signed(lastHold[2])}</b></span>` : '');
     if (!p.plot) p.plot = makePlot(el, p.big);
     if (!p.plot) return;
+    // The licence's logo sits in the plot's bottom-left corner, about 30px tall: the small charts leave
+    // that much under the lowest point so the line never runs through it (the review's X2), however
+    // short the plot. The large chart's time axis already keeps it clear.
+    const ph = el.querySelector('.cplot').clientHeight;
+    const bottom = p.big ? 0.12 : Math.min(0.5, Math.max(0.12, 34 / Math.max(1, ph)));
+    if (p.bottom !== bottom) { p.plot.c.priceScale('right').applyOptions({ scaleMargins: { top: 0.12, bottom } }); p.bottom = bottom; }
     // the library wants strictly rising whole seconds
     const bySec = new Map();
     for (const [t, v, hv] of pts) bySec.set(Math.floor(t / 1000), [v, hv]);
     const rows = [...bySec.entries()].sort((a, b) => a[0] - b[0]);
-    const col = up ? TOK.gain : TOK.loss;
-    p.plot.desk.applyOptions({ lineColor: col, topColor: withAlpha(col, 0.22), bottomColor: 'rgba(0,0,0,0)' });
     p.plot.desk.setData(rows.map(([t, [v]]) => ({ time: t, value: v })));
     p.plot.hold.setData(rows.filter(([, [, hv]]) => hv != null).map(([t, [, hv]]) => ({ time: t, value: hv })));
     p.plot.c.timeScale().fitContent();
@@ -728,10 +824,12 @@
         wallKey = key;
         el.style.fontSize = `${wallFs}px`;
         const a = sel && sel.kind === 'agent' ? S.agents.find((x) => x.key === sel.key) : null;
-        el.innerHTML = sel && sel.kind === 'book' ? wallBook(sel.key) : sel && sel.kind === 'fill' ? wallFill(sel.key) : a ? wallAgent(a) : wallHome();
+        morph(el, sel && sel.kind === 'book' ? wallBook(sel.key) : sel && sel.kind === 'fill' ? wallFill(sel.key) : a ? wallAgent(a) : wallHome());
+        if (!sel) fitWall(el);
         const list2 = el.querySelector('.wlist, .wlog');
         if (list2) list2.scrollTop = top;
         el.classList.toggle('more', !!list2 && list2.scrollHeight > list2.clientHeight + 2);
+        fitAll(el);
         fitWidth(el.querySelector('.wbig'), 14);
         if (sel) fitText(el, wallFs, 9);
       }
@@ -745,20 +843,20 @@
       const el = $('tape');
       fit(el, { x: tapeBox.x + 1, y: tapeBox.y + 1, w: tapeBox.w - 2, h: tapeBox.h - 2 }, Math.max(11.5, Math.min(17, k * 5.6)));
       if (!el.firstChild) el.innerHTML = '<div class="th"><span>Recent fills</span><span class="tclock"></span></div><div class="tbody"><ol></ol><p class="none" hidden></p></div>';
-      const tk = `${frameSeq}|${sel && sel.kind === 'fill' ? sel.key : ''}`;
+      const tk = `${frameSeq}|${sel && sel.kind === 'fill' ? sel.key : ''}|${Math.round(tapeBox.w * k)}`;
       if (tk !== tapeKey) {
         tapeKey = tk;
         const fills = S.fills || [];
         const ol = el.querySelector('ol'), none = el.querySelector('.none');
-        const html = fills.map((f) => `<li class="${f.side}${sel && sel.kind === 'fill' && sel.key === f.id ? ' on' : ''}" data-f="${esc(f.id)}">` +
-          `<span class="act"><b>${f.side === 'buy' ? 'Bought' : 'Sold'}</b> ${esc(qtyTxt(f.qty, f.book))} <i>${esc(f.book === 'crypto' ? f.sym.replace('-USD', '') : f.book === 'options' ? 'contract' + (f.qty === 1 ? '' : 's') : f.sym)}</i></span>` +
-          `<span class="px">${f.pnl != null ? `<span class="${f.pnl >= 0 ? 'pos' : 'neg'}">${signed(f.pnl)}</span>` : money(f.value)}</span>` +
+        const html = fills.map((f) => `<li class="${f.side}${sel && sel.kind === 'fill' && sel.key === f.id ? ' on' : ''}" data-f="${esc(f.id)}" data-k="${esc(f.id)}">` +
+          `<span class="act"><b>${f.side === 'buy' ? 'Bought' : 'Sold'}</b> ${esc(qtyTxt(f.qty, f.book, f.sym))} <i>${esc(f.book === 'crypto' ? f.sym.replace('-USD', '') : f.book === 'options' ? 'contract' + (f.qty === 1 ? '' : 's') : f.sym)}</i></span>` +
+          `<span class="px">${f.pnl != null ? `<span class="${tone(f.pnl)}">${signed(f.pnl)}</span>` : money(f.value)}</span>` +
           `<span class="nm fitw"><span>${esc(f.label)}</span><i> · ${esc(f.book)}</i></span><span class="ago">${px(f.px)} · ${ago(f.at).replace(' ago', '').split(' ')[0]}</span></li>`).join('');
-        if (html !== tapeHtml) {
-          tapeHtml = html; ol.innerHTML = html; ol.hidden = !fills.length; none.hidden = !!fills.length;
-          if (!fills.length) none.textContent = 'No fills yet';
-          el.classList.toggle('more', ol.scrollHeight > ol.clientHeight + 2);
-        }
+        morph(ol, html);
+        fitAll(ol);
+        ol.hidden = !fills.length; none.hidden = !!fills.length;
+        if (!fills.length) none.textContent = 'No fills yet';
+        el.classList.toggle('more', ol.scrollHeight > ol.clientHeight + 2);
       }
       const t = new Date(S.now).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
       const hm = t.replace(/ [AP]M$/, '');
@@ -795,10 +893,10 @@
     if (sp) rows.push({ name: 'SPY', sub: `S&P 500 ETF · ${S.market && S.market.delayMin != null ? `${S.market.delayMin} min late` : '15 min late'}`, price: px(sp.bid || sp.last), chg: chg(sp.last, sp.prevClose), vol: sp.vol, want: sp.want });
     const head = '<div class="mcols"><span>Market</span><span style="text-align:right">Price</span><span style="text-align:right">Today</span><span style="text-align:right">Swings</span><span style="text-align:right">Target</span></div>';
     const list = rows.map((x) => `<li><span class="nm">${esc(x.name)} <i>${esc(x.sub)}</i></span><span class="v">${x.price}</span>` +
-      `<span class="g ${x.chg == null ? 'none' : x.chg >= 0 ? 'pos' : 'neg'}">${x.chg == null ? '—' : `${x.chg >= 0 ? '+' : ''}${(x.chg * 100).toFixed(2)}%`}</span>` +
+      `<span class="g ${x.chg == null ? 'none' : tone(x.chg, 4)}">${x.chg == null ? '—' : isZero(x.chg, 4) ? '0.00%' : `${x.chg > 0 ? '+' : MINUS}${Math.abs(x.chg * 100).toFixed(2)}%`}</span>` +
       `<span class="v">${Number.isFinite(x.vol) ? pct(x.vol) : '—'}</span><span class="v">${Number.isFinite(x.want) ? pct(x.want) : '—'}</span></li>`).join('');
     const note = `<p class="mnone">"Swings" is how much the market has moved in a year, measured over the last ${S.cfg ? '30 days for crypto and 20 sessions for SPY' : 'few weeks'}. "Target" is how much of its slot the book wants to hold: less when it swings more. Options today: <b>${esc(optionsLine())}</b>.</p>`;
-    $('marketlist').innerHTML = `${head}<ol class="mlist">${list}</ol>${note}`;
+    morph($('marketlist'), `${head}<ol class="mlist">${list}</ol>${note}`);
   }
   $('feed').querySelector('.fh').addEventListener('click', (ev) => {
     const b = ev.target.closest('.ftab');
@@ -812,22 +910,48 @@
 
   // ------------------------------------------------------------ phones: the facts as type
   let mobileChart = null;
+  // A tap on a book card opens that book under the cards: what it holds, its rule, and how it stands
+  // against simply holding. It used to pick the book for the wall screen, which phones do not show, so
+  // the card looked tappable and did nothing (the review's B4). The panel is always in the page and
+  // hidden when closed, so the summary keeps one shape and the chart below it is never rebuilt.
+  let mobileBook = null;
+  function mobileDetail(b) {
+    if (!b) return '';
+    const facts = [
+      ...(b.key === 'options' ? [['Today', esc(cap(optionsLine()))]] : []),
+      ['Holding instead', b.bench != null ? `<span class="${tone(b.benchPnl)}">${signed(b.benchPnl)}</span>` : b.key === 'options' ? 'not a thing to hold' : 'starts at the first trade'],
+      ['Banked', `<span class="${tone(b.realized)}">${signed(b.realized)}</span>`],
+      ['Fees paid', money(b.fees)],
+    ];
+    const rows = b.rows.map((r) => {
+      const what = b.key === 'options' ? `${r.qty} × ${px(r.px)} · ${r.label}` : r.qty > 0 ? `${qtyTxt(r.qty, b.key, r.sym)} at ${px(r.px)}` : `not held yet, ${px(r.px)}`;
+      return `<li data-k="${esc(r.sym)}"><div><b>${esc(r.name)}</b><small>${esc(what)}</small></div><span class="v">${money(r.value || 0)}</span>` +
+        `<span class="${Number.isFinite(r.pnl) ? tone(r.pnl) : ''}">${Number.isFinite(r.pnl) ? signed(r.pnl) : '—'}</span></li>`;
+    }).join('');
+    return `<div class="m-detail-top"><b>${esc(b.name)} book</b><span>worth ${money(b.equity)} · on ${money(b.initial, 0)}</span></div>` +
+      `<dl class="m-facts">${facts.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${v}</dd></div>`).join('')}</dl>` +
+      (rows ? `<ol class="m-holds">${rows}</ol>` : '<p class="m-none">Nothing held yet.</p>') +
+      `<p class="m-rule">${esc(b.rule)}</p>`;
+  }
   function renderMobileSummary() {
     const el = $('mobile-summary');
     if (!el || !S) return;
     const [state, cls] = deskState();
     const lf = (S.fills || [])[0];
-    const books = (S.books || []).map((b) => `<button type="button" class="m-book" data-b="${b.key}" style="--bk:${BOOK_COLOR[b.key]}"><span>${esc(b.name)}</span><b class="${b.pnl >= 0 ? 'pos' : 'neg'}">${signed(b.pnl)}</b>` +
+    const open = mobileBook && bookOf(mobileBook) ? mobileBook : null;
+    const books = (S.books || []).map((b) => `<button type="button" class="m-book${open === b.key ? ' open' : ''}" data-b="${b.key}" data-k="${b.key}" aria-expanded="${open === b.key}" aria-controls="m-detail" style="--bk:${BOOK_COLOR[b.key]}"><span>${esc(b.name)}</span><b class="${tone(b.pnl)}">${signed(b.pnl)}</b>` +
       `<small>${b.bench != null ? `holding ${signed(b.benchPnl)}` : b.key === 'options' ? esc(optionsLine()) : 'no trade yet'}</small></button>`).join('');
-    el.innerHTML = `<div class="m-hero"><div><span class="m-label">All paper books</span><strong class="${S.pnl >= 0 ? 'pos' : 'neg'}">${signed(S.pnl)}</strong>` +
+    morph(el, `<div class="m-hero"><div><span class="m-label">All paper books</span><strong class="${tone(S.pnl)}">${signed(S.pnl)}</strong>` +
       `<small>${S.market ? esc(`Stock market ${S.market.says}`) : ''}</small></div><span class="m-state ${cls}"><i></i>${esc(state)}<small>PAPER</small></span></div>` +
-      `<div class="m-books">${books}</div><div id="mobile-chart" class="pnl m-chart"></div>` +
-      (lf ? `<div class="m-fill"><div><span class="m-label">Latest fill</span><b>${lf.side === 'buy' ? 'Bought' : 'Sold'} ${esc(qtyTxt(lf.qty, lf.book))} ${esc(lf.label)} at ${px(lf.px)}</b></div><p>${esc(lf.why || '')}<small>${ago(lf.at)}</small></p></div>`
+      `<div class="m-books">${books}</div>` +
+      `<section id="m-detail" class="m-detail" aria-label="${open ? esc(bookOf(open).name) : ''} book"${open ? '' : ' hidden'}>${open ? mobileDetail(bookOf(open)) : ''}</section>` +
+      `<div id="mobile-chart" class="pnl m-chart" data-keep></div>` +
+      (lf ? `<div class="m-fill"><div><span class="m-label">Latest fill</span><b>${lf.side === 'buy' ? 'Bought' : 'Sold'} ${esc(qtyTxt(lf.qty, lf.book, lf.sym))} ${esc(lf.label)} at ${px(lf.px)}</b></div><p><span class="why">${esc(lf.why || '')}</span><small>${ago(lf.at)}</small></p></div>`
         : '<div class="m-fill empty"><div><span class="m-label">Latest fill</span><b>No fills yet</b></div></div>') +
-      `<div class="m-agents"><span class="m-label">Desks</span><div>${(S.agents || []).map((a) => `<span class="m-agent${isActive(a) ? ' on' : ''}" style="--agent:${a.color}"><i></i>${esc(a.key)}</span>`).join('')}</div></div>`;
+      `<div class="m-agents"><span class="m-label">Desks</span><div>${(S.agents || []).map((a) => `<span class="m-agent${isActive(a) ? ' on' : ''}" style="--agent:${a.color}"><i></i>${esc(a.key)}</span>`).join('')}</div></div>`);
     const slot = $('mobile-chart');
     if (slot) {
-      if (!mobileChart) { mobileChart = slot; wireChart(slot, false); } else slot.replaceWith(mobileChart);
+      if (!mobileChart) { mobileChart = slot; wireChart(slot, false); }
       drawChart(mobileChart);
     }
   }
@@ -869,8 +993,10 @@
     es.onerror = () => { es.close(); setTimeout(connect, 3000); };
   }
   $('mobile-summary').addEventListener('click', (ev) => {
-    const b = ev.target.closest('[data-b]');
-    if (b) { sel = { kind: 'book', key: b.dataset.b }; wallKey = ''; }
+    const b = ev.target.closest('.m-book[data-b]');
+    if (!b) return;
+    mobileBook = mobileBook === b.dataset.b ? null : b.dataset.b;
+    renderMobileSummary();
   });
   wireChart($('chart'), false);
   wireChart($('chartbig-pnl'), true);
