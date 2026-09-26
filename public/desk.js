@@ -1,7 +1,7 @@
 /* The Hexagon — the stocks, crypto and options desk's floor at /. Consumes /api/desk/stream.
  *
  * A wall of boards, one screen each: the headline (every book against simply holding what it holds),
- * the desk's own state, the markets it watches, one card per book with everything the book holds,
+ * the desk's own state, one card per book with everything the book holds and the markets it trades,
  * the P&L chart, and what the bots are doing. Until 2026-09-25 the boards were painted into a pixel
  * room with the bots at their desks and sized by the room's zoom, so most of their words were under
  * 12px; the bots and the room went at Evan's asking, and the boards are laid out for reading now.
@@ -175,6 +175,7 @@
       default: return d.status;
     }
   }
+  // The options day used to have a row here too, word for word the Options card's last line.
   function deskHtml() {
     const mk = S.market || {}, C = S.cfg || {};
     const cryptoOk = !(mk.stale && mk.stale.crypto), spyOk = !(mk.stale && mk.stale.stocks);
@@ -184,7 +185,6 @@
     const rows = [
       ['Stock market', `<b>${mk.open ? 'Open' : 'Closed'}</b> · ${esc(mk.says || '')}`],
       ['Prices', `<span class="dot${cryptoOk ? '' : ' warn'}"></span>Crypto ${cryptoOk ? 'live' : 'stale'} · <span class="dot ${spyOk ? 'late' : 'warn'}"></span>${spyOk ? esc(lag) : 'SPY stale'}`],
-      ['Options today', esc(cap(optionsLine()))],
     ];
     // how much of the day's loss limit is used: TESS stops all new buying when it is. The meter stays plain
     // until half of it is gone, is amber to 80% and red past that.
@@ -198,7 +198,8 @@
     const P = S.legacy;
     if (P) {
       const still = P.groups || P.contracts ? `${P.groups} arb${P.groups === 1 ? '' : 's'} and ${Number(P.contracts || 0).toLocaleString('en-US')} maker contracts open` : 'everything settled';
-      const next = P.nextSettle ? ` · next settles ${new Date(P.nextSettle).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : '';
+      // a no-break space keeps "Oct 3" on one line
+      const next = P.nextSettle ? ` · next settles ${new Date(P.nextSettle).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).replace(' ', '\u00a0')}` : '';
       rows.push(['Prediction mkts', `<a href="/pm">${figure(P.pnl)}</a> · ${esc(still + next)}`]);
     }
     const sha = S.build && S.build.sha ? String(S.build.sha).slice(0, 7) : 'dev';
@@ -206,24 +207,9 @@
       `<p class="deskfoot">Running ${dur(S.now - S.startedAt)} · build ${esc(sha)}</p>`;
   }
 
-  // ------------------------------------------------------------ the markets the desk watches
-  function marketsHtml() {
-    const rows = [];
-    const chg = (last, prev) => (last > 0 && prev > 0 ? last / prev - 1 : null);
-    // how fresh each price is lives on the desk board; here, what each market is
-    for (const r of (bookOf('crypto') || { rows: [] }).rows) rows.push({ name: r.name, sub: r.label, price: px(r.bid), chg: chg(r.bid, r.prevClose), vol: r.vol, want: r.want });
-    const sp = S.spy;
-    if (sp) rows.push({ name: 'SPY', sub: 'S&P 500 ETF', price: px(sp.bid || sp.last), chg: chg(sp.last, sp.prevClose), vol: sp.vol, want: sp.want });
-    const change = (c) => (c == null ? '—' : `<span class="${tone(c, 4)}">${isZero(c, 4) ? '0.00%' : `${c > 0 ? '+' : MINUS}${Math.abs(c * 100).toFixed(2)}%`}</span>`);
-    return `<span class="label">Markets</span><table class="mtab"><thead><tr><th scope="col">Market</th><th scope="col">Price</th><th scope="col">Today</th>` +
-      `<th scope="col" title="How much it moves in a year, measured over the last 30 days (crypto) or 20 sessions (SPY)">Swings</th>` +
-      '<th scope="col" title="How much of its slot the book wants to hold: less when it swings more">Target</th></tr></thead><tbody>' +
-      rows.map((x) => `<tr data-k="${esc(x.name)}"><th scope="row">${esc(x.name)}<small>${esc(x.sub)}</small></th><td>${x.price}</td><td>${change(x.chg)}</td>` +
-        `<td>${Number.isFinite(x.vol) ? pct(x.vol) : '—'}</td><td>${Number.isFinite(x.want) ? pct(x.want) : '—'}</td></tr>`).join('') +
-      '</tbody></table>';
-  }
-
   // ------------------------------------------------------------ a book: against holding, its line, what it holds, what next
+  // Each book also shows the markets it trades: until 2026-09-26 a Markets board gave every coin's and SPY's
+  // price, move and target once more beside the cards, and took a whole row of a laptop's screen to do it.
   // The book's own P&L over its history (and simply holding, dashed), from /api/desk/history's per-book values.
   function sparkSvg(key) {
     const field = { crypto: 'c', stocks: 's', options: 'o' }[key], benchField = { crypto: 'bc', stocks: 'bs' }[key];
@@ -241,15 +227,24 @@
     const path = (i) => series.filter((s) => s[i] != null).map((s, j) => `${j ? 'L' : 'M'}${X(s[0])},${Y(s[i])}`).join('');
     return box(`<line x1="0" x2="1000" y1="${Y(0)}" y2="${Y(0)}"/>${benchField ? `<path class="hold" d="${path(2)}"/>` : ''}<path class="line" d="${path(1)}"/>`);
   }
+  const change = (c) => (c == null ? '' : `<span class="${tone(c, 4)}">${isZero(c, 4) ? '0.00%' : `${c > 0 ? '+' : MINUS}${Math.abs(c * 100).toFixed(2)}%`}</span>`);
+  const SWINGS = 'How much it moves in a year, measured over the last 30 days (crypto) or 20 sessions (SPY)';
+  const TARGET = 'How much of its slot the book wants to hold: less when it swings more';
   function holdRow(b, r) {
     if (b.key === 'options') {
       return `<tr data-k="${esc(r.sym)}"><th><span class="tk">${esc(r.name)}</span><small>${r.qty} × ${px(r.px)} · ${esc(r.label)}</small></th>` +
         `<td class="v">${money(r.value || 0)}</td><td>${Number.isFinite(r.pnl) ? figure(r.pnl) : '—'}</td></tr>`;
     }
-    const what = r.qty > 0 ? `${qtyTxt(r.qty, b.key, r.sym)} at ${px(r.px)}` : `not held yet · ${px(r.px)}`;
-    const want = Number.isFinite(r.target) ? ` · target ${Math.round(r.target * 100)}%` : '';
-    return `<tr data-k="${esc(r.sym)}"><th><span class="tk">${esc(r.name)}</span><small>${what}${want}</small></th>` +
-      `<td class="v">${money(r.value || 0, 0)}</td><td>${Number.isFinite(r.pnl) ? figure(r.pnl) : '—'}</td></tr>`;
+    // the price and today's move beside the name; under it, how much is held and what the rule wants
+    const last = b.key === 'stocks' && S.spy && S.spy.last > 0 ? S.spy.last : r.px;
+    const chg = last > 0 && r.prevClose > 0 ? last / r.prevClose - 1 : null;
+    const want = Number.isFinite(r.want) ? r.want : r.target;
+    const bits = [`<span>${r.qty > 0 ? `${qtyTxt(r.qty, b.key, r.sym)} held` : 'not held yet'}</span>`];
+    if (Number.isFinite(r.vol)) bits.push(`<span title="${SWINGS}">swings ${pct(r.vol)}</span>`);
+    if (Number.isFinite(want)) bits.push(`<span title="${TARGET}">target ${pct(want)}</span>`);
+    const worth = r.qty > 0 ? `<td class="v">${money(r.value || 0, 0)}</td><td>${Number.isFinite(r.pnl) ? figure(r.pnl) : '—'}</td>` : '<td class="v"></td><td></td>';
+    return `<tr data-k="${esc(r.sym)}"><th><span class="tk">${esc(r.name)}</span><span class="mk">${px(r.px)}${chg == null ? '' : ` ${change(chg)}`}</span>` +
+      `<small>${bits.join(' · ')}</small></th>${worth}</tr>`;
   }
   // the options book with nothing open: how today's test went, and where SPY is
   function optionsFacts() {
@@ -264,21 +259,37 @@
     if (b.key === 'stocks') return S.market && S.market.open ? 'Checks once a trading day, after the open' : `Checks at the next open: <b>${esc(String((S.market && S.market.says) || '').replace(/^opens /, ''))}</b>`;
     return esc(cap(optionsLine()));
   }
+  // A book that has never traded is its figure, its markets and its next check: no line that has never
+  // moved. On a phone every book is its figure until it is opened (the chip is the button), so the page
+  // reaches what is happening sooner; which ones are open is remembered.
+  let openBooks = new Set();
+  try { const v = JSON.parse(localStorage.getItem('desk-books-open') || 'null'); if (Array.isArray(v)) openBooks = new Set(v); } catch { /* defaults */ }
   function bookCard(b) {
     const held = b.rows.filter((r) => r.qty > 0).length;
     const chip = b.key === 'options' ? (b.rows.length ? `${b.rows.length} open` : 'no position') : held ? `${held} held` : 'not holding yet';
+    const traded = held || b.fees || !isZero(b.realized || 0) || (b.key === 'options' && ((S.options || {}).trades || []).length);
     const vs = b.bench != null ? `<span class="vs">holding <b class="${tone(b.benchPnl)}">${signed(b.benchPnl)}</b></span>` : '';
     const body = b.rows.length ? `<table class="hold-t"><tbody>${b.rows.map((r) => holdRow(b, r)).join('')}</tbody></table>`
       : b.key === 'options' ? optionsFacts() : '<p class="bksub">Nothing held yet.</p>';
-    return `<article class="card bk" data-k="${b.key}" style="--bk:${BOOK_COLOR[b.key]}" aria-label="${esc(b.name)} book">` +
-      `<header><i class="sw"></i><h3>${esc(b.name)}</h3><span class="chip">${esc(chip)}</span></header>` +
+    const open = openBooks.has(b.key);
+    return `<article class="card bk${open ? ' open' : ''}" data-k="${b.key}" style="--bk:${BOOK_COLOR[b.key]}" aria-label="${esc(b.name)} book">` +
+      `<header><i class="sw"></i><h3>${esc(b.name)}</h3><span class="chip">${esc(chip)}</span>` +
+      `<button type="button" class="chip bktog" data-book="${b.key}" aria-expanded="${open}" aria-controls="bkmore-${b.key}">${esc(chip)}<i aria-hidden="true"></i></button></header>` +
       `<div class="figline"><span class="fig ${tone(b.pnl)}">${signed(b.pnl)}</span>${vs}</div>` +
+      `<div class="bkmore" id="bkmore-${b.key}">` +
       `<div class="bksub">worth ${money(b.equity)} of ${money(b.initial, 0)}${b.fees ? ` · fees ${money(b.fees)}` : ''}${b.realized && !isZero(b.realized) ? ` · banked ${signed(b.realized)}` : ''}</div>` +
-      sparkSvg(b.key) + body +
-      `<details class="rule"><summary>How this book trades</summary><p>${esc(b.rule)}</p></details>` +
+      (traded ? sparkSvg(b.key) : '') + body +
+      `<details class="rule"><summary>How this book trades</summary><p>${esc(b.rule)}</p></details></div>` +
       `<p class="next">${nextLine(b)}</p></article>`;
   }
   const renderBooks = () => morph($('books'), (S.books || []).map(bookCard).join(''));
+  $('books').addEventListener('click', (ev) => {
+    const t = ev.target.closest('.bktog');
+    if (!t) return;
+    if (openBooks.has(t.dataset.book)) openBooks.delete(t.dataset.book); else openBooks.add(t.dataset.book);
+    try { localStorage.setItem('desk-books-open', JSON.stringify([...openBooks])); } catch { /* private window */ }
+    if (S) renderBooks();
+  });
 
   // ------------------------------------------------------------ what's happening: the bots' log, sorted by what it means
   const logKey = (e) => `${e.t}|${e.agent}|${e.text}`;
@@ -306,6 +317,10 @@
   const LEVELS = [['trade', 'Trades'], ['info', 'Signals'], ['warn', 'Warnings'], ['quiet', 'Routine']];
   let showing = new Set(['trade', 'info', 'warn']);
   try { const v = JSON.parse(localStorage.getItem('desk-activity') || 'null'); if (Array.isArray(v)) showing = new Set(v); } catch { /* defaults */ }
+  // A phone shows the latest five of those, and the rest when asked: the list comes second there, under
+  // the books, and eighty entries would bury the chart and the desk beneath it.
+  const phone = matchMedia('(max-width: 640px)');
+  let feedAll = false;
   function renderActivity() {
     const rows = [], last = {}, count = {};
     for (const e of S.log || []) {
@@ -316,7 +331,8 @@
       count[s.level] = (count[s.level] || 0) + 1;
     }
     morph($('chips'), LEVELS.map(([lv, name]) => `<button type="button" data-lv="${lv}" class="${showing.has(lv) ? 'on' : ''}" aria-pressed="${showing.has(lv)}">${name}<span>${count[lv] || 0}</span></button>`).join(''));
-    const shown = rows.filter(({ s }) => showing.has(s.level)).slice(0, 80);
+    const kept = rows.filter(({ s }) => showing.has(s.level)).slice(0, 80);
+    const shown = phone.matches && !feedAll ? kept.slice(0, 5) : kept;
     const today = dayKey(nowT());
     let day = today;
     morph($('feedlist'), shown.map(({ e, s }) => {
@@ -326,8 +342,15 @@
       const amt = (e.kind === 'FILL' || e.kind === 'SETTLE') && e.pnl != null ? `<span class="amt ${tone(e.pnl)}">${signed(e.pnl)}</span>` : '<span class="amt"></span>';
       return `${head}<li class="lv-${s.level}" data-k="${esc(logKey(e))}"><time datetime="${new Date(e.t).toISOString()}">${esc(ET_HM.format(new Date(e.t)))}</time><span class="who">${esc(e.agent)}</span>` +
         `<span class="what">${esc(s.text)}${s.sub ? `<small>${esc(s.sub)}</small>` : ''}</span>${amt}</li>`;
-    }).join('') || `<li class="empty">${rows.length ? 'Nothing of those kinds yet.' : 'Waiting for the first desk round.'}</li>`);
+    }).join('') + (phone.matches && kept.length > 5 ? `<li class="more" data-k="more"><button type="button" data-more="1">${feedAll ? 'Show the latest five' : `Show ${kept.length - 5} earlier`}</button></li>` : '')
+      || `<li class="empty">${rows.length ? 'Nothing of those kinds yet.' : 'Waiting for the first desk round.'}</li>`);
   }
+  $('feedlist').addEventListener('click', (ev) => {
+    if (!ev.target.closest('button[data-more]')) return;
+    feedAll = !feedAll;
+    if (S) renderActivity();
+  });
+  phone.addEventListener('change', () => { if (S) renderActivity(); });
   $('chips').addEventListener('click', (ev) => {
     const b = ev.target.closest('button[data-lv]');
     if (!b) return;
@@ -414,8 +437,12 @@
     const pts = chartSeries();
     const last = pts.length ? pts[pts.length - 1][1] : (S ? S.pnl : 0);
     const first = pts.length ? pts[0][1] : last;
-    morph(el.querySelector('.cv'), figure(last || 0));
-    el.querySelector('.cd').textContent = pts.length > 1 ? `${signed(last - first)} over ${chart.range === 'All' ? 'all of it' : `the last ${chart.range}`}` : '';
+    // The figure is what changed over the range shown: the desk's total is the headline's, and the chart
+    // used to say it a second time here.
+    morph(el.querySelector('.cv'), figure(pts.length > 1 ? r2(last - first) : 0));
+    const from = pts.length ? pts[0][0] : 0;
+    el.querySelector('.cd').textContent = pts.length < 2 ? '' : chart.range !== 'All' ? `over the last ${chart.range}`
+      : `since ${dayKey(from) === dayKey(nowT()) ? `${ET_HM.format(new Date(from))} today` : ET_DAY.format(new Date(from))}`;
     const lastHold = [...pts].reverse().find((x) => x[2] != null);
     morph(el.querySelector('.cr'), lastHold ? `<span title="The dashed line: every book simply holding what it trades, from its first trade">holding: <b class="${tone(lastHold[2])}">${signed(lastHold[2])}</b></span>` : '');
     if (!p.plot) p.plot = makePlot(el, p.big);
@@ -429,8 +456,24 @@
     const bySec = new Map();
     for (const [t, v, hv] of pts) bySec.set(Math.floor(t / 1000), [v, hv]);
     const rows = [...bySec.entries()].sort((a, b) => a[0] - b[0]);
-    p.plot.desk.setData(rows.map(([t, [v]]) => ({ time: t, value: v })));
-    p.plot.hold.setData(rows.filter(([, [, hv]]) => hv != null).map(([t, [, hv]]) => ({ time: t, value: hv })));
+    // The library spaces its points evenly, whatever the time between them, so the hours the desk was down
+    // (it restarts on every deploy) took one step, and a move across them looked sudden. The line breaks
+    // there instead. A gap is more than ten minutes, and more than three of the history's usual steps (it
+    // thins to 1,500 points, so a long history steps a few minutes at a time). The library draws straight
+    // through a point with no value, but a point's colour is the colour of the segment leaving it, so the
+    // last point before a gap is drawn clear.
+    const steps = rows.slice(1).map(([t], i) => t - rows[i][0]).sort((a, b) => a - b);
+    const gap = Math.max(600, 3 * (steps.length ? steps[steps.length >> 1] : 0));
+    const clear = withAlpha(TOK['ink-3'], 0);
+    const deskClear = { topLineColor: clear, bottomLineColor: clear, topFillColor1: clear, topFillColor2: clear, bottomFillColor1: clear, bottomFillColor2: clear };
+    const desk = [], hold = [];
+    rows.forEach(([t, [v, hv]], i) => {
+      const breaks = i + 1 < rows.length && rows[i + 1][0] - t > gap;
+      desk.push(breaks ? { time: t, value: v, ...deskClear } : { time: t, value: v });
+      if (hv != null) hold.push(breaks ? { time: t, value: hv, color: clear } : { time: t, value: hv });
+    });
+    p.plot.desk.setData(desk);
+    p.plot.hold.setData(hold);
     p.plot.c.timeScale().fitContent();
   }
   function wireChart(el, big) {
@@ -478,7 +521,6 @@
     renderClock();
     morph($('hero'), heroHtml());
     morph($('desk'), deskHtml());
-    morph($('markets'), marketsHtml());
     renderBooks();
     renderActivity();
     announce();

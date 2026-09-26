@@ -79,8 +79,8 @@ src/desk/books.js   the rules, pure: volatility targeting (crypto 40%/30 days, S
 src/desk/feeds.js   Coinbase (live) and Cboe (15 min late) parsers + fetches; five-minute bars, VWAP, ATR14
 src/desk/broker.js  paper fills: crypto walks Coinbase's book + 0.40%, SPY at the touch, options at the touch + $0.03
 src/desk/clock.js   NYSE sessions, holidays and 1 PM closes through 2027 (TESS warns when the list runs out)
-public/desk.*     the floor at /: a wall of boards (headline vs holding, the desk, markets, one card per book, the P&L chart,
-                  the bots' activity), laid out for reading, 12px and up; no pixel room or bots drawn since 2026-09-25 (Evan's
+public/desk.*     the floor at /: a wall of boards (headline vs holding, the desk, one card per book with the markets it
+                  trades, the P&L chart, the bots' activity), laid out for reading, 12px and up; no pixel room or bots drawn since 2026-09-25 (Evan's
                   call). desk.css is its own sheet on public/tokens.css, colours named by job; tools/tokens-test.js holds
                   every text colour to 4.5:1. desk.js patches boards in place (morph) so focus survives the 2s stream
 tools/crypto-lab.js the evidence for the crypto book (Coinbase daily candles → data/crypto/bars/)
