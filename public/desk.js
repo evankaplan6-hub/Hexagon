@@ -456,8 +456,24 @@
     const bySec = new Map();
     for (const [t, v, hv] of pts) bySec.set(Math.floor(t / 1000), [v, hv]);
     const rows = [...bySec.entries()].sort((a, b) => a[0] - b[0]);
-    p.plot.desk.setData(rows.map(([t, [v]]) => ({ time: t, value: v })));
-    p.plot.hold.setData(rows.filter(([, [, hv]]) => hv != null).map(([t, [, hv]]) => ({ time: t, value: hv })));
+    // The library spaces its points evenly, whatever the time between them, so the hours the desk was down
+    // (it restarts on every deploy) took one step, and a move across them looked sudden. The line breaks
+    // there instead. A gap is more than ten minutes, and more than three of the history's usual steps (it
+    // thins to 1,500 points, so a long history steps a few minutes at a time). The library draws straight
+    // through a point with no value, but a point's colour is the colour of the segment leaving it, so the
+    // last point before a gap is drawn clear.
+    const steps = rows.slice(1).map(([t], i) => t - rows[i][0]).sort((a, b) => a - b);
+    const gap = Math.max(600, 3 * (steps.length ? steps[steps.length >> 1] : 0));
+    const clear = withAlpha(TOK['ink-3'], 0);
+    const deskClear = { topLineColor: clear, bottomLineColor: clear, topFillColor1: clear, topFillColor2: clear, bottomFillColor1: clear, bottomFillColor2: clear };
+    const desk = [], hold = [];
+    rows.forEach(([t, [v, hv]], i) => {
+      const breaks = i + 1 < rows.length && rows[i + 1][0] - t > gap;
+      desk.push(breaks ? { time: t, value: v, ...deskClear } : { time: t, value: v });
+      if (hv != null) hold.push(breaks ? { time: t, value: hv, color: clear } : { time: t, value: hv });
+    });
+    p.plot.desk.setData(desk);
+    p.plot.hold.setData(hold);
     p.plot.c.timeScale().fitContent();
   }
   function wireChart(el, big) {
