@@ -64,7 +64,7 @@ Nothing clever survived testing, so the books run the one thing that did.
 | KETT | fills every order at the real bid and ask, fees included |
 | PRED | the prediction-market desk, winding down: its P&L and what it still holds |
 
-The floor at `/` is the old floor's room and cast with new boards: the status board (is it working, the market clock, the options book's day), the wall screen (the three books, each holding, and what holding would have made; click a book or a bot), the fills, and the P&L chart. The Markets tab under it lists each market's price, how hard it swings, and how much the book wants to hold.
+The floor at `/` is the old floor's room and cast with new boards: the status board (is it working, the market clock, the options book's day), the wall screen (the three books, each holding, and what holding would have made; click a book or a bot), the fills, and the P&L chart. The Markets tab under it lists each market's price, how hard it swings, and how much the book wants to hold. A phone gets the same facts as a summary instead of the room: tap a book's card for its holdings. The chart is green above zero and red below it, and a book that has not traded shows a plain $0.00.
 
 ### What it does not do
 

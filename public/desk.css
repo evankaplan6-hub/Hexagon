@@ -1,5 +1,14 @@
 /* The stocks, crypto and options floor: only what style.css (the prediction-market floor's sheet,
-   which this page shares) does not already have. */
+   which this page shares) does not already have, and the few places this page needs it to differ.
+   Those overrides live here so the /pm floor stays exactly as it is. */
+
+/* zero is neither a gain nor a loss (tone() in desk.js) */
+.zero { color: #aab2c0; }
+
+/* Portrait tablets: the feed takes the height the room can't use. style.css has this rule too, but
+   above its own #feed rule, which wins on equal specificity and left a third of an 820 x 1180 screen
+   blank. Phones (640px and under) keep the feed height their own block gives it. */
+@media (min-width: 641px) and (max-aspect-ratio: 1/1) { #feed { flex: 1 1 auto; height: auto; min-height: var(--feedh); } }
 
 /* the way to the prediction-market desk's own floor, while it winds down: the lookout link's look */
 #pmlink { flex: none; font: 600 10px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: #b79cf0;
@@ -23,9 +32,24 @@
 #wall .wread a { color: #b79cf0; }
 #wall .wq { line-height: 1.45; }
 #wall .wfacts { margin-top: .4em; }
+/* A long line wraps inside its row. style.css clips it on the promise that app.js's fitWords trims it
+   to whole words first; this page has no fitWords, so "needs 0.5" was cut to "needs (". */
+#wall .wr .nm { white-space: normal; }
+/* A board too short for the headline in full (compact) is too short for every holding to take two lines:
+   each holding keeps its name and figures, and its detail stays one tap away on the book's own page. */
+#wall.compact .wbook .wr.hold .nm i { display: none; }
+/* the headline figure and the table under it get air between them: on a tablet they touched */
+#wall .wbody { gap: .45em; }
+#wall .wbig { line-height: 1.15; }
 
 /* the tape's P&L on a sale */
 #tape .px .pos { color: #6ee7a0; } #tape .px .neg { color: #fca5a5; }
+/* A fill is two lines: what was done and what it came to, then its name, price and age across the
+   whole row. The price and age used to sit in the figure's column, which made that column wide enough
+   to push "Bought 0.036688 BTC" under the figure on a narrow board. The first line wraps instead. */
+#tape .act { white-space: normal; min-width: 0; }
+#tape .tsub { grid-column: 1 / -1; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline;
+  gap: 0 .6em; min-width: 0; }
 
 /* phones: one card per book under the headline */
 .m-books { display: none; }
@@ -37,4 +61,17 @@
   .m-book span { display: block; color: #67718a; font: 700 8px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; }
   .m-book b { display: block; margin-top: 5px; font: 700 15px/1 var(--mono); }
   .m-book small { display: block; margin-top: 4px; color: #737d90; font-size: 9px; line-height: 1.3; }
+  .m-book.on { background: rgba(59,130,246,.11); box-shadow: inset 0 -2px #5b8fd6; }
+  .m-book:focus-visible { z-index: 1; outline: 2px solid #5b8fd6; outline-offset: -2px; }
+  /* A tapped book opens under the cards, in style.css's detail panel (the /pm page's phone view), set
+     at sizes a phone can read. */
+  .m-detail-head small { font-size: 12px; color: #8e98ab; }
+  .m-detail li b { font-size: 13px; }
+  .m-detail li small { font-size: 11px; white-space: normal; }
+  .m-detail li > span { font-size: 12px; }
+  .m-detail li small.pos { color: #6ee7a0; } .m-detail li small.neg { color: #fca5a5; } .m-detail li small.zero { color: #aab2c0; }
+  .m-detail p { padding: 10px; font-size: 12px; color: #aeb6c4; text-align: left; }
+  /* the latest fill's reason sits under it in full, instead of being cut to "to 56% of the S…" */
+  .m-fill { grid-template-columns: 1fr; gap: 6px; }
+  .m-fill p { white-space: normal; text-align: left; }
 }

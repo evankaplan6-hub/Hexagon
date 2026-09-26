@@ -3,9 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#06080c">
 <title>The Hexagon</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Cpolygon points='20,3 35,11.5 35,28.5 20,37 5,28.5 5,11.5' fill='%2306080c' stroke='%238b93a3' stroke-width='3'/%3E%3Cpolygon points='20,14 25.2,17 25.2,23 20,26 14.8,23 14.8,17' fill='%238b93a3'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@600;700;800&display=swap" rel="stylesheet">
+<!-- Weight ranges, so every weight the stylesheets ask for is the real face. The fixed list here was
+     Inter 600-800 and Mono 400/500/700, so Inter 400/500 and Mono 600 were drawn a weight heavier. -->
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400..700&family=Inter:wght@400..800&display=swap" rel="stylesheet">
 <!-- The room, the boards and the feed share the prediction-market floor's stylesheet; desk.css adds
      what only this desk has. -->
 <link rel="stylesheet" href="style.css">
