@@ -53,9 +53,10 @@ h1 { margin: 0; font: 800 var(--type-title)/1 var(--sans); letter-spacing: -.01e
 .banner[hidden] { display: none; }
 
 /* ---- the wall: a twelve-column grid. The numbers come first; the chart and the log share the last
-   row at a height of their own, and the page scrolls to them on a short screen rather than squeezing
-   every board to fit the way the old room did. -------------------------------------------------- */
-main { flex: 1 1 auto; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-template-rows: auto auto 420px;
+   row, 420px or whatever a tall screen has spare, and the page scrolls to them on a short screen rather
+   than squeezing every board to fit the way the old room did. A tall screen's spare height used to go
+   to the top boards as empty space at their feet. --------------------------------------------------- */
+main { flex: 1 1 auto; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-template-rows: auto auto minmax(420px, 1fr);
   gap: var(--space-3); min-height: 0; transition: opacity .4s; }
 /* no signal: the last state received, dimmed, under the banner that says so */
 main.gone { opacity: .45; }
@@ -63,8 +64,10 @@ main.gone { opacity: .45; }
   border-radius: var(--radius-lg); box-shadow: var(--shadow-lift); }
 .hero, .desk, .mkts { grid-column: span 4; }
 .books { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); min-width: 0; }
-.chartcard { grid-column: span 7; display: flex; flex-direction: column; }
-.act { grid-column: span 5; display: flex; flex-direction: column; padding-left: 0; padding-right: 0; }
+/* the last row's two cards take the row's height and never set it: the log scrolls inside, and neither
+   the log's length nor the chart's last size can make the row grow */
+.chartcard { grid-column: span 7; display: flex; flex-direction: column; contain: size; }
+.act { grid-column: span 5; display: flex; flex-direction: column; padding-left: 0; padding-right: 0; contain: size; }
 .label { display: block; margin: 0; font: 600 var(--type-label)/1.2 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); }
 .cardhead { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2) var(--space-3); flex-wrap: wrap; }
 
@@ -211,11 +214,11 @@ footer { font-size: var(--type-label); color: var(--ink-3); }
   .hero { grid-column: span 7; }
   .desk { grid-column: span 5; }
   .mkts { grid-column: 1 / -1; }
-  main { grid-template-rows: auto auto auto 420px; }
+  main { grid-template-rows: auto auto auto minmax(420px, 1fr); }
 }
 @media (max-width: 1023px) {
   main { grid-template-rows: none; }
-  .chartcard, .act { grid-column: 1 / -1; }
+  .chartcard, .act { grid-column: 1 / -1; contain: none; }
   .chartcard { height: 340px; }
   .act { max-height: 560px; }
 }
