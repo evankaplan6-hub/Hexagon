@@ -29,12 +29,14 @@ const clock = require('./clock');
 const feedsLib = require('./feeds');
 const broker = require('./broker');
 const books = require('./books');
+const watchdog = require('../watchdog');
 
 const r2 = (x) => Math.round(x * 100) / 100;
 const r4 = (x) => Math.round(x * 10000) / 10000;
 const r6 = (x) => Math.round(x * 1e6) / 1e6;
 const utcDay = (t) => new Date(t).toISOString().slice(0, 10);
 const MIN = 60000, HOUR = 3600000;
+const WATCHDOG_EVERY_MS = 15000;
 
 const AGENTS = [
   { key: 'BRAM', n: '01', role: 'SIGNALS', color: '#3b82f6' },
@@ -51,7 +53,8 @@ const short = (id) => String(id).replace(/-USD$/, '');
 class Desk {
   // `feeds` and `now` are injectable so tools/desk-test.js can run whole rounds with no network and
   // no clock. `legacy` is a function returning the prediction-market desk's summary, or null.
-  constructor(cfg, { feeds, now, legacy } = {}) {
+  // `onStall` is server.js ending the process when the watchdog finds the loop stuck (watchdogCheck).
+  constructor(cfg, { feeds, now, legacy, onStall } = {}) {
     this.cfg = cfg;
     this.D = cfg.desk;
     this.dir = path.join(cfg.dataDir, 'desk');
@@ -59,6 +62,7 @@ class Desk {
     this.now = now || Date.now;
     this.feeds = feeds || feedsLib.makeFeeds();
     this.legacy = legacy || (() => null);
+    this.onStall = onStall || null;
     this.fees = { cryptoBps: this.D.cryptoFeeBps, stockBps: this.D.stockFeeBps, optionPerContract: this.D.optionFee };
     this.state = this.load();
     this.mkt = { coins: {}, spy: { quote: null, quoteAt: 0, intra: null, intraAt: 0, bars5: [], vwap: [], daily: null, dailyAt: 0, atr: null }, chain: null };
@@ -215,6 +219,11 @@ class Desk {
 
   // ---------------------------------------------------------------- the loop
   async start() {
+    // The watchdog first, so that a first round that never finishes is caught too.
+    if (this.onStall && this.cfg.watchdogSec > 0) {
+      this.beat = this.wdLast = this.now();
+      setInterval(() => this.watchdogCheck(), WATCHDOG_EVERY_MS);
+    }
     this.log('TESS', 'OPS', null, `desk online · paper only · crypto $${this.D.cryptoUsd.toLocaleString()}, stocks $${this.D.stocksUsd.toLocaleString()}, options $${this.D.optionsUsd.toLocaleString()} · equity ${usd(this.equity())}`);
     if (!this.state.startedJournaled) { this.journal('DESK_START', { books: { crypto: this.D.cryptoUsd, stocks: this.D.stocksUsd, options: this.D.optionsUsd } }); this.state.startedJournaled = true; }
     await this.step();
@@ -240,6 +249,32 @@ class Desk {
       this.lastStepMs = this.beat - t0;
       this.stepping = false;
     }
+  }
+
+  // ---------------------------------------------------------------- the watchdog
+  // A round that never returns holds the loop for good (`stepping` turns every later round away), and a
+  // desk that is up and finishing nothing looks from outside like a quiet market: the prediction-market
+  // desk's lesson of 2026-09-19 (src/watchdog.js). The page's light says Stalled after two minutes. Past
+  // WATCHDOG_SEC (300) with no finished round the desk says so in its log and journal, saves, and asks
+  // server.js to end the process, and Fly's restart policy ("always") brings it back. The other desk's
+  // rules: never a laptop that was asleep, and in live mode (the prediction-market desk's, in this same
+  // process, with an order possibly in flight) it only reports, every ten minutes.
+  watchdogCheck(t = this.now()) {
+    const limitMs = (this.cfg.watchdogSec || 0) * 1000;
+    if (!(limitMs > 0)) return null;
+    const asleep = watchdog.wasSuspended({ now: t, last: this.wdLast, everyMs: WATCHDOG_EVERY_MS });
+    this.wdLast = t;
+    if (asleep) { this.beat = t; return null; }
+    const stalled = watchdog.stalledLoops({ now: t, limitMs, beats: { desk: this.beat } });
+    if (!stalled.length) return null;
+    const live = this.cfg.mode === 'live';
+    if (live && !this.due('watchdog-live', 600)) return stalled;
+    this.log('TESS', 'OPS', null, `WATCHDOG: no round finished in ${Math.round(stalled[0].idleMs / 1000)}s (limit ${this.cfg.watchdogSec}s)${this.stepping ? ', one still open' : ''} · ${live ? 'live mode, not restarting' : 'saving and restarting'}`);
+    this.journal('WATCHDOG', { stalled, stepping: !!this.stepping, restarting: !live });
+    if (live) return stalled;
+    this.save();
+    if (this.onStall) this.onStall(stalled);
+    return stalled;
   }
 
   // ---------------------------------------------------------------- HOLT: market data
@@ -653,10 +688,22 @@ class Desk {
     if (h.length > 30000) h.splice(0, h.length - 30000);
     this.dirty = true;
   }
+  // For the chart and each book's line: every minute of the last day, so the 1h, 6h and 24h views keep
+  // their detail, and the days before thinned to about 1,500 points. It used to be thinned alike, the whole
+  // way, and at the 30,000 minutes it keeps that would have drawn the last hour in three points. `step` is
+  // how far apart the thinned points are and `recentFrom` where every minute begins, so the page can tell
+  // the thinning from an hour the desk was down.
   pnlHistory() {
-    const h = this.state.history;
-    const k = Math.max(1, Math.ceil(h.length / 1500));
-    return { initial: this.initial(), books: { crypto: this.state.books.crypto.initial, stocks: this.state.books.stocks.initial, options: this.state.books.options.initial }, points: h.filter((_, i) => i % k === 0 || i === h.length - 1) };
+    const h = this.state.history, b = this.state.books;
+    const end = h.length ? h[h.length - 1].t : this.now();
+    let i = h.findIndex((p) => p.t > end - 864e5);
+    if (i < 0) i = h.length;
+    const k = Math.max(1, Math.ceil(i / 1500));
+    return {
+      initial: this.initial(), books: { crypto: b.crypto.initial, stocks: b.stocks.initial, options: b.options.initial },
+      step: 60 * k, recentFrom: i < h.length ? h[i].t : null,
+      points: [...h.slice(0, i).filter((_, j) => j % k === 0), ...h.slice(i)],
+    };
   }
 
   // ---------------------------------------------------------------- snapshot for the page

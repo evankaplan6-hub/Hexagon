@@ -251,7 +251,10 @@
   function sparkSvg(key) {
     const field = { crypto: 'c', stocks: 's', options: 'o' }[key], benchField = { crypto: 'bc', stocks: 'bs' }[key];
     const init = (hist.books || {})[key], b = bookOf(key);
-    const series = init ? hist.points.filter((p) => p[field] != null).map((p) => [p.t, p[field] - init, benchField && p[benchField] != null ? p[benchField] - init : null]) : [];
+    let series = init ? hist.points.filter((p) => p[field] != null).map((p) => [p.t, p[field] - init, benchField && p[benchField] != null ? p[benchField] - init : null]) : [];
+    // a line 36px tall needs a few hundred points, and the history sends up to three thousand
+    const every = Math.ceil(series.length / 400);
+    if (every > 1) series = series.filter((_, i) => i % every === 0 || i === series.length - 1);
     if (b) series.push([S.now, b.pnl, b.bench != null ? b.benchPnl : null]);
     if (b && beganAt(series[0][0], b.startedAt)) series.unshift([b.startedAt, 0, series[0][2] != null ? 0 : null]);
     const box = (inner) => `<svg class="spark" viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">${inner}</svg>`;
@@ -440,7 +443,7 @@
       const r = await fetch('/api/desk/history');
       if (!r.ok) return;
       const h = await r.json();
-      hist = { points: h.points || [], initial: h.initial || 0, books: h.books || {}, loaded: true };
+      hist = { points: h.points || [], initial: h.initial || 0, books: h.books || {}, step: h.step || 60, recentFrom: h.recentFrom || null, loaded: true };
       for (const el of plots.keys()) drawChart(el);
       if (S) renderBooks();
     } catch { /* the chart waits for the next try */ }
@@ -547,15 +550,23 @@
     // the library wants strictly rising whole seconds
     const bySec = new Map();
     for (const [t, v, hv] of pts) bySec.set(Math.floor(t / 1000), [v, hv]);
-    const rows = [...bySec.entries()].sort((a, b) => a[0] - b[0]);
-    // The library spaces its points evenly, whatever the time between them, so the hours the desk was down
-    // (it restarts on every deploy) took one step, and a move across them looked sudden. The line breaks
-    // there instead. A gap is more than ten minutes, and more than three of the history's usual steps (it
-    // thins to 1,500 points, so a long history steps a few minutes at a time). The library draws straight
-    // through a point with no value, but a point's colour is the colour of the segment leaving it, so the
-    // last point before a gap is drawn clear.
-    const steps = rows.slice(1).map(([t], i) => t - rows[i][0]).sort((a, b) => a - b);
-    const gap = Math.max(600, 3 * (steps.length ? steps[steps.length >> 1] : 0));
+    let rows = [...bySec.entries()].sort((a, b) => a[0] - b[0]);
+    // The library spaces its points evenly, whatever the time between them. The history is every minute
+    // over its last day and `step` apart before that (the engine thins the older days), so a range that
+    // reaches into those days takes the last one at the same step: at every minute, the last day filled
+    // half the width of a five-day chart. A range inside the last day keeps every minute.
+    const step = hist.recentFrom && rows.length && rows[0][0] * 1000 < hist.recentFrom ? hist.step : 60;
+    if (step > 60) {
+      // each point a step on from the last one kept (a round's few seconds either way), and the live end
+      const kept = [];
+      for (let i = 0; i < rows.length; i++) if (!kept.length || i === rows.length - 1 || rows[i][0] - kept[kept.length - 1][0] >= step - 5) kept.push(rows[i]);
+      rows = kept;
+    }
+    // The hours the desk was down (it restarts on every deploy) took one step too, and a move across them
+    // looked sudden, so the line breaks there: a gap is more than ten minutes, and more than three of the
+    // range's steps. The library draws straight through a point with no value, but a point's colour is the
+    // colour of the segment leaving it, so the last point before a gap is drawn clear.
+    const gap = Math.max(600, 3 * step);
     const clear = withAlpha(TOK['ink-3'], 0);
     const deskClear = { topLineColor: clear, bottomLineColor: clear, topFillColor1: clear, topFillColor2: clear, bottomFillColor1: clear, bottomFillColor2: clear };
     const desk = [], hold = [];
