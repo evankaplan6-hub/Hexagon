@@ -210,12 +210,18 @@
   // ------------------------------------------------------------ a book: against holding, its line, what it holds, what next
   // Each book also shows the markets it trades: until 2026-09-26 a Markets board gave every coin's and SPY's
   // price, move and target once more beside the cards, and took a whole row of a laptop's screen to do it.
+  // A desk starts all cash, level with its capital, and records its first minute just after its first buys,
+  // with their fees paid: on the box, 21:35:20 on 25 September, five seconds in, at −$31.99. While a line's
+  // first point is that minute (the history keeps about three weeks), the line begins at zero at the start,
+  // where the desk did. Measured from that first minute, the chart read +$29.76 over a desk that was −$2.23.
+  function beganAt(t, start) { return start > 0 && t > start && t - start < 10 * 6e4; }
   // The book's own P&L over its history (and simply holding, dashed), from /api/desk/history's per-book values.
   function sparkSvg(key) {
     const field = { crypto: 'c', stocks: 's', options: 'o' }[key], benchField = { crypto: 'bc', stocks: 'bs' }[key];
     const init = (hist.books || {})[key], b = bookOf(key);
     const series = init ? hist.points.filter((p) => p[field] != null).map((p) => [p.t, p[field] - init, benchField && p[benchField] != null ? p[benchField] - init : null]) : [];
     if (b) series.push([S.now, b.pnl, b.bench != null ? b.benchPnl : null]);
+    if (b && beganAt(series[0][0], b.startedAt)) series.unshift([b.startedAt, 0, series[0][2] != null ? 0 : null]);
     const box = (inner) => `<svg class="spark" viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">${inner}</svg>`;
     if (series.length < 2) return box('<line x1="0" x2="1000" y1="50" y2="50"/>');
     const vals = [0];
@@ -394,6 +400,8 @@
       const held = (b) => (b.bench != null ? b.bench : b.equity);
       pts.push([S.now, S.pnl, bc && bs ? r2(held(bc) + held(bs) + opt - hist.initial) : null]);
     }
+    // from zero at the desk's start while the history reaches back to it (see beganAt)
+    if (S && pts.length && beganAt(pts[0][0], S.startedAt)) pts.unshift([S.startedAt, 0, pts[0][2] != null ? 0 : null]);
     const span = RANGES.find(([r]) => r === chart.range)[1];
     const from = Number.isFinite(span) ? (S ? S.now : Date.now()) - span : -Infinity;
     return pts.filter((p) => p[0] >= from);
@@ -437,14 +445,17 @@
     const pts = chartSeries();
     const last = pts.length ? pts[pts.length - 1][1] : (S ? S.pnl : 0);
     const first = pts.length ? pts[0][1] : last;
-    // The figure is what changed over the range shown: the desk's total is the headline's, and the chart
-    // used to say it a second time here.
+    // The figure is what changed over the range shown. Over all of it that is the desk's total, the headline's
+    // figure too; over 1h, 6h or 24h it is the move in that window, which nothing else on the page gives.
     morph(el.querySelector('.cv'), figure(pts.length > 1 ? r2(last - first) : 0));
     const from = pts.length ? pts[0][0] : 0;
     el.querySelector('.cd').textContent = pts.length < 2 ? '' : chart.range !== 'All' ? `over the last ${chart.range}`
       : `since ${dayKey(from) === dayKey(nowT()) ? `${ET_HM.format(new Date(from))} today` : ET_DAY.format(new Date(from))}`;
-    const lastHold = [...pts].reverse().find((x) => x[2] != null);
-    morph(el.querySelector('.cr'), lastHold ? `<span title="The dashed line: every book simply holding what it trades, from its first trade">holding: <b class="${tone(lastHold[2])}">${signed(lastHold[2])}</b></span>` : '');
+    // holding over the same stretch, so the two figures compare: it gave holding's whole total beside the
+    // desk's move over the last hour
+    const firstHold = pts.find((x) => x[2] != null), lastHold = [...pts].reverse().find((x) => x[2] != null);
+    const held = lastHold ? r2(lastHold[2] - firstHold[2]) : null;
+    morph(el.querySelector('.cr'), held != null ? `<span title="The dashed line: every book simply holding what it trades, over the same stretch">holding: <b class="${tone(held)}">${signed(held)}</b></span>` : '');
     if (!p.plot) p.plot = makePlot(el, p.big);
     if (!p.plot) return;
     // The licence's logo sits in the plot's bottom-left corner, about 30px tall, just above the time
