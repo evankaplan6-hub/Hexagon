@@ -632,6 +632,9 @@ module.exports = {
     options: env('DESK_OPTIONS', '1') !== '0',
     // no new buying for the rest of the Eastern day past this loss on the whole desk; selling is never blocked
     maxDailyDdPct: num('DESK_MAX_DAILY_DD', 0.05),
+    // an option is bought only off a chain whose own time is within this many seconds of the trigger
+    // bar's close (src/desk/books.js chainSync); sales are never held back, only flagged
+    chainSkewSec: Math.max(0, num('DESK_CHAIN_SKEW_SEC', 120)),
     everySec: Math.max(5, num('DESK_EVERY_SEC', 10)),
   },
 

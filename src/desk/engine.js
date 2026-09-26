@@ -35,6 +35,7 @@ const r2 = (x) => Math.round(x * 100) / 100;
 const r4 = (x) => Math.round(x * 10000) / 10000;
 const r6 = (x) => Math.round(x * 1e6) / 1e6;
 const utcDay = (t) => new Date(t).toISOString().slice(0, 10);
+const iso = (t) => (Number.isFinite(t) ? new Date(t).toISOString() : null);
 const MIN = 60000, HOUR = 3600000;
 const WATCHDOG_EVERY_MS = 15000;
 
@@ -409,16 +410,23 @@ class Desk {
     await this.optionChain(today, true);
     const dir = o.day.dir;
     const byOsi = (osi, right) => { const ch = this.mkt.chain; return ch && ch.expiry === today ? (right === 'C' ? ch.calls : ch.puts).find((r) => r.osi === osi) : null; };
+    // a sale is never held back for a chain out of step with the bars (selling is never blocked), but
+    // it is journaled with both times like a buy, and said once on the floor
+    const onLast = this.chainSync(this.mkt.chain, today, last.m);
+    let said = false;
+    const flag = (sync) => { if (!sync.ok && !said) { said = true; this.log('RIGO', 'OPS', null, `options: selling anyway · ${sync.why}`); } };
     for (const lot of [...o.lots]) {
       const row = byOsi(lot.osi, lot.right);
-      if (books.targetHit(lot, row)) await this.kett({ book: 'options', lot, side: 'sell', px: lot.target, why: `${lot.role === 'first' ? '2x' : '3x'} target hit` });
+      if (books.targetHit(lot, row)) { flag(onLast); await this.kett({ book: 'options', lot, side: 'sell', px: lot.target, sync: onLast.rec, why: `${lot.role === 'first' ? '2x' : '3x'} target hit` }); }
     }
     if (!o.lots.length) return;
     const brk = fresh.find((x) => books.vwapBreak(x.b, x.vw, dir));
     const clockOut = last.m >= books.ZERO.clock;
     if (brk || clockOut) {
       const why = brk ? `SPY closed ${dir === 'up' ? 'below' : 'above'} VWAP at ${hm(brk.b.m + 5)} (${brk.b.c.toFixed(2)} vs ${brk.vw.toFixed(2)})` : '3:15 clock';
-      for (const lot of [...o.lots]) await this.kett({ book: 'options', lot, side: 'sell', market: byOsi(lot.osi, lot.right), why });
+      const sync = brk ? this.chainSync(this.mkt.chain, today, brk.b.m) : onLast;
+      flag(sync);
+      for (const lot of [...o.lots]) await this.kett({ book: 'options', lot, side: 'sell', market: byOsi(lot.osi, lot.right), sync: sync.rec, why });
     }
   }
   // Worth its intrinsic value against SPY's last price: what an expiring option pays.
@@ -453,6 +461,14 @@ class Desk {
       if (x && (x.calls.length || x.puts.length)) { x.fetchedAt = t; this.mkt.chain = x; }
     } catch (e) { if (this.due('holt-chain', 120)) this.log('HOLT', 'OPS', null, `SPY option chain did not load: ${String(e.message).slice(0, 90)}`); }
     return this.mkt.chain && this.mkt.chain.expiry === day ? this.mkt.chain : null;
+  }
+  // The chain against the close of the five-minute bar that starts at minute `barM` (Eastern) on
+  // `day`: books.chainSync's verdict, and in `rec` the three fields every option fill journals.
+  chainSync(ch, day, barM) {
+    const barAt = clock.atMin(day, barM + 5);
+    const chainAt = ch && ch.expiry === day && Number.isFinite(ch.at) ? ch.at : null;
+    const v = ch && ch.expiry === day ? books.chainSync(chainAt, barAt, this.D.chainSkewSec) : { ok: false, skewSec: null, why: "no option chain for today's expiry" };
+    return { ...v, rec: { barAt: iso(barAt), chainAt: iso(chainAt), skewSec: v.skewSec } };
   }
 
   // ---------------------------------------------------------------- BRAM: what each book should hold
@@ -574,15 +590,22 @@ class Desk {
     // on one from half an hour ago, and buying it at the current price is not the rule.
     if (s.hit.idx < bars.length - 1) { this.log('BRAM', 'PASS', null, `options: new ${d.dir === 'up' ? 'high' : 'low'} at ${hm(s.hit.m + 5)} was missed (the desk was not running) · waiting for the next one`); return; }
     if (this.halt) { this.log('KETT', 'PASS', null, `options: trigger at ${hm(s.hit.m + 5)} not taken · ${this.halt}`); return; }
-    const ch = await this.optionChain(today);
+    // a fresh chain, never the four-minute cache: the fill has to be from the trigger's moment
+    const ch = await this.optionChain(today, true);
     if (!ch) { this.log('BRAM', 'PASS', null, `options: trigger at ${hm(s.hit.m + 5)} but the chain did not load`); return; }
+    const sync = this.chainSync(ch, today, s.hit.m);
+    if (!sync.ok) {
+      this.log('BRAM', 'PASS', null, `options: new ${d.dir === 'up' ? 'high' : 'low'} at ${hm(s.hit.m + 5)} not taken · ${sync.why}`);
+      this.journal('OPTIONS_SKIP', { date: today, bar: hm(s.hit.m + 5), ...sync.rec, why: sync.why });
+      return;
+    }
     const rows = d.dir === 'up' ? ch.calls : ch.puts;
     const spot = ch.spot > 0 ? ch.spot : s.hit.c;
     const pick = books.pickContract(rows, spot, d.dir);
     if (!pick.row) { this.log('BRAM', 'PASS', null, `options: new ${d.dir === 'up' ? 'high' : 'low'} at ${hm(s.hit.m + 5)} (${s.hit.c.toFixed(2)}) but ${pick.why}`); return; }
     const qty = d.entries === 1 ? 1 : pick.qty;
     this.log('BRAM', 'SIGNAL', null, `options: new ${d.dir === 'up' ? 'high' : 'low'} at ${hm(s.hit.m + 5)}, SPY ${s.hit.c.toFixed(2)} · buy ${qty} ${pick.row.strike} ${d.dir === 'up' ? 'call' : 'put'} at ${prem(pick.row.ask)}${d.entries === 1 ? ' (the one re-entry)' : ''}`);
-    const f = await this.kett({ book: 'options', side: 'buy', row: pick.row, qty, why: d.entries === 1 ? 're-entry on a fresh extreme' : `trend-day trigger at ${hm(s.hit.m + 5)}` });
+    const f = await this.kett({ book: 'options', side: 'buy', row: pick.row, qty, sync: sync.rec, why: d.entries === 1 ? 're-entry on a fresh extreme' : `trend-day trigger at ${hm(s.hit.m + 5)}` });
     // exits are judged on the bars after the one it was bought on
     if (f) { d.entryBarM = s.hit.m; d.exitBarM = null; }
   }
@@ -639,7 +662,7 @@ class Desk {
       if (o.trades.length > 120) o.trades.length = 120;
       this.dirty = true;
       const label = lotName(base);
-      this.journal('FILL', { book: 'options', sym: row.osi, side: 'buy', qty: f.qty, px: f.avg, notional: f.notional, fee: f.fee, cash: f.cash, why: order.why });
+      this.journal('FILL', { book: 'options', sym: row.osi, side: 'buy', qty: f.qty, px: f.avg, notional: f.notional, fee: f.fee, cash: f.cash, why: order.why, ...order.sync });
       this.pushFill({ book: 'options', sym: row.osi, label, side: 'buy', qty: f.qty, px: f.avg, value: f.notional, fee: f.fee, pnl: null, why: order.why });
       this.log('KETT', 'FILL', null, `bought ${f.qty} ${label} at ${prem(f.avg)} · ${usd(f.notional)} · targets ${o.lots.filter((l) => l.trade === tradeId).map((l) => prem(l.target)).join(' and ')}`);
       return f;
@@ -652,7 +675,7 @@ class Desk {
       const pnl = r2(-lot.cost);
       o.realized = r2(o.realized + pnl); o.lots = o.lots.filter((x) => x !== lot);
       this.noteExit(lot, pnl, false);
-      this.journal('FILL', { book: 'options', sym: lot.osi, side: 'sell', qty: lot.qty, px: 0, notional: 0, fee: 0, cash: 0, pnl, why: `${order.why}; no bid` });
+      this.journal('FILL', { book: 'options', sym: lot.osi, side: 'sell', qty: lot.qty, px: 0, notional: 0, fee: 0, cash: 0, pnl, why: `${order.why}; no bid`, ...order.sync });
       this.pushFill({ book: 'options', sym: lot.osi, label: lotName(lot), side: 'sell', qty: lot.qty, px: 0, value: 0, fee: 0, pnl, why: `${order.why}, no bid` });
       this.log('KETT', 'FILL', pnl, `${lotName(lot)}: no bid · written off, lost ${usd(Math.abs(pnl))} · ${order.why}`);
       return null;
@@ -663,7 +686,7 @@ class Desk {
     o.cash = r2(o.cash + f.cash); o.realized = r2(o.realized + pnl); o.fees = r2(o.fees + f.fee);
     o.lots = o.lots.filter((x) => x !== lot);
     this.noteExit(lot, pnl, order.px != null);
-    this.journal('FILL', { book: 'options', sym: lot.osi, side: 'sell', qty: f.qty, px: f.avg, notional: f.notional, fee: f.fee, cash: f.cash, pnl, why: order.why });
+    this.journal('FILL', { book: 'options', sym: lot.osi, side: 'sell', qty: f.qty, px: f.avg, notional: f.notional, fee: f.fee, cash: f.cash, pnl, why: order.why, ...order.sync });
     this.pushFill({ book: 'options', sym: lot.osi, label: lotName(lot), side: 'sell', qty: f.qty, px: f.avg, value: f.notional, fee: f.fee, pnl, why: order.why });
     this.log('KETT', 'FILL', pnl, `sold ${f.qty} ${lotName(lot)} at ${prem(f.avg)} · ${pnl >= 0 ? 'made' : 'lost'} ${usd(Math.abs(pnl))} · ${order.why}`);
     return f;

@@ -95,6 +95,11 @@ async function main() {
   const hn = C.health(noisy, at('12:48'));
   ok('a feed hiccup is a note', hn.notes.some((x) => /HOLT: SPY quote did not load/.test(x)), hn.notes);
   ok('a round that threw is a problem', hn.problems.some((x) => /desk round failed/.test(x)), hn.problems);
+  const skewed = JSON.parse(JSON.stringify(S));
+  skewed.log.unshift({ t: at('12:47'), agent: 'BRAM', kind: 'PASS', text: "options: new high at 12:45 not taken · the option chain is out of step with the bars: its prices are 185s older than the bar's close (limit 120s)" });
+  const hs = C.health(skewed, at('12:48'));
+  ok('an option trade skipped for a chain out of step with the bars is a note', hs.notes.some((x) => /BRAM: .*out of step/.test(x)), hs.notes);
+  ok('not a problem with the desk', !hs.problems.some((x) => /out of step/.test(x)), hs.problems);
 
   // no state at all
   const none = [];

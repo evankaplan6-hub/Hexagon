@@ -45,6 +45,8 @@ const near = (name, got, want, tol = 1e-6) => ok(`${name} (want ~${want})`, Numb
   eq('the next open said in words, from a Friday evening', clock.describe(t), 'opens Mon 9:30 AM ET');
   eq('before the bell on a trading day', clock.describe(clock.etToUtc('2026-09-24T08:00:00')), 'opens today 9:30 AM ET');
   eq('during the session', clock.describe(clock.etToUtc('2026-09-24T11:00:00')), 'open until 4:00 PM ET');
+  eq("a bar's minute on a date is an instant: 12:35 in summer", new Date(clock.atMin('2026-09-23', 755)).toISOString(), '2026-09-23T16:35:00.000Z');
+  eq('and 9:30 in winter', new Date(clock.atMin('2026-12-01', 570)).toISOString(), '2026-12-01T14:30:00.000Z');
   ok('the calendar covers 2027', clock.calendarCovers('2027-06-01'));
   ok('and says so past its last year', !clock.calendarCovers('2028-01-03'));
 }
@@ -191,6 +193,17 @@ const near = (name, got, want, tol = 1e-6) => ok(`${name} (want ~${want})`, Numb
   ok('a target hit: the bid reached it', B.targetHit(lot, { bid: 0.21, high: 0.15 }));
   ok('a target hit: it printed there since the lot was bought', B.targetHit(lot, { bid: 0.12, high: 0.22 }));
   ok('not hit: the day high was above the target before the lot was bought', !B.targetHit({ target: 0.2, high0: 0.4 }, { bid: 0.12, high: 0.4 }));
+
+  // the option chain against the bar the rule acted on (2026-09-26)
+  const bar = clock.etToUtc('2026-09-23T12:35:00');
+  eq("a chain from the bar's close is in step", B.chainSync(bar, bar, 120), { ok: true, skewSec: 0, why: '' });
+  eq('so is one from a minute and a half after it: the desk reads the bars once a minute', B.chainSync(bar + 90000, bar, 120).ok, true);
+  eq('the limit is two minutes either side, inclusive', [B.chainSync(bar - 120000, bar, 120).ok, B.chainSync(bar + 120000, bar, 120).ok], [true, true]);
+  const old = B.chainSync(bar - 185000, bar, 120);
+  eq('a chain from before the bar closed is out of step', [old.ok, old.skewSec], [false, -185]);
+  ok('and says which way and by how much', /out of step/.test(old.why) && /185s older/.test(old.why) && /limit 120s/.test(old.why), old.why);
+  eq('so is one well ahead of the bars', [B.chainSync(bar + 300000, bar, 120).ok, B.chainSync(bar + 300000, bar, 120).skewSec], [false, 300]);
+  eq('a chain with no time of its own never is', B.chainSync(null, bar, 120), { ok: false, skewSec: null, why: 'the option chain carries no time of its own' });
 }
 
 // ------------------------------------------------------------------ the engine, on a fake market
@@ -239,7 +252,7 @@ async function engineTests() {
   // round 3: 12:36. The 12:30 bar closed at a new high above VWAP: buy the 705 call at 0.10, two of them.
   T = clock.etToUtc('2026-09-23T12:36:00');
   setMinutes(12 * 60 + 35);
-  W.chain = { expiry: '2026-09-23', spot: 703.7, calls: [call(704, 0.3, 0.31, 0.5), call(705, 0.09, 0.1, 0.15), call(706, 0.04, 0.05, 0.1)], puts: [] };
+  W.chain = { expiry: '2026-09-23', spot: 703.7, at: clock.etToUtc('2026-09-23T12:35:00'), calls: [call(704, 0.3, 0.31, 0.5), call(705, 0.09, 0.1, 0.15), call(706, 0.04, 0.05, 0.1)], puts: [] };
   await desk.step();
   const lots = b.options.lots;
   eq('two contracts bought at the trigger', lots.map((l) => [l.strike, l.role, l.target]), [[705, 'first', 0.2], [705, 'runner', 0.3]]);
@@ -249,7 +262,7 @@ async function engineTests() {
   // round 4: 12:41. The 705 call is bid 0.21: the first contract's 2x target (0.20) fills. The runner stays.
   T = clock.etToUtc('2026-09-23T12:41:00');
   setMinutes(12 * 60 + 40);
-  W.chain = { ...W.chain, calls: [call(704, 0.5, 0.51, 0.6), call(705, 0.21, 0.22, 0.22), call(706, 0.08, 0.09, 0.1)] };
+  W.chain = { ...W.chain, at: clock.etToUtc('2026-09-23T12:40:00'), calls: [call(704, 0.5, 0.51, 0.6), call(705, 0.21, 0.22, 0.22), call(706, 0.08, 0.09, 0.1)] };
   await desk.step();
   eq('the first contract sold at its target', b.options.lots.map((l) => l.role), ['runner']);
   near('made $9.94 on it', b.options.realized, 9.94, 0.001);
@@ -258,12 +271,46 @@ async function engineTests() {
   // round 5: 12:46. SPY falls through VWAP on the 12:40 bar: the runner goes at the bid, 0.05.
   T = clock.etToUtc('2026-09-23T12:46:00');
   setMinutes(12 * 60 + 45, { 761: 701.5, 762: 701.2, 763: 701, 764: 700.9, 765: 700.8 });
-  W.chain = { ...W.chain, calls: [call(704, 0.1, 0.11, 0.6), call(705, 0.05, 0.06, 0.22), call(706, 0.01, 0.02, 0.1)] };
+  W.chain = { ...W.chain, at: clock.etToUtc('2026-09-23T12:45:00'), calls: [call(704, 0.1, 0.11, 0.6), call(705, 0.05, 0.06, 0.22), call(706, 0.01, 0.02, 0.1)] };
   await desk.step();
   eq('flat after the VWAP break', b.options.lots.length, 0);
   near('realised: +9.94 on the first, -5.06 on the runner', b.options.realized, 4.88, 0.001);
   near('cash reconciles to the penny', b.options.cash, 1004.88, 0.001);
   eq('one trade on the scorecard', b.options.trades.map((t) => [t.strike, t.qty, t.pnl, t.open]), [[705, 2, 4.88, 0]]);
+  {
+    const js = fs.readFileSync(path.join(dir, 'desk', 'journal-2026-09-23.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    const opt = js.filter((j) => j.kind === 'FILL' && j.book === 'options');
+    eq("every option fill journals the bar's close, the chain's time and the gap between them", opt.map((j) => [j.side, j.barAt, j.chainAt, j.skewSec]), [
+      ['buy', '2026-09-23T16:35:00.000Z', '2026-09-23T16:35:00.000Z', 0],
+      ['sell', '2026-09-23T16:40:00.000Z', '2026-09-23T16:40:00.000Z', 0],
+      ['sell', '2026-09-23T16:45:00.000Z', '2026-09-23T16:45:00.000Z', 0],
+    ]);
+  }
+
+  // An option is not bought off a chain out of step with the bars (2026-09-26). The trigger is the 12:30 bar,
+  // closed at 12:35; a chain whose prices are from 12:30 would sell the call at its price before the new high.
+  {
+    const sdir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-test-'));
+    let T2 = clock.etToUtc('2026-09-23T12:31:00');
+    const M2 = fakeMarket(() => T2);
+    M2.setMinutes(12 * 60 + 30);
+    const d5 = new Desk(deskConfig(sdir), { feeds: M2.feeds, now: () => T2 });
+    d5.quiet = true;
+    await d5.step();
+    T2 = clock.etToUtc('2026-09-23T12:36:00');
+    M2.setMinutes(12 * 60 + 35);
+    M2.W.chain = { expiry: '2026-09-23', spot: 703.7, at: clock.etToUtc('2026-09-23T12:30:00'), calls: [M2.call(705, 0.09, 0.1, 0.15)], puts: [] };
+    await d5.step();
+    eq('nothing is bought off a chain five minutes older than the trigger bar', d5.state.books.options.lots.length, 0);
+    const js = fs.readFileSync(path.join(sdir, 'desk', 'journal-2026-09-23.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    const skip = js.find((j) => j.kind === 'OPTIONS_SKIP');
+    eq('the skip is journaled with both times', skip && [skip.bar, skip.barAt, skip.chainAt, skip.skewSec], ['12:35', '2026-09-23T16:35:00.000Z', '2026-09-23T16:30:00.000Z', -300]);
+    eq('and no option fill', js.filter((j) => j.kind === 'FILL' && j.book === 'options').length, 0);
+    ok('the floor says why', d5.state.log.some((l) => l.kind === 'PASS' && /not taken/.test(l.text) && /300s older/.test(l.text)), d5.state.log.map((l) => l.text));
+    eq('the book stays armed for a later trigger', d5.state.books.options.day.status, 'armed');
+    eq('and this one is spent: the scan has moved past its bar', d5.state.books.options.day.scanIdx, d5.mkt.spy.bars5.length - 1);
+    fs.rmSync(sdir, { recursive: true, force: true });
+  }
 
   // SPY is never bought off the tape once it has stopped: the 3:59 price at 4:30 is not a fill
   {
