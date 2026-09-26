@@ -21,8 +21,15 @@
   const MINUS = '−';
   const money = (x, d = 2) => `$${Math.abs(x).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d })}`;
   const isZero = (x, d = 2) => Math.abs(x) < 0.5 / 10 ** d;
-  const signed = (x, d = 2) => (isZero(x, d) ? money(0, d) : `${x > 0 ? '+' : MINUS}${money(x, d)}`);
+  // U+2060, the word joiner, is invisible and holds the sign to the dollar wherever a figure sits in running
+  // text (a book's "banked +$4.20"), where the nowrap on .pos, .neg and .zero does not reach. The tab's
+  // title and the chart's axis take it out again with plain(): nothing wraps there.
+  const signed = (x, d = 2) => (isZero(x, d) ? money(0, d) : `${x > 0 ? '+' : MINUS}\u2060${money(x, d)}`);
+  const plain = (s) => s.replace(/\u2060/g, '');
   const tone = (x, d = 2) => (isZero(x, d) ? 'zero' : x > 0 ? 'pos' : 'neg');
+  // The desk's log writes money as it adds it up ($1869.41); shown with its thousands separators, the way
+  // every other figure on the page reads. Figures already grouped ($83,946.05) are left alone.
+  const grouped = (s) => s.replace(/\$(\d{4,})(?=[.\s,)]|$)/g, (m, i) => `$${Number(i).toLocaleString('en-US')}`);
   const figure = (x) => `<span class="${tone(x)}">${signed(x)}</span>`;
   const r2 = (x) => Math.round(x * 100) / 100;
   const pct = (x, d = 0) => `${(x * 100).toFixed(d)}%`;
@@ -95,7 +102,7 @@
     pill.className = `pill ${cls}`;
     morph(pill, `<i></i>${esc(state)}<span class="mode">Paper</span>`);
     // a background tab says how the desk is doing, not just its name
-    const title = Number.isFinite(S.pnl) ? `${signed(S.pnl)} · ${state} · The Hexagon` : 'The Hexagon';
+    const title = Number.isFinite(S.pnl) ? `${plain(signed(S.pnl))} · ${state} · The Hexagon` : 'The Hexagon';
     if (document.title !== title) document.title = title;
     const L = S.legacy;
     morph($('pmlink'), `Prediction markets${L ? (L.groups || L.contracts ? ': winding down' : ': settled') : ''} ›`);
@@ -263,7 +270,7 @@
   //   trade  money moved          warn  needs a look
   //   info   a decision           quiet the desk doing its rounds
   function say(e) {
-    const t = String(e.text || ''), parts = t.split(' · '), first = cap(parts[0]), rest = parts.slice(1).join(' · ');
+    const t = grouped(String(e.text || '')), parts = t.split(' · '), first = cap(parts[0]), rest = parts.slice(1).join(' · ');
     if (e.kind === 'FILL' || e.kind === 'SETTLE') return { text: first, sub: rest, level: 'trade' };
     if (e.kind === 'HALT') return { text: `Stopped buying: ${parts[0]}`, sub: rest, level: 'warn' };
     switch (`${e.agent} ${e.kind}`) {
@@ -372,7 +379,7 @@
       topLineColor: TOK.gain, topFillColor1: withAlpha(TOK.gain, 0.22), topFillColor2: withAlpha(TOK.gain, 0.02),
       bottomLineColor: TOK.loss, bottomFillColor1: withAlpha(TOK.loss, 0.02), bottomFillColor2: withAlpha(TOK.loss, 0.22),
       lineWidth: big ? 3 : 2, priceLineVisible: false, lastValueVisible: big, crosshairMarkerRadius: 3,
-      priceFormat: { type: 'custom', minMove: 0.01, formatter: (v) => signed(v) } });
+      priceFormat: { type: 'custom', minMove: 0.01, formatter: (v) => plain(signed(v)) } });
     const hold = c.addSeries(LW.LineSeries, { color: TOK['ink-3'], lineWidth: 1, lineStyle: LW.LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
     desk.createPriceLine({ price: 0, color: withAlpha(TOK['ink-3'], 0.45), lineWidth: 1, lineStyle: LW.LineStyle.Dashed, axisLabelVisible: false });
     return { c, desk, hold };
