@@ -9,7 +9,7 @@ const clock = require('../src/desk/clock');
 const F = require('../src/desk/feeds');
 const broker = require('../src/desk/broker');
 const B = require('../src/desk/books');
-const { Desk } = require('../src/desk/engine');
+const { Desk, logLevel, ROUTINE_KEEP } = require('../src/desk/engine');
 const { upDay, deskConfig, fakeMarket } = require('./desk-fixture');
 
 let pass = 0, fail = 0;
@@ -66,6 +66,11 @@ const near = (name, got, want, tol = 1e-6) => ok(`${name} (want ~${want})`, Numb
   eq('the file time is UTC', new Date(q.fileAt).toISOString(), '2026-09-25T20:05:28.000Z');
   eq('bid, ask and the previous close', [q.bid, q.ask, q.prevClose, q.last], [772.08, 772.1, 767.18, 772.08]);
   eq('a quote with no price is null', F.parseCboeQuote({ data: { symbol: 'SPY' } }), null);
+  // Saturday's file: prev_day_close has turned into Friday's own close, and price_change still holds Friday's move
+  const sat = F.parseCboeQuote({ timestamp: '2026-09-26 16:23:01', data: { symbol: 'SPY', current_price: 771.35, close: 771.35, prev_day_close: 771.35, price_change: 4.17, bid: 772, ask: 772.04, open: 768.79, last_trade_time: '2026-09-25T16:00:00' } });
+  eq("after the close, the previous close is the price less the session's change, not the close it rolled over to", sat.prevClose, 767.18);
+  const live = F.parseCboeQuote({ timestamp: '2026-09-25 20:05:28', data: { symbol: 'SPY', current_price: 772.08, prev_day_close: 767.18, price_change: 4.9, last_trade_time: '2026-09-25T15:50:26' } });
+  eq('in the session the two agree', live.prevClose, 767.18);
 
   const bar = (dt, c, v = 1000) => ({ datetime: dt, price: { open: c, high: c + 0.1, low: c - 0.1, close: c }, volume: { stock_volume: v } });
   const intra = F.parseCboeIntraday({ data: [bar('2026-09-25T09:31:00', 100), bar('2026-09-25T09:32:00', 101)] });
@@ -239,6 +244,7 @@ async function engineTests() {
   const lots = b.options.lots;
   eq('two contracts bought at the trigger', lots.map((l) => [l.strike, l.role, l.target]), [[705, 'first', 0.2], [705, 'runner', 0.3]]);
   near('cash: $20 of premium and 6 cents of fees', b.options.cash, 979.94, 0.001);
+  eq('each contract names its role, and its target (the page writes the price it sells at)', desk.snapshot().books[2].rows.map((r) => [r.label, r.target]), [['first contract', 0.2], ['runner', 0.3]]);
 
   // round 4: 12:41. The 705 call is bid 0.21: the first contract's 2x target (0.20) fills. The runner stays.
   T = clock.etToUtc('2026-09-23T12:41:00');
@@ -284,6 +290,23 @@ async function engineTests() {
   eq('and what that holding paid to buy in (the options book is never "held")', snap.books.map((x) => x.benchFee), [35.86, 0, null]);
   ok('paper, always', snap.mode === 'paper');
   near('the headline is every book together', snap.equity, snap.books.reduce((a, x) => a + x.equity, 0), 0.02);
+  eq('the frame says when the last round finished', snap.beat, T);
+  ok("and each log line's level, for the page's filters", snap.log.length && snap.log.every((e) => ['trade', 'info', 'warn', 'quiet'].includes(e.level)), snap.log.map((e) => e.level));
+
+  // A day of routine rounds (thirteen an hour) used to push the desk's trades and decisions out of the ring
+  // and the frame; now they make way only for each other.
+  {
+    const fillsLogged = desk.state.log.filter((e) => e.kind === 'FILL').length;
+    const signals = desk.state.log.filter((e) => e.kind === 'SIGNAL').length;
+    for (let i = 0; i < 500; i++) desk.log(['HOLT', 'TESS', 'RIGO'][i % 3], ['SCAN', 'OPS', 'RESEARCH'][i % 3], null, ['3/3 coins live from Coinbase', 'all clear · crypto prices fresh', 'marked BTC, ETH, SOL'][i % 3]);
+    eq('a day of routine rounds keeps only the newest of them', desk.state.log.filter((e) => logLevel(e) === 'quiet').length, ROUTINE_KEEP);
+    ok('and every fill the desk made is still in the ring', fillsLogged >= 7 && desk.state.log.filter((e) => e.kind === 'FILL').length === fillsLogged, fillsLogged);
+    eq('every signal too', desk.state.log.filter((e) => e.kind === 'SIGNAL').length, signals);
+    eq('and in the frame the page reads', desk.snapshot().log.filter((e) => e.level === 'trade').length, fillsLogged);
+    eq('a warning is not routine', logLevel({ agent: 'HOLT', kind: 'OPS', text: 'SPY quote did not load' }), 'warn');
+    eq("TESS's all clear is", logLevel({ agent: 'TESS', kind: 'OPS', text: 'all clear · crypto prices fresh' }), 'quiet');
+    eq("the options book's verdict is a decision", logLevel({ agent: 'BRAM', kind: 'PASS', text: 'options: not a trend day (moved 0.41 ATR, needs 0.50) · no trade today' }), 'info');
+  }
 
   // a restart reads the same ledger back
   desk.save();

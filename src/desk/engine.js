@@ -155,7 +155,15 @@ class Desk {
   log(agent, kind, pnl, text, extra) {
     const e = { t: this.now(), agent, kind, pnl: pnl == null ? null : r2(pnl), text, ...(extra || {}) };
     this.state.log.unshift(e);
-    if (this.state.log.length > 400) this.state.log.length = 400;
+    // The routine rounds (prices, swings, marks, all clear) come thirteen times an hour, and the desk
+    // trades about once a day. In one ring they pushed its trades and decisions out of the page's frame
+    // within hours and out of the ring in about thirty: on 26 September the page said "Nothing of those
+    // kinds yet" beside a crypto book holding the three coins it had bought eight hours before the oldest
+    // line it was sent. Routine lines now make way for each other, the newest ROUTINE_KEEP of them kept,
+    // so the rest of the ring holds weeks of what the desk did.
+    let routine = 0;
+    this.state.log = this.state.log.filter((x) => logLevel(x) !== 'quiet' || ++routine <= ROUTINE_KEEP);
+    if (this.state.log.length > LOG_KEEP) this.state.log.length = LOG_KEEP;
     this.touch(agent, text);
     this.dirty = true;
     if (!this.quiet) console.log(`${new Date(e.t).toISOString().slice(11, 19)} desk ${agent} ${kind.padEnd(7)} ${text}`);
@@ -389,7 +397,7 @@ class Desk {
     this.noteExit(lot, pnl, false);
     this.journal('SETTLE', { book: 'options', osi: lot.osi, qty: lot.qty, value: val, spy, pnl });
     this.pushFill({ book: 'options', sym: lot.osi, label: lotName(lot), side: 'sell', qty: lot.qty, px: r4(val), value: cash, fee: 0, pnl, why: 'expired: worth its intrinsic value' });
-    this.log('RIGO', 'SETTLE', pnl, `${lotName(lot)} expired worth ${val.toFixed(2)} · ${pnl >= 0 ? 'made' : 'lost'} ${usd(Math.abs(pnl))}`);
+    this.log('RIGO', 'SETTLE', pnl, `${lotName(lot)} expired worth ${prem(val)} · ${pnl >= 0 ? 'made' : 'lost'} ${usd(Math.abs(pnl))}`);
   }
   noteExit(lot, pnl, targetHit) {
     const o = this.state.books.options, d = o.day;
@@ -538,7 +546,7 @@ class Desk {
     const pick = books.pickContract(rows, spot, d.dir);
     if (!pick.row) { this.log('BRAM', 'PASS', null, `options: new ${d.dir === 'up' ? 'high' : 'low'} at ${hm(s.hit.m + 5)} (${s.hit.c.toFixed(2)}) but ${pick.why}`); return; }
     const qty = d.entries === 1 ? 1 : pick.qty;
-    this.log('BRAM', 'SIGNAL', null, `options: new ${d.dir === 'up' ? 'high' : 'low'} at ${hm(s.hit.m + 5)}, SPY ${s.hit.c.toFixed(2)} · buy ${qty} ${pick.row.strike} ${d.dir === 'up' ? 'call' : 'put'} at ${pick.row.ask.toFixed(2)}${d.entries === 1 ? ' (the one re-entry)' : ''}`);
+    this.log('BRAM', 'SIGNAL', null, `options: new ${d.dir === 'up' ? 'high' : 'low'} at ${hm(s.hit.m + 5)}, SPY ${s.hit.c.toFixed(2)} · buy ${qty} ${pick.row.strike} ${d.dir === 'up' ? 'call' : 'put'} at ${prem(pick.row.ask)}${d.entries === 1 ? ' (the one re-entry)' : ''}`);
     const f = await this.kett({ book: 'options', side: 'buy', row: pick.row, qty, why: d.entries === 1 ? 're-entry on a fresh extreme' : `trend-day trigger at ${hm(s.hit.m + 5)}` });
     // exits are judged on the bars after the one it was bought on
     if (f) { d.entryBarM = s.hit.m; d.exitBarM = null; }
@@ -598,7 +606,7 @@ class Desk {
       const label = lotName(base);
       this.journal('FILL', { book: 'options', sym: row.osi, side: 'buy', qty: f.qty, px: f.avg, notional: f.notional, fee: f.fee, cash: f.cash, why: order.why });
       this.pushFill({ book: 'options', sym: row.osi, label, side: 'buy', qty: f.qty, px: f.avg, value: f.notional, fee: f.fee, pnl: null, why: order.why });
-      this.log('KETT', 'FILL', null, `bought ${f.qty} ${label} at ${f.avg.toFixed(2)} · ${usd(f.notional)} · targets ${o.lots.filter((l) => l.trade === tradeId).map((l) => l.target.toFixed(2)).join(' and ')}`);
+      this.log('KETT', 'FILL', null, `bought ${f.qty} ${label} at ${prem(f.avg)} · ${usd(f.notional)} · targets ${o.lots.filter((l) => l.trade === tradeId).map((l) => prem(l.target)).join(' and ')}`);
       return f;
     }
     // a sale: at the target (a resting limit that filled) or at the bid
@@ -622,7 +630,7 @@ class Desk {
     this.noteExit(lot, pnl, order.px != null);
     this.journal('FILL', { book: 'options', sym: lot.osi, side: 'sell', qty: f.qty, px: f.avg, notional: f.notional, fee: f.fee, cash: f.cash, pnl, why: order.why });
     this.pushFill({ book: 'options', sym: lot.osi, label: lotName(lot), side: 'sell', qty: f.qty, px: f.avg, value: f.notional, fee: f.fee, pnl, why: order.why });
-    this.log('KETT', 'FILL', pnl, `sold ${f.qty} ${lotName(lot)} at ${f.avg.toFixed(2)} · ${pnl >= 0 ? 'made' : 'lost'} ${usd(Math.abs(pnl))} · ${order.why}`);
+    this.log('KETT', 'FILL', pnl, `sold ${f.qty} ${lotName(lot)} at ${prem(f.avg)} · ${pnl >= 0 ? 'made' : 'lost'} ${usd(Math.abs(pnl))} · ${order.why}`);
     return f;
   }
   // Every fill is saved to disk at once, not on the next ten-second save: a restart in between would
@@ -684,6 +692,9 @@ class Desk {
     const equity = this.equity();
     return {
       now: t, name: 'The Hexagon', kind: 'desk', mode: 'paper', startedAt: this.state.startedAt, halt: this.halt,
+      // when the last round finished: the stream keeps coming from the server while a stuck round holds the
+      // loop, and the page's prices then stand still under a light that says Working
+      beat: this.beat,
       build: { sha: this.cfg.buildSha || null },
       equity, initial: this.initial(), pnl: r2(equity - this.initial()),
       today: this.state.dayStart > 0 ? r2(equity - this.state.dayStart) : null,
@@ -692,7 +703,7 @@ class Desk {
         book('crypto', 'Crypto', `Holds ${D.coins.map(short).join(', ')}, a third each, sized to swing about ${Math.round(D.cryptoVolTarget * 100)}% a year: less of a coin while it has been wild. Checked once a day after midnight UTC.`, coinRows),
         book('stocks', 'Stocks', `Holds ${D.stockSym}, sized to swing about ${Math.round(D.stockVolTarget * 100)}% a year: trims when the market gets jumpy. Checked once a trading day after the open.`, stockRows),
         book('options', 'Options', 'SPY same-day options on trend days only (the stack\'s afternoon rules): a new high after a 12:30 trend test buys a call 1-2 points out; out at 2x or 3x, a VWAP break, or 3:15.', o.lots.map((l) => ({
-          sym: l.osi, name: lotName(l), label: `${l.role === 'first' ? 'first contract, sells at 2x' : 'runner, sells at 3x'}`, qty: l.qty, px: l.mark, value: r2(l.qty * 100 * (l.mark ?? l.entry)), cost: l.cost, pnl: r2(l.qty * 100 * (l.mark ?? l.entry) - l.cost), target: l.target, entry: l.entry,
+          sym: l.osi, name: lotName(l), label: l.role === 'first' ? 'first contract' : 'runner', qty: l.qty, px: l.mark, value: r2(l.qty * 100 * (l.mark ?? l.entry)), cost: l.cost, pnl: r2(l.qty * 100 * (l.mark ?? l.entry) - l.cost), target: l.target, entry: l.entry,
         }))),
       ],
       options: {
@@ -703,7 +714,7 @@ class Desk {
       },
       spy: quote ? { last: quote.last, bid: quote.bid, ask: quote.ask, prevClose: quote.prevClose, open: quote.open, high: quote.high, low: quote.low, at: quote.at, vol: S.vol, want: S.w, spark: S.intra ? S.intra.bars.filter((_, i) => i % 5 === 0).map((x) => x.c) : [] } : null,
       fills: this.state.fills.slice(0, 80),
-      log: this.state.log.slice(0, 150),
+      log: this.state.log.slice(0, 150).map((e) => ({ ...e, level: logLevel(e) })),
       agents: AGENTS.map((a) => ({ ...a, ...this.agentStatus[a.key], active: t - this.agentStatus[a.key].lastActive < 4000 })),
       legacy,
       feed: { ...this.feeds.stats },
@@ -726,6 +737,27 @@ const usd = (x) => `$${x.toLocaleString('en-US', { minimumFractionDigits: 2, max
 const fmtQty = (q, kind, sym) => (kind === 'crypto' ? q.toLocaleString('en-US', { minimumFractionDigits: COIN_DP[sym] ?? 6, maximumFractionDigits: COIN_DP[sym] ?? 6 })
   : kind === 'stock' ? String(+q.toFixed(3)) : String(q));
 const fmtPx = (p) => (p >= 1 ? usd(p) : `$${p.toFixed(4)}`);
+// an option's premium, in dollars and cents like every other price
+const prem = (p) => `$${p.toFixed(2)}`;
+
+// What a log line is, for the page's filters and for which lines the ring keeps:
+//   trade  money moved       warn   needs a look
+//   info   a decision        quiet  the desk doing its rounds
+// The page used to work this out from the text, and a line from before this was written is judged the
+// same way, so a ledger's old ring sorts itself out on its first new line.
+const LOG_KEEP = 400, ROUTINE_KEEP = 60;
+function logLevel(e) {
+  const t = String(e.text || '');
+  if (e.kind === 'FILL' || e.kind === 'SETTLE') return 'trade';
+  if (e.kind === 'HALT') return 'warn';
+  switch (`${e.agent} ${e.kind}`) {
+    case 'HOLT SCAN': case 'RIGO RESEARCH': case 'ILSA RESEARCH': return 'quiet';
+    case 'TESS OPS': return /^all clear/i.test(t) || /desk online|new day/.test(t) ? 'quiet' : 'warn';
+    case 'HOLT OPS': return 'warn';
+    case 'BRAM PASS': return /^options/.test(t) ? 'info' : 'quiet';
+    default: return 'info';
+  }
+}
 function safe(fn) { try { return fn(); } catch { return null; } }
 
-module.exports = { Desk, AGENTS, lotName, hm };
+module.exports = { Desk, AGENTS, lotName, hm, logLevel, ROUTINE_KEEP };

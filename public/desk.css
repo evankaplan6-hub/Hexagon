@@ -51,6 +51,8 @@ h1 { margin: 0; font: 800 var(--type-title)/1 var(--sans); letter-spacing: -.01e
 .banner { margin: 0; padding: var(--space-2) var(--space-3); border: 1px solid var(--bad-edge); border-radius: var(--radius-md);
   background: var(--bad-wash); color: var(--ink-1); font-weight: 600; }
 .banner[hidden] { display: none; }
+/* past the daily loss limit: the desk is working as it should and not buying, which is amber, not broken */
+.banner.warn { border-color: var(--warn-edge); background: var(--warn-wash); }
 
 /* ---- the wall: a twelve-column grid. The headline and the desk, then the books, then the chart and the
    log sharing the last row, 420px or whatever a tall screen has spare (it used to go to the top boards as
@@ -132,6 +134,9 @@ main.gone { opacity: .45; }
 .hold-t th, .hold-t td { padding: 6px 0; border-top: 1px solid var(--line-1); text-align: right; vertical-align: baseline; white-space: nowrap; }
 .hold-t th { text-align: left; font-weight: 400; white-space: normal; }
 .hold-t td { padding-left: var(--space-3); }
+/* the two figures' names, once, over them */
+.hold-t thead th { padding: 0 0 4px var(--space-3); border-top: 0; text-align: right; white-space: nowrap; font-size: var(--type-label); color: var(--ink-3); }
+.hold-t thead th:first-child { padding-left: 0; }
 .hold-t .tk { font: 600 var(--type-small) var(--mono); color: var(--ink-1); }
 /* the market beside its name: the price, and today's move */
 .hold-t .mk { margin-left: var(--space-2); color: var(--ink-2); white-space: nowrap; }
@@ -173,6 +178,8 @@ main.gone { opacity: .45; }
 .pnl .seg button:hover:not(.on) { color: var(--ink-2); }
 .pnl .cr { margin-left: auto; min-width: 0; white-space: nowrap; font: 500 var(--type-label)/1 var(--mono); color: var(--ink-3); text-align: right; }
 .pnl .cr b { font-weight: 700; }
+/* the dashed line, beside the figure it draws */
+.pnl .cr .dash { display: inline-block; width: 14px; margin-right: 6px; border-top: 2px dashed var(--ink-3); vertical-align: middle; }
 .pnl.big .cv { font-size: var(--type-headline); }
 .pnl.big .cd, .pnl.big .cr { font-size: var(--type-small); }
 
@@ -193,7 +200,9 @@ main.gone { opacity: .45; }
 .chips button { padding: 5px 10px; border-radius: var(--radius-pill); border: 1px solid var(--line-2); background: none; cursor: pointer;
   font-size: var(--type-label); color: var(--ink-3); white-space: nowrap; }
 .chips button span { margin-left: 4px; font-family: var(--mono); color: var(--ink-3); }
-.chips button.on { border-color: var(--ink-3); background: var(--tint-2); color: var(--ink-1); }
+/* a kind that is showing is filled in, like the chart's picked range; one that is hidden is only its outline */
+.chips button.on { border-color: var(--line-2); background: var(--line-2); color: var(--ink-1); box-shadow: var(--shadow-lift); }
+.chips button.on span { color: var(--ink-2); }
 .chips button:hover { color: var(--ink-1); }
 #feedlist { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; list-style: none; margin: 0; padding: 0 var(--space-5);
   scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
