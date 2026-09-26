@@ -21,8 +21,15 @@
   const MINUS = '−';
   const money = (x, d = 2) => `$${Math.abs(x).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d })}`;
   const isZero = (x, d = 2) => Math.abs(x) < 0.5 / 10 ** d;
-  const signed = (x, d = 2) => (isZero(x, d) ? money(0, d) : `${x > 0 ? '+' : MINUS}${money(x, d)}`);
+  // U+2060, the word joiner, is invisible and holds the sign to the dollar wherever a figure sits in running
+  // text (a book's "banked +$4.20"), where the nowrap on .pos, .neg and .zero does not reach. The tab's
+  // title and the chart's axis take it out again with plain(): nothing wraps there.
+  const signed = (x, d = 2) => (isZero(x, d) ? money(0, d) : `${x > 0 ? '+' : MINUS}\u2060${money(x, d)}`);
+  const plain = (s) => s.replace(/\u2060/g, '');
   const tone = (x, d = 2) => (isZero(x, d) ? 'zero' : x > 0 ? 'pos' : 'neg');
+  // The desk's log writes money as it adds it up ($1869.41); shown with its thousands separators, the way
+  // every other figure on the page reads. Figures already grouped ($83,946.05) are left alone.
+  const grouped = (s) => s.replace(/\$(\d{4,})(?=[.\s,)]|$)/g, (m, i) => `$${Number(i).toLocaleString('en-US')}`);
   const figure = (x) => `<span class="${tone(x)}">${signed(x)}</span>`;
   const r2 = (x) => Math.round(x * 100) / 100;
   const pct = (x, d = 0) => `${(x * 100).toFixed(d)}%`;
@@ -31,7 +38,13 @@
   const ET_HM = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', hour12: true });
   const ET_DAY = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' });
   const ET_CLOCK = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
-  const hhmm = (t) => ET_HM.format(new Date(t)).replace(/ [AP]M$/, '');
+  // The activity list's times keep their AM or PM, and a line naming the day heads anything from before
+  // today: a bare "6:17" from yesterday evening read as this morning. Days are Eastern, like the clock.
+  const ET_YMD = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', year: 'numeric', month: 'numeric', day: 'numeric' });
+  const ET_DATE = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric' });
+  const dayKey = (t) => { const p = {}; for (const x of ET_YMD.formatToParts(new Date(t))) p[x.type] = x.value; return `${p.year}-${p.month.padStart(2, '0')}-${p.day.padStart(2, '0')}`; };
+  const dayBefore = (k) => new Date(Date.parse(`${k}T12:00:00Z`) - 864e5).toISOString().slice(0, 10);
+  const dayName = (t, today) => (dayKey(t) === dayBefore(today) ? 'Yesterday' : ET_DATE.format(new Date(t)));
   const dur = (ms) => {
     const h = Math.floor(ms / 3.6e6), m = Math.floor((ms % 3.6e6) / 6e4);
     return h >= 48 ? `${Math.floor(h / 24)}d ${String(h % 24).padStart(2, '0')}h` : `${h}h ${String(m).padStart(2, '0')}m`;
@@ -95,7 +108,7 @@
     pill.className = `pill ${cls}`;
     morph(pill, `<i></i>${esc(state)}<span class="mode">Paper</span>`);
     // a background tab says how the desk is doing, not just its name
-    const title = Number.isFinite(S.pnl) ? `${signed(S.pnl)} · ${state} · The Hexagon` : 'The Hexagon';
+    const title = Number.isFinite(S.pnl) ? `${plain(signed(S.pnl))} · ${state} · The Hexagon` : 'The Hexagon';
     if (document.title !== title) document.title = title;
     const L = S.legacy;
     morph($('pmlink'), `Prediction markets${L ? (L.groups || L.contracts ? ': winding down' : ': settled') : ''} ›`);
@@ -118,14 +131,22 @@
     const benchPnl = bench.length ? r2(bench.reduce((a, b) => a + b.benchPnl, 0)) : null;
     const vs = bench.length ? r2(bench.reduce((a, b) => a + b.pnl, 0) - benchPnl) : null;
     const fees = r2(books.reduce((a, b) => a + (b.fees || 0), 0));
+    const benchFees = r2(bench.reduce((a, b) => a + (b.fees || 0), 0));   // the fees inside that comparison
     const atWork = r2(books.reduce((a, b) => a + b.rows.reduce((x, r) => x + (r.value || 0), 0), 0));
     const cash = r2((S.equity || 0) - atWork);
     const kpi = (label, html, title) => `<div${title ? ` title="${esc(title)}"` : ''}><dt>${label}</dt><dd>${html}</dd></div>`;
     // the one sentence that says why the books and holding differ
     let insight = '';
     if (benchPnl != null) {
-      insight = `Simply holding what the books hold would be <b>${figure(benchPnl)}</b>; they are <b>${figure(vs)}</b> against that${fees ? `, after ${money(fees)} in fees` : ''}.`;
-      if (vs < 0 && fees >= -vs * 0.5) insight += ' The fees are most of the gap.';
+      insight = `Simply holding what the books hold would be <b>${figure(benchPnl)}</b>; they are <b>${figure(vs)}</b> against that${benchFees ? `, after ${money(benchFees)} in fees` : ''}.`;
+      // Holding pays no fees, so when the books trail it the fees are part of why. When they are more than
+      // the whole gap, the books did better than holding before them, and that is the thing to say.
+      const before = r2(vs + benchFees);
+      if (vs < 0 && benchFees > 0) {
+        insight += isZero(before) ? ' The fees are the whole gap.'
+          : before > 0 ? ` Before the fees, they are <b class="pos">${money(before)}</b> ahead.`
+            : benchFees >= -vs * 0.5 ? ' The fees are most of the gap.' : '';
+      }
     }
     return `<span class="label">All paper books</span>` +
       `<div class="big ${tone(S.pnl)}">${signed(S.pnl)}</div>` +
@@ -156,18 +177,22 @@
   }
   function deskHtml() {
     const mk = S.market || {}, C = S.cfg || {};
-    const cryptoOk = !(mk.stale && mk.stale.crypto);
+    const cryptoOk = !(mk.stale && mk.stale.crypto), spyOk = !(mk.stale && mk.stale.stocks);
     const lag = mk.delayMin != null ? `SPY ${mk.delayMin} min late` : 'SPY 15 min late';
+    // Amber means look. A quarter of an hour late is how SPY's free feed always is, so its dot is the plain
+    // one, and it turns amber only when TESS finds the feed has stopped.
     const rows = [
       ['Stock market', `<b>${mk.open ? 'Open' : 'Closed'}</b> · ${esc(mk.says || '')}`],
-      ['Prices', `<span class="dot${cryptoOk ? '' : ' warn'}"></span>Crypto ${cryptoOk ? 'live' : 'stale'} · <span class="dot warn"></span>${esc(lag)}`],
+      ['Prices', `<span class="dot${cryptoOk ? '' : ' warn'}"></span>Crypto ${cryptoOk ? 'live' : 'stale'} · <span class="dot ${spyOk ? 'late' : 'warn'}"></span>${spyOk ? esc(lag) : 'SPY stale'}`],
       ['Options today', esc(cap(optionsLine()))],
     ];
-    // how much of the day's loss limit is used: TESS stops all new buying when it is
+    // how much of the day's loss limit is used: TESS stops all new buying when it is. The meter stays plain
+    // until half of it is gone, is amber to 80% and red past that.
     if (C.maxDailyDdPct && S.today != null && S.equity) {
       const start = S.equity - S.today, down = start > 0 ? Math.max(0, -S.today / start) : 0, used = Math.min(1, down / C.maxDailyDdPct);
+      const level = used >= 0.8 ? ' bad' : used >= 0.5 ? ' warn' : '';
       rows.push(['Loss limit', `${down ? `down ${(down * 100).toFixed(2)}%` : 'nothing lost'} today; buying stops at ${(C.maxDailyDdPct * 100).toFixed(0)}%` +
-        `<span class="meter" role="img" aria-label="${Math.round(used * 100)}% of the daily loss limit used"><i style="width:${(used * 100).toFixed(1)}%"></i></span>`]);
+        `<span class="meter${level}" role="img" aria-label="${Math.round(used * 100)}% of the daily loss limit used"><i style="width:${(used * 100).toFixed(1)}%"></i></span>`]);
     }
     // the prediction-market desk, winding down in the same process
     const P = S.legacy;
@@ -263,7 +288,7 @@
   //   trade  money moved          warn  needs a look
   //   info   a decision           quiet the desk doing its rounds
   function say(e) {
-    const t = String(e.text || ''), parts = t.split(' · '), first = cap(parts[0]), rest = parts.slice(1).join(' · ');
+    const t = grouped(String(e.text || '')), parts = t.split(' · '), first = cap(parts[0]), rest = parts.slice(1).join(' · ');
     if (e.kind === 'FILL' || e.kind === 'SETTLE') return { text: first, sub: rest, level: 'trade' };
     if (e.kind === 'HALT') return { text: `Stopped buying: ${parts[0]}`, sub: rest, level: 'warn' };
     switch (`${e.agent} ${e.kind}`) {
@@ -292,9 +317,14 @@
     }
     morph($('chips'), LEVELS.map(([lv, name]) => `<button type="button" data-lv="${lv}" class="${showing.has(lv) ? 'on' : ''}" aria-pressed="${showing.has(lv)}">${name}<span>${count[lv] || 0}</span></button>`).join(''));
     const shown = rows.filter(({ s }) => showing.has(s.level)).slice(0, 80);
+    const today = dayKey(nowT());
+    let day = today;
     morph($('feedlist'), shown.map(({ e, s }) => {
+      // newest first: the day's name goes above the first entry from each earlier day
+      const k = dayKey(e.t), head = k === day ? '' : `<li class="day" data-k="day|${k}">${esc(dayName(e.t, today))}</li>`;
+      day = k;
       const amt = (e.kind === 'FILL' || e.kind === 'SETTLE') && e.pnl != null ? `<span class="amt ${tone(e.pnl)}">${signed(e.pnl)}</span>` : '<span class="amt"></span>';
-      return `<li class="lv-${s.level}" data-k="${esc(logKey(e))}"><time>${hhmm(e.t)}</time><span class="who">${esc(e.agent)}</span>` +
+      return `${head}<li class="lv-${s.level}" data-k="${esc(logKey(e))}"><time datetime="${new Date(e.t).toISOString()}">${esc(ET_HM.format(new Date(e.t)))}</time><span class="who">${esc(e.agent)}</span>` +
         `<span class="what">${esc(s.text)}${s.sub ? `<small>${esc(s.sub)}</small>` : ''}</span>${amt}</li>`;
     }).join('') || `<li class="empty">${rows.length ? 'Nothing of those kinds yet.' : 'Waiting for the first desk round.'}</li>`);
   }
@@ -347,7 +377,8 @@
   }
   function chartSkeleton(big) {
     const seg = `<span class="seg">${RANGES.map(([r]) => `<button type="button" data-range="${r}" class="${chart.range === r ? 'on' : ''}">${r}</button>`).join('')}</span>`;
-    return `<div class="ct"><span class="ctitle">Profit and loss · every book</span>${big ? '' : '<button type="button" class="cx" data-expand="1" title="Open large" aria-label="Open the chart large">⤢</button>'}</div>` +
+    // opened large, the dialog's header names the chart, so the chart leaves its own title out
+    return (big ? '' : '<div class="ct"><span class="ctitle">Profit and loss · every book</span><button type="button" class="cx" data-expand="1" title="Open large" aria-label="Open the chart large">⤢</button></div>') +
       `<div class="chead"><span class="cv"></span><span class="cd"></span></div>` +
       `<div class="cplot"></div><div class="cb">${seg}<span class="cr"></span></div>`;
   }
@@ -372,7 +403,7 @@
       topLineColor: TOK.gain, topFillColor1: withAlpha(TOK.gain, 0.22), topFillColor2: withAlpha(TOK.gain, 0.02),
       bottomLineColor: TOK.loss, bottomFillColor1: withAlpha(TOK.loss, 0.02), bottomFillColor2: withAlpha(TOK.loss, 0.22),
       lineWidth: big ? 3 : 2, priceLineVisible: false, lastValueVisible: big, crosshairMarkerRadius: 3,
-      priceFormat: { type: 'custom', minMove: 0.01, formatter: (v) => signed(v) } });
+      priceFormat: { type: 'custom', minMove: 0.01, formatter: (v) => plain(signed(v)) } });
     const hold = c.addSeries(LW.LineSeries, { color: TOK['ink-3'], lineWidth: 1, lineStyle: LW.LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
     desk.createPriceLine({ price: 0, color: withAlpha(TOK['ink-3'], 0.45), lineWidth: 1, lineStyle: LW.LineStyle.Dashed, axisLabelVisible: false });
     return { c, desk, hold };
