@@ -28,13 +28,12 @@ const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p);
 const hex = (name) => { const v = T[name]; ok(`${name} is a six-digit hex colour`, /^#[0-9a-f]{6}$/i.test(v || ''), v); return v; };
 
 const INKS = ['--ink-1', '--ink-2', '--ink-3', '--gain', '--loss', '--ok', '--warn', '--bad'];
-const GROUNDS = ['--bg-0', '--bg-1', '--room'];
+const GROUNDS = ['--bg-0', '--bg-1'];
 for (const ink of INKS) for (const g of GROUNDS) {
   const r = ratio(hex(ink), hex(g));
   ok(`${ink} on ${g} reads at 4.5:1 or better`, r >= 4.5, +r.toFixed(2));
 }
 ok('a picked segment\'s label (--ink-1 on --line-2) reads at 4.5:1 or better', ratio(hex('--ink-1'), hex('--line-2')) >= 4.5);
-ok('the name plates read at 4.5:1 or better', ratio(hex('--plate-ink'), hex('--plate-bg')) >= 4.5, +ratio(T['--plate-ink'], T['--plate-bg']).toFixed(2));
 ok('the faintest ink is the one labels use, and it is not faint', ratio(hex('--ink-3'), hex('--bg-1')) >= 6);
 for (const [name, c] of Object.entries(claims)) {
   const r = ratio(hex(name), hex(c.on));

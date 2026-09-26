@@ -14,50 +14,37 @@
 <body>
 <div class="wrap">
 
-  <header>
+  <header class="top">
     <div class="brand">
-      <svg viewBox="0 0 40 40" width="34" height="34" aria-hidden="true">
+      <svg viewBox="0 0 40 40" width="26" height="26" aria-hidden="true">
         <polygon points="20,3 35,11.5 35,28.5 20,37 5,28.5 5,11.5" fill="none" stroke="currentColor" stroke-width="2"/>
         <polygon points="20,10 29,15 29,25 20,30 11,25 11,15" fill="none" stroke="currentColor" stroke-width="1.5"/>
         <polygon points="20,15.5 24.5,18 24.5,22 20,24.5 15.5,22 15.5,18" fill="currentColor"/>
       </svg>
       <h1>The Hexagon</h1>
     </div>
-    <div class="hside">
-      <div class="pill" id="deskstate"></div>
-      <div class="meta" id="meta"></div>
-      <!-- the prediction-market desk, winding down until its last positions settle -->
-      <a id="pmlink" href="/pm" title="The prediction-market desk: no new trades, positions riding to settlement"><span class="lg">Prediction markets</span><span class="sm">Pred. mkts</span></a>
-    </div>
+    <!-- the one thing a glance is asking: is the desk working, and with whose money -->
+    <div class="pill" id="deskstate"></div>
+    <span class="clock" id="clock"></span>
+    <!-- the prediction-market desk, winding down until its last positions settle -->
+    <a id="pmlink" href="/pm" title="The prediction-market desk: no new trades, positions riding to settlement">Prediction markets</a>
   </header>
 
-  <section class="panel" id="floor">
-    <div class="ph"><span><i>◆</i><span class="desktop-title">Trading Floor · stocks, crypto, options</span><span class="mobile-title">Desk Overview</span></span><span id="floor-meta"></span></div>
-    <!-- Phones get the facts as type; the animated room is the desktop view. -->
-    <section id="mobile-summary" aria-label="Desk overview"></section>
-    <div class="stage">
-      <div class="room">
-        <canvas id="floorc" width="480" height="262"></canvas>
-        <div id="fx" aria-live="polite">
-          <div id="status"></div>
-          <div id="wall"></div>
-          <div id="tape"></div>
-          <div id="chart" class="pnl"></div>
-          <div id="bubbles"></div>
-        </div>
-      </div>
-      <div id="split" role="separator" aria-orientation="horizontal" tabindex="0" aria-label="Resize the trading floor" title="Drag to resize the floor · double-click to reset"></div>
-      <div id="feed">
-        <div class="fh" role="tablist">
-          <button type="button" class="ftab on" role="tab" data-tab="feed" aria-selected="true" aria-controls="feedlist">What's happening</button>
-          <button type="button" class="ftab" role="tab" data-tab="markets" aria-selected="false" aria-controls="marketlist">Markets</button>
-          <span class="fnote" id="feednote"></span>
-        </div>
-        <ol id="feedlist" role="tabpanel"></ol>
-        <div id="marketlist" role="tabpanel" hidden></div>
-      </div>
-    </div>
-  </section>
+  <p class="banner" id="banner" role="status" hidden></p>
+
+  <!-- A wall of boards, one screen each. Until 2026-09-25 they were painted into a pixel room with the
+       bots at their desks; the bots and the room went, and the boards are laid out for reading. -->
+  <main id="floor" aria-busy="true">
+    <section class="card hero" id="hero" aria-label="All paper books"></section>
+    <section class="card desk" id="desk" aria-label="The desk"></section>
+    <section class="card mkts" id="markets" aria-label="Markets"></section>
+    <section class="books" id="books" aria-label="The three books"></section>
+    <section class="card chartcard" aria-label="Profit and loss"><div id="chart" class="pnl"></div></section>
+    <section class="card act" aria-label="What's happening">
+      <div class="cardhead"><h2 class="label">What's happening</h2><div class="chips" id="chips" role="group" aria-label="Show"></div></div>
+      <ol id="feedlist"></ol>
+    </section>
+  </main>
 
   <footer>Paper only: no broker is connected to this desk, and it has no way to place a real order. Crypto prices are live from Coinbase; stock and option prices come from Cboe about 15 minutes late, and the desk trades at those same late prices.</footer>
 </div>
@@ -69,6 +56,8 @@
     <div id="chartbig-pnl" class="pnl big"></div>
   </div>
 </div>
+<!-- read out when a fill lands or the desk stops, and nothing else -->
+<span class="sr" id="announce" role="status"></span>
 <!-- TradingView Lightweight Charts, vendored: see vendor/README.md -->
 <script src="vendor/lightweight-charts.standalone.production.js"></script>
 <script src="desk.js"></script>
