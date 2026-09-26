@@ -77,7 +77,7 @@ class Desk {
   // ---------------------------------------------------------------- the ledger
   fresh() {
     const t = this.now(), D = this.D;
-    const sleeve = (initial) => ({ initial, cash: initial, qty: 0, cost: 0, realized: 0, fees: 0, target: null, checkDay: null, benchPx: null });
+    const sleeve = (initial) => ({ initial, cash: initial, qty: 0, cost: 0, realized: 0, fees: 0, target: null, checkDay: null, benchPx: null, benchFeeBps: null });
     const coins = Object.fromEntries(D.coins.map((id) => [id, sleeve(r2(D.cryptoUsd / D.coins.length))]));
     return {
       version: 1, startedAt: t,
@@ -98,7 +98,29 @@ class Desk {
     try { s = JSON.parse(fs.readFileSync(this.file, 'utf8')); }
     catch (e) { throw new Error(`desk state ${this.file} is unreadable (${e.message}). Refusing to start and overwrite it; move it aside to begin a fresh paper account.`); }
     if (!s || s.version !== 1 || !s.books) throw new Error(`desk state ${this.file} has unexpected version ${s && s.version}. Refusing to start.`);
+    this.chargeHoldingFee(s);
     return s;
+  }
+  // The fee a book pays to buy, in basis points; simply holding pays it to buy in too.
+  feeBps(key) { return (key === 'crypto' ? this.fees.cryptoBps : this.fees.stockBps) || 0; }
+  // Until 2026-09-26 holding bought in free of the fee the book pays on a buy, so every book began about
+  // 0.4% of its slot behind holding before any price moved. Evan's call that day: holding pays it too, as
+  // anyone simply holding would. A ledger from before then gets the fee its holding would have paid, at the
+  // rate the book pays now, and the holding values in its history are put on the same footing, once (a
+  // ledger that has the fee is left alone).
+  chargeHoldingFee(s) {
+    for (const [key, field] of [['crypto', 'bc'], ['stocks', 'bs']]) {
+      const sleeves = Object.values((s.books[key] && s.books[key].sleeves) || {});
+      const unset = sleeves.filter((sl) => sl.benchPx > 0 && sl.benchFeeBps == null);
+      if (!unset.length) continue;
+      const bps = this.feeBps(key);
+      for (const sl of unset) sl.benchFeeBps = bps;
+      // The history holds holding's value only from the minute every sleeve had bought in (before that, the
+      // book's own value). When every one of them bought in without the fee, each of those values lacks it.
+      if (!bps || unset.length !== sleeves.length) continue;
+      const from = Math.max(...sleeves.map((sl) => sl.benchAt || 0));
+      for (const p of s.history || []) if (p.t >= from && Number.isFinite(p[field])) p[field] = r2(p[field] / (1 + bps / 10000));
+    }
   }
   save() {
     try {
@@ -154,7 +176,9 @@ class Desk {
     if (key === 'stocks') return r2(Object.values(b.sleeves).reduce((a, sl) => a + this.sleeveValue(sl, this.spyBid()), 0));
     return r2(b.cash + b.lots.reduce((a, l) => a + l.qty * 100 * (l.mark ?? l.entry), 0));
   }
-  // What simply holding the same thing from the book's first mark would be worth now.
+  // What simply holding the same thing from the book's first trade would be worth now: the whole slot,
+  // bought at that trade's mid price, with the fee the book pays on a buy (0.40% for crypto, none for SPY)
+  // coming out of the slot, as it does for any buyer.
   benchValue(key) {
     const b = this.state.books[key];
     if (key === 'options') return null;
@@ -162,9 +186,21 @@ class Desk {
     for (const [id, sl] of Object.entries(b.sleeves)) {
       const px = key === 'crypto' ? this.coinBid(id) : this.spyBid();
       if (!(sl.benchPx > 0) || !(px > 0)) return null;
-      v += sl.initial * px / sl.benchPx;
+      v += sl.initial * px / (sl.benchPx * (1 + (sl.benchFeeBps || 0) / 10000));
     }
     return r2(v);
+  }
+  // What holding paid to buy in: the fee on what the slot bought, the slot less that fee.
+  benchFee(key) {
+    const b = this.state.books[key];
+    if (key === 'options') return null;
+    let f = 0;
+    for (const sl of Object.values(b.sleeves)) {
+      if (!(sl.benchPx > 0)) return null;
+      const k = (sl.benchFeeBps || 0) / 10000;
+      f += sl.initial * k / (1 + k);
+    }
+    return r2(f);
   }
   equity() { return r2(this.bookValue('crypto') + this.bookValue('stocks') + this.bookValue('options')); }
   initial() { const b = this.state.books; return r2(b.crypto.initial + b.stocks.initial + b.options.initial); }
@@ -422,8 +458,9 @@ class Desk {
     const wantQty = (w * worth) / px, delta = wantQty - sl.qty;
     const from = sl.target;
     // The benchmark starts where the book does: holding the same thing from its first trade, not from
-    // whatever price happened to be on the screen when the desk booted on a Saturday.
-    if (!(sl.benchPx > 0)) { sl.benchPx = px; sl.benchAt = this.now(); }
+    // whatever price happened to be on the screen when the desk booted on a Saturday, and paying the same
+    // fee to buy in.
+    if (!(sl.benchPx > 0)) { sl.benchPx = px; sl.benchAt = this.now(); sl.benchFeeBps = this.feeBps(bookKey); }
     this.log('BRAM', 'SIGNAL', null, `${name}: ${from == null ? 'start at' : 'move from ' + Math.round(from * 100) + '% to'} ${Math.round(w * 100)}% (${volTxt}, target ${Math.round((bookKey === 'crypto' ? this.D.cryptoVolTarget : this.D.stockVolTarget) * 100)}%)`);
     this.journal('REBALANCE', { book: bookKey, sym, from, to: r4(w), vol: r4(vol), px, worth });
     const kind = bookKey === 'crypto' ? 'crypto' : 'stock';
@@ -640,7 +677,7 @@ class Desk {
       const equity = this.bookValue(key), bench = this.benchValue(key), bk = b[key];
       const realized = key === 'options' ? o.realized : r2(Object.values(bk.sleeves).reduce((a, sl) => a + sl.realized, 0));
       const fees = key === 'options' ? o.fees : r2(Object.values(bk.sleeves).reduce((a, sl) => a + sl.fees, 0));
-      return { key, name, rule, initial: bk.initial, startedAt: bk.startedAt, equity, pnl: r2(equity - bk.initial), realized, fees, bench, benchPnl: bench == null ? null : r2(bench - bk.initial), rows };
+      return { key, name, rule, initial: bk.initial, startedAt: bk.startedAt, equity, pnl: r2(equity - bk.initial), realized, fees, bench, benchPnl: bench == null ? null : r2(bench - bk.initial), benchFee: bench == null ? null : this.benchFee(key), rows };
     };
     const lastBar = S.bars5.length ? S.bars5[S.bars5.length - 1] : null;
     const quote = S.quote;

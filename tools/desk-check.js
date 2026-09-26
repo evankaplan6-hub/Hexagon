@@ -190,18 +190,22 @@ function health(S, now) {
 
 // ---------------------------------------------------------------- pure: what each book made
 // From the newest minute the desk recorded: each book's value, and holding's (the engine records a
-// book that has not traded yet at its own value, so its "holding" is flat until it does).
+// book that has not traded yet at its own value, so its "holding" is flat until it does). Holding paid
+// the book's fee to buy in (since 2026-09-26), which the line says beside it.
 function bookLines(S) {
   const h = S.history || [], p = h[h.length - 1], B = S.books || {};
   if (!p) return ['no minute recorded yet'];
-  const traded = (key) => Object.values((B[key] && B[key].sleeves) || {}).some((sl) => sl.benchPx > 0);
-  const banked = (key) => r2(Object.values((B[key] && B[key].sleeves) || {}).reduce((a, sl) => a + (sl.realized || 0), 0));
-  const fees = (key) => r2(Object.values((B[key] && B[key].sleeves) || {}).reduce((a, sl) => a + (sl.fees || 0), 0));
+  const sleeves = (key) => Object.values((B[key] && B[key].sleeves) || {});
+  const traded = (key) => sleeves(key).some((sl) => sl.benchPx > 0);
+  const banked = (key) => r2(sleeves(key).reduce((a, sl) => a + (sl.realized || 0), 0));
+  const fees = (key) => r2(sleeves(key).reduce((a, sl) => a + (sl.fees || 0), 0));
+  const holdFee = (key) => r2(sleeves(key).reduce((a, sl) => { const k = (sl.benchFeeBps || 0) / 10000; return a + (sl.benchPx > 0 ? sl.initial * k / (1 + k) : 0); }, 0));
+  const holding = (key, v, initial) => `holding would be ${signed(r2(v - initial))}${holdFee(key) > 0 ? ` after its ${money(holdFee(key))} fee to buy in` : ''}`;
   const row = (name, value, initial, extra) => `${name.padEnd(8)}${money(value).padStart(12)}  ${signed(r2(value - initial)).padStart(10)}  ${extra}`;
   const out = [];
   const c = B.crypto, s = B.stocks, o = B.options;
-  if (c) out.push(row('crypto', p.c, c.initial, traded('crypto') ? `holding would be ${signed(r2(p.bc - c.initial))} · banked ${signed(banked('crypto'))} · fees ${money(fees('crypto'))}` : 'not traded yet'));
-  if (s) out.push(row('stocks', p.s, s.initial, traded('stocks') ? `holding would be ${signed(r2(p.bs - s.initial))} · banked ${signed(banked('stocks'))} · fees ${money(fees('stocks'))}` : 'not traded yet'));
+  if (c) out.push(row('crypto', p.c, c.initial, traded('crypto') ? `${holding('crypto', p.bc, c.initial)} · banked ${signed(banked('crypto'))} · fees ${money(fees('crypto'))}` : 'not traded yet'));
+  if (s) out.push(row('stocks', p.s, s.initial, traded('stocks') ? `${holding('stocks', p.bs, s.initial)} · banked ${signed(banked('stocks'))} · fees ${money(fees('stocks'))}` : 'not traded yet'));
   if (o) {
     const done = (o.trades || []).filter((t) => !t.open);
     const won = done.filter((t) => t.pnl > 0).length;

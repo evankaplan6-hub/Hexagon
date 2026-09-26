@@ -24,7 +24,7 @@ Copy `.env.example` to `.env` to change anything. The desk keeps its ledger in `
 | Stocks | SPY | the same at 15% a year, on 20 sessions | once a trading day, after the open | $10,000 |
 | Options | SPY same-day calls or puts | the afternoon trend-day rules, below | every five-minute bar, 12:30 to 3:15 | $1,000 |
 
-Each book keeps its own cash and is scored against simply holding what it trades, from its first trade: the wall screen says "holding would be ..." beside every book, and the chart draws holding as a dashed line. A book trades only when its target moves 10 points from the last one it traded to (0.72 becoming 0.83) or goes back to full size, so prices drifting never trade on their own. Rarely trading is normal here, as it was on the old desk.
+Each book keeps its own cash and is scored against simply holding what it trades, from its first trade: the wall screen says "holding would be ..." beside every book, and the chart draws holding as a dashed line. Holding buys its whole slot at that trade's mid price and pays the fee the book pays on a buy (0.40% for crypto, none for SPY), once. Until 2026-09-26 it paid none, so every crypto book started about 0.4% of its slot behind holding before any price moved: the crypto book was $41.72 behind holding that morning, and with the fee about $1.55. The books still pay a fee on every trade after that, which holding never does, and that is the honest cost of their rule. A book trades only when its target moves 10 points from the last one it traded to (0.72 becoming 0.83) or goes back to full size, so prices drifting never trade on their own. Rarely trading is normal here, as it was on the old desk.
 
 ### Why these rules
 

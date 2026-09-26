@@ -132,27 +132,33 @@
     const vs = bench.length ? r2(bench.reduce((a, b) => a + b.pnl, 0) - benchPnl) : null;
     const fees = r2(books.reduce((a, b) => a + (b.fees || 0), 0));
     const benchFees = r2(bench.reduce((a, b) => a + (b.fees || 0), 0));   // the fees inside that comparison
+    const holdFee = r2(bench.reduce((a, b) => a + (b.benchFee || 0), 0));  // what holding paid to buy in
     const atWork = r2(books.reduce((a, b) => a + b.rows.reduce((x, r) => x + (r.value || 0), 0), 0));
     const cash = r2((S.equity || 0) - atWork);
     const kpi = (label, html, title) => `<div${title ? ` title="${esc(title)}"` : ''}><dt>${label}</dt><dd>${html}</dd></div>`;
     // the one sentence that says why the books and holding differ
     let insight = '';
     if (benchPnl != null) {
-      insight = `Simply holding what the books hold would be <b>${figure(benchPnl)}</b>; they are <b>${figure(vs)}</b> against that${benchFees ? `, after ${money(benchFees)} in fees` : ''}.`;
-      // Holding pays no fees, so when the books trail it the fees are part of why. When they are more than
-      // the whole gap, the books did better than holding before them, and that is the thing to say.
-      const before = r2(vs + benchFees);
-      if (vs < 0 && benchFees > 0) {
-        insight += isZero(before) ? ' The fees are the whole gap.'
-          : before > 0 ? ` Before the fees, they are <b class="pos">${money(before)}</b> ahead.`
-            : benchFees >= -vs * 0.5 ? ' The fees are most of the gap.' : '';
+      insight = `Simply holding what the books hold would be <b>${figure(benchPnl)}</b>${holdFee ? `, after its ${money(holdFee)} fee to buy in` : ''}; ` +
+        `they are <b>${figure(vs)}</b> against that${benchFees ? `, after ${money(benchFees)} in fees` : ''}.`;
+      // Holding pays one fee, to buy in (since 2026-09-26: before, it paid none, and every book started that
+      // fee behind it). The books pay one on every trade. When they trail holding and have paid more, the
+      // difference is part of why, and when it is more than the whole gap, the books did better than holding
+      // before it. When they paid no more than holding, the fees are not why: the gap is how much they hold.
+      const extra = r2(benchFees - holdFee), before = r2(vs + extra);
+      if (vs < 0 && extra > 0) {
+        insight += isZero(before) ? ` The ${money(extra)} they paid in fees beyond holding's is the whole gap.`
+          : before > 0 ? ` Before the ${money(extra)} they paid in fees beyond holding's, they are <b class="pos">${money(before)}</b> ahead.`
+            : extra >= -vs * 0.5 ? ` The ${money(extra)} they paid in fees beyond holding's is most of the gap.` : '';
+      } else if (vs <= -1) {
+        insight += ` ${isZero(extra) ? 'The fees are even' : 'Holding paid more in fees'}, so the gap is how much the books hold: their rule keeps some money in cash when prices swing hard.`;
       }
     }
     return `<span class="label">All paper books</span>` +
       `<div class="big ${tone(S.pnl)}">${signed(S.pnl)}</div>` +
       `<div class="sub">on ${money(S.initial, 0)} of paper · marked ${esc(ET_HM.format(new Date(S.now)))} ET</div>` +
       `<dl class="kpis">${kpi('Today', S.today != null ? figure(S.today) : '—')}` +
-      `${kpi('vs holding', vs != null ? figure(vs) : '—', 'The books against simply holding what they hold, from each book’s first trade')}` +
+      `${kpi('vs holding', vs != null ? figure(vs) : '—', 'The books against simply holding what they hold, bought at each book’s first trade with the same fee the book pays to buy')}` +
       `${kpi('Fees paid', money(fees))}${kpi('At work', `${money(atWork, 0)}<small>${money(cash, 0)} in cash</small>`)}</dl>` +
       (insight ? `<p class="insight">${insight}</p>` : '');
   }
@@ -274,7 +280,8 @@
     const held = b.rows.filter((r) => r.qty > 0).length;
     const chip = b.key === 'options' ? (b.rows.length ? `${b.rows.length} open` : 'no position') : held ? `${held} held` : 'not holding yet';
     const traded = held || b.fees || !isZero(b.realized || 0) || (b.key === 'options' && ((S.options || {}).trades || []).length);
-    const vs = b.bench != null ? `<span class="vs">holding <b class="${tone(b.benchPnl)}">${signed(b.benchPnl)}</b></span>` : '';
+    const vs = b.bench != null ? `<span class="vs" title="Simply holding what this book trades, from its first trade${b.benchFee ? `, after its ${plain(money(b.benchFee))} fee to buy in` : ''}">` +
+      `holding <b class="${tone(b.benchPnl)}">${signed(b.benchPnl)}</b></span>` : '';
     const body = b.rows.length ? `<table class="hold-t"><tbody>${b.rows.map((r) => holdRow(b, r)).join('')}</tbody></table>`
       : b.key === 'options' ? optionsFacts() : '<p class="bksub">Nothing held yet.</p>';
     const open = openBooks.has(b.key);
