@@ -90,8 +90,12 @@ main.gone { opacity: .45; }
 .facts a { text-decoration: underline; text-decoration-color: var(--line-2); }
 .dot { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--ok); vertical-align: 1px; }
 .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+/* working as it always does, but not live: SPY's feed, a quarter of an hour late */
+.dot.late { background: var(--ink-3); }
+/* amber and red are for a limit getting close, not for every loss: plain until half of it is used */
 .meter { display: block; height: 4px; margin-top: 6px; border-radius: var(--radius-pill); background: var(--line-1); overflow: hidden; }
-.meter i { display: block; height: 100%; background: var(--warn); }
+.meter i { display: block; height: 100%; background: var(--ink-3); }
+.meter.warn i { background: var(--warn); } .meter.bad i { background: var(--bad); }
 .deskfoot { margin: var(--space-2) 0 0; font: 400 var(--type-label)/1.4 var(--mono); color: var(--ink-3); }
 
 /* ---- the markets the desk watches ------------------------------------------------------------ */

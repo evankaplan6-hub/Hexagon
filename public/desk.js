@@ -177,18 +177,22 @@
   }
   function deskHtml() {
     const mk = S.market || {}, C = S.cfg || {};
-    const cryptoOk = !(mk.stale && mk.stale.crypto);
+    const cryptoOk = !(mk.stale && mk.stale.crypto), spyOk = !(mk.stale && mk.stale.stocks);
     const lag = mk.delayMin != null ? `SPY ${mk.delayMin} min late` : 'SPY 15 min late';
+    // Amber means look. A quarter of an hour late is how SPY's free feed always is, so its dot is the plain
+    // one, and it turns amber only when TESS finds the feed has stopped.
     const rows = [
       ['Stock market', `<b>${mk.open ? 'Open' : 'Closed'}</b> · ${esc(mk.says || '')}`],
-      ['Prices', `<span class="dot${cryptoOk ? '' : ' warn'}"></span>Crypto ${cryptoOk ? 'live' : 'stale'} · <span class="dot warn"></span>${esc(lag)}`],
+      ['Prices', `<span class="dot${cryptoOk ? '' : ' warn'}"></span>Crypto ${cryptoOk ? 'live' : 'stale'} · <span class="dot ${spyOk ? 'late' : 'warn'}"></span>${spyOk ? esc(lag) : 'SPY stale'}`],
       ['Options today', esc(cap(optionsLine()))],
     ];
-    // how much of the day's loss limit is used: TESS stops all new buying when it is
+    // how much of the day's loss limit is used: TESS stops all new buying when it is. The meter stays plain
+    // until half of it is gone, is amber to 80% and red past that.
     if (C.maxDailyDdPct && S.today != null && S.equity) {
       const start = S.equity - S.today, down = start > 0 ? Math.max(0, -S.today / start) : 0, used = Math.min(1, down / C.maxDailyDdPct);
+      const level = used >= 0.8 ? ' bad' : used >= 0.5 ? ' warn' : '';
       rows.push(['Loss limit', `${down ? `down ${(down * 100).toFixed(2)}%` : 'nothing lost'} today; buying stops at ${(C.maxDailyDdPct * 100).toFixed(0)}%` +
-        `<span class="meter" role="img" aria-label="${Math.round(used * 100)}% of the daily loss limit used"><i style="width:${(used * 100).toFixed(1)}%"></i></span>`]);
+        `<span class="meter${level}" role="img" aria-label="${Math.round(used * 100)}% of the daily loss limit used"><i style="width:${(used * 100).toFixed(1)}%"></i></span>`]);
     }
     // the prediction-market desk, winding down in the same process
     const P = S.legacy;
