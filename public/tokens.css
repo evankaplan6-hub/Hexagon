@@ -3,25 +3,20 @@
    checks that, and that every text colour here reads at 4.5:1 or better on every surface here.
 
    From the 2026-09-25 design review. Dark only: the floor is a lit room at night. Ratios in the
-   comments are against --bg-1; the boards sit on the room's darker glass and read higher still. */
+   comments are against --bg-1, the boards' face. */
 :root {
   color-scheme: dark;
 
   /* ---- surfaces, darkest first */
-  --bg-0: #080a0f;                    /* the page, the floor's frame, the feed */
-  --bg-1: #0e121a;                    /* raised off the page: the chart dialog, the floor's title bar */
-  --room: #0b0e14;                    /* the room's backdrop; desk.js fills the canvas with it too */
-  --glass: rgba(10, 13, 20, .94);     /* a speech bubble over the room */
-  --bad-glass: rgba(40, 10, 14, .95); /* a bubble saying something is wrong */
+  --bg-0: #080a0f;                    /* the page */
+  --bg-1: #0e121a;                    /* a board on the wall, the chart dialog */
   --scrim: rgba(4, 6, 10, .72);       /* behind the chart dialog */
-  --tint-1: rgba(255, 255, 255, .02); /* a card on a panel, a book's heading row */
   --tint-2: rgba(255, 255, 255, .04); /* a chip, a segmented control, a tile */
-  --hover: rgba(120, 160, 230, .07);  /* a row under the pointer, or the one picked */
 
   /* ---- lines */
   --line-1: #1f2735;                  /* hairlines on the page */
-  --line-2: #2c3648;                  /* stronger: bubble frames, a picked segment, scrollbars */
-  --rule-1: rgba(140, 168, 210, .10); /* hairlines on the boards, which sit over the room's art */
+  --line-2: #2c3648;                  /* stronger: a picked segment, a chip's edge, scrollbars */
+  --rule-1: rgba(140, 168, 210, .10); /* the chart's grid, and a dialog's edge */
   --rule-2: rgba(140, 168, 210, .20);
 
   /* ---- ink: text, brightest first. Nothing on the page is fainter than --ink-3. */
@@ -47,7 +42,6 @@
   --book-options: #d55181;
 
   /* ---- washes and edges for tinted chips and badges, mixed from the colours above */
-  --gain-wash: color-mix(in srgb, var(--gain) 10%, transparent);
   --ok-wash: color-mix(in srgb, var(--ok) 10%, transparent);
   --ok-edge: color-mix(in srgb, var(--ok) 30%, transparent);
   --warn-wash: color-mix(in srgb, var(--warn) 10%, transparent);
@@ -55,18 +49,11 @@
   --bad-wash: color-mix(in srgb, var(--bad) 12%, transparent);
   --bad-edge: color-mix(in srgb, var(--bad) 35%, transparent);
 
-  /* ---- the bots' brass name plates on their desks: part of the room, so warmer than the page */
-  --plate-bg: #1c1610;
-  --plate-edge: #4a3d2c;
-  --plate-ink: #9d8d71;               /*  5.5:1 on --plate-bg */
-
   /* ---- type. Inter for words and figures, JetBrains Mono for tickers, times and the clock; both
-     loaded 400 to 800 (desk.html). The scale is what the layout step moves the page onto: today the
-     boards size their words in em from the room's zoom (desk.js placeBoards), so they stay as they
-     are until the boards stop being drawn by the room. */
+     loaded 400 to 800 (desk.html). */
   --sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-  --type-label: 12px;                 /* the floor: nothing smaller once the layout moves */
+  --type-label: 12px;                 /* the floor: nothing on the page is smaller */
   --type-small: 13px;
   --type-body: 14px;
   --type-title: 16px;
@@ -82,16 +69,12 @@
   --space-6: 24px;
 
   /* ---- shape */
-  --radius-xs: 2px;                   /* stripes, grips, name plates */
-  --radius-sm: 4px;                   /* rows, tiles, the plot */
-  --radius-md: 8px;                   /* cards, bubbles, the floor's frame */
-  --radius-lg: 12px;                  /* the dialog */
+  --radius-sm: 4px;                   /* chips */
+  --radius-md: 8px;                   /* the banner */
+  --radius-lg: 12px;                  /* boards and the dialog */
   --radius-pill: 999px;
 
   /* ---- depth */
-  --shadow-panel: 0 18px 50px -20px rgba(0, 0, 0, .9), inset 0 1px 0 rgba(255, 255, 255, .04);
-  --shadow-pop: 0 6px 18px -6px rgba(0, 0, 0, .9);
   --shadow-dialog: 0 20px 60px rgba(0, 0, 0, .55);
-  --shadow-plate: inset 0 1px 0 rgba(255, 255, 255, .05), 0 1px 2px rgba(0, 0, 0, .6);
   --shadow-lift: inset 0 1px 0 rgba(255, 255, 255, .05);
 }
