@@ -131,14 +131,22 @@
     const benchPnl = bench.length ? r2(bench.reduce((a, b) => a + b.benchPnl, 0)) : null;
     const vs = bench.length ? r2(bench.reduce((a, b) => a + b.pnl, 0) - benchPnl) : null;
     const fees = r2(books.reduce((a, b) => a + (b.fees || 0), 0));
+    const benchFees = r2(bench.reduce((a, b) => a + (b.fees || 0), 0));   // the fees inside that comparison
     const atWork = r2(books.reduce((a, b) => a + b.rows.reduce((x, r) => x + (r.value || 0), 0), 0));
     const cash = r2((S.equity || 0) - atWork);
     const kpi = (label, html, title) => `<div${title ? ` title="${esc(title)}"` : ''}><dt>${label}</dt><dd>${html}</dd></div>`;
     // the one sentence that says why the books and holding differ
     let insight = '';
     if (benchPnl != null) {
-      insight = `Simply holding what the books hold would be <b>${figure(benchPnl)}</b>; they are <b>${figure(vs)}</b> against that${fees ? `, after ${money(fees)} in fees` : ''}.`;
-      if (vs < 0 && fees >= -vs * 0.5) insight += ' The fees are most of the gap.';
+      insight = `Simply holding what the books hold would be <b>${figure(benchPnl)}</b>; they are <b>${figure(vs)}</b> against that${benchFees ? `, after ${money(benchFees)} in fees` : ''}.`;
+      // Holding pays no fees, so when the books trail it the fees are part of why. When they are more than
+      // the whole gap, the books did better than holding before them, and that is the thing to say.
+      const before = r2(vs + benchFees);
+      if (vs < 0 && benchFees > 0) {
+        insight += isZero(before) ? ' The fees are the whole gap.'
+          : before > 0 ? ` Before the fees, they are <b class="pos">${money(before)}</b> ahead.`
+            : benchFees >= -vs * 0.5 ? ' The fees are most of the gap.' : '';
+      }
     }
     return `<span class="label">All paper books</span>` +
       `<div class="big ${tone(S.pnl)}">${signed(S.pnl)}</div>` +
