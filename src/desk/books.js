@@ -158,4 +158,20 @@ function targetHit(lot, row) {
   return Number.isFinite(row.high) && Number.isFinite(lot.high0) && row.high > lot.high0 + 1e-9 && row.high >= lot.target - 1e-9;
 }
 
-module.exports = { volTargetWeight, needsRebalance, trendTest, scanEntry, vwapBreak, pickContract, targetHit, ZERO };
+// Is the option chain from the moment the rule acted on? The rule reads SPY's five-minute bars from
+// Cboe's delayed chart file and fills at Cboe's delayed option chain: two files on the same ~15-minute
+// delay, and nothing ties one to the other. A chain from before a breakout sells the call at its price
+// before the breakout, which would flatter every entry. `chainAt` is the chain's own time (SPY's last
+// trade in it), `barAt` the instant the bar the rule acted on closed. Both are market time, so the
+// delay cancels.
+// `maxSec` is DESK_CHAIN_SKEW_SEC.
+// -> { ok, skewSec (the chain's time less the bar's close, in seconds; null without both), why }
+function chainSync(chainAt, barAt, maxSec) {
+  if (!Number.isFinite(chainAt)) return { ok: false, skewSec: null, why: 'the option chain carries no time of its own' };
+  if (!Number.isFinite(barAt)) return { ok: false, skewSec: null, why: 'no bar close to match the option chain to' };
+  const skewSec = Math.round((chainAt - barAt) / 1000);
+  if (Math.abs(skewSec) <= maxSec) return { ok: true, skewSec, why: '' };
+  return { ok: false, skewSec, why: `the option chain is out of step with the bars: its prices are ${Math.abs(skewSec)}s ${skewSec < 0 ? 'older' : 'newer'} than the bar's close (limit ${maxSec}s)` };
+}
+
+module.exports = { volTargetWeight, needsRebalance, trendTest, scanEntry, vwapBreak, pickContract, targetHit, chainSync, ZERO };

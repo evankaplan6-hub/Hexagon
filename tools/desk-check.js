@@ -177,7 +177,7 @@ function health(S, now) {
   const since = now - 24 * 3600000, seen = new Set();
   for (const l of S.log || []) {
     if (l.t < since) break;
-    const bad = l.kind === 'HALT' || /did not load|failed|not filled|stalled|stale/i.test(l.text || '');
+    const bad = l.kind === 'HALT' || /did not load|failed|not filled|stalled|stale|out of step/i.test(l.text || '');
     if (!bad) continue;
     const key = String(l.text).replace(/[\d.,$%]+/g, '#');
     if (seen.has(key)) continue;

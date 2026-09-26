@@ -75,7 +75,8 @@ src/desk/engine.js  the desk: three books' ledgers, the six bots' jobs (HOLT pri
                   RIGO marks and option exits, BRAM signals, KETT fills; PRED is the prediction-market desk
                   winding down), data/desk/state.json + journal-YYYY-MM-DD.jsonl, the page's snapshot
 src/desk/books.js   the rules, pure: volatility targeting (crypto 40%/30 days, SPY 15%/20 sessions, 10-point band)
-                  and the SPY same-day options rules ported from the stack's trend_day_check.py
+                  and the SPY same-day options rules ported from the stack's trend_day_check.py, plus chainSync:
+                  an option is bought only off a chain within DESK_CHAIN_SKEW_SEC of the trigger bar's close
 src/desk/feeds.js   Coinbase (live) and Cboe (15 min late) parsers + fetches; five-minute bars, VWAP, ATR14
 src/desk/broker.js  paper fills: crypto walks Coinbase's book + 0.40%, SPY at the touch, options at the touch + $0.03
 src/desk/clock.js   NYSE sessions, holidays and 1 PM closes through 2027 (TESS warns when the list runs out)

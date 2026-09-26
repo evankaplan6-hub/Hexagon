@@ -49,6 +49,10 @@ function etToUtc(s) {
   return null;
 }
 
+// A date and a time in minutes since midnight Eastern -> the instant ('2026-09-23', 755 is 12:35 PM
+// Eastern that day). Bars carry their minute, not their instant.
+const atMin = (day, min) => etToUtc(`${day}T${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}:00`);
+
 // A 'YYYY-MM-DD' -> weekday, by the calendar rather than a clock.
 const weekday = (day) => new Date(`${day}T12:00:00Z`).getUTCDay();
 const addDays = (day, n) => new Date(Date.parse(`${day}T12:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
@@ -98,6 +102,6 @@ function describe(t) {
 }
 
 module.exports = {
-  et, etToUtc, isTradingDay, session, isOpen, isEarlyClose, calendarCovers, prevTradingDay, nextOpen, describe, addDays,
+  et, etToUtc, atMin, isTradingDay, session, isOpen, isEarlyClose, calendarCovers, prevTradingDay, nextOpen, describe, addDays,
   OPEN_MIN, CLOSE_MIN, LAST_YEAR,
 };
