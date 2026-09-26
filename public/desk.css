@@ -182,9 +182,13 @@ main.gone { opacity: .45; }
 .chips button:hover { color: var(--ink-1); }
 #feedlist { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; list-style: none; margin: 0; padding: 0 var(--space-5);
   scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
-#feedlist li { display: grid; grid-template-columns: 3.6em 3.6em minmax(0, 1fr) auto; gap: var(--space-3); align-items: baseline;
+/* the time column holds the widest time with its AM or PM, "12:59 PM" */
+#feedlist li { display: grid; grid-template-columns: 4.7em 3.6em minmax(0, 1fr) auto; gap: var(--space-3); align-items: baseline;
   padding: var(--space-2) 0; border-bottom: 1px solid var(--line-1); font-size: var(--type-small); }
 #feedlist li:last-child { border-bottom: 0; }
+/* the day above the entries from before today */
+#feedlist li.day { display: block; padding: var(--space-4) 0 var(--space-2); font: 600 var(--type-label)/1.2 var(--mono); letter-spacing: .12em;
+  text-transform: uppercase; color: var(--ink-3); }
 #feedlist time { font: 400 var(--type-label) var(--mono); color: var(--ink-3); white-space: nowrap; }
 #feedlist .who { font: 600 var(--type-label) var(--mono); letter-spacing: .04em; color: var(--ink-3); }
 #feedlist .what { min-width: 0; color: var(--ink-2); overflow-wrap: anywhere; }
@@ -222,7 +226,7 @@ footer { font-size: var(--type-label); color: var(--ink-3); }
   .act { padding-left: 0; padding-right: 0; }
   .act .cardhead { padding: 0 var(--space-4) var(--space-3); }
   #feedlist { padding: 0 var(--space-4); }
-  #feedlist li { grid-template-columns: 3.6em minmax(0, 1fr) auto; }
+  #feedlist li { grid-template-columns: 4.7em minmax(0, 1fr) auto; }
   #feedlist .who { display: none; }
   .clock { order: 5; margin-left: 0; }
   #pmlink { margin-left: auto; }

@@ -38,7 +38,13 @@
   const ET_HM = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', hour12: true });
   const ET_DAY = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' });
   const ET_CLOCK = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
-  const hhmm = (t) => ET_HM.format(new Date(t)).replace(/ [AP]M$/, '');
+  // The activity list's times keep their AM or PM, and a line naming the day heads anything from before
+  // today: a bare "6:17" from yesterday evening read as this morning. Days are Eastern, like the clock.
+  const ET_YMD = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', year: 'numeric', month: 'numeric', day: 'numeric' });
+  const ET_DATE = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric' });
+  const dayKey = (t) => { const p = {}; for (const x of ET_YMD.formatToParts(new Date(t))) p[x.type] = x.value; return `${p.year}-${p.month.padStart(2, '0')}-${p.day.padStart(2, '0')}`; };
+  const dayBefore = (k) => new Date(Date.parse(`${k}T12:00:00Z`) - 864e5).toISOString().slice(0, 10);
+  const dayName = (t, today) => (dayKey(t) === dayBefore(today) ? 'Yesterday' : ET_DATE.format(new Date(t)));
   const dur = (ms) => {
     const h = Math.floor(ms / 3.6e6), m = Math.floor((ms % 3.6e6) / 6e4);
     return h >= 48 ? `${Math.floor(h / 24)}d ${String(h % 24).padStart(2, '0')}h` : `${h}h ${String(m).padStart(2, '0')}m`;
@@ -299,9 +305,14 @@
     }
     morph($('chips'), LEVELS.map(([lv, name]) => `<button type="button" data-lv="${lv}" class="${showing.has(lv) ? 'on' : ''}" aria-pressed="${showing.has(lv)}">${name}<span>${count[lv] || 0}</span></button>`).join(''));
     const shown = rows.filter(({ s }) => showing.has(s.level)).slice(0, 80);
+    const today = dayKey(nowT());
+    let day = today;
     morph($('feedlist'), shown.map(({ e, s }) => {
+      // newest first: the day's name goes above the first entry from each earlier day
+      const k = dayKey(e.t), head = k === day ? '' : `<li class="day" data-k="day|${k}">${esc(dayName(e.t, today))}</li>`;
+      day = k;
       const amt = (e.kind === 'FILL' || e.kind === 'SETTLE') && e.pnl != null ? `<span class="amt ${tone(e.pnl)}">${signed(e.pnl)}</span>` : '<span class="amt"></span>';
-      return `<li class="lv-${s.level}" data-k="${esc(logKey(e))}"><time>${hhmm(e.t)}</time><span class="who">${esc(e.agent)}</span>` +
+      return `${head}<li class="lv-${s.level}" data-k="${esc(logKey(e))}"><time datetime="${new Date(e.t).toISOString()}">${esc(ET_HM.format(new Date(e.t)))}</time><span class="who">${esc(e.agent)}</span>` +
         `<span class="what">${esc(s.text)}${s.sub ? `<small>${esc(s.sub)}</small>` : ''}</span>${amt}</li>`;
     }).join('') || `<li class="empty">${rows.length ? 'Nothing of those kinds yet.' : 'Waiting for the first desk round.'}</li>`);
   }
