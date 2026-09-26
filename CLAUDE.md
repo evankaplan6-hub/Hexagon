@@ -106,7 +106,8 @@ src/venues/       Polymarket (Gamma + CLOB) and Kalshi public data; cboe.js (del
                   chartexchange.js (read-only market data behind CHARTEXCHANGE_API_KEY; the trial key has answered "401 Expired" since the evening
                   of 2026-09-23, so nothing answers until a paid key is set: quotes, short volume, dark pool, max pain, the historical
                   option bars; only the Ask panel and tools/ read it, never the trading loop)
-src/watchdog.js   stall watchdog: exits the desk when the taker or maker loop finishes no round (WATCHDOG_SEC)
+src/watchdog.js   stall watchdog: exits the process when the taker or maker loop, or (since 2026-09-26) the stocks,
+                  crypto and options desk's loop, finishes no round (WATCHDOG_SEC); Fly restarts it
 src/volume.js     the desk's own trading volume by the minute (fed by the journal, rebuilt from it; /api/volume) for the chart's bars
 src/recorder.js   tick tape writer      public/          dashboard (lookout.html: the same desk as one painted room, read-only)
                                          public/vendor/   TradingView Lightweight Charts, one vendored file: draws the P&L chart (candles or line)

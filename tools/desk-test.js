@@ -354,6 +354,59 @@ async function engineTests() {
   await d2.step();
   ok('past the daily loss limit, TESS halts buying', /past the 5% limit/.test(d2.halt || ''), d2.halt);
   eq('and nothing is bought', d2.state.fills.length, 0);
+
+  // The desk's own watchdog. A round that never returns holds the loop for good, and the process stays up
+  // looking like a quiet market: past WATCHDOG_SEC with no finished round the desk says so, saves, and asks
+  // server.js to end the process. Never a healthy desk, a laptop that slept, or a live-mode process.
+  {
+    const wdDir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-test-'));
+    const stalls = [];
+    let now = T;
+    const w = new Desk({ ...cfg, dataDir: wdDir, watchdogSec: 300 }, { feeds, now: () => now, onStall: (x) => stalls.push(x) });
+    w.quiet = true;
+    w.wdLast = now; w.beat = now - 10000;
+    eq('a desk whose last round finished ten seconds ago is left alone', w.watchdogCheck(now), null);
+    w.wdLast = now; w.beat = now - 301000; w.stepping = true;
+    now += 15000;
+    const st = w.watchdogCheck(now);
+    ok('one with no round finished for five minutes is reported', st && st[0].loop === 'desk' && st[0].idleMs === 316000, st);
+    eq('...and asks, once, for the process to end', stalls.length, 1);
+    const wj = fs.readFileSync(path.join(wdDir, 'desk', `journal-${clock.et(now).day}.jsonl`), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).find((x) => x.kind === 'WATCHDOG');
+    ok('...its journal says a round is still open and that it is restarting', wj && wj.stepping === true && wj.restarting === true, wj);
+    ok('...its log says so, as a warning', /^WATCHDOG: no round finished in 316s/.test(w.state.log[0].text) && logLevel(w.state.log[0]) === 'warn', w.state.log[0]);
+    ok('...and its ledger is saved first', fs.existsSync(path.join(wdDir, 'desk', 'state.json')));
+    w.wdLast = now; w.beat = now - 20 * 60000;
+    eq('a wake from sleep (the check an hour late) is not a stall', w.watchdogCheck(now + 3600000), null);
+    ok('...and the loop gets a fresh start', w.beat === now + 3600000 && stalls.length === 1, w.beat);
+    const live = new Desk({ ...cfg, dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'desk-test-')), watchdogSec: 300, mode: 'live' }, { feeds, now: () => now, onStall: (x) => stalls.push(x) });
+    live.quiet = true;
+    live.wdLast = now; live.beat = now - 20 * 60000;
+    ok('in live mode (the other desk may have an order in flight) the stall is reported', live.watchdogCheck(now + 15000) && /live mode, not restarting/.test(live.state.log[0].text), live.state.log[0]);
+    eq('...but the process is not ended', stalls.length, 1);
+    const off = new Desk({ ...cfg, dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'desk-test-')), watchdogSec: 0 }, { feeds, now: () => now, onStall: (x) => stalls.push(x) });
+    off.wdLast = now; off.beat = 0;
+    eq('WATCHDOG_SEC=0 turns it off', off.watchdogCheck(now + 15000), null);
+    fs.rmSync(wdDir, { recursive: true, force: true });
+  }
+
+  // The P&L history: every minute of the last day, and the days before thinned to about 1,500 points. It
+  // was thinned alike the whole way, and at the 30,000 minutes it keeps the last hour would have been three.
+  {
+    const hd = new Desk({ ...cfg, dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'desk-test-')) }, { feeds, now: () => T });
+    const t0 = T - 30000 * 60000, pt = (i) => ({ t: t0 + i * 60000, e: 20000 + i / 100, c: 9000, s: 10000, o: 1000, bc: 9000, bs: 10000 });
+    hd.state.history = Array.from({ length: 30000 }, (_, i) => pt(i));
+    const H = hd.pnlHistory(), end = hd.state.history[29999].t;
+    const recent = H.points.filter((p) => p.t > end - 864e5), older = H.points.filter((p) => p.t <= end - 864e5);
+    eq('every minute of the last day is sent', recent.length, 1440);
+    ok('the days before are thinned to about 1,500 points', older.length > 1400 && older.length <= 1500, older.length);
+    eq('the history says how far apart those are', H.step, 60 * Math.ceil(28560 / 1500));
+    eq('and where every minute begins', H.recentFrom, recent[0].t);
+    ok('it starts at the first minute and ends at the last', H.points[0].t === t0 && H.points[H.points.length - 1].t === end);
+    ok('in time order', H.points.every((p, i) => !i || p.t > H.points[i - 1].t));
+    hd.state.history = Array.from({ length: 100 }, (_, i) => pt(i));
+    const S2 = hd.pnlHistory();
+    ok('a history shorter than a day is sent whole', S2.points.length === 100 && S2.step === 60 && S2.recentFrom === t0, [S2.points.length, S2.step]);
+  }
   fs.rmSync(dir, { recursive: true, force: true });
   fs.rmSync(fresh, { recursive: true, force: true });
 }

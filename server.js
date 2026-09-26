@@ -49,13 +49,22 @@ function pmSummary() {
 // to the prediction-market floor: its positions still have to settle.
 let desk = null;
 if (cfg.desk.on) {
-  try { desk = new Desk(cfg, { legacy: pmSummary }); }
+  try { desk = new Desk(cfg, { legacy: pmSummary, onStall: deskStalled }); }
   catch (e) { console.error(`stocks/crypto/options desk not started: ${e.message}`); }
 }
 // START, STOP and CRASH in the journal (src/journal.js says why): a restart the desk did not ask
 // for has to be countable the next morning, not just visible in a log that rolls over in half an
 // hour. Never in the way of starting or exiting: the journal already swallows a failed write.
 const lifecycle = (kind, payload) => { try { engine.journal(engine, kind, payload); } catch { /* the exit still happens */ } };
+// The stocks, crypto and options desk's watchdog found its loop stuck (src/desk/engine.js watchdogCheck),
+// and has already said so in its own log and journal and saved its ledger. The WATCHDOG line here is what
+// tells tools/restarts.js that the next START was this, and the other desk's ledger is saved too, as a
+// signal would; then the process ends and Fly starts it again.
+function deskStalled(stalled) {
+  lifecycle('WATCHDOG', { stalled, restarting: true });
+  try { engine.save(); } catch { /* ending anyway */ }
+  setTimeout(() => process.exit(1), 250);
+}
 const clients = new Set();
 const deskClients = new Set();
 const PUBLIC = path.join(__dirname, 'public');
