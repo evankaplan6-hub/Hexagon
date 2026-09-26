@@ -171,7 +171,7 @@ class Desk {
 
   // ---------------------------------------------------------------- the loop
   async start() {
-    this.log('TESS', 'OPS', null, `desk online · paper only · crypto $${this.D.cryptoUsd.toLocaleString()}, stocks $${this.D.stocksUsd.toLocaleString()}, options $${this.D.optionsUsd.toLocaleString()} · equity $${this.equity().toFixed(2)}`);
+    this.log('TESS', 'OPS', null, `desk online · paper only · crypto $${this.D.cryptoUsd.toLocaleString()}, stocks $${this.D.stocksUsd.toLocaleString()}, options $${this.D.optionsUsd.toLocaleString()} · equity ${usd(this.equity())}`);
     if (!this.state.startedJournaled) { this.journal('DESK_START', { books: { crypto: this.D.cryptoUsd, stocks: this.D.stocksUsd, options: this.D.optionsUsd } }); this.state.startedJournaled = true; }
     await this.step();
     setInterval(() => { this.step().catch((e) => console.error('desk step', e)); }, this.D.everySec * 1000);
@@ -291,7 +291,7 @@ class Desk {
     if (!clock.calendarCovers(e.day) && this.due('tess-cal', 86400)) this.log('TESS', 'OPS', null, `the market calendar in src/desk/clock.js ends ${clock.LAST_YEAR}: add next year's NYSE holidays`);
     if (this.due('tess-say', 900)) {
       const bits = [this.stale.crypto ? 'crypto prices stale' : 'crypto prices fresh', q ? (this.stale.stocks && inSession ? 'SPY feed stalled' : 'SPY feed ok') : 'no SPY quote yet'];
-      this.log('TESS', 'OPS', null, `${this.halt ? 'HALTED' : 'all clear'} · ${bits.join(', ')} · desk ${dd >= 0 ? '+' : ''}${(dd * 100).toFixed(2)}% today`);
+      this.log('TESS', 'OPS', null, `${this.halt ? 'HALTED' : 'all clear'} · ${bits.join(', ')} · desk ${dd > 0 ? '+' : dd < 0 ? MINUS : ''}${Math.abs(dd * 100).toFixed(2)}% today`);
     } else this.touch('TESS');
   }
 
@@ -303,7 +303,7 @@ class Desk {
     for (const l of o.lots) l.mark = this.lotBid(l);
     if (this.due('rigo-say', 1800)) {
       const held = [...Object.entries(b.crypto.sleeves), ...Object.entries(b.stocks.sleeves)].filter(([, sl]) => sl.qty > 0).map(([id]) => short(id));
-      this.log('RIGO', 'RESEARCH', null, `marked ${held.length ? held.join(', ') : 'nothing held'}${o.lots.length ? ` + ${o.lots.length} option${o.lots.length === 1 ? '' : 's'}` : ''} · desk $${this.equity().toFixed(2)}`);
+      this.log('RIGO', 'RESEARCH', null, `marked ${held.length ? held.join(', ') : 'nothing held'}${o.lots.length ? ` + ${o.lots.length} option${o.lots.length === 1 ? '' : 's'}` : ''} · desk ${usd(this.equity())}`);
     } else this.touch('RIGO');
   }
 
@@ -353,7 +353,7 @@ class Desk {
     this.noteExit(lot, pnl, false);
     this.journal('SETTLE', { book: 'options', osi: lot.osi, qty: lot.qty, value: val, spy, pnl });
     this.pushFill({ book: 'options', sym: lot.osi, label: lotName(lot), side: 'sell', qty: lot.qty, px: r4(val), value: cash, fee: 0, pnl, why: 'expired: worth its intrinsic value' });
-    this.log('RIGO', 'SETTLE', pnl, `${lotName(lot)} expired worth ${val.toFixed(2)} · ${pnl >= 0 ? 'made' : 'lost'} $${Math.abs(pnl).toFixed(2)}`);
+    this.log('RIGO', 'SETTLE', pnl, `${lotName(lot)} expired worth ${val.toFixed(2)} · ${pnl >= 0 ? 'made' : 'lost'} ${usd(Math.abs(pnl))}`);
   }
   noteExit(lot, pnl, targetHit) {
     const o = this.state.books.options, d = o.day;
@@ -535,7 +535,7 @@ class Desk {
     const label = kind === 'crypto' ? `${COIN_NAME[sym] || short(sym)}` : sym;
     this.journal('FILL', { book: order.book, sym, side, qty: f.qty, px: f.avg, notional: f.notional, fee: f.fee, cash: f.cash, pnl, why: order.why });
     this.pushFill({ book: order.book, sym, label, side, qty: f.qty, px: f.avg, value: f.notional, fee: f.fee, pnl, why: order.why });
-    this.log('KETT', 'FILL', pnl, `${side === 'buy' ? 'bought' : 'sold'} ${fmtQty(f.qty, kind)} ${label} at ${fmtPx(f.avg)} · $${f.notional.toFixed(2)}${f.fee ? `, fee $${f.fee.toFixed(2)}` : ''} · ${order.why}`);
+    this.log('KETT', 'FILL', pnl, `${side === 'buy' ? 'bought' : 'sold'} ${fmtQty(f.qty, kind, sym)} ${label} at ${fmtPx(f.avg)} · ${usd(f.notional)}${f.fee ? `, fee ${usd(f.fee)}` : ''} · ${order.why}`);
     void b;
     return f;
   }
@@ -561,7 +561,7 @@ class Desk {
       const label = lotName(base);
       this.journal('FILL', { book: 'options', sym: row.osi, side: 'buy', qty: f.qty, px: f.avg, notional: f.notional, fee: f.fee, cash: f.cash, why: order.why });
       this.pushFill({ book: 'options', sym: row.osi, label, side: 'buy', qty: f.qty, px: f.avg, value: f.notional, fee: f.fee, pnl: null, why: order.why });
-      this.log('KETT', 'FILL', null, `bought ${f.qty} ${label} at ${f.avg.toFixed(2)} · $${f.notional.toFixed(2)} · targets ${o.lots.filter((l) => l.trade === tradeId).map((l) => l.target.toFixed(2)).join(' and ')}`);
+      this.log('KETT', 'FILL', null, `bought ${f.qty} ${label} at ${f.avg.toFixed(2)} · ${usd(f.notional)} · targets ${o.lots.filter((l) => l.trade === tradeId).map((l) => l.target.toFixed(2)).join(' and ')}`);
       return f;
     }
     // a sale: at the target (a resting limit that filled) or at the bid
@@ -574,7 +574,7 @@ class Desk {
       this.noteExit(lot, pnl, false);
       this.journal('FILL', { book: 'options', sym: lot.osi, side: 'sell', qty: lot.qty, px: 0, notional: 0, fee: 0, cash: 0, pnl, why: `${order.why}; no bid` });
       this.pushFill({ book: 'options', sym: lot.osi, label: lotName(lot), side: 'sell', qty: lot.qty, px: 0, value: 0, fee: 0, pnl, why: `${order.why}, no bid` });
-      this.log('KETT', 'FILL', pnl, `${lotName(lot)}: no bid · written off, lost $${Math.abs(pnl).toFixed(2)} · ${order.why}`);
+      this.log('KETT', 'FILL', pnl, `${lotName(lot)}: no bid · written off, lost ${usd(Math.abs(pnl))} · ${order.why}`);
       return null;
     }
     const f = broker.fill({ kind: 'option', side: 'sell', qty: lot.qty }, market, this.fees);
@@ -585,7 +585,7 @@ class Desk {
     this.noteExit(lot, pnl, order.px != null);
     this.journal('FILL', { book: 'options', sym: lot.osi, side: 'sell', qty: f.qty, px: f.avg, notional: f.notional, fee: f.fee, cash: f.cash, pnl, why: order.why });
     this.pushFill({ book: 'options', sym: lot.osi, label: lotName(lot), side: 'sell', qty: f.qty, px: f.avg, value: f.notional, fee: f.fee, pnl, why: order.why });
-    this.log('KETT', 'FILL', pnl, `sold ${f.qty} ${lotName(lot)} at ${f.avg.toFixed(2)} · ${pnl >= 0 ? 'made' : 'lost'} $${Math.abs(pnl).toFixed(2)} · ${order.why}`);
+    this.log('KETT', 'FILL', pnl, `sold ${f.qty} ${lotName(lot)} at ${f.avg.toFixed(2)} · ${pnl >= 0 ? 'made' : 'lost'} ${usd(Math.abs(pnl))} · ${order.why}`);
     return f;
   }
   // Every fill is saved to disk at once, not on the next ten-second save: a restart in between would
@@ -681,8 +681,14 @@ function lotName(l) {
   const md = String(l.expiry || '').slice(5).replace('-', '/');
   return `SPY ${md} ${l.strike}${l.right === 'C' ? 'C' : 'P'}`;
 }
-const fmtQty = (q, kind) => (kind === 'crypto' ? String(+q.toFixed(6)) : kind === 'stock' ? String(+q.toFixed(3)) : String(q));
-const fmtPx = (p) => (p >= 1000 ? `$${p.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : `$${p.toFixed(p < 1 ? 4 : 2)}`);
+// The feed prints these lines as they are, so they follow the floor's way of writing a number
+// (public/desk.js): a true minus, thousands separators, cents on money, each coin to its own decimals.
+const MINUS = '\u2212';
+const COIN_DP = { 'BTC-USD': 6, 'ETH-USD': 4, 'SOL-USD': 2 };
+const usd = (x) => `$${x.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const fmtQty = (q, kind, sym) => (kind === 'crypto' ? q.toLocaleString('en-US', { minimumFractionDigits: COIN_DP[sym] ?? 6, maximumFractionDigits: COIN_DP[sym] ?? 6 })
+  : kind === 'stock' ? String(+q.toFixed(3)) : String(q));
+const fmtPx = (p) => (p >= 1 ? usd(p) : `$${p.toFixed(4)}`);
 function safe(fn) { try { return fn(); } catch { return null; } }
 
 module.exports = { Desk, AGENTS, lotName, hm };

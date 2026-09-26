@@ -62,7 +62,8 @@ h1 { font: 800 22px/1 var(--sans); margin: 0; letter-spacing: -0.01em; white-spa
 #floorc { display: block; background: var(--room); image-rendering: pixelated;
   width: 100%; height: 100%; flex: 1 1 auto; min-height: 0; }
 
-.pos { color: var(--gain); } .neg { color: var(--loss); }
+/* the sign of money: up, down, and zero, which is neither (no sign, no green) */
+.pos { color: var(--gain); } .neg { color: var(--loss); } .zero { color: var(--ink-2); }
 
 footer { color: var(--ink-3); font-size: 10px; text-align: center; padding-top: 6px; }
 
@@ -173,11 +174,6 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, var(--ink-1), 
      letterboxes again -- top and bottom this time, which is what a phone was getting. Cap the box
      at that shape and give the height back to the feed, which can use it. */
   max-height: calc((100vw - 28px) / 1.9); }
-/* Portrait: the room has hit that cap and there is height left over, so the feed takes it rather
-   than leaving a hole under the floor. Landscape keeps the feed a fixed band and gives the room
-   everything else. */
-@media (max-aspect-ratio: 1/1) { #feed { flex: 1 1 auto; height: auto; min-height: var(--feedh); }
-}
 /* The feed's band is the room's size dial, and it was set too generously. The room is drawn at a
    fixed height in drawing units, so its scale is simply the pixel height it is handed -- every pixel
    the feed gives back makes the whole cast bigger. Coming down from 250 to 200 on a laptop makes the
@@ -186,6 +182,17 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, var(--ink-1), 
 /* 2026-09-19: the desks were shrunk (ROOM_H/WALL_H in the room's drawing) and the feed took the height back. */
 #feed { flex: 0 0 auto; height: var(--feedh); display: flex; flex-direction: column; font-size: 14px; font-family: var(--sans);
   background: var(--bg-0); border-top: 1px solid var(--line-1); border-radius: 0 0 calc(var(--radius-md) - 1px) calc(var(--radius-md) - 1px); overflow: hidden; }
+/* Portrait: the room has hit that cap and there is height left over, so the room stands at its
+   cap and the feed takes everything under it rather than leaving a hole under the floor. Landscape
+   keeps the feed a fixed band and gives the room everything else. This has to come after the rule
+   above: the two are equally specific, and until 2026-09-25 it sat before it and never applied (a
+   tablet kept 394px of nothing under the feed). It had never run, so it had never been right either:
+   a feed sized to its content took the whole height and left the room a pixel tall. The room now
+   has a height of its own here, and the feed grows from nothing into the rest. */
+@media (max-aspect-ratio: 1/1) {
+  .room { flex: 0 1 auto; height: calc((100vw - 28px) / 1.9); }
+  #feed { flex: 1 1 0; height: auto; min-height: var(--feedh); }
+}
 #feed .fh { flex: none; display: flex; align-items: baseline; gap: 1em; padding: .7em 1em .4em; font: 700 .72em/1.2 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--ink-3); }
 /* The two views of this band -- the log, and what the desk is watching -- as tabs rather than a
    second panel: a market list that pushed the log off the page would be a worse trade than a
@@ -316,6 +323,13 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, var(--ink-1), 
 #wall.compact .wnum { display: flex; align-items: baseline; gap: .5em; }
 #wall.compact .wbig { margin-top: 0; font-size: 1.3em; }
 #wall.compact .wsub, #wall.compact .wstats { display: none; }
+#wall.compact .wnum { margin-bottom: .45em; }
+/* ...and there is only room for the three books themselves: their holdings are one click away */
+#wall.compact .wr.hold { display: none; }
+/* With the number in a column of its own, desk.js (fitWall) steps it down when the column overflows:
+   the per-book split first, then the line under the number. */
+#wall.wide.short .wstats .x { display: none; }
+#wall.wide.shorter .wsub { display: none; }
 #wall .wstats dt { font: 500 .8em/1 var(--sans); color: var(--ink-3); }
 #wall .wstats dd { margin: 0; font: 600 .95em/1 var(--mono); color: var(--ink-1); }
 /* Wide and shallow: the number takes a column of its own and the book takes the rest, instead of
@@ -349,7 +363,7 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, var(--ink-1), 
 /* One row, one line. A 60-character market name used to wrap every row onto two and the book
    turned into a ragged paragraph; the overflow fades rather than ending in an ellipsis. */
 #wall .wr .nm { color: var(--ink-1); min-width: 0; white-space: nowrap; overflow: hidden; }
-/* one line, clipped at the box: desk.js does not cut these at whole words (app.js's fitWords does, on /pm) */
+/* one line, cut at whole words by fitWords in desk.js: never through a letter or a figure, never an ellipsis */
 .fitw { display: block; min-width: 0; white-space: nowrap; overflow: hidden; }
 #wall .sd { justify-self: start; font: 600 .66em/1 var(--mono); letter-spacing: .1em; padding: .35em .55em; border-radius: var(--radius-pill); white-space: nowrap; }
 #wall .sd.long { color: var(--gain); background: var(--gain-wash); }
@@ -384,7 +398,7 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, var(--ink-1), 
 #tape li::before { content: ''; position: absolute; left: 0; top: .4em; bottom: .4em; width: 2px; border-radius: var(--radius-xs); }
 #tape li.buy::before { background: color-mix(in srgb, var(--gain) 60%, transparent); }
 #tape li.sell::before { background: color-mix(in srgb, var(--loss) 60%, transparent); }
-#tape .act { font-size: .9em; color: var(--ink-1); font-weight: 600; white-space: nowrap; }
+#tape .act { min-width: 0; font-size: .9em; color: var(--ink-1); font-weight: 600; }
 #tape .act b { font-weight: 700; }
 #tape .act i { font-style: normal; font-weight: 500; color: var(--ink-3); }
 
@@ -509,7 +523,7 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, var(--ink-1), 
   .m-state.warn { color: var(--warn); border-color: var(--warn-edge); }
   .m-state.bad { color: var(--bad); border-color: var(--bad-edge); }
 
-  .m-chart { height: 150px; margin-top: 9px; padding: 10px; border: 1px solid var(--line-1); border-radius: var(--radius-md); background: var(--tint-1); box-sizing: border-box; }
+  .m-chart { height: 190px; margin-top: 9px; padding: 10px; border: 1px solid var(--line-1); border-radius: var(--radius-md); background: var(--tint-1); box-sizing: border-box; }
   .m-chart .ct { gap: 6px; }
   /* the card above already says "All paper trades"; the chart's own title would say it twice */
   .m-chart .ctitle { display: none; }
@@ -520,7 +534,9 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, var(--ink-1), 
 
   .m-fill { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; align-items: center; margin-top: 10px; padding: 10px; border: 1px solid var(--line-1); border-radius: var(--radius-md); background: var(--tint-1); }
   .m-fill b { color: var(--ink-1); font-size: 13px; }
-  .m-fill p { min-width: 0; margin: 0; color: var(--ink-2); font-size: 11px; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
+  .m-fill p { min-width: 0; margin: 0; color: var(--ink-2); font-size: 11px; line-height: 1.35; text-align: right; }
+  /* the reason gets two lines rather than an ellipsis through its middle ("to 56% of the S...") */
+  .m-fill p .why { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   .m-fill p small { display: block; color: var(--ink-3); }
   .m-fill.empty { grid-template-columns: 1fr; }
 
@@ -565,7 +581,7 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, var(--ink-1), 
   .m-hero strong { font-size: 23px; }
   .m-hero > div > small { margin-top: 3px; }
   .m-state { padding: 5px 7px; }
-  .m-chart { height: 128px; margin-top: 8px; padding: 8px; }
+  .m-chart { height: 170px; margin-top: 8px; padding: 8px; }   /* the column scrolls; the plot needs the height to keep its line off the logo */
   .m-chart .cplot { min-height: 42px; }
   .m-fill { margin-top: 8px; padding: 8px; }
   .m-agents { margin-top: 8px; }
@@ -600,7 +616,7 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, var(--ink-1), 
 #wall .wfacts { margin-top: .4em; }
 
 /* the tape's P&L on a sale */
-#tape .px .pos { color: var(--gain); } #tape .px .neg { color: var(--loss); }
+#tape .px .pos { color: var(--gain); } #tape .px .neg { color: var(--loss); } #tape .px .zero { color: var(--ink-2); }
 
 /* phones: one card per book under the headline */
 .m-books { display: none; }
@@ -612,4 +628,27 @@ h1 { letter-spacing: -0.02em; background: linear-gradient(180deg, var(--ink-1), 
   .m-book span { display: block; color: var(--ink-3); font: 700 8px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; }
   .m-book b { display: block; margin-top: 5px; font: 700 15px/1 var(--mono); }
   .m-book small { display: block; margin-top: 4px; color: var(--ink-3); font-size: 9px; line-height: 1.3; }
+  .m-book.open { background: var(--tint-2); }
+  .m-book:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+
+  /* a book opened from its card: what it holds, how it stands against holding, and its rule. New,
+     so it keeps the type floor the layout step brings to the rest of the page. */
+  .m-detail { margin-top: 8px; padding: 10px 12px 12px; border: 1px solid var(--line-1); border-radius: var(--radius-md);
+    background: var(--tint-1); font-size: var(--type-small); line-height: 1.4; }
+  .m-detail[hidden] { display: none; }
+  .m-detail-top { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-2); }
+  .m-detail-top b { font: 600 var(--type-title)/1.2 var(--sans); color: var(--ink-1); }
+  .m-detail-top span { font-size: var(--type-label); color: var(--ink-3); white-space: nowrap; }
+  .m-facts { margin: var(--space-2) 0 0; }
+  .m-facts div { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-3); padding: 5px 0; border-top: 1px solid var(--line-1); }
+  .m-facts dt { color: var(--ink-3); }
+  .m-facts dd { margin: 0; text-align: right; color: var(--ink-1); font-family: var(--mono); }
+  .m-holds { list-style: none; margin: var(--space-2) 0 0; padding: 0; }
+  .m-holds li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: var(--space-3); align-items: baseline; padding: 6px 0; border-top: 1px solid var(--line-1); }
+  .m-holds b { display: block; color: var(--ink-1); font-weight: 600; }
+  .m-holds small { display: block; color: var(--ink-3); font-size: var(--type-label); }
+  .m-holds li > span { font: 500 var(--type-small) var(--mono); text-align: right; }
+  .m-holds .v { color: var(--ink-2); }
+  .m-none { margin: var(--space-2) 0 0; color: var(--ink-3); }
+  .m-rule { margin: var(--space-3) 0 0; color: var(--ink-2); font-size: var(--type-label); line-height: 1.45; }
 }
