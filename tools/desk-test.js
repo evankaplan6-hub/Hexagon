@@ -206,9 +206,18 @@ async function engineTests() {
   near('BTC is bought to a 0.70 weight of its slot', btc.qty * 84000 / 3000, 0.4 / (Math.sqrt(30 * 0.03 * 0.03 / 29) * Math.sqrt(365)), 0.01);
   near('and remembers the target it traded to', btc.target, 0.4 / (Math.sqrt(30 * 0.03 * 0.03 / 29) * Math.sqrt(365)), 1e-9);
   ok('the benchmark starts at that trade', btc.benchPx > 83999 && btc.benchPx < 84001, btc.benchPx);
+  eq("and pays the book's fee to buy in, as any buyer would", btc.benchFeeBps, 40);
   eq('checked for today (UTC)', btc.checkDay, '2026-09-23');
   const spy = b.stocks.sleeves.SPY;
   ok('SPY is bought: calm, so the full slot', spy.qty > 14 && spy.cash < 20, spy);
+  eq('SPY holding pays no fee to buy in, as the book pays none', spy.benchFeeBps, 0);
+  {
+    // holding: the whole slot bought at the trade's mid, the fee coming out of it, marked at the bid
+    const want = Object.entries(b.crypto.sleeves).reduce((a, [id, sl]) => a + sl.initial * desk.coinBid(id) / (sl.benchPx * 1.004), 0);
+    near('crypto holding is the slot less its fee to buy in, marked at the bid', desk.benchValue('crypto'), Math.round(want * 100) / 100, 0.006);
+    near('its fee: 0.40% of what $9,000 bought', desk.benchFee('crypto'), 35.86, 0.001);
+    eq('SPY holding paid nothing to buy in', desk.benchFee('stocks'), 0);
+  }
   eq('the options book is armed after the 12:30 test', b.options.day.status, 'armed');
   eq('on an up day', b.options.day.dir, 'up');
   const journal = fs.readFileSync(path.join(dir, 'desk', 'journal-2026-09-23.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
@@ -272,6 +281,7 @@ async function engineTests() {
   eq('three books', snap.books.map((x) => x.key), ['crypto', 'stocks', 'options']);
   ok('the prediction-market desk sits at the seventh', snap.agents[6].note === 'winding down: 3 held');
   ok('each book carries its benchmark', snap.books[0].bench > 0 && snap.books[1].bench > 0 && snap.books[2].bench === null, snap.books.map((x) => x.bench));
+  eq('and what that holding paid to buy in (the options book is never "held")', snap.books.map((x) => x.benchFee), [35.86, 0, null]);
   ok('paper, always', snap.mode === 'paper');
   near('the headline is every book together', snap.equity, snap.books.reduce((a, x) => a + x.equity, 0), 0.02);
 
@@ -284,6 +294,34 @@ async function engineTests() {
   let threw = null;
   try { new Desk(cfg, { feeds, now: () => T }); } catch (e) { threw = e.message; }
   ok('a corrupt ledger refuses to start rather than being overwritten', /unreadable/.test(threw || ''), threw);
+
+  // A ledger from before holding paid its fee (2026-09-26): on loading, each sleeve that has bought in gets
+  // the fee at the rate the book pays now, and the holding values its history recorded from the minute
+  // every sleeve had bought in are put on the same footing, once.
+  {
+    const oldDir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-test-'));
+    const d4 = new Desk({ ...cfg, dataDir: oldDir }, { feeds, now: () => T });
+    d4.quiet = true;
+    await d4.step();
+    const s = JSON.parse(JSON.stringify(d4.state));
+    const from = Math.max(...Object.values(s.books.crypto.sleeves).map((sl) => sl.benchAt));
+    for (const bk of [s.books.crypto, s.books.stocks]) for (const sl of Object.values(bk.sleeves)) delete sl.benchFeeBps;
+    s.history = [
+      { t: from - 60000, e: 20000, c: 9000, s: 10000, o: 1000, bc: 9000, bs: 10000 },   // before: the book's own value
+      { t: from, e: 19950, c: 8990, s: 9960, o: 1000, bc: 9036, bs: 9990 },
+      { t: from + 60000, e: 19960, c: 8995, s: 9965, o: 1000, bc: 9036.14, bs: 9995 },
+    ];
+    fs.writeFileSync(path.join(oldDir, 'desk', 'state.json'), JSON.stringify(s));
+    const d5 = new Desk({ ...cfg, dataDir: oldDir }, { feeds, now: () => T });
+    eq('an older ledger gets the fee its holding would have paid', Object.values(d5.state.books.crypto.sleeves).map((sl) => sl.benchFeeBps), [40, 40, 40]);
+    eq("holding before every coin had bought in is the book's own value, left alone", d5.state.history[0].bc, 9000);
+    eq('holding from then on is the slot less its fee', d5.state.history.slice(1).map((p) => p.bc), [9000, 9000.14]);
+    eq("SPY's recorded holding is left alone: it pays no fee", d5.state.history.map((p) => p.bs), [10000, 9990, 9995]);
+    d5.save();
+    const d6 = new Desk({ ...cfg, dataDir: oldDir }, { feeds, now: () => T });
+    eq('and only once: loading it again changes nothing', d6.state.history.map((p) => p.bc), [9000, 9000, 9000.14]);
+    fs.rmSync(oldDir, { recursive: true, force: true });
+  }
 
   // the loss limit: no new buying, selling still allowed
   const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-test-'));

@@ -41,6 +41,8 @@ async function main() {
   eq('a healthy day exits 0', code, 0);
   ok('it says the ledger is OK', lines.some((l) => /^LEDGER  OK/.test(l)), lines);
   ok('each book on its own line, crypto against holding', lines.some((l) => /crypto .*holding would be/.test(l)), lines);
+  ok('and what holding paid to buy in: 0.40% of what its $9,000 bought', lines.some((l) => /crypto .*holding would be \S+ after its \$35\.86 fee to buy in · banked/.test(l)), lines);
+  ok('SPY holding pays no fee, and its line claims none', lines.some((l) => /stocks .*holding would be/.test(l)) && !lines.some((l) => /stocks .*fee to buy in/.test(l)), lines);
   ok('the options book counts its closed trades', lines.some((l) => /options .*1 trade closed \(1 made money\)/.test(l)), lines);
   ok("today's checks are reported, not flagged", lines.some((l) => /^TODAY   SPY checked today/.test(l)) && lines.some((l) => /^TODAY   crypto checked 2026-09-23/.test(l)), lines);
 
