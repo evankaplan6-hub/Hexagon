@@ -45,12 +45,15 @@
   const dayKey = (t) => { const p = {}; for (const x of ET_YMD.formatToParts(new Date(t))) p[x.type] = x.value; return `${p.year}-${p.month.padStart(2, '0')}-${p.day.padStart(2, '0')}`; };
   const dayBefore = (k) => new Date(Date.parse(`${k}T12:00:00Z`) - 864e5).toISOString().slice(0, 10);
   const dayName = (t, today) => (dayKey(t) === dayBefore(today) ? 'Yesterday' : ET_DATE.format(new Date(t)));
-  const dur = (ms) => {
-    const h = Math.floor(ms / 3.6e6), m = Math.floor((ms % 3.6e6) / 6e4);
-    return h >= 48 ? `${Math.floor(h / 24)}d ${String(h % 24).padStart(2, '0')}h` : `${h}h ${String(m).padStart(2, '0')}m`;
-  };
   // a price the way its market quotes it: dollars and cents, and an option's premium to the tenth of a cent
-  const px = (p) => (!Number.isFinite(p) ? '—' : p >= 1 ? `$${p.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : `$${p.toFixed(p < 0.1 ? 3 : 2)}`);
+  // only when it has one (an average over two fills); a $0.07 premium read "$0.070"
+  const px = (p) => (!Number.isFinite(p) ? '—' : p >= 1 ? `$${p.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    : `$${p.toFixed(Math.abs(p * 100 - Math.round(p * 100)) < 1e-6 ? 2 : 3)}`);
+  // an Eastern day ("2026-09-25") as its weekday, and a minute of the Eastern day as a time ("3:55 PM")
+  const WD = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short' });
+  const wd = (k) => WD.format(new Date(`${k}T12:00:00Z`));
+  const minTxt = (m) => `${((Math.floor(m / 60) + 11) % 12) + 1}:${String(m % 60).padStart(2, '0')} ${m >= 720 ? 'PM' : 'AM'}`;
+  const coin = (sym) => String(sym).replace(/-USD$/, '');
   // a coin to the decimals its price needs: a thousandth of a bitcoin is $80, of a SOL twelve cents
   const COIN_DP = { 'BTC-USD': 6, 'ETH-USD': 4, 'SOL-USD': 2 };
   const qtyTxt = (q, book, sym) => (book === 'crypto'
@@ -97,11 +100,17 @@
   let lastFrameAt = 0, shownGone = null;
   const STALE_MS = 12000;
   const stale = () => lastFrameAt && Date.now() - lastFrameAt > STALE_MS;
-  const deskState = () => (stale() ? ['No signal', 'bad'] : S.halt ? ['Stopped', 'bad'] : S.market && S.market.stale && S.market.stale.crypto ? ['Waiting on prices', 'warn'] : ['Working', 'good']);
+  // The desk's own heartbeat, the moment its last round finished. The server keeps streaming while a stuck
+  // round holds the desk's loop, and then every price on the page stands still under a light that says
+  // Working. Two minutes is twelve rounds, and longer than any round's calls can take.
+  const stalled = () => !!(S && S.beat && S.now - S.beat > Math.max(120000, 12 * ((S.cfg && S.cfg.everySec) || 10) * 1000));
+  // Past the daily loss limit the desk is still marking and may still sell: it is not stopped, it is not buying.
+  const deskState = () => (stale() ? ['No signal', 'bad'] : stalled() ? ['Stalled', 'bad'] : S.halt ? ['Not buying', 'warn']
+    : S.market && S.market.stale && S.market.stale.crypto ? ['Waiting on prices', 'warn'] : ['Working', 'good']);
   // the desk's clock, carried forward between frames
   const nowT = () => (S ? S.now + (performance.now() - (S._rxPerf || performance.now())) : Date.now());
   function renderHeader() {
-    const gone = !!stale();
+    const gone = !!stale(), stuck = stalled();
     shownGone = gone;
     const [state, cls] = deskState();
     const pill = $('deskstate');
@@ -112,10 +121,13 @@
     if (document.title !== title) document.title = title;
     const L = S.legacy;
     morph($('pmlink'), `Prediction markets${L ? (L.groups || L.contracts ? ': winding down' : ': settled') : ''} ›`);
-    $('floor').classList.toggle('gone', gone);
-    const msg = gone ? 'No signal from the desk: this page is showing the last state it received.' : S.halt ? `Stopped buying: ${S.halt}` : '';
+    $('floor').classList.toggle('gone', gone || stuck);
+    const msg = gone ? 'No signal from the desk: this page is showing the last state it received.'
+      : stuck ? `The desk has finished no round since ${ET_HM.format(new Date(S.beat))} ET: every price and figure here stopped then.`
+        : S.halt ? `${cap(S.halt)}. Selling still works.` : '';
     const banner = $('banner');
     banner.hidden = !msg;
+    banner.classList.toggle('warn', !gone && !stuck && !!S.halt);
     if (banner.textContent !== msg) banner.textContent = msg;
   }
   function renderClock() {
@@ -165,12 +177,20 @@
 
   // ------------------------------------------------------------ the desk: market, prices, the options day, the limits
   // the options book's day, in one sentence a person reads
+  const today = () => dayKey(nowT());
+  // when the stock market next opens, in the desk's own words ("opens Mon 9:30 AM ET"): today, tomorrow or a weekday
+  const nextOpenDay = () => { const m = String((S.market && S.market.says) || '').match(/^opens (\w+)/); return m ? m[1] : null; };
   function optionsLine() {
     const O = S.options || {}, d = O.day;
     if (!O.enabled) return 'switched off';
     const open = (bookOf('options') || { rows: [] }).rows.length;
     if (open) return `holding ${open} contract${open === 1 ? '' : 's'}`;
-    if (!d) return S.market && S.market.open ? 'waiting for today\'s 12:30 test' : 'next 12:30 test on the next trading day';
+    // Friday's verdict is not Saturday's: a day that is over says when the next test is
+    if (!d || d.date !== today()) {
+      if (S.market && S.market.open) return 'waiting for today\'s 12:30 test';
+      const n = nextOpenDay();
+      return !n ? 'next 12:30 test on the next trading day' : `next 12:30 test ${n === 'today' || n === 'tomorrow' ? n : `on ${n}`}`;
+    }
     const up = d.dir === 'up';
     switch (d.status) {
       case 'waiting': return 'waiting for the 12:30 test';
@@ -185,12 +205,14 @@
   function deskHtml() {
     const mk = S.market || {}, C = S.cfg || {};
     const cryptoOk = !(mk.stale && mk.stale.crypto), spyOk = !(mk.stale && mk.stale.stocks);
-    const lag = mk.delayMin != null ? `SPY ${mk.delayMin} min late` : 'SPY 15 min late';
     // Amber means look. A quarter of an hour late is how SPY's free feed always is, so its dot is the plain
-    // one, and it turns amber only when TESS finds the feed has stopped.
+    // one, and it turns amber only when TESS finds the feed has stopped. Out of hours nothing is late (it
+    // said "15 min late" all weekend), and in the first minutes of a session the late tape has no trade
+    // from today yet, so the delay is the feed's usual one rather than the hours since yesterday's close.
+    const spy = !spyOk ? 'SPY stale' : !mk.open ? 'SPY closed' : mk.delayMin != null && mk.delayMin <= 30 ? `SPY ${mk.delayMin} min late` : 'SPY about 15 min late';
     const rows = [
       ['Stock market', `<b>${mk.open ? 'Open' : 'Closed'}</b> · ${esc(mk.says || '')}`],
-      ['Prices', `<span class="dot${cryptoOk ? '' : ' warn'}"></span>Crypto ${cryptoOk ? 'live' : 'stale'} · <span class="dot ${spyOk ? 'late' : 'warn'}"></span>${spyOk ? esc(lag) : 'SPY stale'}`],
+      ['Prices', `<span class="dot${cryptoOk ? '' : ' warn'}"></span>Crypto ${cryptoOk ? 'live' : 'stale'} · <span class="dot ${spyOk ? 'late' : 'warn'}"></span>${esc(spy)}`],
     ];
     // how much of the day's loss limit is used: TESS stops all new buying when it is. The meter stays plain
     // until half of it is gone, is amber to 80% and red past that.
@@ -209,8 +231,12 @@
       rows.push(['Prediction mkts', `<a href="/pm">${figure(P.pnl)}</a> · ${esc(still + next)}`]);
     }
     const sha = S.build && S.build.sha ? String(S.build.sha).slice(0, 7) : 'dev';
+    // Since when (it read "Running 19h 02m", which sounds like time since the last restart), and when the
+    // last round finished, the heartbeat behind the Stalled light
+    const since = new Date(S.startedAt), ago = S.beat ? Math.max(0, Math.round((S.now - S.beat) / 1000)) : null;
+    const beat = ago == null ? '' : ` · last round ${ago < 120 ? `${ago}s ago` : `at ${ET_HM.format(new Date(S.beat))}`}`;
     return `<span class="label">The desk</span><dl class="facts">${rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl>` +
-      `<p class="deskfoot">Running ${dur(S.now - S.startedAt)} · build ${esc(sha)}</p>`;
+      `<p class="deskfoot">Running since ${esc(ET_DAY.format(since))}, ${esc(ET_HM.format(since))}${beat} · build ${esc(sha)}</p>`;
   }
 
   // ------------------------------------------------------------ a book: against holding, its line, what it holds, what next
@@ -244,10 +270,13 @@
   const TARGET = 'How much of its slot the book wants to hold: less when it swings more';
   function holdRow(b, r) {
     if (b.key === 'options') {
-      return `<tr data-k="${esc(r.sym)}"><th><span class="tk">${esc(r.name)}</span><small>${r.qty} × ${px(r.px)} · ${esc(r.label)}</small></th>` +
+      // the price its target sells at, not just "2x", and what it is bid now
+      const mult = r.entry > 0 && r.target > 0 ? ` (${Math.round(r.target / r.entry)}x)` : '';
+      return `<tr data-k="${esc(r.sym)}"><th><span class="tk">${esc(r.name)}</span><small>${esc(cap(r.label))} · sells at ${px(r.target)}${mult} · bid ${px(r.px)}</small></th>` +
         `<td class="v">${money(r.value || 0)}</td><td>${Number.isFinite(r.pnl) ? figure(r.pnl) : '—'}</td></tr>`;
     }
-    // the price and today's move beside the name; under it, how much is held and what the rule wants
+    // the price and its move beside the name; under it, how much is held and what the rule wants. SPY's price
+    // is its last trade (the book is valued at the bid, which after hours sat 65 cents above the close).
     const last = b.key === 'stocks' && S.spy && S.spy.last > 0 ? S.spy.last : r.px;
     const chg = last > 0 && r.prevClose > 0 ? last / r.prevClose - 1 : null;
     const want = Number.isFinite(r.want) ? r.want : r.target;
@@ -255,20 +284,26 @@
     if (Number.isFinite(r.vol)) bits.push(`<span title="${SWINGS}">swings ${pct(r.vol)}</span>`);
     if (Number.isFinite(want)) bits.push(`<span title="${TARGET}">target ${pct(want)}</span>`);
     const worth = r.qty > 0 ? `<td class="v">${money(r.value || 0, 0)}</td><td>${Number.isFinite(r.pnl) ? figure(r.pnl) : '—'}</td>` : '<td class="v"></td><td></td>';
-    return `<tr data-k="${esc(r.sym)}"><th><span class="tk">${esc(r.name)}</span><span class="mk">${px(r.px)}${chg == null ? '' : ` ${change(chg)}`}</span>` +
+    return `<tr data-k="${esc(r.sym)}"><th><span class="tk">${esc(r.name)}</span><span class="mk">${px(last)}${chg == null ? '' : ` ${change(chg)}`}</span>` +
       `<small>${bits.join(' · ')}</small></th>${worth}</tr>`;
   }
   // the options book with nothing open: how today's test went, and where SPY is
   function optionsFacts() {
-    const O = S.options || {}, d = O.day, sp = O.spy, rows = [];
-    if (d && d.test && Number.isFinite(d.test.moveAtr)) rows.push(['12:30 test', `${d.test.dir || d.dir || ''} ${d.test.moveAtr.toFixed(2)} ATR from the open${Number.isFinite(d.test.retr) ? `, gave back ${Math.round(d.test.retr * 100)}%` : ''}`]);
-    if (sp && Number.isFinite(sp.c)) rows.push(['SPY, last bar', `${sp.c.toFixed(2)} · VWAP ${sp.vwap != null ? sp.vwap.toFixed(2) : '—'} · ATR ${sp.atr != null ? sp.atr.toFixed(2) : '—'}`]);
+    const O = S.options || {}, d = O.day, sp = O.spy, rows = [], td = today();
+    const on = (day) => (day && day !== td ? `${wd(day)} ` : '');
+    if (d && d.test && Number.isFinite(d.test.moveAtr)) rows.push([`${on(d.date)}12:30 test`, `${d.test.dir || d.dir || ''} ${d.test.moveAtr.toFixed(2)} ATR from the open${Number.isFinite(d.test.retr) ? `, gave back ${Math.round(d.test.retr * 100)}%` : ''}`]);
+    // the last five-minute bar, by the time it closed
+    if (sp && Number.isFinite(sp.c)) rows.push([`SPY ${on(sp.day)}${Number.isFinite(sp.m) ? minTxt(sp.m + 5) : ''}`, `${sp.c.toFixed(2)} · VWAP ${sp.vwap != null ? sp.vwap.toFixed(2) : '—'} · ATR ${sp.atr != null ? sp.atr.toFixed(2) : '—'}`]);
     for (const t of (O.trades || []).slice(0, 3)) rows.push([t.date.slice(5).replace('-', '/'), `${t.qty} × ${t.strike}${t.right} at ${px(t.entry)}${t.open ? ' · open' : ` · ${t.pnl >= 0 ? 'made' : 'lost'} ${money(Math.abs(t.pnl))}`}`]);
     return rows.length ? `<dl class="bkfacts">${rows.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>` : '<p class="bksub">No contracts open.</p>';
   }
   function nextLine(b) {
     if (b.key === 'crypto') return `Checks again after midnight UTC: <b>${esc(ET_HM.format(new Date(Math.floor(S.now / 864e5 + 1) * 864e5)))} ET</b>`;
-    if (b.key === 'stocks') return S.market && S.market.open ? 'Checks once a trading day, after the open' : `Checks at the next open: <b>${esc(String((S.market && S.market.says) || '').replace(/^opens /, ''))}</b>`;
+    if (b.key === 'stocks') {
+      const checked = b.rows.some((r) => r.checkDay === today());
+      return S.market && S.market.open ? (checked ? 'Checked today; checks again after the next open' : 'Checks once a trading day, after the open')
+        : `Checks at the next open: <b>${esc(String((S.market && S.market.says) || '').replace(/^opens /, ''))}</b>`;
+    }
     return esc(cap(optionsLine()));
   }
   // A book that has never traded is its figure, its markets and its next check: no line that has never
@@ -282,7 +317,9 @@
     const traded = held || b.fees || !isZero(b.realized || 0) || (b.key === 'options' && ((S.options || {}).trades || []).length);
     const vs = b.bench != null ? `<span class="vs" title="Simply holding what this book trades, from its first trade${b.benchFee ? `, after its ${plain(money(b.benchFee))} fee to buy in` : ''}">` +
       `holding <b class="${tone(b.benchPnl)}">${signed(b.benchPnl)}</b></span>` : '';
-    const body = b.rows.length ? `<table class="hold-t"><tbody>${b.rows.map((r) => holdRow(b, r)).join('')}</tbody></table>`
+    // the two figures on each row are named once, over them, when the book holds something
+    const head = b.key === 'options' || held ? '<thead><tr><th></th><th>Worth</th><th>P&amp;L</th></tr></thead>' : '';
+    const body = b.rows.length ? `<table class="hold-t">${head}<tbody>${b.rows.map((r) => holdRow(b, r)).join('')}</tbody></table>`
       : b.key === 'options' ? optionsFacts() : '<p class="bksub">Nothing held yet.</p>';
     const open = openBooks.has(b.key);
     return `<article class="card bk${open ? ' open' : ''}" data-k="${b.key}" style="--bk:${BOOK_COLOR[b.key]}" aria-label="${esc(b.name)} book">` +
@@ -304,26 +341,45 @@
     if (S) renderBooks();
   });
 
-  // ------------------------------------------------------------ what's happening: the bots' log, sorted by what it means
+  // ------------------------------------------------------------ what's happening: the desk's trades and the bots' log
   const logKey = (e) => `${e.t}|${e.agent}|${e.text}`;
   const shape = (s) => String(s).replace(/[−+-]?\$?\d[\d,.]*%?/g, '#');
-  // One log line -> { text, sub, level }. The desk writes its log in plain sentences already; the part
-  // before the first " · " is what happened, the rest is the detail underneath.
+  // One row of the list: { t, who, text, sub, level, pnl, key }. Its level is the engine's word for the line
+  // (src/desk/engine.js logLevel), the same one that decides which lines its ring keeps:
   //   trade  money moved          warn  needs a look
   //   info   a decision           quiet the desk doing its rounds
-  function say(e) {
-    const t = grouped(String(e.text || '')), parts = t.split(' · '), first = cap(parts[0]), rest = parts.slice(1).join(' · ');
-    if (e.kind === 'FILL' || e.kind === 'SETTLE') return { text: first, sub: rest, level: 'trade' };
-    if (e.kind === 'HALT') return { text: `Stopped buying: ${parts[0]}`, sub: rest, level: 'warn' };
-    switch (`${e.agent} ${e.kind}`) {
-      case 'HOLT SCAN': case 'RIGO RESEARCH': case 'ILSA RESEARCH': return { text: first, sub: rest, level: 'quiet' };
-      case 'TESS OPS': return { text: first, sub: rest, level: /^all clear/i.test(t) || /desk online|new day/.test(t) ? 'quiet' : 'warn' };
-      case 'HOLT OPS': return { text: first, sub: rest, level: 'warn' };
-      case 'BRAM SIGNAL': return { text: first, sub: rest, level: 'info' };
-      case 'BRAM PASS': return { text: first, sub: rest, level: /^options/.test(t) ? 'info' : 'quiet' };
-      case 'KETT PASS': return { text: first, sub: rest, level: 'info' };
-      default: return { text: first, sub: rest, level: 'info' };
+  // The desk writes its log in plain sentences already; the part before the first " · " is what happened,
+  // the rest is the detail underneath.
+  function logRow(e) {
+    const parts = grouped(String(e.text || '')).split(' · ');
+    return { t: e.t, who: e.agent, text: cap(parts[0]), sub: parts.slice(1).join(' · '), level: e.level || 'info', pnl: null, key: logKey(e), halt: e.kind === 'HALT' };
+  }
+  // A trade is a row from the ledger's own fills, not from the log. On 26 September the routine rounds had
+  // pushed the log lines of the desk's three buys out of the frame in eight hours, and this list said
+  // "Nothing of those kinds yet" beside a book holding all three coins; the frame's eighty fills do not
+  // age out that way. A fill's log line says the same thing, so it is left out.
+  function fillRow(f) {
+    const opt = f.book === 'options', name = opt ? f.label : f.book === 'crypto' ? coin(f.sym) : f.sym;
+    const why = String(f.why || ''), expired = /^expired/.test(why);
+    const row = { t: f.at, who: expired ? 'RIGO' : 'KETT', level: 'trade', pnl: f.side === 'sell' ? f.pnl : null, key: `fill|${f.id}` };
+    if (expired) return { ...row, text: `${name} expired worth ${px(f.px)}`, sub: '' };
+    if (f.side === 'sell' && !(f.px > 0)) return { ...row, text: `${name} written off: no bid`, sub: cap(why.replace(/,? no bid$/, '')) };
+    const qty = opt ? String(f.qty) : qtyTxt(f.qty, f.book, f.sym);
+    return { ...row, text: `${f.side === 'buy' ? 'Bought' : 'Sold'} ${qty} ${name} at ${px(f.px)}`,
+      sub: [`${money(f.value)}${f.fee ? `, fee ${money(f.fee)}` : ''}`, why].filter(Boolean).join(' · ') };
+  }
+  // newest first; the same round said again by the same bot is shown once
+  function activityRows() {
+    const rows = [], last = {};
+    for (const e of S.log || []) {
+      if (e.kind === 'FILL' || e.kind === 'SETTLE') continue;
+      const r = logRow(e), k = shape(r.text);
+      if (last[e.agent] === k) continue;
+      last[e.agent] = k;
+      rows.push(r);
     }
+    for (const f of S.fills || []) rows.push(fillRow(f));
+    return rows.sort((a, b) => b.t - a.t);
   }
   // The routine rounds ("3/3 coins live", "all clear") come every few minutes and used to push the day's
   // few trades out of sight, so they are counted and hidden until asked for.
@@ -334,27 +390,21 @@
   // the books, and eighty entries would bury the chart and the desk beneath it.
   const phone = matchMedia('(max-width: 640px)');
   let feedAll = false;
-  function renderActivity() {
-    const rows = [], last = {}, count = {};
-    for (const e of S.log || []) {
-      const s = say(e), k = shape(s.text);
-      if (last[e.agent] === k) continue;   // the same round said again: once is enough
-      last[e.agent] = k;
-      rows.push({ e, s });
-      count[s.level] = (count[s.level] || 0) + 1;
-    }
+  function renderActivity(rows = activityRows()) {
+    const count = {};
+    for (const r of rows) count[r.level] = (count[r.level] || 0) + 1;
     morph($('chips'), LEVELS.map(([lv, name]) => `<button type="button" data-lv="${lv}" class="${showing.has(lv) ? 'on' : ''}" aria-pressed="${showing.has(lv)}">${name}<span>${count[lv] || 0}</span></button>`).join(''));
-    const kept = rows.filter(({ s }) => showing.has(s.level)).slice(0, 80);
+    const kept = rows.filter((r) => showing.has(r.level)).slice(0, 80);
     const shown = phone.matches && !feedAll ? kept.slice(0, 5) : kept;
-    const today = dayKey(nowT());
-    let day = today;
-    morph($('feedlist'), shown.map(({ e, s }) => {
+    const td = today();
+    let day = td;
+    morph($('feedlist'), shown.map((r) => {
       // newest first: the day's name goes above the first entry from each earlier day
-      const k = dayKey(e.t), head = k === day ? '' : `<li class="day" data-k="day|${k}">${esc(dayName(e.t, today))}</li>`;
+      const k = dayKey(r.t), head = k === day ? '' : `<li class="day" data-k="day|${k}">${esc(dayName(r.t, td))}</li>`;
       day = k;
-      const amt = (e.kind === 'FILL' || e.kind === 'SETTLE') && e.pnl != null ? `<span class="amt ${tone(e.pnl)}">${signed(e.pnl)}</span>` : '<span class="amt"></span>';
-      return `${head}<li class="lv-${s.level}" data-k="${esc(logKey(e))}"><time datetime="${new Date(e.t).toISOString()}">${esc(ET_HM.format(new Date(e.t)))}</time><span class="who">${esc(e.agent)}</span>` +
-        `<span class="what">${esc(s.text)}${s.sub ? `<small>${esc(s.sub)}</small>` : ''}</span>${amt}</li>`;
+      const amt = r.pnl != null ? `<span class="amt ${tone(r.pnl)}">${signed(r.pnl)}</span>` : '<span class="amt"></span>';
+      return `${head}<li class="lv-${r.level}" data-k="${esc(r.key)}"><time datetime="${new Date(r.t).toISOString()}">${esc(ET_HM.format(new Date(r.t)))}</time><span class="who">${esc(r.who)}</span>` +
+        `<span class="what">${esc(r.text)}${r.sub ? `<small>${esc(r.sub)}</small>` : ''}</span>${amt}</li>`;
     }).join('') + (phone.matches && kept.length > 5 ? `<li class="more" data-k="more"><button type="button" data-more="1">${feedAll ? 'Show the latest five' : `Show ${kept.length - 5} earlier`}</button></li>` : '')
       || `<li class="empty">${rows.length ? 'Nothing of those kinds yet.' : 'Waiting for the first desk round.'}</li>`);
   }
@@ -371,14 +421,13 @@
     try { localStorage.setItem('desk-activity', JSON.stringify([...showing])); } catch { /* private window */ }
     if (S) renderActivity();
   });
-  // a fill or a halt is read out once, by a screen reader, as it lands; nothing else is
+  // a trade or a halt is read out once, by a screen reader, as it lands; nothing else is
   let announced = null;
-  function announce() {
-    const e = (S.log || []).find((x) => x.kind === 'FILL' || x.kind === 'SETTLE' || x.kind === 'HALT');
-    if (!e) return;
-    const k = logKey(e);
-    if (announced !== null && k !== announced) $('announce').textContent = `${e.agent}: ${say(e).text}`;
-    announced = k;
+  function announce(rows) {
+    const r = rows.find((x) => x.level === 'trade' || x.halt);
+    if (!r) return;
+    if (announced !== null && r.key !== announced) $('announce').textContent = `${r.who}: ${r.text}`;
+    announced = r.key;
   }
 
   // ------------------------------------------------------------ the chart: every book, and what holding would have made
@@ -397,6 +446,24 @@
     } catch { /* the chart waits for the next try */ }
   }
   const plots = new Map();
+  // The library lays its axis out in UTC: its day marks fell on UTC midnight, 8 PM here, and a "Sep 25" sat in
+  // the middle of the 25th's evening while the real midnight went unmarked. Each point goes to it as Eastern
+  // wall-clock time instead, so a day's mark lands on Eastern midnight, and its labels are read in UTC.
+  // The offset is looked up once an hour of time: the clocks change on the hour.
+  const ET_PARTS = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' });
+  const offsets = new Map();
+  function etOffset(sec) {
+    const h = Math.floor(sec / 3600);
+    if (!offsets.has(h)) {
+      const p = {};
+      for (const x of ET_PARTS.formatToParts(new Date(h * 3600e3))) p[x.type] = +x.value;
+      offsets.set(h, (Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - h * 3600e3) / 1000);
+    }
+    return offsets.get(h);
+  }
+  const W_HM = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', hour: 'numeric', minute: '2-digit', hour12: true });
+  const W_DAY = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' });
+  const W_FULL = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   // points: [t, desk P&L, holding P&L|null]. The live end comes from the stream, the rest from history.
   function chartSeries() {
     const bk = hist.books || {}, opt = bk.options || 0;
@@ -430,10 +497,11 @@
       // a label at the plot's edge is drawn whole or not at all, never cut in half; the bottom margin
       // is set in drawChart from the plot's height, to keep the line clear of the licence's logo
       rightPriceScale: { borderVisible: false, entireTextOnly: true, scaleMargins: { top: 0.12, bottom: 0.12 } },
-      // the axis in Eastern time, like every other time on the page (the library's own is UTC)
+      // the axis in Eastern time, like every other time on the page: the times it is given are Eastern
+      // wall-clock seconds (etOffset), so it reads them back as UTC
       timeScale: { visible: true, borderVisible: false, timeVisible: true, secondsVisible: false, fixLeftEdge: true, fixRightEdge: true,
-        tickMarkFormatter: (sec, type) => (type >= 3 ? ET_HM : ET_DAY).format(new Date(sec * 1000)) },
-      localization: { timeFormatter: (sec) => new Date(sec * 1000).toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) },
+        tickMarkFormatter: (sec, type) => (type >= 3 ? W_HM : W_DAY).format(new Date(sec * 1000)) },
+      localization: { timeFormatter: (sec) => W_FULL.format(new Date(sec * 1000)) },
       crosshair: { mode: LW.CrosshairMode.Magnet, horzLine: { visible: big, labelVisible: big } },
     });
     // Above zero the line and its fill are the gain colour, below it the loss colour, whatever the range.
@@ -462,7 +530,7 @@
     // desk's move over the last hour
     const firstHold = pts.find((x) => x[2] != null), lastHold = [...pts].reverse().find((x) => x[2] != null);
     const held = lastHold ? r2(lastHold[2] - firstHold[2]) : null;
-    morph(el.querySelector('.cr'), held != null ? `<span title="The dashed line: every book simply holding what it trades, over the same stretch">holding: <b class="${tone(held)}">${signed(held)}</b></span>` : '');
+    morph(el.querySelector('.cr'), held != null ? `<span title="The dashed line: every book simply holding what it trades, over the same stretch"><i class="dash" aria-hidden="true"></i>holding: <b class="${tone(held)}">${signed(held)}</b></span>` : '');
     if (!p.plot) p.plot = makePlot(el, p.big);
     if (!p.plot) return;
     // The licence's logo sits in the plot's bottom-left corner, about 30px tall, just above the time
@@ -485,10 +553,13 @@
     const clear = withAlpha(TOK['ink-3'], 0);
     const deskClear = { topLineColor: clear, bottomLineColor: clear, topFillColor1: clear, topFillColor2: clear, bottomFillColor1: clear, bottomFillColor2: clear };
     const desk = [], hold = [];
+    let prev = -Infinity;
     rows.forEach(([t, [v, hv]], i) => {
       const breaks = i + 1 < rows.length && rows[i + 1][0] - t > gap;
-      desk.push(breaks ? { time: t, value: v, ...deskClear } : { time: t, value: v });
-      if (hv != null) hold.push(breaks ? { time: t, value: hv, color: clear } : { time: t, value: hv });
+      // Eastern wall-clock time; the hour the clocks go back comes round twice, and time may not run backwards
+      const time = prev = Math.max(prev + 1, t + etOffset(t));
+      desk.push(breaks ? { time, value: v, ...deskClear } : { time, value: v });
+      if (hv != null) hold.push(breaks ? { time, value: hv, color: clear } : { time, value: hv });
     });
     p.plot.desk.setData(desk);
     p.plot.hold.setData(hold);
@@ -540,8 +611,9 @@
     morph($('hero'), heroHtml());
     morph($('desk'), deskHtml());
     renderBooks();
-    renderActivity();
-    announce();
+    const rows = activityRows();
+    renderActivity(rows);
+    announce(rows);
     drawChart($('chart'));
     if (!bigChart.hidden) drawChart($('chartbig-pnl'));
     $('floor').removeAttribute('aria-busy');

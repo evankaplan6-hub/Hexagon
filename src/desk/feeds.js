@@ -64,7 +64,12 @@ function parseCboeQuote(j) {
   return {
     sym: d.symbol || j.symbol || null,
     bid: bid > 0 ? bid : null, ask: ask > 0 ? ask : null, bidSz: fin(d.bid_size), askSz: fin(d.ask_size),
-    last, open: fin(d.open), high: fin(d.high), low: fin(d.low), prevClose: fin(d.prev_day_close), volume: fin(d.volume),
+    // The close before the quote's session. prev_day_close turns into the session's own close some time
+    // after the bell (Saturday 26 September's file: 771.35 for both, and the page said SPY moved 0.00% on
+    // a day it rose 0.54%); price_change keeps the session's move, so the price less its change is that
+    // close, in the session and after it. prev_day_close only when there is no change to go by.
+    last, open: fin(d.open), high: fin(d.high), low: fin(d.low), volume: fin(d.volume),
+    prevClose: fin(d.price_change) != null ? Math.round((last - fin(d.price_change)) * 1e4) / 1e4 : fin(d.prev_day_close),
     // the moment the price is FROM, which is what the desk's clock runs on for stocks
     at: etToUtc(d.last_trade_time),
     fileAt: Number.isFinite(fileAt) ? fileAt : null,
