@@ -512,11 +512,17 @@
       priceFormat: { type: 'custom', minMove: 0.01, formatter: (v) => plain(signed(v)) } });
     const hold = c.addSeries(LW.LineSeries, { color: TOK['ink-3'], lineWidth: 1, lineStyle: LW.LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
     desk.createPriceLine({ price: 0, color: withAlpha(TOK['ink-3'], 0.45), lineWidth: 1, lineStyle: LW.LineStyle.Dashed, axisLabelVisible: false });
+    // The plot is always the whole range (it cannot be scrolled or zoomed), but when its width changes the
+    // library keeps its bar spacing and cuts the end off. The large chart is measured again as it opens and
+    // when the axis's font arrives, and four times in six it opened ending 17 minutes early, its last-value
+    // label on a price from then: -$5.44 beside a desk at +$1.94. Any change of width fits it again.
+    c.timeScale().subscribeSizeChange(() => c.timeScale().fitContent());
     return { c, desk, hold };
   }
   function drawChart(el) {
     const p = plots.get(el);
-    if (!p) return;
+    // the large chart is built when it opens, at the size it opens at, not while it is hidden at none
+    if (!p || (p.big && bigChart.hidden)) return;
     const pts = chartSeries();
     const last = pts.length ? pts[pts.length - 1][1] : (S ? S.pnl : 0);
     const first = pts.length ? pts[0][1] : last;
