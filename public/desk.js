@@ -377,7 +377,8 @@
   }
   function chartSkeleton(big) {
     const seg = `<span class="seg">${RANGES.map(([r]) => `<button type="button" data-range="${r}" class="${chart.range === r ? 'on' : ''}">${r}</button>`).join('')}</span>`;
-    return `<div class="ct"><span class="ctitle">Profit and loss · every book</span>${big ? '' : '<button type="button" class="cx" data-expand="1" title="Open large" aria-label="Open the chart large">⤢</button>'}</div>` +
+    // opened large, the dialog's header names the chart, so the chart leaves its own title out
+    return (big ? '' : '<div class="ct"><span class="ctitle">Profit and loss · every book</span><button type="button" class="cx" data-expand="1" title="Open large" aria-label="Open the chart large">⤢</button></div>') +
       `<div class="chead"><span class="cv"></span><span class="cd"></span></div>` +
       `<div class="cplot"></div><div class="cb">${seg}<span class="cr"></span></div>`;
   }
