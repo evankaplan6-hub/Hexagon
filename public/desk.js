@@ -1,10 +1,12 @@
 /* The Hexagon — the stocks, crypto and options desk's floor. Consumes /api/desk/stream.
  *
- * The room, the bots, the boards and the bubbles are the prediction-market floor's (public/app.js),
+ * The room, the desks, the boards and the bubbles are the prediction-market floor's (public/app.js),
  * carried over rather than shared: that page stays exactly as it is at /pm until its desk's last
  * positions settle, and then it and its script go. What is new here is what the boards SAY -- the
  * three books, their holdings against simply holding, the fills, the market clock -- and the
- * seventh desk, PRED, which is the prediction-market desk winding down.
+ * seventh desk, PRED, which is the prediction-market desk winding down. Since 2026-09-25 the desks
+ * have no one sitting at them: each bot is its desk, its screen and its name plate, and what it is
+ * doing shows on the screen (the avatars went at Evan's asking).
  *
  * Read-only, like the other floor: nothing on this page can place, change or cancel anything.
  */
@@ -320,7 +322,6 @@
       const picked = sel && sel.kind === 'agent' && sel.key === a.key;
       const latest = (S.log || []).find((e) => e.agent === a.key);
       const beat = (Math.sin(t * 7 + i * 1.7) + 1) / 2;
-      const bob = act ? Math.round(Math.sin(t * 9 + i) * 1.5) : 0;
       // PRED is a desk being wound down: dimmer, slower, and its screen is an hourglass, not a chart
       const winding = a.key === 'PRED';
       ctx.save();
@@ -363,23 +364,12 @@
       pxl(ctx, 0, 11, 64, 9, '#33291d'); pxl(ctx, 0, 11, 64, 1, '#6b5942'); pxl(ctx, 0, 19, 64, 1, '#1b150e');
       pxl(ctx, 2, 20, 4, 8, '#221b13'); pxl(ctx, 58, 20, 4, 8, '#221b13');
       pxl(ctx, 24, 30, 16, 5, '#12151b'); pxl(ctx, 22, 24, 20, 6, '#1a1e27'); pxl(ctx, 22, 24, 20, 1, '#28303d');
-      const by = 22 + bob;
-      shadow(ctx, 25, by + 3, 14, 5, 0.35);
-      ctx.fillStyle = a.color; ctx.beginPath(); ctx.roundRect(25, by - 8, 14, 13, [6, 6, 5, 5]); ctx.fill();
-      ctx.save(); ctx.globalAlpha = 0.35; ctx.fillStyle = '#fff';
-      ctx.beginPath(); ctx.roundRect(25, by - 8, 14, 4, [6, 6, 0, 0]); ctx.fill(); ctx.restore();
-      if (act) glow(ctx, 32, by - 2, 16, a.color, 0.22);
-      const blink = Math.floor(t * 1.3 + i * 0.7) % 6 === 0 && ((t * 1.3 + i * 0.7) % 1) < 0.18;
-      // the winding-down desk dozes: eyes half shut
-      if (winding && !act) { pxl(ctx, 28, by - 3, 3, 1, '#fff'); pxl(ctx, 33, by - 3, 3, 1, '#fff'); }
-      else if (blink) { pxl(ctx, 28, by - 3, 3, 1, '#fff'); pxl(ctx, 33, by - 3, 3, 1, '#fff'); }
-      else { pxl(ctx, 28, by - 4, 3, 3, '#fff'); pxl(ctx, 33, by - 4, 3, 3, '#fff'); pxl(ctx, 29, by - 3, 1, 1, '#111'); pxl(ctx, 34, by - 3, 1, 1, '#111'); }
       ctx.restore();
       if (act && a.key === 'BRAM') wires.push({ kind: 'wire', color: a.color, fx: x + 32 * Z, fy: y - 17 * Z, tx: VPX, ty: ws.y + ws.h });
       if (act && a.key === 'KETT' && latest && latest.kind === 'FILL') {
         wires.push({ kind: 'packet', color: a.color, fx: x + 32 * Z, fy: y - 6 * Z, tx: L.tape.x + L.tape.w / 2, ty: L.tape.y + 30, down: latest.pnl != null && latest.pnl < 0 });
       }
-      labels.push({ key: a.key, bx: x + 32 * Z, by: y + (22 + bob) * Z, top: y - 18 * Z, foot: y + 31 * Z, plate: y + 15.5 * Z, px: x + 52 * Z,
+      labels.push({ key: a.key, bx: x + 32 * Z, by: y + 22 * Z, top: y - 18 * Z, foot: y + 31 * Z, plate: y + 15.5 * Z, px: x + 52 * Z,
         back: i < 3, color: a.color, act, lit: hot || picked, note: a.note, w: 64 * Z });
     });
     for (const w of wires) {
