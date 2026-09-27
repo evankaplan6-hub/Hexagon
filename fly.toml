@@ -93,23 +93,20 @@ primary_region = "iad"          # Ashburn, Virginia — close to the exchange, a
   # to the tape, so the book can be re-scored from the tape without paying for another week of it.
   # Set to "1" to turn it back on.
   CONVERGE = "0"
-  # No new trades of any kind since 2026-09-25, Evan's call after fifteen days of paper: every book
-  # lost (all-in -$1,753 on $10,000), the fixes only made the losses smaller, and no study on fresh
-  # data found an edge after fees (README). Nothing was sold: the 20 locked arbs run to settlement
-  # (30-year Treasury 09-30 first, CPI mid-October), and the maker's held contracts are settled and
-  # re-marked once a minute until each market ends. The box keeps recording the tape, the chains
-  # and whale watch, and the dashboard stays up. Set any of these to "1" to turn that book back on;
-  # MAKER_QUOTE latches nothing, so no /api/resume is needed.
-  #   ARBS=0         no new locked arb (19 groups closed, -$222; five mismatched pairs lost $244)
-  #   MAKER_QUOTE=0  the maker quotes nothing (-$888 on 98,785 contracts; fills 0.6-1.2c worse at 30 min)
-  #   SNIPE=0        the settlement snipe never fired; Sunday 09-27's tape still answers it, because
-  #                  SNIPE_WATCH (on by default, buys nothing) keeps finished games on the tape until
-  #                  Polymarket closes them (at resolution, 17-46 min after the game)
-  #                  (node tools/settle-lag.js --day 2026-09-27), and it comes back only if Kalshi
-  #                  stays 2c+ under par for minutes after Polymarket closes, with size at the touch
-  ARBS = "0"
-  MAKER_QUOTE = "0"
-  SNIPE = "0"
+  # From 2026-09-25 to 09-27 no new trades of any kind, after fifteen days of paper in which every
+  # book lost (all-in -$1,753 on $10,000; README). Back on in paper since 2026-09-27 at Evan's
+  # request: the scope moved to stocks, crypto and options, but this desk keeps trading in
+  # simulation beside it. The verdicts that switched each off still stand; this is paper money,
+  # kept running so the record keeps growing. Set any of these to "0" to stop that book again;
+  # MAKER_QUOTE latches nothing, so no /api/resume is needed either way.
+  #   ARBS           locked arbs (19 groups closed to 09-25, -$222; five mismatched pairs lost $244)
+  #   MAKER_QUOTE    the maker's quotes (-$888 on 98,785 contracts; fills 0.6-1.2c worse at 30 min)
+  #   SNIPE          the settlement snipe, which had never fired; it buys only once Polymarket's
+  #                  record says closed and Kalshi still offers the winner 2c+ under par, net of fees
+  #                  (node tools/settle-lag.js --day 2026-09-27 scores the watch-only Sunday)
+  ARBS = "1"
+  MAKER_QUOTE = "1"
+  SNIPE = "1"
   # The option-chain recorder runs inside the desk here (src/chainsched.js) since 2026-09-23: the
   # box has no cron, so its Stocks and Options tabs had read an empty folder since they shipped.
   # Same tool, same three Eastern times as the Mac's launchd job, weekdays only, as a child

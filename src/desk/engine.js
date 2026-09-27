@@ -22,7 +22,7 @@
 //   RIGO  settlement      marks every position; takes the options book's exits
 //   BRAM  signals         what each book should hold now; the 12:30 test and the entry trigger
 //   KETT  execution       fills every order against the book or the touch
-// PRED sits at the seventh desk: the prediction-market desk, winding down (server.js feeds it).
+// PRED sits at the seventh desk: the prediction-market desk, trading in paper beside it (server.js feeds it).
 const fs = require('fs');
 const path = require('path');
 const clock = require('./clock');
