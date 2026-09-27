@@ -1,0 +1,26 @@
+# What `fly deploy` may send to the image builder: exactly what the Dockerfile copies, nothing else.
+#
+# `fly deploy` uploads the folder it runs in to Fly's builder. On the Mac that folder also holds .env,
+# kalshi-private-key.pem and gigabytes of data/, and none of them may leave the machine (CLAUDE.md,
+# safety invariants). So this is an allowlist: everything is out unless it is named below, and a new
+# secret or data folder stays out without anyone remembering to add it. The GitHub deploy builds from a
+# clean checkout and never had the problem; a deploy by hand from ~/Hexagon did.
+#
+# tools/dockerignore-test.js holds this file to the Dockerfile's COPY lines, both ways: every file a
+# COPY takes is let through, and nothing is let through that no COPY takes.
+*
+!Dockerfile
+!package*.json
+!src
+!tools
+!public
+!server.js
+!README.md
+!ops/DEPLOY.md
+
+# ...and never a key or an env file, even one that turns up inside a folder let through above.
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*.p12
