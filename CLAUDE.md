@@ -76,8 +76,8 @@ npm run reset                                 # wipe the prediction-market paper
 ```
                   THE STOCKS, CRYPTO AND OPTIONS DESK (the main scope since 2026-09-25; paper only, no broker)
 src/desk/engine.js  the desk: three books' ledgers, the six bots' jobs (HOLT prices, ILSA volatility, TESS risk,
-                  RIGO marks and option exits, BRAM signals, KETT fills; PRED is the prediction-market desk
-                  winding down), data/desk/state.json + journal-YYYY-MM-DD.jsonl, the page's snapshot
+                  RIGO marks and option exits, BRAM signals, KETT fills; PRED is the prediction-market desk,
+                  trading in paper beside it), data/desk/state.json + journal-YYYY-MM-DD.jsonl, the page's snapshot
 src/desk/books.js   the rules, pure: volatility targeting (crypto 40%/30 days, SPY 15%/20 sessions, 10-point band)
                   and the SPY same-day options rules ported from the stack's trend_day_check.py, plus chainSync:
                   an option is bought only off a chain within DESK_CHAIN_SKEW_SEC of the trigger bar's close
