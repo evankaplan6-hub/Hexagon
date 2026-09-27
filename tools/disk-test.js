@@ -1011,7 +1011,7 @@ if (!HAVE_BASH) {
     p.w('data/fly/archive/backup.log', '2026-09-24T14:31:20Z ok backup copied data/chains\n');
     const pr = p.go([], { now: '2026-09-24T15:31:16Z' });
     ok('an ok earlier in the day does not count when the last pull line is a PROBLEM: it pulls again', pr.code === 0 && p.pulls().length === 1, pr);
-    ok('...and the backup, already done today, is not done again', p.backupLog().length === 1, p.backupLog());
+    ok('...and backs up again although it already did today: that pull brought files the first backup never saw (09-26)', p.backupLog().length === 2 && / ok backup copied /.test(p.backupLog()[1]), p.backupLog());
     p.done();
   }
 
@@ -1023,7 +1023,8 @@ if (!HAVE_BASH) {
     ok('...but the chain tape was still backed up', fs.existsSync(path.join(j.backup, 'chains', 'chains-2026-09-23.jsonl')) && j.backupLog().length === 1, j.walk(j.backup));
     ok("the pull's PROBLEM stays the last line of pull.log, not hidden by the backup", / PROBLEM hexagon-desk /.test(j.pullLog().slice(-1)[0]), j.pullLog());
     const r2 = j.go([], { now: '2026-09-24T14:30:40Z' });
-    ok('the next hour pulls again, and does not back up twice', r2.code === 0 && j.pulls().length === 2 && j.backupLog().length === 1, [r2, j.backupLog()]);
+    ok('the next hour pulls again and backs up again: what it copied came after the first backup (09-26)', r2.code === 0 && j.pulls().length === 2 && j.backupLog().length === 2 && / ok backup copied /.test(j.backupLog()[1]), [r2, j.backupLog()]);
+    ok('...and the hour after that is quiet: pulled and backed up today', j.go([], { now: '2026-09-24T15:30:40Z' }).out === '' && j.pulls().length === 2 && j.backupLog().length === 2, [j.pulls(), j.backupLog()]);
     j.done();
 
     const n = pullJob('noicloud', { icloud: false });
@@ -1063,6 +1064,7 @@ group('the schedule: every hour at :30, and the installer tests the backup from 
   const cal = plist.slice(plist.indexOf('<key>StartCalendarInterval</key>'));
   const dict = cal.slice(0, cal.indexOf('</dict>') + 7);
   ok('one calendar entry, Minute 30 and no Hour', /<key>StartCalendarInterval<\/key>\s*<dict>\s*<key>Minute<\/key>\s*<integer>30<\/integer>\s*<\/dict>/.test(dict) && !/<key>Hour<\/key>/.test(plist), dict);
+  ok('the job may download iCloud placeholders, or rsync dies on the first one (2026-09-27)', /<key>MaterializeDatalessFiles<\/key>\s*<true\/>/.test(plist));
   const inst = fs.readFileSync(path.join(__dirname, '..', 'ops', 'install-pull.sh'), 'utf8');
   ok('install-pull.sh runs the backup from env -i before installing', /env -i HOME="\$HOME"[^\n]*\\\n\s*\/bin\/bash "\$HEXDIR\/ops\/run-pull\.sh" --backup-only/.test(inst) && inst.indexOf('--backup-only') < inst.indexOf('launchctl load'), null);
 }

@@ -1511,7 +1511,9 @@ trimmed (09-10 to 09-21) existed only on this Mac. After the pull, whether or no
 `iCloud Drive/Hexagon-backup`: no `--delete`, so a file removed here is kept there; no `.part`
 files; never `.env` or a `.pem`; and only into an iCloud Drive that exists. A failed copy writes its
 own `PROBLEM backup` line to `pull.log` and `backup.log` and is tried again the next hour; a good one
-writes an `ok` line to `backup.log`. `.env` and `kalshi-private-key.pem` are **not** in it: a secret
+writes an `ok` line to `backup.log`. A pull that works backs up again even after the day's backup, and
+the job may download iCloud's placeholders (`MaterializeDatalessFiles`): from 2026-09-27 05:07 ET every
+backup died on an evicted `archive/backup.log` until it could (ops/DEPLOY.md). `.env` and `kalshi-private-key.pem` are **not** in it: a secret
 does not go to anyone's cloud in the clear. `ops/uninstall-pull.sh` stops the backup along with the
 pull and leaves the iCloud copy in place.
 
