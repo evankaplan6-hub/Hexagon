@@ -57,9 +57,11 @@ npm run reset                                 # wipe the prediction-market paper
   Do not bind it to `0.0.0.0` casually.
 - The desk trading rarely — or not at all — is correct behavior, not a bug. Real cross-venue
   gaps on liquid markets are usually 0–1c.
-- Since 2026-09-25 the **prediction-market** desk opens **no new trades** (fly.toml: `CONVERGE=0`, `ARBS=0`, `MAKER_QUOTE=0`,
-  `SNIPE=0`), Evan's call after every book lost on paper; the same day the desk's scope moved to stocks, crypto and options. Open arbs and maker inventory run to
-  settlement. Do not turn a book back on unasked; the one pending check is the snipe on Sunday
+- From 2026-09-25 the **prediction-market** desk opened **no new trades** (fly.toml: `CONVERGE=0`, `ARBS=0`, `MAKER_QUOTE=0`,
+  `SNIPE=0`), Evan's call after every book lost on paper; the same day the desk's scope moved to stocks, crypto and options.
+  On 2026-09-27 Evan restarted the **arb book** (`ARBS=1`, `MAX_ARB_GROUPS=40`): a change of main focus is not a reason
+  to stop simulating a book, and paper books keep running unless he says otherwise. Convergence, the maker's quoting and
+  the snipe are still off; open arbs and maker inventory run to settlement. Do not switch a book on or off unasked; the one pending check is the snipe on Sunday
   09-27's tape (`node tools/settle-lag.js --day 2026-09-27`, README → the settlement snipe). `SNIPE_WATCH`
   (on, buys nothing) keeps finished games on the tape until Polymarket's close, which comes at
   resolution, 17-46 minutes after the game; SNIPE=0 had stopped that on 09-25.
