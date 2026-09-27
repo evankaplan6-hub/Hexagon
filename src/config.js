@@ -382,6 +382,18 @@ module.exports = {
   snipeMaxKsAgeSec: num('SNIPE_MAX_KS_AGE_SEC', 30),  // the Kalshi quote must be this fresh (they are repriced every cycle)
   snipeHoldSec: num('SNIPE_HOLD_SEC', 300),           // how long HOLT keeps a game pair after Polymarket's listing drops it
   snipeMaxQty: Math.max(1, Math.round(num('SNIPE_MAX_QTY', 100))),
+  // The snipe's watch, which buys nothing (2026-09-27). SNIPE=0 also stopped HOLT keeping finished game
+  // pairs, so the 09-25 and 09-26 tapes have no row past Polymarket's close: the one thing the snipe was
+  // switched off waiting to measure. With the watch on, a finished game pair is kept until SNIPE_HOLD_SEC
+  // after Polymarket's market record says closed (asked every SNIPE_WATCH_ASK_SEC), for at most
+  // SNIPE_WATCH_SEC after the listing drops it, and let go once Kalshi's side stops repricing (Kalshi
+  // has closed it too). The tape stamps pmClosedAt on its rows; tools/settle-lag.js reads them.
+  // An hour, because Polymarket's record says closed only when the market is RESOLVED: on the 09-26
+  // tape, 14 finished games read 99c, left the listing within seconds, and closed 17 to 46 minutes
+  // later (closedTime = umaEndDate, a median of about 32). The snipe's own 300s never reached a close.
+  snipeWatch: env('SNIPE_WATCH', '1') !== '0',
+  snipeWatchSec: num('SNIPE_WATCH_SEC', 3600),
+  snipeWatchAskSec: num('SNIPE_WATCH_ASK_SEC', 30),
   exitGap: num('EXIT_GAP', 0.01),
   stopLoss: num('STOP_LOSS', 0.06),
   // Paper positions also use a percentage stop so a cheap contract cannot lose nearly all of

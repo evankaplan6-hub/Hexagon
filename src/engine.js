@@ -109,6 +109,7 @@ class Engine {
     this.rejected = [];
     this.signals = [];
     this.history = new Map(); // pairId -> [{t, pmMid, ksMid}]
+    this.pmCloses = new Map(); // pairId -> { askedAt, haltedAt, closedAt }: the snipe's watch (agents.watchCloses)
     this.bias = new Map();
     this.agentStatus = Object.fromEntries(AGENTS.map((a) => [a.key, { lastActive: 0, runs: 0, note: '' }]));
     this.timers = {};
@@ -1040,6 +1041,9 @@ class Engine {
       // Full order books whenever a gap looks too good. Not awaited (2026-09-24): it never throws,
       // it trades nothing, and waiting on its two book fetches held KETT back on ~2,600 cycles a day.
       this.probe(this).catch(() => {});
+      // Has Polymarket closed the finished games? Not awaited either: it trades nothing, and its
+      // answers reach the tape and HOLT's kept pairs on the next cycle (agents.watchCloses).
+      agents.watchCloses(this).catch(() => {});
       await agents.KETT(this);
       // the maker runs on its own cadence: requoting every cycle costs an API call per market and
       // buys nothing when the book has not moved

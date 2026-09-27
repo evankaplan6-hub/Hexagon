@@ -60,7 +60,9 @@ npm run reset                                 # wipe the prediction-market paper
 - Since 2026-09-25 the **prediction-market** desk opens **no new trades** (fly.toml: `CONVERGE=0`, `ARBS=0`, `MAKER_QUOTE=0`,
   `SNIPE=0`), Evan's call after every book lost on paper; the same day the desk's scope moved to stocks, crypto and options. Open arbs and maker inventory run to
   settlement. Do not turn a book back on unasked; the one pending check is the snipe on Sunday
-  09-27's tape (`node tools/settle-lag.js --day 2026-09-27`, README → the settlement snipe).
+  09-27's tape (`node tools/settle-lag.js --day 2026-09-27`, README → the settlement snipe). `SNIPE_WATCH`
+  (on, buys nothing) keeps finished games on the tape until Polymarket's close, which comes at
+  resolution, 17-46 minutes after the game; SNIPE=0 had stopped that on 09-25.
 - **No TradingView data in Hexagon.** Evan's TradingView account (the official MCP connector, tools
   `mcp-tv-*`/`mcp-watchlist-*`, added 2026-09-25, and his chart in Chrome) is for him to read in chat,
   under the `tradingview-web-master` skill (repo `~/Downloads/stack`). TradingView's Terms §3 allow
