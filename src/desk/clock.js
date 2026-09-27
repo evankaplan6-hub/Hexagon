@@ -5,10 +5,11 @@
 // Everything here is pure (an instant or a date in, an answer out), so tools/desk-test.js can pin
 // it without a clock or a timezone-sensitive machine.
 //
-// The holiday lists are NYSE's own, copied from the investment stack's trend-day checker
-// (strategies/scripts/trend_day_check.py), which is where the options book's rules come from. They
-// end with 2027. A date past the last listed year still answers, as a plain weekday, and
-// calendarCovers() says so, so TESS can raise it before a holiday is traded through.
+// The holiday lists are NYSE's own. They agree on every weekday of 2026-27 with the investment
+// stack's calendar (strategies/scripts/bars.py, which works them out from NYSE's rules; the trend-day
+// checker the options book's rules come from reads them there). They end with 2027. A date past the
+// last listed year still answers, as a plain weekday, and calendarCovers() says so, so TESS can raise
+// it before a holiday is traded through.
 
 const HOLIDAYS = new Set([
   '2026-01-01', '2026-01-19', '2026-02-16', '2026-04-03', '2026-05-25', '2026-06-19', '2026-07-03', '2026-09-07', '2026-11-26', '2026-12-25',
