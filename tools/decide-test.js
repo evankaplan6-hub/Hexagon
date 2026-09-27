@@ -597,7 +597,7 @@ group('property: the arb is the better signal wherever both are available');
 
 group('the settlement snipe: Polymarket has settled, Kalshi still offers the winner');
 {
-  const cfg = { ...require('../src/config'), snipe: true, snipeMinEdge: 0.02, snipeMinKsPrice: 0.75, snipePmBid: 0.99, snipeMaxKsAgeSec: 30, snipeHoldSec: 300 };
+  const cfg = { ...require('../src/config'), snipe: true, snipeWatch: false, snipeMinEdge: 0.02, snipeMinKsPrice: 0.75, snipePmBid: 0.99, snipeMaxKsAgeSec: 30, snipeHoldSec: 300 };
   const now = 1_800_000_000_000;
   const pair = (q, over = {}) => ({ id: 'pmX:0|KXNFLGAME-T-MIN', label: 'NFL test', kind: 'game', inPlay: true, pm: { id: 'pmX', tokenIndex: 0 }, ks: { ticker: 'KXNFLGAME-T-MIN' }, q: { pmVol: 1, ksVol: 1, pmFeeRate: 0.05, t: now, pmAt: now, ksAt: now, ksBidSize: 200, ksAskSize: 300, ...q }, ...over });
   const s1 = d.snipeSignal(pair({ pmBid: 0.99, pmAsk: 1, ksBid: 0.82, ksAsk: 0.86 }), cfg, now);
@@ -629,6 +629,27 @@ group('the settlement snipe: Polymarket has settled, Kalshi still offers the win
   ok('after SNIPE_HOLD_SEC it is let go', d.keepClosedGamePairs(new Map([[gone.id, { ...gone, pmGoneAt: now - 301000 }]]), [], cfg, now).length === 0);
   ok('and the stamp is carried, not reset', d.keepClosedGamePairs(new Map([[gone.id, { ...gone, pmGoneAt: now - 100000 }]]), [], cfg, now)[0].pmGoneAt === now - 100000);
   ok('switched off, nothing is kept', d.keepClosedGamePairs(prev, [], { ...cfg, snipe: false }, now).length === 0);
+}
+
+group("the snipe's watch: SNIPE=0 still keeps finished game pairs until after Polymarket's close");
+{
+  // 2026-09-25/26: SNIPE=0 also stopped HOLT keeping these, and the two tapes had no row past the close
+  const cfg = { ...require('../src/config'), snipe: false, snipeWatch: true, snipePmBid: 0.99, snipeHoldSec: 300, snipeWatchSec: 1800 };
+  const now = 1_800_000_000_000;
+  const gone = { id: 'pmX:0|KXNFLGAME-T-MIN', label: 'NFL test', kind: 'game', inPlay: true, pm: { id: 'pmX', tokenIndex: 0 }, ks: { ticker: 'KXNFLGAME-T-MIN' }, q: { pmBid: 0.99, pmAsk: 1, ksBid: 0.97, ksAsk: 0.98, t: now, pmAt: now, ksAt: now } };
+  const at = (goneAgo, ksAgo = 0) => new Map([[gone.id, { ...gone, pmGoneAt: now - goneAgo, q: { ...gone.q, ksAt: now - ksAgo } }]]);
+  const closes = (ago) => new Map([[gone.id, { closedAt: now - ago }]]);
+  ok('SNIPE=0 with the watch on: the vanished game pair is kept and flagged', (d.keepClosedGamePairs(new Map([[gone.id, gone]]), [], cfg, now)[0] || {}).pmGone === true);
+  ok('no close seen yet: still kept 20 minutes after the listing drop', d.keepClosedGamePairs(at(20 * 60000), [], cfg, now).length === 1);
+  ok('...and let go after SNIPE_WATCH_SEC', d.keepClosedGamePairs(at(1801000), [], cfg, now).length === 0);
+  ok('Polymarket closed it 4 minutes ago: kept (SNIPE_HOLD_SEC after the close)', d.keepClosedGamePairs(at(20 * 60000), [], cfg, now, closes(240000)).length === 1);
+  ok('...6 minutes ago: let go, even inside SNIPE_WATCH_SEC', d.keepClosedGamePairs(at(10 * 60000), [], cfg, now, closes(360000)).length === 0);
+  ok("Kalshi's side has not repriced for 6 minutes (Kalshi closed it too): let go", d.keepClosedGamePairs(at(10 * 60000, 360000), [], cfg, now).length === 0);
+  ok('both off: nothing kept', d.keepClosedGamePairs(new Map([[gone.id, gone]]), [], { ...cfg, snipeWatch: false }, now).length === 0);
+  ok('snipe on, watch on: the longer of the two windows', d.keepClosedGamePairs(at(20 * 60000), [], { ...cfg, snipe: true }, now).length === 1);
+  ok('a 99/100 book reads YES settled', d.pmReadsSettled({ pmBid: 0.99, pmAsk: 1 }, cfg) === 'yes');
+  ok('a 0/0.01 book reads NO settled', d.pmReadsSettled({ pmBid: 0, pmAsk: 0.01 }, cfg) === 'no');
+  ok('an empty 0/1 book and a live 81/83 read nothing', d.pmReadsSettled({ pmBid: 0, pmAsk: 1 }, cfg) === null && d.pmReadsSettled({ pmBid: 0.81, pmAsk: 0.83 }, cfg) === null);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -11,7 +11,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { Engine } = require('../src/engine');
-const { KETT, RIGO } = require('../src/agents');
+const { KETT, RIGO, watchCloses } = require('../src/agents');
 const decide = require('../src/decide');
 const base = require('../src/config');
 
@@ -972,6 +972,56 @@ const position = (over = {}) => ({
       const done = await run({ closed: true, resolved: false, prices: [1, 0] });
       const pos = done.E.state.positions[0];
       ok('closed on Polymarket: the snipe buys, 100 at 96c', pos && pos.strategy === 'snipe' && pos.qty === 100 && pos.entry === 0.96, pos);
+    } finally { pmv.fetchMarket = real; }
+  }
+
+  group("the snipe's watch asks whether a finished game has closed, and buys nothing (SNIPE=0)");
+  {
+    const pmv = require('../src/venues/polymarket');
+    const real = pmv.fetchMarket;
+    const now = Date.now();
+    const E = engine({ snipe: false, snipeWatch: true, snipeWatchAskSec: 30 });
+    E.halt = null;
+    const logs = [];
+    E.log = (agent, kind, pnl, text) => logs.push({ agent, kind, text });
+    const game = (id, q) => ({ id: `${id}:0|KXNFLGAME-T-MIN`, label: 'NFL test · Vikings', kind: 'game', series: 'KXNFLGAME', inPlay: true, startsAt: now - 3 * 3600000,
+      pm: { id, tokenIndex: 0 }, ks: { ticker: 'KXNFLGAME-T-MIN' },
+      q: { pmVol: 1e6, ksVol: 1e6, pmFeeRate: 0.05, t: now, pmAt: now, ksAt: now, ksBidSize: 50, ksAskSize: 120, ...q } });
+    const done = game('pm7', { pmBid: 0.99, pmAsk: 1, ksBid: 0.9, ksAsk: 0.93 });
+    const live = game('pm8', { pmBid: 0.6, pmAsk: 0.62, ksBid: 0.6, ksAsk: 0.62 });
+    E.pairs = [done, live];
+    const asked = [];
+    let market = { closed: false, resolved: false, accepting: false };
+    pmv.fetchMarket = async (id) => { asked.push(id); return { id, tokenIds: ['t0', 't1'], prices: [0.9995, 0.0005], ...market }; };
+    try {
+      await watchCloses(E);
+      ok('asks about the game reading 99c, not the one still being played', asked.join() === 'pm7', asked);
+      const w = E.pmCloses.get(done.id);
+      ok('not closed yet: no close time, and "not accepting orders" is noted', w && !w.closedAt && Number.isFinite(w.haltedAt), w);
+      await watchCloses(E);
+      ok('not asked again inside SNIPE_WATCH_ASK_SEC', asked.length === 1, asked);
+      w.askedAt -= 31000;
+      market = { closed: true, resolved: false, accepting: false };
+      await watchCloses(E);
+      ok('30 seconds on it asks again, and the close is noted', asked.length === 2 && Number.isFinite(E.pmCloses.get(done.id).closedAt), E.pmCloses.get(done.id));
+      ok('one research line: YES won, Kalshi offers it at 93c with 120 at the touch, watched not bought',
+        logs.filter((l) => l.agent === 'BRAM' && /closed the market, YES won · Kalshi offers the winner at 93c \(120 at the touch\) · [\d.]+c net · watched, not bought \(SNIPE=0\)/.test(l.text)).length === 1, logs);
+      E.pmCloses.get(done.id).askedAt -= 31000;
+      await watchCloses(E);
+      ok('once closed it is never asked again', asked.length === 2, asked);
+      ok('nothing was bought', E.state.positions.length === 0 && E.state.cash === 10000, E.state.positions);
+      const kept = decide.keepClosedGamePairs(new Map([[done.id, done]]), [], E.cfg, Date.now(), E.pmCloses);
+      ok("HOLT's rule keeps the pair past the listing drop, flagged", kept.length === 1 && kept[0].pmGone === true, kept);
+      pmv.fetchMarket = async () => { throw new Error('gamma down'); };
+      const E2 = engine({ snipe: false, snipeWatch: true });
+      E2.pairs = [game('pm9', { pmBid: 0.99, pmAsk: 1, ksBid: 0.9, ksAsk: 0.93 })];
+      await watchCloses(E2);
+      const w2 = E2.pmCloses.get(E2.pairs[0].id);
+      ok('a lookup that fails notes nothing and asks again later', w2 && !w2.closedAt && !w2.busy && !w2.haltedAt, w2);
+      const off = engine({ snipe: false, snipeWatch: false });
+      off.pairs = [game('pm10', { pmBid: 0.99, pmAsk: 1, ksBid: 0.9, ksAsk: 0.93 })];
+      await watchCloses(off);
+      ok('SNIPE_WATCH=0: asks nothing', off.pmCloses.size === 0);
     } finally { pmv.fetchMarket = real; }
   }
 

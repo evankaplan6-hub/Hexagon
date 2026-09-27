@@ -61,8 +61,9 @@ function HOLT(E) {
   // always undefined. It used to be games-only, so a Fed pair stayed tradeable up to the minute
   // Kalshi closed it ahead of the statement.
   const now = Date.now();
-  // Game pairs Polymarket closed this cycle stay a while for the settlement snipe (decide.keepClosedGamePairs)
-  for (const p of decide.keepClosedGamePairs(prev, pairs, E.cfg, now)) pairs.push(p);
+  // Game pairs Polymarket closed this cycle stay a while: for the settlement snipe, and for its watch,
+  // which keeps them until after Polymarket's market record says closed (decide.keepClosedGamePairs)
+  for (const p of decide.keepClosedGamePairs(prev, pairs, E.cfg, now, E.pmCloses)) pairs.push(p);
   for (const p of pairs) p.inPlay = decide.liveWindow(p, now, E.cfg);
   E.pairs = pairs;
   E.rejected = rejected;
@@ -375,6 +376,45 @@ function BRAM(E) {
   }
 }
 
+// ------------------------------------------------------- the snipe's watch
+// Has Polymarket really closed this finished game? (2026-09-27) The snipe asks only on the rare cycle
+// it wants to buy, and with SNIPE=0 nothing asked at all, so the tape could not say what Kalshi offered
+// after the close: the one question the snipe was switched off waiting on. This asks Polymarket's
+// market record for each in-play game pair that reads settled (decide.pmReadsSettled) or that the
+// listing has dropped (pmGone), at most every SNIPE_WATCH_ASK_SEC, until the record says closed or
+// resolved. It notes when the record first said "not accepting orders" and when it first said closed:
+// HOLT keeps the pair SNIPE_HOLD_SEC past the close, and the tape stamps both times on its rows. It
+// buys nothing, and the engine does not wait on it: an answer lands on the next cycle's rows.
+async function watchCloses(E) {
+  if (!E.cfg.snipeWatch) return;
+  const now = Date.now();
+  const closes = E.pmCloses || (E.pmCloses = new Map());
+  for (const [id, w] of closes) if (now - (w.closedAt || w.askedAt || 0) > 6 * 3600000) closes.delete(id);
+  const ask = E.pairs.filter((p) => {
+    if (p.kind !== 'game' || !p.inPlay || !p.q || !(p.pmGone || decide.pmReadsSettled(p.q, E.cfg))) return false;
+    const w = closes.get(p.id);
+    return !w || (!w.closedAt && !w.busy && now - w.askedAt >= E.cfg.snipeWatchAskSec * 1000);
+  });
+  await Promise.all(ask.map(async (p) => {
+    const w = { ...(closes.get(p.id) || {}), askedAt: now, busy: true };
+    closes.set(p.id, w);
+    const m = await pm.fetchMarket(p.pm.id).catch(() => null);
+    w.busy = false;
+    if (!m) return;
+    if (m.accepting === false && !w.haltedAt) w.haltedAt = Date.now();
+    if (!(m.closed || m.resolved)) return;
+    w.closedAt = Date.now();
+    const q = p.q;
+    const yesPx = Array.isArray(m.prices) ? m.prices[p.pm.tokenIndex || 0] : null;
+    const won = Number.isFinite(yesPx) ? (yesPx >= 0.5 ? 'yes' : 'no') : decide.pmReadsSettled(q, E.cfg);
+    const off = E.cfg.snipe ? '' : ' · watched, not bought (SNIPE=0)';
+    if (!won) { E.log('BRAM', 'RESEARCH', null, `${p.label}: Polymarket has closed the market · Kalshi ${q.ksBid}/${q.ksAsk}${off}`); return; }
+    const px = won === 'yes' ? q.ksAsk : 1 - q.ksBid;
+    const size = won === 'yes' ? q.ksAskSize : q.ksBidSize;
+    E.log('BRAM', 'RESEARCH', null, `${p.label}: Polymarket has closed the market, ${won.toUpperCase()} won · Kalshi offers the winner at ${(px * 100).toFixed(0)}c${Number.isFinite(size) ? ` (${size} at the touch)` : ''} · ${c(decide.snipeEdge(px, p.ks.ticker, E.cfg))} net${off}`);
+  }));
+}
+
 // ------------------------------------------------------- mind proposals into the signal book
 // ORDER HAZARD, and the reason this is its own exported step rather than a line inside ILSA:
 // BRAM assigns `E.signals` wholesale every cycle (`E.signals = sig`). ILSA runs BEFORE BRAM, so a
@@ -612,4 +652,4 @@ async function KETT(E) {
   E.touch('KETT', E.signals.length ? `${E.signals.length} signal${E.signals.length === 1 ? '' : 's'}` : 'no signals');
 }
 
-module.exports = { HOLT, ILSA, TESS, RIGO, BRAM, KETT, mergeBrainSignals };
+module.exports = { HOLT, ILSA, TESS, RIGO, BRAM, KETT, mergeBrainSignals, watchCloses };

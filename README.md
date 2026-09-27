@@ -121,7 +121,7 @@ before funding anything.
 - Paper convergence trades stop at the tighter of a 6c loss per contract (`STOP_LOSS`) or a 20% loss from entry (`PAPER_STOP_LOSS_PCT`). The percentage rail keeps a cheap contract from falling almost to zero before the flat 6c stop can fire. Locked arbs are exempt because their two legs are held as one hedged $1 payout. The percentage rail is paper-only; it does not change live-mode exits.
 - Max 2% of equity per position, 12 open convergence bets, 12 locked arbs (counted per arb, not per leg), 3% daily drawdown halt, 90-second stale-data halt. All in `.env`. The two books were one limit over legs until 2026-09-15, when six hedged Fed arbs filled all twelve slots.
 - **The convergence book has a switch** (`CONVERGE=0`), and on the Fly box it is off since 2026-09-21. The journals' verdict for 2026-09-10 to 09-21: 72 convergence bets closed, 3 winners, −$637 (−$293 of it fees); the gates added on the 18th and 19th only made it lose more slowly. Off, the scanner opens no new convergence position and a mind's proposal is dropped as `convergence book off`; open positions are still marked and taken to their exits, locked arbs and the maker are untouched, and every pair is still priced, vetoed and written to the tape, so the book can be re-scored from the tape without trading it.
-- **Every book has a switch, and since 2026-09-25 all four are off on the Fly box** (`CONVERGE=0`, `ARBS=0`, `MAKER_QUOTE=0`, `SNIPE=0`): no new trade of any kind. Evan's call after fifteen days of paper: all-in −$1,753 on $10,000 (convergence −$643 with 3 winners in 73, locked arbs −$222, maker −$888 with its own fills 0.6–1.2c a contract worse 30 minutes later on every day of tape, the snipe never fired), every fix made the losses smaller and none made money, and no study on fresh data found an edge after fees. Nothing was sold. `ARBS=0` stops new arbs (vetoed `arb book off`, still priced); held ones run to settlement or the early unwind. `MAKER_QUOTE=0` withdraws every quote and runs the maker's hold round, settling and re-marking held contracts once a minute until each market ends; unlike `MAKER=0`, which returns before that round and would freeze them, and unlike a drawdown halt, it latches nothing, so setting it back to 1 needs no `/api/resume`. The box keeps pricing every pair, recording the tape, the chains and whale watch, and the floor stays up.
+- **Every book has a switch, and since 2026-09-25 all four are off on the Fly box** (`CONVERGE=0`, `ARBS=0`, `MAKER_QUOTE=0`, `SNIPE=0`): no new trade of any kind. Evan's call after fifteen days of paper: all-in −$1,753 on $10,000 (convergence −$643 with 3 winners in 73, locked arbs −$222, maker −$888 with its own fills 0.6–1.2c a contract worse 30 minutes later on every day of tape, the snipe never fired), every fix made the losses smaller and none made money, and no study on fresh data found an edge after fees. Nothing was sold. `ARBS=0` stops new arbs (vetoed `arb book off`, still priced); held ones run to settlement or the early unwind. `MAKER_QUOTE=0` withdraws every quote and runs the maker's hold round, settling and re-marking held contracts once a minute until each market ends; unlike `MAKER=0`, which returns before that round and would freeze them, and unlike a drawdown halt, it latches nothing, so setting it back to 1 needs no `/api/resume`. The box keeps pricing every pair, recording the tape, the chains and whale watch, and the floor stays up; the snipe's watch (`SNIPE_WATCH`, below) still keeps finished games on the tape past Polymarket's close, buying nothing.
 - The daily drawdown window rolls at midnight **US/Eastern**, matching the dates the matcher pairs games on (a UTC roll would reset the limit at 8pm ET, mid-slate).
 - **A locked arb always outranks a convergence signal, and a pair emits at most one of them.** They
   are not the same asset — one is hedged and pays $1 whatever happens, the other is an unhedged bet
@@ -558,6 +558,23 @@ Polymarket does", not as "no edge". The "different game" case the Kalshi price f
 for turned out to be the Rays-Yankees doubleheader on 09-22 (Polymarket's game 1 paired with Kalshi's game 2, 10c against
 45c), which the matcher now refuses by start time (*Wrong games* above); the Yankees v Diamondbacks
 row the floor was set on was the same game.
+
+**The watch, and why the snipe never fired (2026-09-27).** Switching the snipe off on 09-25 also
+switched off HOLT keeping finished games, so the 09-25 and 09-26 tapes end at the listing drop (no
+`pmGone` row on either, against about 300 a day before): the Sunday check would have had nothing to
+read. And the two never met anyway: Polymarket's market record says `closed` only when the market is
+resolved. On 09-26, 14 finished games read 99c, left the listing within seconds, and closed 17 to 46
+minutes later (`closedTime` = `umaEndDate`, a median of about 32), long after the 300 seconds HOLT
+kept them. So `SNIPE_WATCH` (on by default, buys nothing, runs whatever `SNIPE` says) keeps a finished
+game pair until `SNIPE_HOLD_SEC` after Polymarket's close, for at most `SNIPE_WATCH_SEC` (an hour)
+after the listing drops it, and lets it go once Kalshi's side stops repricing. `agents.watchCloses`
+asks Polymarket's record every `SNIPE_WATCH_ASK_SEC` (30s) from the 99c reading, and the tape stamps
+`pmHaltedAt` (first "not accepting orders") and `pmClosedAt` on the rows, with `ksQt` (Kalshi's own
+quote time) on kept rows. BRAM says each close on the floor. `tools/settle-lag.js` reports, from each
+of the two moments, what Kalshi offered the winner, how long it stayed 2c+ net under par and how much
+was at the touch. The snipe buys only after the close, so the close is its test. As built it still
+cannot reach one: `snipeSignal` gives up `SNIPE_HOLD_SEC` after Polymarket's last quote, half an hour
+before a typical close, so turning `SNIPE` back on would take more than the switch.
 
 ## The MAKER desk (07)
 

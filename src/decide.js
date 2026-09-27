@@ -627,17 +627,37 @@ function snipeSignal(pair, cfg, now) {
 // game the cycle it closes -- the cycle the snipe needs it. The in-play game pairs that just vanished
 // are kept for snipeHoldSec, flagged pmGone with when they went; engine.quote keeps their Kalshi side
 // live. Pure: prev is last cycle's pairs by id, pairs is this cycle's list.
-function keepClosedGamePairs(prev, pairs, cfg, now) {
-  if (!cfg.snipe) return [];
+//
+// The watch (SNIPE_WATCH, 2026-09-27) keeps them whether or not the snipe buys: until snipeHoldSec
+// after Polymarket's market record said closed (`closes`, pair id -> { closedAt }, from
+// agents.watchCloses), or snipeWatchSec after the listing drop while no close has been seen, and
+// never once Kalshi's side has gone snipeHoldSec without repricing (Kalshi closed it too).
+function keepClosedGamePairs(prev, pairs, cfg, now, closes = null) {
+  if (!cfg.snipe && !cfg.snipeWatch) return [];
   const have = new Set(pairs.map((p) => p.id));
+  const hold = cfg.snipeHoldSec * 1000;
   const kept = [];
   for (const [id, p] of prev) {
     if (have.has(id) || !p || p.kind !== 'game' || !p.inPlay || !p.q) continue;
     const goneAt = p.pmGoneAt || now;
-    if (now - goneAt > cfg.snipeHoldSec * 1000) continue;
+    let until = cfg.snipe ? goneAt + hold : 0;
+    if (cfg.snipeWatch) {
+      const closedAt = closes && closes.get(id) ? closes.get(id).closedAt : null;
+      const ksLive = !Number.isFinite(p.q.ksAt) || now - p.q.ksAt <= hold;
+      if (ksLive) until = Math.max(until, closedAt ? closedAt + hold : goneAt + cfg.snipeWatchSec * 1000);
+    }
+    if (now > until) continue;
     kept.push({ ...p, pmGone: true, pmGoneAt: goneAt });
   }
   return kept;
 }
+// Polymarket's book reads settled: 99c or better bid for the winner with nothing offered under par,
+// or the mirror for NO. A reason to ask whether the market has closed, never proof (see snipeSignal).
+function pmReadsSettled(q, cfg) {
+  if (!q) return null;
+  if (q.pmBid >= cfg.snipePmBid - 1e-9 && q.pmAsk >= 0.999) return 'yes';
+  if (q.pmBid <= 0.001 && q.pmAsk <= 1 - cfg.snipePmBid + 1e-9) return 'no';
+  return null;
+}
 
-module.exports = { fairValue, quoteFault, snipeEdge, snipeSignal, keepClosedGamePairs, convEdge, pairSignals, scan, liveWindow, exitIntent, gainLockIntent, arbUnwind, arbUnwindLive, arbReturn, arbEdgeLive, riskState, biasFor, standingGap, gapUnseen, bookFull, persistFilter, sizePlan, rankSignals, pmRate };
+module.exports = { fairValue, quoteFault, snipeEdge, snipeSignal, keepClosedGamePairs, pmReadsSettled, convEdge, pairSignals, scan, liveWindow, exitIntent, gainLockIntent, arbUnwind, arbUnwindLive, arbReturn, arbEdgeLive, riskState, biasFor, standingGap, gapUnseen, bookFull, persistFilter, sizePlan, rankSignals, pmRate };

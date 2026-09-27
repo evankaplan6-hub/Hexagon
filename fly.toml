@@ -102,7 +102,9 @@ primary_region = "iad"          # Ashburn, Virginia — close to the exchange, a
   # MAKER_QUOTE latches nothing, so no /api/resume is needed.
   #   ARBS=0         no new locked arb (19 groups closed, -$222; five mismatched pairs lost $244)
   #   MAKER_QUOTE=0  the maker quotes nothing (-$888 on 98,785 contracts; fills 0.6-1.2c worse at 30 min)
-  #   SNIPE=0        the settlement snipe never fired; Sunday 09-27's tape still answers it
+  #   SNIPE=0        the settlement snipe never fired; Sunday 09-27's tape still answers it, because
+  #                  SNIPE_WATCH (on by default, buys nothing) keeps finished games on the tape until
+  #                  Polymarket closes them (at resolution, 17-46 min after the game)
   #                  (node tools/settle-lag.js --day 2026-09-27), and it comes back only if Kalshi
   #                  stays 2c+ under par for minutes after Polymarket closes, with size at the touch
   ARBS = "0"

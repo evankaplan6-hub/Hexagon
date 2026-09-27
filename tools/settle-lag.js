@@ -25,6 +25,17 @@
 // Polymarket's market was still open. The desk now buys only once Polymarket's market record says
 // closed or resolved, so the edge has to be measured again after the close -- Sunday 09-27 may show
 // little or none.
+//
+// After the close (tapes from 2026-09-27 on). SNIPE=0 had also stopped the desk keeping finished game
+// pairs, so the 09-25 and 09-26 tapes end at the listing drop. The snipe's watch (SNIPE_WATCH, on
+// whether or not the snipe buys) asks Polymarket's market record whether each finished game has closed
+// and stamps its rows: pmHaltedAt (first said "not accepting orders"), pmClosedAt (first said closed or
+// resolved), and on kept rows ksQt, Kalshi's own quote time. From each of those two moments this says
+// what Kalshi offered the winner, how many seconds it stayed 2c+ net under par, and how many contracts
+// were at the touch: the two numbers the snipe was switched off waiting for. The two are far apart:
+// on 09-26 Polymarket's record said closed only at resolution, 17-46 minutes after the 99c reading
+// (closedTime = umaEndDate), while its listing dropped the game within seconds. The snipe buys only
+// after the close, so the close is its test; the halt is when the game is over.
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
@@ -34,6 +45,27 @@ const settledYes = (r) => r.pmBid >= 0.99 && r.pmAsk >= 0.999;
 const settledNo = (r) => r.pmBid <= 0.001 && r.pmAsk <= 0.01;
 const hhmmss = (s) => String(s).slice(11, 19);
 const age = (r) => (r.qt ? `${Math.round((Date.parse(r.t) - Date.parse(r.qt)) / 1000)}s` : '?');
+const secs = (ms) => { const s = Math.round(ms / 1000); return s >= 60 ? `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s` : `${s}s`; };
+// Kalshi's side of a row is fresh: on a kept row qt is the frozen Polymarket side's time, ksQt is Kalshi's
+const ksFresh = (r, maxSec = 30) => { const q = r.ksQt || r.qt; return !q || Date.parse(r.t) - Date.parse(q) <= maxSec * 1000; };
+// What Kalshi offered the winner from row `from` on, on its fresh rows only, timed from t0 (ms): the
+// first row's price, net and size, how long it stayed 2c+ net row after row, the most at the touch
+// while it did, and `open` when the tape let the pair go while it still did (so "at least").
+function windowFrom(rows, from, t0, at, size) {
+  const post = rows.slice(from).filter((r) => ksFresh(r));
+  const x = post.length ? at(post[0]) : null;
+  const worth = x != null && x.net >= 0.02;
+  let underSec = 0, maxSize = null, open = worth;
+  if (worth) {
+    for (const r of post) {
+      if (at(r).net < 0.02) { open = false; break; }
+      underSec = (Date.parse(r.t) - t0) / 1000;
+      if (Number.isFinite(size(r))) maxSize = Math.max(maxSize || 0, size(r));
+    }
+  }
+  return { px: x && x.px, net: x && x.net, agree: x && x.agree, size: post.length ? size(post[0]) : null, worth, underSec, maxSize, open };
+}
+const offered = (k) => `Kalshi offered the winner at ${k.px == null ? '?' : `${(k.px * 100).toFixed(0)}c`}${Number.isFinite(k.size) ? ` (${k.size} at the touch)` : ''} → ${k.net == null ? '?' : `${(k.net * 100).toFixed(1)}c net`} · 2c+ net for ${k.open ? 'at least ' : ''}${secs(k.underSec * 1000)}${k.maxSize != null ? `, at most ${k.maxSize} at the touch` : ''}`;
 
 async function study(file, { all = false, out = console.log, ksFeeRate = 0.07 } = {}) {
   const g = new Map();
@@ -56,6 +88,31 @@ async function study(file, { all = false, out = console.log, ksFeeRate = 0.07 } 
     const best = after.reduce((b, r) => Math.max(b, at(r).net), -1);
     const rec = { ticker, label, when: hhmmss(rows[i].t), winner: yesWon ? 'YES' : 'NO', px: first.px, net: first.net, agree: first.agree, best, rowsAfter: after.length - 1, sizes: after.some((r) => r.ksAskSize != null), pmGone: after.some((r) => r.pmGone) };
     found.push(rec);
+    // From the two moments the watch stamps (pmHaltedAt, pmClosedAt): what Kalshi offered after each.
+    const size = (r) => (yesWon ? r.ksAskSize : r.ksBidSize);
+    const since = (iso) => (Date.parse(iso) - Date.parse(rows[i].t)) / 1000;
+    const hi = rows.findIndex((r) => r.pmHaltedAt);
+    if (hi >= 0) rec.halt = { at: hhmmss(rows[hi].pmHaltedAt), afterSec: since(rows[hi].pmHaltedAt), ...windowFrom(rows, hi, Date.parse(rows[hi].pmHaltedAt), at, size) };
+    const ci = rows.findIndex((r) => r.pmClosedAt);
+    if (ci >= 0) {
+      const closedAt = Date.parse(rows[ci].pmClosedAt);
+      rec.close = { at: hhmmss(rows[ci].pmClosedAt), afterSec: since(rows[ci].pmClosedAt), watchedSec: (Date.parse(rows[rows.length - 1].t) - closedAt) / 1000, ...windowFrom(rows, ci, closedAt, at, size) };
+    }
+    if ((rec.halt || rec.close) && (all || (rec.halt && rec.halt.worth) || (rec.close && rec.close.worth))) {
+      const h = rec.halt, k = rec.close;
+      out(`\n${ticker.padEnd(34)} ${label.padEnd(38)} Polymarket read ${rec.winner} at ${rec.when}`
+        + `${h ? ` · stopped taking orders by ${h.at} (+${secs(h.afterSec * 1000)})` : ''}`
+        + `${k ? ` · closed at ${k.at} (+${secs(k.afterSec * 1000)}) · the tape watched ${secs(k.watchedSec * 1000)} more` : ` · not closed while the tape watched (last row ${hhmmss(rows[rows.length - 1].t)})`}`);
+      if (h) out(`    once Polymarket stopped taking orders, ${offered(h)}`);
+      if (k) out(`    once Polymarket closed it, ${offered(k)}`);
+      const from = h && h.worth ? hi : k && k.worth ? ci : -1;
+      if (from >= 0) {
+        for (const r of rows.slice(from, from + 12)) {
+          const y = at(r);
+          out(`    ${hhmmss(r.t)} +${secs(Date.parse(r.t) - Date.parse(rows[i].t)).padStart(6)}  KS ${String(r.ksBid).padEnd(4)}/${String(r.ksAsk).padEnd(4)}${r.ksAskSize != null ? `  (${r.ksBidSize}x${r.ksAskSize})` : ''}${ksFresh(r) ? '' : '  (Kalshi quote stale)'}  buy the winner at ${(y.px * 100).toFixed(0)}c → ${(y.net * 100).toFixed(1)}c net${r.pmClosedAt ? '  [closed]' : r.pmHaltedAt ? '  [no orders]' : ''}`);
+        }
+      }
+    }
     if (!all && best < 0.02) continue;
     out(`\n${ticker.padEnd(34)} ${label.padEnd(38)} Polymarket settled ${rec.winner} at ${rec.when} · rows after: ${rec.rowsAfter}${rec.pmGone ? ' (kept past the close)' : ''}`);
     for (const r of rows.slice(Math.max(0, i - 1), i + 8)) {
@@ -66,7 +123,20 @@ async function study(file, { all = false, out = console.log, ksFeeRate = 0.07 } 
   const real = found.filter((f) => f.agree >= 0.75);
   const worth = real.filter((f) => f.best >= 0.02);
   out(`\n${path.basename(file)}: ${g.size} game pairs · Polymarket settled ${found.length} on the tape · ${real.length} with Kalshi agreeing on the winner · ${worth.length} worth 2c+ net at some row after: ${worth.map((f) => `${f.label.split(' · ')[0]} ${(f.best * 100).toFixed(1)}c`).join(', ') || 'none'}`);
-  return { pairs: g.size, settled: found, worth };
+  const halted = real.filter((f) => f.halt), closed = real.filter((f) => f.close);
+  if (!halted.length && !closed.length) {
+    out(`after the close: no row on this tape says when Polymarket stopped or closed a game (the watch stamps them from 2026-09-27)`);
+    return { pairs: g.size, settled: found, worth, halted, closed };
+  }
+  const median = (xs) => { const v = [...xs].sort((a, b) => a - b); return v[Math.floor(v.length / 2)]; };
+  const line = (list, key) => {
+    const under = list.filter((f) => f[key].worth).sort((a, b) => b[key].underSec - a[key].underSec);
+    return `Kalshi 2c+ net under par then in ${under.length}${under.length ? `: ${under.map((f) => `${f.label.split(' · ')[0]} ${(f[key].net * 100).toFixed(1)}c for ${f[key].open ? '≥' : ''}${secs(f[key].underSec * 1000)}${f[key].maxSize != null ? ` (${f[key].maxSize} at the touch)` : ''}`).join(', ')}` : ''} · for a minute or more in ${under.filter((f) => f[key].underSec >= 60).length}`;
+  };
+  if (halted.length) out(`once Polymarket stopped taking orders (seen in ${halted.length} of those ${real.length}, a median ${secs(median(halted.map((f) => f.halt.afterSec)) * 1000)} after the 99c reading): ${line(halted, 'halt')}`);
+  if (closed.length) out(`once Polymarket closed the market (${closed.length} of those ${real.length} closed on the tape, a median ${secs(median(closed.map((f) => f.close.afterSec)) * 1000)} after the 99c reading): ${line(closed, 'close')}`);
+  else out(`once Polymarket closed the market: none of those ${real.length} closed while the tape watched`);
+  return { pairs: g.size, settled: found, worth, halted, closed };
 }
 
 module.exports = { study, settledYes, settledNo };
