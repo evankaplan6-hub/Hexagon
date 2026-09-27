@@ -10,10 +10,10 @@ Coinbase), stocks (SPY) and options (SPY same-day), both from Cboe about 15 minu
 them to a live trading floor at `/`. The code is `src/desk/`; README's first section explains it.
 
 It began as a six-agent prediction-market desk that priced the same events on Polymarket and Kalshi and
-traded the disagreements. That desk still runs in the same process, opens no new trades, and carries
-its last positions to settlement (arbs by mid-October, maker contracts as late as December) on its own
-floor at `/pm`. Everything below that names Polymarket, Kalshi, the maker, arbs, pairs or the tick tape
-is that desk; its code retires once its last position settles.
+traded the disagreements. That desk still runs in the same process, in paper, on its own floor at `/pm`:
+it stopped trading 2026-09-25 to 09-27, and since 09-27 its arbs, maker and snipe trade again in
+simulation at Evan's request (not the main focus, but kept running). Everything below that names
+Polymarket, Kalshi, the maker, arbs, pairs or the tick tape is that desk.
 Node 20+, **zero npm dependencies** — that is deliberate, do not add packages. (The one file of
 third-party code is the dashboard's chart library, TradingView Lightweight Charts, vendored as a single
 file in `public/vendor/` on 2026-09-19 at Evan's request; see `public/vendor/README.md`. It is not a
@@ -57,12 +57,12 @@ npm run reset                                 # wipe the prediction-market paper
   Do not bind it to `0.0.0.0` casually.
 - The desk trading rarely — or not at all — is correct behavior, not a bug. Real cross-venue
   gaps on liquid markets are usually 0–1c.
-- Since 2026-09-25 the **prediction-market** desk opens **no new trades** (fly.toml: `CONVERGE=0`, `ARBS=0`, `MAKER_QUOTE=0`,
-  `SNIPE=0`), Evan's call after every book lost on paper; the same day the desk's scope moved to stocks, crypto and options. Open arbs and maker inventory run to
-  settlement. Do not turn a book back on unasked; the one pending check is the snipe on Sunday
-  09-27's tape (`node tools/settle-lag.js --day 2026-09-27`, README → the settlement snipe). `SNIPE_WATCH`
-  (on, buys nothing) keeps finished games on the tape until Polymarket's close, which comes at
-  resolution, 17-46 minutes after the game; SNIPE=0 had stopped that on 09-25.
+- The **prediction-market** desk keeps trading **in paper** even though it is no longer the main focus
+  (Evan, 2026-09-27: "doesn't mean you shouldn't be still running them in simulation"). fly.toml has
+  `ARBS=1`, `MAKER_QUOTE=1`, `SNIPE=1`; `CONVERGE=0` stays off (its own verdict, 2026-09-21). All four
+  were off 2026-09-25 to 09-27 after every book lost on paper. Do not switch a book off, or
+  convergence on, unasked. `SNIPE_WATCH` keeps finished games on the tape until Polymarket's close,
+  which comes at resolution, 17-46 minutes after the game (`node tools/settle-lag.js --day 2026-09-27`).
 - **No TradingView data in Hexagon.** Evan's TradingView account (the official MCP connector, tools
   `mcp-tv-*`/`mcp-watchlist-*`, added 2026-09-25, and his chart in Chrome) is for him to read in chat,
   under the `tradingview-web-master` skill (repo `~/Downloads/stack`). TradingView's Terms §3 allow
@@ -76,8 +76,8 @@ npm run reset                                 # wipe the prediction-market paper
 ```
                   THE STOCKS, CRYPTO AND OPTIONS DESK (the main scope since 2026-09-25; paper only, no broker)
 src/desk/engine.js  the desk: three books' ledgers, the six bots' jobs (HOLT prices, ILSA volatility, TESS risk,
-                  RIGO marks and option exits, BRAM signals, KETT fills; PRED is the prediction-market desk
-                  winding down), data/desk/state.json + journal-YYYY-MM-DD.jsonl, the page's snapshot
+                  RIGO marks and option exits, BRAM signals, KETT fills; PRED is the prediction-market desk,
+                  trading in paper beside it), data/desk/state.json + journal-YYYY-MM-DD.jsonl, the page's snapshot
 src/desk/books.js   the rules, pure: volatility targeting (crypto 40%/30 days, SPY 15%/20 sessions, 10-point band)
                   and the SPY same-day options rules ported from the stack's trend_day_check.py, plus chainSync:
                   an option is bought only off a chain within DESK_CHAIN_SKEW_SEC of the trigger bar's close
@@ -93,7 +93,7 @@ tools/desk-check.js step 8 of the daily check: the desk's loop alive, each book'
                   rebuilding state.json to the penny, each book against holding (--box copies /data/desk first);
                   tests: tools/desk-test.js, tools/crypto-lab-test.js, tools/desk-check-test.js (tools/desk-fixture.js
                   is their shared fake market, not a suite)
-                  THE PREDICTION-MARKET DESK (winding down: no new trades, positions ride to settlement; floor at /pm)
+                  THE PREDICTION-MARKET DESK (paper, not the main focus: arbs, maker and snipe on since 2026-09-27; floor at /pm)
 server.js         HTTP + SSE server for both desks, .env loader, live-mode gate; journals START/STOP/CRASH
 src/sse.js        the dashboard stream's per-tab gzip, flushed per frame (the frames leave out the P&L histories via engine.snapshot; GET /api/history serves them)
 src/config.js     all tunables          src/engine.js    state, cash, positions, cycle loop

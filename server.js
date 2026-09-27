@@ -40,9 +40,12 @@ function pmSummary() {
   const groups = new Set(s.positions.map((p) => p.group || p.id)).size;
   const contracts = mk.reduce((a, x) => a + Math.abs(x.inv || 0), 0);
   const pnl = Math.round(((engine.equity() - s.initial) + (Number.isFinite(m.equity) ? m.equity - cfg.initialBalance : 0)) * 100) / 100;
+  // Trading again in paper since 2026-09-27 (any of ARBS, MAKER_QUOTE, SNIPE on); winding down only with all off
+  const trading = cfg.arbsEnabled !== false || cfg.makerQuoting !== false || !!cfg.snipe;
+  const open = `${groups} arb${groups === 1 ? '' : 's'}, ${contracts.toLocaleString()} held`;
   return {
-    pnl, groups, held: mk.filter((x) => x.inv).length, contracts, nextSettle: next, lastCycleAt: engine.beat.taker, url: '/pm',
-    note: groups || contracts ? `winding down: ${groups} arb${groups === 1 ? '' : 's'}, ${contracts.toLocaleString()} held` : 'all settled',
+    pnl, groups, held: mk.filter((x) => x.inv).length, contracts, nextSettle: next, lastCycleAt: engine.beat.taker, url: '/pm', trading,
+    note: trading ? `trading in paper: ${open}` : groups || contracts ? `winding down: ${open}` : 'all settled',
   };
 }
 // A desk that cannot load its ledger stays down with the reason in the log, and the page falls back

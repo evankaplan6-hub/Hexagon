@@ -120,7 +120,7 @@
     const title = Number.isFinite(S.pnl) ? `${plain(signed(S.pnl))} · ${state} · The Hexagon` : 'The Hexagon';
     if (document.title !== title) document.title = title;
     const L = S.legacy;
-    morph($('pmlink'), `Prediction markets${L ? (L.groups || L.contracts ? ': winding down' : ': settled') : ''} ›`);
+    morph($('pmlink'), `Prediction markets${L ? (L.trading ? ': paper' : L.groups || L.contracts ? ': winding down' : ': settled') : ''} ›`);
     $('floor').classList.toggle('gone', gone || stuck);
     const msg = gone ? 'No signal from the desk: this page is showing the last state it received.'
       : stuck ? `The desk has finished no round since ${ET_HM.format(new Date(S.beat))} ET: every price and figure here stopped then.`
@@ -222,7 +222,7 @@
       rows.push(['Loss limit', `${down ? `down ${(down * 100).toFixed(2)}%` : 'nothing lost'} today; buying stops at ${(C.maxDailyDdPct * 100).toFixed(0)}%` +
         `<span class="meter${level}" role="img" aria-label="${Math.round(used * 100)}% of the daily loss limit used"><i style="width:${(used * 100).toFixed(1)}%"></i></span>`]);
     }
-    // the prediction-market desk, winding down in the same process
+    // the prediction-market desk in the same process: trading in paper again since 2026-09-27
     const P = S.legacy;
     if (P) {
       const still = P.groups || P.contracts ? `${P.groups} arb${P.groups === 1 ? '' : 's'} and ${Number(P.contracts || 0).toLocaleString('en-US')} maker contracts open` : 'everything settled';
