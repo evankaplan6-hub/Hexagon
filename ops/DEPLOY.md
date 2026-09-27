@@ -12,8 +12,12 @@ sleeps, and the one thing this strategy needs is **days of uninterrupted tape**.
 in live mode (`src/broker.js`, `LiveKalshiBroker`) and, in any mode *if they are present*, the
 handshake for the read-only market-data socket (`src/kalshi-ws.js`). Absent, the maker desk polls
 the trade tape every two seconds as it always did, and the poll pages back so nothing is lost. A
-paper deployment carries no secrets, so there is nothing on that box worth stealing. Nothing here
-uploads `.env` or `*.pem`, and both are gitignored.
+paper deployment carries no secrets, so there is nothing on that box worth stealing. `fly deploy`
+uploads the folder it runs in to Fly's builder, and on the Mac that folder holds `.env`, the `.pem`
+and `data/`. So `.dockerignore` is an allowlist of exactly what the Dockerfile copies:
+everything else stays on the Mac, and `tools/dockerignore-test.js` holds the list to the
+Dockerfile. Until 2026-09-27 there was no `.dockerignore`, so a `fly deploy` run by hand from
+`~/Hexagon` may have sent them. Whether it did depends on the builder; nothing stopped it.
 
 **The dashboard has a password now, and the server refuses to start without one** on any address
 that is not loopback. `/api/positions` and the full activity log are unauthenticated otherwise,
@@ -71,6 +75,27 @@ fly tokens create deploy -a hexagon-desk -x 8760h | gh secret set FLY_API_TOKEN 
 
 The token is scoped to this one app and expires after a year; rerun the line to renew it. A
 manual `fly deploy` still works and is still how to ship from a branch.
+
+**A merge can get no run at all.** On 2026-09-26 GitHub never started the push run for #153's merge
+(60e144d). A day later there was still no run for it, while GitHub's status page showed Actions
+working normally. So nothing tested it and nothing deployed it, and nothing said so. After a merge,
+check that the run exists:
+
+```bash
+gh run list --branch main --limit 3
+```
+
+If it is missing, start the same run by hand. It runs the same tests and checks as a push, deploys
+`main` and moves the tag:
+
+```bash
+gh workflow run test.yml --ref main
+```
+
+That day it was shipped by hand instead, before the workflow took `workflow_dispatch`. The steps:
+note `sha=$(git rev-parse main)` in the repo, export `main` clean (`git archive main | tar -x -C DIR`),
+then in DIR run `fly deploy --remote-only -a hexagon-desk --build-arg GIT_SHA=$sha`. A manual deploy
+leaves the tag behind (below).
 
 **The box always ends on the newest `main`.** Deploys run one at a time, but not in merge order:
 two PRs merged seconds apart can finish their tests in either order. On 2026-09-13 #11 deployed

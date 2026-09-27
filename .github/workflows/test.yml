@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # By hand, for a merge GitHub never started a run for (2026-09-26, #153's 60e144d): the same tests,
+  # the same deploy rails. `gh workflow run test.yml --ref main` (ops/DEPLOY.md, Auto-deploy).
+  workflow_dispatch:
 
 jobs:
   test:
@@ -58,7 +61,8 @@ jobs:
   #     real money; going live stays a deliberate, manual act.
   deploy:
     needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # a push to main, or a run started by hand on main; never a pull request or another branch
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write   # only to move the fly-deployed tag after a successful deploy

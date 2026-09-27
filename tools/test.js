@@ -33,6 +33,7 @@ const SUITES = [
   ['whale', 'whale watch: what counts as a bet, said once across a restart, what copying pays'],
   ['http', "the Kalshi pacer: calls spaced apart, the maker's calls first, nothing else waits"],
   ['env', 'the .env reader: comments, quotes, and a # inside a password is part of the password'],
+  ['dockerignore', "what a deploy sends to Fly's builder: exactly what the Dockerfile copies, and never .env, a key or data/"],
   ['ledger', 'the ledger check: the journal rebuilds the state exactly, and every drift is named'],
   ['disk', 'the box disk: pull copies and verifies before any delete, the brake only trims old tapes'],
   ['ask', 'the Ask panel: the tool loop, append-only chats, limits and budget, route locks, no secrets'],

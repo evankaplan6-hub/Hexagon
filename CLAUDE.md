@@ -48,9 +48,11 @@ npm run reset                                 # wipe the prediction-market paper
 - Live mode is Kalshi-only and has never been exercised with a funded account. Treat
   `src/broker.js` live paths as untested.
 - Secrets live in `.env` and `kalshi-private-key.pem`. Both are gitignored. Never commit them,
-  print their values, or send them anywhere. The one sanctioned copy is `ops/backup-secrets.sh`
-  (run by Evan in a terminal): an AES-256 encrypted image in iCloud Drive, under a passphrase only
-  he types. Never supply, store or generate that passphrase.
+  print their values, or send them anywhere. `fly deploy` uploads the folder it runs in to Fly's
+  builder. `.dockerignore` is an allowlist of what the Dockerfile copies, held to it by
+  `tools/dockerignore-test.js`, so the secrets and `data/` stay out; keep it an allowlist. The one
+  sanctioned copy is `ops/backup-secrets.sh` (run by Evan in a terminal): an AES-256 encrypted image
+  in iCloud Drive, under a passphrase only he types. Never supply, store or generate that passphrase.
 - The server binds `127.0.0.1` because `/api/positions` and the activity log are unauthenticated.
   Do not bind it to `0.0.0.0` casually.
 - The desk trading rarely — or not at all — is correct behavior, not a bug. Real cross-venue
