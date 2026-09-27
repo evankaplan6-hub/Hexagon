@@ -29,6 +29,16 @@
     <integer>30</integer>
   </dict>
 
+  <!-- iCloud's "Optimize Mac Storage" turns backup files nobody has opened lately into placeholders
+       whose content stays in iCloud, and a launchd job may not download one unless it says so here.
+       rsync opens the old copy of any file it replaces, so from 2026-09-27 05:07 ET every backup
+       failed on archive/backup.log, which changes daily and which iCloud had evicted: "mmap:
+       Resource deadlock avoided", logged as the sender's "unexpected end of file". No rsync flag
+       avoids that open. A run from a terminal may download, which is why install-pull.sh's test
+       from the bare environment cannot catch it. -->
+  <key>MaterializeDatalessFiles</key>
+  <true/>
+
   <!-- Not at login, and not kept alive: this is a daily chore, not a server. -->
   <key>RunAtLoad</key>
   <false/>

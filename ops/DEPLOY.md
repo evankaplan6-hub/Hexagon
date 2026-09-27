@@ -250,6 +250,16 @@ code is the pull's. `bash ops/run-pull.sh --backup-only` runs only the copy. `.e
 external disk covers them). If macOS ever refuses the LaunchAgent write access to iCloud Drive, the
 only sign is an hourly `PROBLEM backup` line.
 
+It refused a read once (2026-09-27). With "Optimize Mac Storage" on, iCloud turns backup files nobody
+has opened lately into placeholders whose content stays in iCloud, and a launchd job may not download
+one unless its plist says `MaterializeDatalessFiles`. rsync opens the old copy of every file it
+replaces, so each backup from 05:07 ET died on the evicted `archive/backup.log` ("mmap: Resource
+deadlock avoided", logged only as "unexpected end of file" until the PROBLEM line took rsync's first
+lines instead of its last). The plist now sets the key; reinstall with `install-pull.sh` after
+changing the plist. Also since that day, a pull that works backs up again even when the day's backup
+is done: on 09-26 the backup ran at 00:49 ET while the box was unreachable, and the 09-25 tapes
+pulled at 09:30 reached iCloud a day late.
+
 Every run that does anything leaves a line in `data/fly/archive/pull.log`, including runs that fail
 before the pull starts (no node, no fly, logged out, offline). No new line for a day, or a `PROBLEM`
 line, means look (`ops/daily-check.sh` step 1 reads it). Full output of each run goes to `~/Library/Logs/hexagon-pull.log`.

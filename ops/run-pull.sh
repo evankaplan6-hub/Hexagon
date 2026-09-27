@@ -222,7 +222,10 @@ backup() {
   local caff=()
   [ -x /usr/bin/caffeinate ] && caff=(/usr/bin/caffeinate -i)
   if ! out="$(cd "$HEXDIR" && ${caff[@]+"${caff[@]}"} /usr/bin/rsync -a --exclude '.*.part' --exclude '.env' --exclude '*.pem' "${src[@]}" "$BACKUP/" 2>&1)"; then
-    backup_problem "rsync failed ($(printf '%s\n' "$out" | grep . | tail -1))"
+    # The first lines, not the last: when the receiving rsync dies, the sender's last word is
+    # "unexpected end of file" and the reason is above it (2026-09-27: an iCloud placeholder the job
+    # could not download, "mmap: Resource deadlock avoided"; see com.hexagon.pull.plist).
+    backup_problem "rsync failed ($(printf '%s\n' "$out" | grep . | head -3 | paste -sd ';' -))"
     return 1
   fi
   echo "$(ts) backed up ${src[*]} to $BACKUP/"
@@ -239,11 +242,17 @@ if [ "$BACKUP_ONLY" = 1 ]; then
   backup || rc=$?
   exit "$rc"
 fi
+fresh=0
 if [ "$DRY" = 0 ] && pulled_today; then
   echo "$(ts) the box was already pulled today ($TODAY_ET); only the backup is left"
+elif pull; then
+  fresh=1
 else
-  pull || rc=$?
+  rc=$?
 fi
-if [ "$DRY" = 1 ] || ! backed_up_today; then backup || true; fi
+# A pull that worked just copied files no earlier backup today could have had, so it is backed up
+# again. On 2026-09-26 the backup ran at 00:49 ET while the box was unreachable, the pull got the
+# 09-25 tapes at 09:30, and "already backed up today" kept them out of iCloud for a day.
+if [ "$DRY" = 1 ] || [ "$fresh" = 1 ] || ! backed_up_today; then backup || true; fi
 # the pull's own exit code: a failed backup has its own PROBLEM line and is retried next hour
 exit "$rc"
