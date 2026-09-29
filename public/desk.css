@@ -72,8 +72,11 @@ main.gone { opacity: .45; }
 .hero { grid-column: span 7; }
 .desk { grid-column: span 5; }
 /* each card as tall as what it has to say: a book holding nothing used to stretch to the tallest one's
-   height and carry 80-95px of nothing */
-.books { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); min-width: 0; align-items: start; }
+   height and carry 80-95px of nothing. Five books (2026-09-29): the two that hold markets side by side,
+   the three option books under them */
+.books { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: var(--space-3); min-width: 0; align-items: start; }
+.bk { grid-column: span 2; }
+.bk:is([data-k="crypto"], [data-k="stocks"]) { grid-column: span 3; }
 /* the last row's two cards take the row's height and never set it: the log scrolls inside, and neither
    the log's length nor the chart's last size can make the row grow */
 .chartcard { grid-column: span 7; display: flex; flex-direction: column; contain: size; }
@@ -231,13 +234,13 @@ main.gone { opacity: .45; }
 footer { font-size: var(--type-label); color: var(--ink-3); }
 
 /* ---- narrower windows ------------------------------------------------------------------------- */
-/* a tablet: the headline beside the desk, the books in pairs (crypto down the left, the other two
-   beside it), then the chart and the log; it was the phone's single column, 2,712px long at 820 */
+/* a tablet: the headline beside the desk, the books in pairs (crypto and stocks, then the option books),
+   then the chart and the log; it was the phone's single column, 2,712px long at 820 */
 @media (max-width: 1023px) {
   main { grid-template-rows: none; }
   .hero, .desk { grid-column: span 6; }
   .books { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .bk[data-k="crypto"] { grid-row: span 2; }
+  .bk, .bk:is([data-k="crypto"], [data-k="stocks"]) { grid-column: auto; }
   .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .kpis div:nth-child(3) { padding-left: 0; border-left: 0; }
   .kpis div:nth-child(n+3) { margin-top: var(--space-2); }
@@ -259,7 +262,6 @@ footer { font-size: var(--type-label); color: var(--ink-3); }
   .act { order: 2; padding-left: 0; padding-right: 0; }
   .chartcard { order: 3; height: 300px; }
   .desk { order: 4; }
-  .bk[data-k="crypto"] { grid-row: auto; }
   .bk .chip:not(.bktog) { display: none; }
   .bktog { display: inline-flex; align-items: center; min-height: 32px; }
   .bk:not(.open) :is(.bkmore, .next) { display: none; }

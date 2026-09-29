@@ -1,7 +1,8 @@
 'use strict';
 // The stocks, crypto and options desk (src/desk/): the market calendar, the feed parsers, paper fills,
-// both books' rules, and whole rounds of the engine on a fake market -- a crypto and SPY rebalance,
-// and one options trend day from the 12:30 test to the last exit. No network, no clock.
+// every book's rules, and whole rounds of the engine on a fake market -- a crypto and SPY rebalance,
+// one options trend day from the 12:30 test to the last exit, a morning of scalps and a morning dip. No
+// network, no clock.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -10,7 +11,7 @@ const F = require('../src/desk/feeds');
 const broker = require('../src/desk/broker');
 const B = require('../src/desk/books');
 const { Desk, logLevel, ROUTINE_KEEP } = require('../src/desk/engine');
-const { upDay, deskConfig, fakeMarket } = require('./desk-fixture');
+const { upDay, deskConfig, fakeMarket, playScalpMorning, playDipMorning, at: atDay } = require('./desk-fixture');
 
 let pass = 0, fail = 0;
 const ok = (name, cond, got) => {
@@ -206,6 +207,111 @@ const near = (name, got, want, tol = 1e-6) => ok(`${name} (want ~${want})`, Numb
   eq('a chain with no time of its own never is', B.chainSync(null, bar, 120), { ok: false, skewSec: null, why: 'the option chain carries no time of its own' });
 }
 
+// the scalp book's rules (2026-09-29), on the same climbing morning
+{
+  const bars = F.fiveMinute(upDay({ to: 10 * 60 + 5 })), vw = F.vwapSeries(bars);
+  eq('9:30 to 10:00 is seven five-minute bars', bars.map((b) => b.m), [570, 575, 580, 585, 590, 595, 600]);
+  const hit = B.scalpTrigger(bars, vw, 6);
+  eq('the 10:00 bar closing over the opening range (and VWAP) buys a call', hit && [hit.dir, hit.m, +hit.level.toFixed(2), +hit.c.toFixed(2)], ['up', 600, 700.61, 700.7]);
+  eq('nothing closing before 10:05 triggers, however high', B.scalpTrigger(bars, vw, 5), null);
+  const holed = bars.filter((b) => b.m !== 580);
+  eq('a bar missing from the 30 minutes before: no range, no trigger', B.scalpTrigger(holed, F.vwapSeries(holed), 5), null);
+  const flat = (m, c) => ({ m, o: c, h: c + 0.05, l: c - 0.05, c, v: 1000 });
+  const down = [570, 575, 580, 585, 590, 595].map((m) => flat(m, 700)).concat([{ m: 600, o: 700, h: 700, l: 699.5, c: 699.6, v: 1000 }]);
+  const dh = B.scalpTrigger(down, F.vwapSeries(down), 6);
+  eq('a close under the 30 minutes\' low, and under VWAP, buys a put', dh && [dh.dir, dh.level], ['down', 699.95]);
+  const inside = down.slice(0, 6).concat([flat(600, 700.02)]);
+  eq('a close inside the range is nothing', B.scalpTrigger(inside, F.vwapSeries(inside), 6), null);
+  const lateAt = (m) => { const bs = [30, 25, 20, 15, 10, 5].map((k) => flat(m - k, 700)).concat([flat(m, 701)]); return B.scalpTrigger(bs, F.vwapSeries(bs), 6); };
+  eq('the 2:25 bar (it closes 2:30) is the last that can', [!!lateAt(14 * 60 + 25), lateAt(14 * 60 + 30)], [true, null]);
+
+  const day = { entries: 0, lossRun: 0, pauseUntil: null };
+  eq('a fresh day may trade', B.scalpGate(day, '2026-09-23', 600), '');
+  ok('not a fifth trade', /4 trades today/.test(B.scalpGate({ ...day, entries: 4 }, '2026-09-23', 600)));
+  ok('not after two losses in a row', /2 losses in a row/.test(B.scalpGate({ ...day, lossRun: 2 }, '2026-09-23', 600)));
+  ok('one loss pauses it 15 minutes', /pausing after a loss until 10:30/.test(B.scalpGate({ ...day, lossRun: 1, pauseUntil: 630 }, '2026-09-23', 620)));
+  eq('and the bar that closes when the pause ends may', B.scalpGate({ ...day, lossRun: 1, pauseUntil: 630 }, '2026-09-23', 625), '');
+  const fed = (m) => B.scalpGate(day, '2026-10-28', m);
+  eq('on a Fed day, nothing closing 1:30 to 2:00; before and after, yes', [fed(13 * 60 + 20), !!fed(13 * 60 + 25), !!fed(13 * 60 + 55), fed(14 * 60)], ['', true, true, '']);
+
+  const c = (strike, delta, bid, ask) => ({ strike, delta, bid, ask });
+  const chain = [c(700, 0.62, 1.9, 2), c(701, 0.52, 1.3, 1.4), c(702, 0.44, 0.99, 1), c(703, 0.33, 0.6, 0.61), c(704, 0.2, 0.24, 0.25)];
+  eq('the contract nearest 0.40 delta', B.pickScalp(chain, 'up', 600).row.strike, 702);
+  eq('over $1.50 it is passed over for the next nearest', B.pickScalp(chain.map((r) => (r.strike === 702 ? { ...r, ask: 1.6 } : r)), 'up', 600).row.strike, 703);
+  eq("puts' deltas are negative, and count the same", B.pickScalp([c(698, -0.38, 0.8, 0.81), c(697, -0.27, 0.5, 0.51)], 'down', 600).row.strike, 698);
+  ok('nothing outside 0.25-0.60', /no call with a delta of 0.25 to 0.60/.test(B.pickScalp([c(700, 0.7, 2, 2.01), c(705, 0.1, 0.05, 0.06)], 'up', 600).why));
+  ok('no delta in the chain: nothing', !!B.pickScalp([{ strike: 702, bid: 1, ask: 1.01 }], 'up', 600).why);
+  eq('an $0.18 ask is enough before 2 PM', B.pickScalp([c(705, 0.26, 0.17, 0.18)], 'up', 13 * 60 + 50).row.strike, 705);
+  ok('and not from 2 PM on: $0.20 then', /asks \$0\.20 to \$1\.50/.test(B.pickScalp([c(705, 0.26, 0.17, 0.18)], 'up', 13 * 60 + 55).why));
+  ok('nothing with no bid to sell into', !!B.pickScalp([c(702, 0.4, 0, 1)], 'up', 600).why);
+
+  const lot = { dir: 'up', level: 700.61, barM: 600, entry: 1, target: 1.5, high0: 1.2 };
+  const bar = (m, cl) => ({ m, c: cl });
+  eq('bid at the target: sold there', B.scalpExit(lot, [bar(605, 700.8)], bar(605, 700.8), { bid: 1.5, high: 1.2 }).kind, 'target');
+  eq('printed there since it was bought: sold there too', B.scalpExit(lot, [bar(605, 700.8)], bar(605, 700.8), { bid: 1.3, high: 1.55 }).kind, 'target');
+  eq('a close back under the range it broke: the stop', B.scalpExit(lot, [bar(605, 700.5)], bar(605, 700.5), { bid: 0.9, high: 1.2 }).kind, 'stop');
+  eq('ten minutes in, down but above the range: held', B.scalpExit(lot, [bar(610, 700.7)], bar(610, 700.7), { bid: 0.95, high: 1.2 }), null);
+  eq('fifteen minutes in and bid no more than it cost: the time stop', B.scalpExit(lot, [bar(615, 700.7)], bar(615, 700.7), { bid: 1, high: 1.2 }).kind, 'time');
+  eq('fifteen minutes in and bid above it: held', B.scalpExit(lot, [bar(615, 700.9)], bar(615, 700.9), { bid: 1.05, high: 1.2 }), null);
+  eq('thirty minutes in, whatever the bid: out', B.scalpExit(lot, [bar(630, 701)], bar(630, 701), { bid: 1.3, high: 1.4 }).kind, 'hold');
+  eq('the 3:15 clock', B.scalpExit({ ...lot, barM: 900 }, [bar(910, 701)], bar(910, 701), { bid: 1.3, high: 1.4 }).kind, 'clock');
+  eq('a put stops on a close back over its level', B.scalpExit({ ...lot, dir: 'down', level: 699.95 }, [bar(605, 700)], bar(605, 700), { bid: 0.9, high: 1.2 }).kind, 'stop');
+  eq('the target comes first: a resting limit fills before a bar closes', B.scalpExit(lot, [bar(605, 700.5)], bar(605, 700.5), { bid: 1.5, high: 1.5 }).kind, 'target');
+}
+
+// the dip book's rules (2026-09-29): Evan's morning dip under VWAP, on the fixture's dipping morning, in
+// one-minute bars labelled by the minute they close, as Cboe's are
+{
+  const path = { 598: 698, 611: 700.2, 616: 701.5, 621: 701 };
+  const bars = upDay({ to: 10 * 60 + 25, drops: path }), vw = F.vwapSeries(bars);
+  const at = (m) => bars.findIndex((b) => b.m === m);
+  eq('10:04 turns up too, but nothing triggers before 10:05', B.dipTrigger(bars, vw, at(604), 6), null);
+  const hit = B.dipTrigger(bars, vw, at(605), 6);
+  ok('the 10:05 minute closes over the one before, under the open and VWAP, 6 minutes off the low: a dip buy', hit && hit.m === 605 && hit.c < 700 && hit.c < hit.vwap, hit);
+  eq('two points under a 700 open on a 6-point ATR is a 0.33-ATR dip, and the stop is 0.6 under the low', hit && [+hit.low.toFixed(2), +hit.dip.toFixed(3), +hit.stop.toFixed(2)], [697.99, 0.335, 697.39]);
+  eq('a shallower dip (under 0.25 ATR) is nothing', B.dipTrigger(bars, vw, at(605), 9), null);
+  eq('a minute back over VWAP is not a dip buy', B.dipTrigger(bars, vw, at(612), 6), null);
+  // a 700 open, half an hour at 700.5, then 699.5 with one minute's low at 697.5, and 10:20 closing over
+  // the minute before it (still under the open and VWAP)
+  const dipAt = (lowM) => {
+    const bs = [];
+    for (let m = 571; m <= 620; m++) {
+      const px = m <= 600 ? 700.5 : 699.5;
+      bs.push({ m, o: m === 571 ? 700 : px, h: px + 0.1, l: m === lowM ? 697.5 : px - 0.1, c: m === 620 ? 699.65 : px, v: 1000 });
+    }
+    return B.dipTrigger(bs, F.vwapSeries(bs), bs.length - 1, 6);
+  };
+  ok('a low made 20 minutes before (10:00) is the dip it buys', !!dipAt(600));
+  eq('one made 21 minutes before (9:59) is not', dipAt(599), null);
+  const noOpen = bars.slice(1);
+  eq('without the 9:31 minute there is no open to measure from: nothing', B.dipTrigger(noOpen, F.vwapSeries(noOpen), noOpen.findIndex((b) => b.m === 605), 6), null);
+  const gap = bars.filter((b) => b.m !== 604);
+  eq('the minute before the trigger missing: nothing', B.dipTrigger(gap, F.vwapSeries(gap), gap.findIndex((b) => b.m === 605), 6), null);
+
+  const c = (strike, bid, ask) => ({ strike, bid, ask });
+  eq('the call 2-3 points out, $0.20-$0.45', B.pickDip([c(700, 0.6, 0.62), c(701, 0.28, 0.3), c(702, 0.1, 0.12)], 698.14).row.strike, 701);
+  ok('too dear: nothing', /asks \$0\.50, outside \$0\.20-\$0\.45/.test(B.pickDip([c(701, 0.48, 0.5)], 698.14).why));
+  ok('too cheap: nothing', !!B.pickDip([c(701, 0.13, 0.15)], 698.14).why);
+
+  const lot = { role: 'first', stop: 697.39, spy: 698.14, entry: 0.3, peak: 0.3, reclaimM: null };
+  const b = (m, cl, v) => ({ m, c: cl, vw: v });
+  eq('under VWAP and over the stop: held', B.dipExit(lot, [b(606, 698.16, 699.6)], b(606, 698.16, 699.6), null).exit, null);
+  eq('a close back above VWAP sells the first call, with no chain read needed to say so', B.dipExit(lot, [b(611, 700.2, 699.7)], b(611, 700.2, 699.7), null), { exit: { kind: 'reclaim', bar: b(611, 700.2, 699.7) }, reclaimM: 611 });
+  const run = { ...lot, role: 'runner' };
+  eq('the runner stays, and remembers the minute of the reclaim', B.dipExit(run, [b(611, 700.2, 699.7)], b(611, 700.2, 699.7), { bid: 0.55 }), { exit: null, reclaimM: 611 });
+  eq('a close under the morning low less 0.1 ATR: both go', [B.dipExit(lot, [b(610, 697.2, 699.6)], b(610, 697.2, 699.6), null).exit.kind, B.dipExit(run, [b(610, 697.2, 699.6)], b(610, 697.2, 699.6), null).exit.kind], ['stop', 'stop']);
+  eq('no reclaim by 12:30: both go', B.dipExit(run, [b(750, 698.9, 699.3)], b(750, 698.9, 699.3), null).exit.kind, 'late');
+  const rode = { ...run, reclaimM: 611 };
+  eq('after the reclaim, the runner goes on a close back under where SPY was bought', B.dipExit(rode, [b(640, 698.1, 699.5)], b(640, 698.1, 699.5), null).exit.kind, 'fade');
+  eq('it rides a dip that stays over that price, under VWAP or not', B.dipExit(rode, [b(640, 699, 699.5)], b(640, 699, 699.5), null).exit, null);
+  eq('doubled to 0.95, and bid 0.60 (under 0.625, halfway back): out', B.dipExit({ ...rode, peak: 0.95 }, [b(621, 701, 700)], b(621, 701, 700), { bid: 0.6 }).exit.kind, 'trail');
+  eq('a bid read that doubles it counts at once: bid 0.95, never above 0.55 before, held', B.dipExit({ ...rode, peak: 0.55 }, [b(616, 701.5, 700)], b(616, 701.5, 700), { bid: 0.95 }).exit, null);
+  eq('doubled, and bid 0.70: held', B.dipExit({ ...rode, peak: 0.95 }, [b(621, 701.3, 700)], b(621, 701.3, 700), { bid: 0.7 }).exit, null);
+  eq('never doubled (best 0.55), bid 0.40: no trail yet', B.dipExit({ ...rode, peak: 0.55 }, [b(621, 700.5, 700)], b(621, 700.5, 700), { bid: 0.4 }).exit, null);
+  eq('no bid read, no trail', B.dipExit({ ...rode, peak: 0.95 }, [b(621, 701, 700)], b(621, 701, 700), null).exit, null);
+  eq('3:15', B.dipExit(rode, [b(915, 702, 700)], b(915, 702, 700), null).exit.kind, 'clock');
+}
+
 // ------------------------------------------------------------------ the engine, on a fake market
 async function engineTests() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-test-'));
@@ -242,7 +348,7 @@ async function engineTests() {
   eq('every fill is journaled', journal.filter((j) => j.kind === 'FILL').length, 4);
   ok('with the 12:30 verdict', journal.some((j) => j.kind === 'OPTIONS_DAY' && j.status === 'pass'));
   const eq1 = desk.equity();
-  ok('the desk is worth what it paid, less spreads and fees', eq1 < 20000 && eq1 > 19900, eq1);
+  ok('the desk is worth what it paid, less spreads and fees', eq1 < 22000 && eq1 > 21900, eq1);
 
   // round 2, same day: nothing re-trades (the target has not moved, the day is checked)
   const fills1 = desk.state.fills.length;
@@ -331,10 +437,10 @@ async function engineTests() {
   // the snapshot the page reads
   const snap = desk.snapshot();
   eq('seven desks on the floor', snap.agents.map((a) => a.key), ['BRAM', 'KETT', 'RIGO', 'TESS', 'HOLT', 'ILSA', 'PRED']);
-  eq('three books', snap.books.map((x) => x.key), ['crypto', 'stocks', 'options']);
+  eq('five books', snap.books.map((x) => x.key), ['crypto', 'stocks', 'options', 'scalps', 'dips']);
   ok('the prediction-market desk sits at the seventh', snap.agents[6].note === 'winding down: 3 held');
-  ok('each book carries its benchmark', snap.books[0].bench > 0 && snap.books[1].bench > 0 && snap.books[2].bench === null, snap.books.map((x) => x.bench));
-  eq('and what that holding paid to buy in (the options book is never "held")', snap.books.map((x) => x.benchFee), [35.86, 0, null]);
+  ok('each book carries its benchmark', snap.books[0].bench > 0 && snap.books[1].bench > 0 && snap.books.slice(2).every((x) => x.bench === null), snap.books.map((x) => x.bench));
+  eq('and what that holding paid to buy in (the option books are never "held")', snap.books.map((x) => x.benchFee), [35.86, 0, null, null, null]);
   ok('paper, always', snap.mode === 'paper');
   near('the headline is every book together', snap.equity, snap.books.reduce((a, x) => a + x.equity, 0), 0.02);
   eq('the frame says when the last round finished', snap.beat, T);
@@ -391,6 +497,113 @@ async function engineTests() {
     const d6 = new Desk({ ...cfg, dataDir: oldDir }, { feeds, now: () => T });
     eq('and only once: loading it again changes nothing', d6.state.history.map((p) => p.bc), [9000, 9000, 9000.14]);
     fs.rmSync(oldDir, { recursive: true, force: true });
+  }
+
+  // A morning of scalps (2026-09-29): tools/desk-fixture.js playScalpMorning, round by round.
+  {
+    const sdir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-test-'));
+    let TS = atDay('10:06');
+    const M = fakeMarket(() => TS);
+    const ds = new Desk(deskConfig(sdir), { feeds: M.feeds, now: () => TS });
+    ds.quiet = true;
+    const x = ds.state.books.scalps;
+    const rounds = [];
+    const real = ds.step.bind(ds);
+    ds.step = async () => { await real(); rounds.push({ lots: x.lots.map((l) => [l.strike, l.entry, l.target, l.level, l.barM]), cash: x.cash, realized: x.realized, entries: x.day && x.day.entries }); };
+    await playScalpMorning(ds, M, (t) => { TS = t; });
+    eq('10:06: the opening-range break buys the 701 call, 1.5x target, stop at the range it broke', rounds[0].lots, [[701, 1, 1.5, 700.61, 600]]);
+    eq('$100 of premium and a 3-cent fee', rounds[0].cash, 899.97);
+    eq('10:11: another break while it is held adds nothing', [rounds[1].lots.length, rounds[1].entries], [1, 1]);
+    eq('10:16: the 1.50 target fills, and the new break buys the 702 at 0.91', rounds[2].lots, [[702, 0.91, 1.365, 700.81, 610]]);
+    eq('banked $49.94 on the first', rounds[2].realized, 49.94);
+    eq('10:21: SPY closes back under 700.81, and the 702 goes at the bid', rounds[3].lots, []);
+    eq('realised: +49.94, then -21.06', x.realized, 28.88);
+    eq('cash reconciles to the penny', x.cash, 1028.88);
+    eq('the loss starts the 15-minute pause from the 10:20 close', [x.day.lossRun, x.day.pauseUntil], [1, 635]);
+    eq('two trades on its scorecard, newest first', x.trades.map((t) => [t.strike, t.dir, t.pnl, t.open]), [[702, 'up', -21.06, 0], [701, 'up', 49.94, 0]]);
+    const js = fs.readFileSync(path.join(sdir, 'desk', 'journal-2026-09-23.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    const sf = js.filter((j) => j.kind === 'FILL' && j.book === 'scalps');
+    eq('every scalp fill is journaled, with its reason', sf.map((j) => [j.side, j.px, j.why.split(' (')[0]]), [
+      ['buy', 1, 'break above the last 30 minutes at 10:05'], ['sell', 1.5, '1.5x target hit'],
+      ['buy', 0.91, 'break above the last 30 minutes at 10:15'], ['sell', 0.7, 'SPY closed back under 700.81 at 10:20']]);
+    const b1 = sf[0];
+    eq("a buy journals what the stack's §8 asks: SPY, the level, the delta, the quote", [b1.dir, b1.spy, b1.level, b1.delta, b1.bid, b1.ask, b1.bidSz, b1.askSz, b1.skewSec], ['up', 700.7, 700.61, 0.45, 0.99, 1, 100, 100, 0]);
+    eq('the options book, waiting for 12:30, traded nothing', ds.state.books.options.lots.length + ds.state.books.options.trades.length, 0);
+    const snap = ds.snapshot();
+    eq('the page gets the scalp day', [snap.scalps.enabled, snap.scalps.day.entries, snap.scalps.day.lossRun, snap.scalps.day.pauseUntil], [true, 2, 1, 635]);
+    ok('and the range the next bar has to break', snap.scalps.range && snap.scalps.range.hi > snap.scalps.range.lo, snap.scalps.range);
+    near('the desk counts the scalp book in its worth', snap.equity, snap.books.reduce((a, b2) => a + b2.equity, 0), 0.02);
+    eq('its decisions are decisions, not routine', logLevel({ agent: 'BRAM', kind: 'PASS', text: 'scalps: SPY broke above 700.81 at 10:15 · not taken: pausing after a loss until 10:35' }), 'info');
+    // a second loss in a row ends the day
+    ds.scalpClosed(x.day, { pnl: -5 });
+    eq('two losses in a row: done for today', [x.day.status, x.day.why], ['done', '2 losses in a row']);
+    fs.rmSync(sdir, { recursive: true, force: true });
+  }
+
+  // A morning dip (2026-09-29): tools/desk-fixture.js playDipMorning, round by round, on one-minute bars.
+  {
+    const pdir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-test-'));
+    let TP = atDay('10:05');
+    const M = fakeMarket(() => TP);
+    const dp = new Desk(deskConfig(pdir), { feeds: M.feeds, now: () => TP });
+    dp.quiet = true;
+    const x = dp.state.books.dips;
+    const rounds = [];
+    const real = dp.step.bind(dp);
+    let reads = 0;
+    const expiry = M.feeds.expiry;
+    M.feeds.expiry = async (...a) => { reads++; return expiry(...a); };
+    dp.step = async () => { const r0 = reads; await real(); rounds.push({ lots: x.lots.map((l) => [l.strike, l.role, l.entry, l.stop, l.spy, l.reclaimM, l.peak]), cash: x.cash, realized: x.realized, reads: reads - r0 }); };
+    await playDipMorning(dp, M, (t) => { TP = t; });
+    eq('10:04: turning, but before 10:05: nothing bought', rounds[0].lots, []);
+    eq('10:05: two 701 calls at 0.30, stop 697.39, bought with SPY at 698.14', rounds[1].lots, [[701, 'first', 0.3, 697.39, 698.14, null, 0.3], [701, 'runner', 0.3, 697.39, 698.14, null, 0.3]]);
+    eq('$60 of premium and 6 cents of fees', rounds[1].cash, 939.94);
+    eq('10:10: SPY still under VWAP: held, and the 6 MB chain is not read', [rounds[2].lots.length, rounds[2].reads], [2, 0]);
+    eq('10:11: SPY back over VWAP: the first sells at 0.55, and the runner rides from that minute', rounds[3].lots, [[701, 'runner', 0.3, 697.39, 698.14, 611, 0.55]]);
+    eq('banked $24.94 on it', rounds[3].realized, 24.94);
+    eq("10:16: five minutes on, the runner's bid is read: 0.95, more than double, held", [rounds[4].lots.map((l) => l[6]), rounds[4].reads], [[0.95], 1]);
+    eq('10:21: bid 0.60, under halfway back to its cost: out', rounds[5].lots, []);
+    eq('realised: +24.94 and +29.94', x.realized, 54.88);
+    eq('cash reconciles to the penny', x.cash, 1054.88);
+    eq('one trade, two calls, closed', x.trades.map((t) => [t.strike, t.qty, t.pnl, t.open]), [[701, 2, 54.88, 0]]);
+    const js = fs.readFileSync(path.join(pdir, 'desk', 'journal-2026-09-23.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    const df = js.filter((j) => j.kind === 'FILL' && j.book === 'dips');
+    eq('every dip fill is journaled with its reason', df.map((j) => [j.side, j.qty, j.px, j.why.split(' (')[0]]), [
+      ['buy', 2, 0.3, 'dip buy: SPY turned up off 697.99 at 10:05'], ['sell', 1, 0.55, 'SPY closed back above VWAP at 10:11'], ['sell', 1, 0.6, 'gave back half its gain from $0.95']]);
+    eq('a buy journals the dip it bought: SPY, the open, the low, the dip in ATRs, the stop', [df[0].spy, df[0].open, df[0].low, df[0].dipAtr, df[0].stop], [698.14, 700, 697.99, 0.335, 697.39]);
+    eq('and each fill the minute it acted on against the chain: in step', df.map((j) => j.skewSec), [0, 0, 0]);
+    eq('the scalp book passed on its breakout (no delta in this chain)', dp.state.books.scalps.lots.length + dp.state.books.scalps.trades.length, 0);
+    const snap = dp.snapshot();
+    eq('the page gets the dip day and where SPY stands against the dip', [snap.dips.enabled, snap.dips.day.entries, snap.dips.spy.open, snap.dips.spy.need, snap.dips.spy.m], [true, 1, 700, 698.5, 621]);
+    eq("its decisions are decisions, not routine", logLevel({ agent: 'BRAM', kind: 'PASS', text: 'dips: noon, done for today · no dip to buy by noon' }), 'info');
+    // a losing trade ends the day
+    dp.dipClosed(x.day, { pnl: -12 });
+    eq('a loss: done for today', [x.day.status, x.day.why], ['done', 'a trade lost $12.00']);
+    fs.rmSync(pdir, { recursive: true, force: true });
+  }
+
+  // A ledger from before the scalp and dip books (2026-09-29) gets them as cash, and the desk's recorded
+  // value and today's starting mark go up by that cash, so the P&L they show does not move. Once.
+  {
+    const odir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-test-'));
+    const d7 = new Desk({ ...cfg, dataDir: odir }, { feeds, now: () => T });
+    d7.quiet = true;
+    await d7.step();
+    const s = JSON.parse(JSON.stringify(d7.state));
+    delete s.books.scalps; delete s.books.dips;
+    s.history = [{ t: T - 120000, e: 20000, c: 9000, s: 10000, o: 1000, bc: 9000, bs: 10000 }, { t: T - 60000, e: 19990, c: 8995, s: 9995, o: 1000, bc: 9000, bs: 10000 }];
+    s.dayStart = 19990;
+    fs.writeFileSync(path.join(odir, 'desk', 'state.json'), JSON.stringify(s));
+    const d8 = new Desk({ ...cfg, dataDir: odir }, { feeds, now: () => T });
+    eq('each arrives as $1,000 of cash', ['scalps', 'dips'].map((k) => [d8.state.books[k].cash, d8.state.books[k].initial, d8.state.books[k].lots.length]), [[1000, 1000, 0], [1000, 1000, 0]]);
+    eq("the desk's recorded value carries them from the start", d8.state.history.map((p) => p.e), [22000, 21990]);
+    eq('and so does the start of the day', d8.state.dayStart, 21990);
+    eq('the P&L the chart draws is what it was', d8.state.history.map((p) => p.e - d8.initial()), [0, -10]);
+    eq('their starts are journaled when the desk starts', Object.entries(d8.state.added).map(([k, a]) => [k, a.cash, a.journaled]), [['scalps', 1000, false], ['dips', 1000, false]]);
+    d8.save();
+    const d9 = new Desk({ ...cfg, dataDir: odir }, { feeds, now: () => T });
+    eq('only once', d9.state.history.map((p) => p.e), [22000, 21990]);
+    fs.rmSync(odir, { recursive: true, force: true });
   }
 
   // the loss limit: no new buying, selling still allowed
