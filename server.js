@@ -9,6 +9,7 @@ require('./src/env').loadEnv(path.join(__dirname, '.env'));
 const cfg = require('./src/config');
 const { Engine } = require('./src/engine');
 const { Desk } = require('./src/desk/engine');
+const { pmFloor } = require('./src/pmfloor');
 const { actionRefusal, rebindRefusal, routeAsk } = require('./src/ask');
 const chaintape = require('./src/chaintape');
 const { crashRecord } = require('./src/journal');
@@ -30,24 +31,9 @@ const engine = new Engine(cfg);
 // The stocks, crypto and options desk (src/desk/), the desk's main work since 2026-09-25. It shares
 // this process with the prediction-market desk above and nothing else: its own ledger under
 // data/desk/, its own journal, its own loop, and no broker at all -- paper only whatever MODE says.
-// The prediction-market desk keeps running until its last positions settle; PRED, the new floor's
-// seventh desk, is this one-line summary of it.
-function pmSummary() {
-  const s = engine.state, m = s.maker || {};
-  const mk = Object.values(m.markets || {});
-  const now = Date.now();
-  const next = s.positions.map((p) => p.settlesAt).filter((t) => Number.isFinite(t) && t > now).sort((a, b) => a - b)[0] || null;
-  const groups = new Set(s.positions.map((p) => p.group || p.id)).size;
-  const contracts = mk.reduce((a, x) => a + Math.abs(x.inv || 0), 0);
-  const pnl = Math.round(((engine.equity() - s.initial) + (Number.isFinite(m.equity) ? m.equity - cfg.initialBalance : 0)) * 100) / 100;
-  // Trading again in paper since 2026-09-27 (any of ARBS, MAKER_QUOTE, SNIPE on); winding down only with all off
-  const trading = cfg.arbsEnabled !== false || cfg.makerQuoting !== false || !!cfg.snipe;
-  const open = `${groups} arb${groups === 1 ? '' : 's'}, ${contracts.toLocaleString()} held`;
-  return {
-    pnl, groups, held: mk.filter((x) => x.inv).length, contracts, nextSettle: next, lastCycleAt: engine.beat.taker, url: '/pm', trading,
-    note: trading ? `trading in paper: ${open}` : groups || contracts ? `winding down: ${open}` : 'all settled',
-  };
-}
+// The prediction-market desk trades in paper beside it. Since 2026-09-29 the floor at / shows it whole,
+// its four books as cards and its bots in the same activity list (src/pmfloor.js); it used to be one line.
+const pmSummary = () => pmFloor(engine, cfg);
 // A desk that cannot load its ledger stays down with the reason in the log, and the page falls back
 // to the prediction-market floor: its positions still have to settle.
 let desk = null;
