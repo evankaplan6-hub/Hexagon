@@ -375,7 +375,7 @@
     const on = (day) => (day && day !== td ? `${wd(day)} ` : '');
     const done = (P.trades || []).filter((t) => t.date === (d && d.date) && !t.open);
     if (d && d.entries) rows.push([d.date === td ? 'Today' : wd(d.date), `${d.entries} trade${d.entries === 1 ? '' : 's'} · ${plain(signed(r2(done.reduce((a, t) => a + t.pnl, 0))))}`]);
-    if (sp) rows.push([`SPY ${on(sp.day)}${minTxt(sp.m + 5)}`, `${sp.c.toFixed(2)} · open ${sp.open.toFixed(2)} · low ${sp.low.toFixed(2)}${sp.need != null ? ` · needs ${sp.need.toFixed(2)}` : ''}`]);
+    if (sp) rows.push([`SPY ${on(sp.day)}${minTxt(sp.m)}`, `${sp.c.toFixed(2)} · open ${sp.open.toFixed(2)} · low ${sp.low.toFixed(2)}${sp.need != null ? ` · needs ${sp.need.toFixed(2)}` : ''}`]);
     for (const t of (P.trades || []).slice(0, 3)) rows.push([t.date.slice(5).replace('-', '/'), `${t.qty} × ${t.strike}${t.right} at ${px(t.entry)}${t.open ? ' · open' : ` · ${t.pnl >= 0 ? 'made' : 'lost'} ${money(Math.abs(t.pnl))}`}`]);
     return rows.length ? `<dl class="bkfacts">${rows.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>` : '<p class="bksub">No calls open.</p>';
   }

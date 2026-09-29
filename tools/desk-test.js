@@ -259,50 +259,57 @@ const near = (name, got, want, tol = 1e-6) => ok(`${name} (want ~${want})`, Numb
   eq('the target comes first: a resting limit fills before a bar closes', B.scalpExit(lot, [bar(605, 700.5)], bar(605, 700.5), { bid: 1.5, high: 1.5 }).kind, 'target');
 }
 
-// the dip book's rules (2026-09-29): Evan's morning dip under VWAP, on the fixture's dipping morning
+// the dip book's rules (2026-09-29): Evan's morning dip under VWAP, on the fixture's dipping morning, in
+// one-minute bars labelled by the minute they close, as Cboe's are
 {
   const path = { 598: 698, 611: 700.2, 616: 701.5, 621: 701 };
-  const bars = F.fiveMinute(upDay({ to: 10 * 60 + 25, drops: path })), vw = F.vwapSeries(bars);
+  const bars = upDay({ to: 10 * 60 + 25, drops: path }), vw = F.vwapSeries(bars);
   const at = (m) => bars.findIndex((b) => b.m === m);
-  eq('the 10:00 bar, still falling, is not a turn', B.dipTrigger(bars, vw, at(600), 6), null);
+  eq('10:04 turns up too, but nothing triggers before 10:05', B.dipTrigger(bars, vw, at(604), 6), null);
   const hit = B.dipTrigger(bars, vw, at(605), 6);
-  ok('the 10:05 bar turns up off the 9:55 low, under the open and VWAP: a dip buy', hit && hit.m === 605 && hit.c < 700 && hit.c < hit.vwap, hit);
+  ok('the 10:05 minute closes over the one before, under the open and VWAP, 6 minutes off the low: a dip buy', hit && hit.m === 605 && hit.c < 700 && hit.c < hit.vwap, hit);
   eq('two points under a 700 open on a 6-point ATR is a 0.33-ATR dip, and the stop is 0.6 under the low', hit && [+hit.low.toFixed(2), +hit.dip.toFixed(3), +hit.stop.toFixed(2)], [697.99, 0.335, 697.39]);
   eq('a shallower dip (under 0.25 ATR) is nothing', B.dipTrigger(bars, vw, at(605), 9), null);
-  // a 700 open, half an hour at 700.5, then 699.5 from 10:00 with one bar's low at 697.5, and the 10:20 bar
-  // closing over the bar before it (still under the open and VWAP)
+  eq('a minute back over VWAP is not a dip buy', B.dipTrigger(bars, vw, at(612), 6), null);
+  // a 700 open, half an hour at 700.5, then 699.5 with one minute's low at 697.5, and 10:20 closing over
+  // the minute before it (still under the open and VWAP)
   const dipAt = (lowM) => {
     const bs = [];
-    for (let m = 570; m <= 620; m += 5) {
-      const px = m < 600 ? 700.5 : 699.5;
-      bs.push({ m, o: m === 570 ? 700 : px, h: px + 0.1, l: m === lowM ? 697.5 : px - 0.1, c: m === 620 ? 699.65 : px, v: 1000 });
+    for (let m = 571; m <= 620; m++) {
+      const px = m <= 600 ? 700.5 : 699.5;
+      bs.push({ m, o: m === 571 ? 700 : px, h: px + 0.1, l: m === lowM ? 697.5 : px - 0.1, c: m === 620 ? 699.65 : px, v: 1000 });
     }
     return B.dipTrigger(bs, F.vwapSeries(bs), bs.length - 1, 6);
   };
-  ok('a low made in the last 20 minutes (the 10:05 bar) is the dip it buys', !!dipAt(605));
-  eq('one made 35 minutes before (the 9:45 bar) is not', dipAt(585), null);
-  eq('nothing before 10:05 or after noon', [B.dipTrigger(bars.map((b) => ({ ...b, m: b.m - 60 })), vw, at(605), 6), B.dipTrigger(bars.map((b, k) => ({ ...b, m: k === 0 ? 570 : b.m + 120 })), vw, at(605), 6)], [null, null]);
+  ok('a low made 20 minutes before (10:00) is the dip it buys', !!dipAt(600));
+  eq('one made 21 minutes before (9:59) is not', dipAt(599), null);
+  const noOpen = bars.slice(1);
+  eq('without the 9:31 minute there is no open to measure from: nothing', B.dipTrigger(noOpen, F.vwapSeries(noOpen), noOpen.findIndex((b) => b.m === 605), 6), null);
+  const gap = bars.filter((b) => b.m !== 604);
+  eq('the minute before the trigger missing: nothing', B.dipTrigger(gap, F.vwapSeries(gap), gap.findIndex((b) => b.m === 605), 6), null);
 
   const c = (strike, bid, ask) => ({ strike, bid, ask });
-  eq('the call 2-3 points out, $0.20-$0.45', B.pickDip([c(700, 0.6, 0.62), c(701, 0.28, 0.3), c(702, 0.1, 0.12)], 698.24).row.strike, 701);
-  ok('too dear: nothing', /asks \$0\.50, outside \$0\.20-\$0\.45/.test(B.pickDip([c(701, 0.48, 0.5)], 698.24).why));
-  ok('too cheap: nothing', !!B.pickDip([c(701, 0.13, 0.15)], 698.24).why);
+  eq('the call 2-3 points out, $0.20-$0.45', B.pickDip([c(700, 0.6, 0.62), c(701, 0.28, 0.3), c(702, 0.1, 0.12)], 698.14).row.strike, 701);
+  ok('too dear: nothing', /asks \$0\.50, outside \$0\.20-\$0\.45/.test(B.pickDip([c(701, 0.48, 0.5)], 698.14).why));
+  ok('too cheap: nothing', !!B.pickDip([c(701, 0.13, 0.15)], 698.14).why);
 
-  const lot = { role: 'first', stop: 697.39, spy: 698.24, entry: 0.3, peak: 0.3, reclaimM: null };
+  const lot = { role: 'first', stop: 697.39, spy: 698.14, entry: 0.3, peak: 0.3, reclaimM: null };
   const b = (m, cl, v) => ({ m, c: cl, vw: v });
-  eq('under VWAP and over the stop: held', B.dipExit(lot, [b(610, 698.5, 699.6)], b(610, 698.5, 699.6), { bid: 0.3 }).exit, null);
-  eq('a close back above VWAP sells the first contract', B.dipExit(lot, [b(610, 700.28, 699.7)], b(610, 700.28, 699.7), { bid: 0.55 }), { exit: { kind: 'reclaim', bar: b(610, 700.28, 699.7) }, reclaimM: 610 });
+  eq('under VWAP and over the stop: held', B.dipExit(lot, [b(606, 698.16, 699.6)], b(606, 698.16, 699.6), null).exit, null);
+  eq('a close back above VWAP sells the first call, with no chain read needed to say so', B.dipExit(lot, [b(611, 700.2, 699.7)], b(611, 700.2, 699.7), null), { exit: { kind: 'reclaim', bar: b(611, 700.2, 699.7) }, reclaimM: 611 });
   const run = { ...lot, role: 'runner' };
-  eq('the runner stays, and remembers the reclaim', B.dipExit(run, [b(610, 700.28, 699.7)], b(610, 700.28, 699.7), { bid: 0.55 }), { exit: null, reclaimM: 610 });
-  eq('a close under the morning low less 0.1 ATR: both go', [B.dipExit(lot, [b(610, 697.2, 699.6)], b(610, 697.2, 699.6), { bid: 0.1 }).exit.kind, B.dipExit(run, [b(610, 697.2, 699.6)], b(610, 697.2, 699.6), { bid: 0.1 }).exit.kind], ['stop', 'stop']);
-  eq('no reclaim by 12:30: both go', B.dipExit(run, [b(745, 698.9, 699.3)], b(745, 698.9, 699.3), { bid: 0.2 }).exit.kind, 'late');
-  const rode = { ...run, reclaimM: 610 };
-  eq('after the reclaim, the runner goes on a close back under where SPY was bought', B.dipExit(rode, [b(640, 698.1, 699.5)], b(640, 698.1, 699.5), { bid: 0.2 }).exit.kind, 'fade');
-  eq('it rides a dip that stays over that price, under VWAP or not', B.dipExit(rode, [b(640, 699, 699.5)], b(640, 699, 699.5), { bid: 0.4 }).exit, null);
-  eq('doubled to 0.95, and bid 0.60 (under 0.625, halfway back): out', B.dipExit({ ...rode, peak: 0.95 }, [b(620, 701.08, 700)], b(620, 701.08, 700), { bid: 0.6 }).exit.kind, 'trail');
-  eq('doubled, and bid 0.70: held', B.dipExit({ ...rode, peak: 0.95 }, [b(620, 701.3, 700)], b(620, 701.3, 700), { bid: 0.7 }).exit, null);
-  eq('never doubled (best 0.55), bid 0.40: no trail yet', B.dipExit({ ...rode, peak: 0.55 }, [b(620, 700.5, 700)], b(620, 700.5, 700), { bid: 0.4 }).exit, null);
-  eq('3:15', B.dipExit(rode, [b(910, 702, 700)], b(910, 702, 700), { bid: 1 }).exit.kind, 'clock');
+  eq('the runner stays, and remembers the minute of the reclaim', B.dipExit(run, [b(611, 700.2, 699.7)], b(611, 700.2, 699.7), { bid: 0.55 }), { exit: null, reclaimM: 611 });
+  eq('a close under the morning low less 0.1 ATR: both go', [B.dipExit(lot, [b(610, 697.2, 699.6)], b(610, 697.2, 699.6), null).exit.kind, B.dipExit(run, [b(610, 697.2, 699.6)], b(610, 697.2, 699.6), null).exit.kind], ['stop', 'stop']);
+  eq('no reclaim by 12:30: both go', B.dipExit(run, [b(750, 698.9, 699.3)], b(750, 698.9, 699.3), null).exit.kind, 'late');
+  const rode = { ...run, reclaimM: 611 };
+  eq('after the reclaim, the runner goes on a close back under where SPY was bought', B.dipExit(rode, [b(640, 698.1, 699.5)], b(640, 698.1, 699.5), null).exit.kind, 'fade');
+  eq('it rides a dip that stays over that price, under VWAP or not', B.dipExit(rode, [b(640, 699, 699.5)], b(640, 699, 699.5), null).exit, null);
+  eq('doubled to 0.95, and bid 0.60 (under 0.625, halfway back): out', B.dipExit({ ...rode, peak: 0.95 }, [b(621, 701, 700)], b(621, 701, 700), { bid: 0.6 }).exit.kind, 'trail');
+  eq('a bid read that doubles it counts at once: bid 0.95, never above 0.55 before, held', B.dipExit({ ...rode, peak: 0.55 }, [b(616, 701.5, 700)], b(616, 701.5, 700), { bid: 0.95 }).exit, null);
+  eq('doubled, and bid 0.70: held', B.dipExit({ ...rode, peak: 0.95 }, [b(621, 701.3, 700)], b(621, 701.3, 700), { bid: 0.7 }).exit, null);
+  eq('never doubled (best 0.55), bid 0.40: no trail yet', B.dipExit({ ...rode, peak: 0.55 }, [b(621, 700.5, 700)], b(621, 700.5, 700), { bid: 0.4 }).exit, null);
+  eq('no bid read, no trail', B.dipExit({ ...rode, peak: 0.95 }, [b(621, 701, 700)], b(621, 701, 700), null).exit, null);
+  eq('3:15', B.dipExit(rode, [b(915, 702, 700)], b(915, 702, 700), null).exit.kind, 'clock');
 }
 
 // ------------------------------------------------------------------ the engine, on a fake market
@@ -533,36 +540,41 @@ async function engineTests() {
     fs.rmSync(sdir, { recursive: true, force: true });
   }
 
-  // A morning dip (2026-09-29): tools/desk-fixture.js playDipMorning, round by round.
+  // A morning dip (2026-09-29): tools/desk-fixture.js playDipMorning, round by round, on one-minute bars.
   {
     const pdir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-test-'));
-    let TP = atDay('10:06');
+    let TP = atDay('10:05');
     const M = fakeMarket(() => TP);
     const dp = new Desk(deskConfig(pdir), { feeds: M.feeds, now: () => TP });
     dp.quiet = true;
     const x = dp.state.books.dips;
     const rounds = [];
     const real = dp.step.bind(dp);
-    dp.step = async () => { await real(); rounds.push({ lots: x.lots.map((l) => [l.strike, l.role, l.entry, l.stop, l.spy, l.reclaimM, l.peak]), cash: x.cash, realized: x.realized }); };
+    let reads = 0;
+    const expiry = M.feeds.expiry;
+    M.feeds.expiry = async (...a) => { reads++; return expiry(...a); };
+    dp.step = async () => { const r0 = reads; await real(); rounds.push({ lots: x.lots.map((l) => [l.strike, l.role, l.entry, l.stop, l.spy, l.reclaimM, l.peak]), cash: x.cash, realized: x.realized, reads: reads - r0 }); };
     await playDipMorning(dp, M, (t) => { TP = t; });
-    eq('10:06: the 10:00 bar is still falling: nothing bought', rounds[0].lots, []);
-    eq('10:11: the 10:05 bar turns: two 701 calls at 0.30, stop 697.39, bought with SPY at 698.24', rounds[1].lots, [[701, 'first', 0.3, 697.39, 698.24, null, 0.3], [701, 'runner', 0.3, 697.39, 698.24, null, 0.3]]);
+    eq('10:04: turning, but before 10:05: nothing bought', rounds[0].lots, []);
+    eq('10:05: two 701 calls at 0.30, stop 697.39, bought with SPY at 698.14', rounds[1].lots, [[701, 'first', 0.3, 697.39, 698.14, null, 0.3], [701, 'runner', 0.3, 697.39, 698.14, null, 0.3]]);
     eq('$60 of premium and 6 cents of fees', rounds[1].cash, 939.94);
-    eq('10:16: SPY back over VWAP: the first sells at 0.55, and the runner rides from that bar', rounds[2].lots, [[701, 'runner', 0.3, 697.39, 698.24, 610, 0.55]]);
-    eq('banked $24.94 on it', rounds[2].realized, 24.94);
-    eq('10:21: the runner is bid 0.95, more than double: held', rounds[3].lots.map((l) => l[6]), [0.95]);
-    eq('10:26: bid 0.60, under halfway back to its cost: out', rounds[4].lots, []);
+    eq('10:10: SPY still under VWAP: held, and the 6 MB chain is not read', [rounds[2].lots.length, rounds[2].reads], [2, 0]);
+    eq('10:11: SPY back over VWAP: the first sells at 0.55, and the runner rides from that minute', rounds[3].lots, [[701, 'runner', 0.3, 697.39, 698.14, 611, 0.55]]);
+    eq('banked $24.94 on it', rounds[3].realized, 24.94);
+    eq("10:16: five minutes on, the runner's bid is read: 0.95, more than double, held", [rounds[4].lots.map((l) => l[6]), rounds[4].reads], [[0.95], 1]);
+    eq('10:21: bid 0.60, under halfway back to its cost: out', rounds[5].lots, []);
     eq('realised: +24.94 and +29.94', x.realized, 54.88);
     eq('cash reconciles to the penny', x.cash, 1054.88);
-    eq('one trade, two contracts, closed', x.trades.map((t) => [t.strike, t.qty, t.pnl, t.open]), [[701, 2, 54.88, 0]]);
+    eq('one trade, two calls, closed', x.trades.map((t) => [t.strike, t.qty, t.pnl, t.open]), [[701, 2, 54.88, 0]]);
     const js = fs.readFileSync(path.join(pdir, 'desk', 'journal-2026-09-23.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
     const df = js.filter((j) => j.kind === 'FILL' && j.book === 'dips');
     eq('every dip fill is journaled with its reason', df.map((j) => [j.side, j.qty, j.px, j.why.split(' (')[0]]), [
-      ['buy', 2, 0.3, 'dip buy: SPY turned up off 697.99 at 10:10'], ['sell', 1, 0.55, 'SPY closed back above VWAP at 10:15'], ['sell', 1, 0.6, 'gave back half its gain from $0.95']]);
-    eq('a buy journals the dip it bought: SPY, the open, the low, the dip in ATRs, VWAP, the stop', [df[0].spy, df[0].open, df[0].low, df[0].dipAtr, df[0].stop], [698.24, 700, 697.99, 0.335, 697.39]);
-    eq('the scalp book passed on the breakout (no delta in this chain)', dp.state.books.scalps.lots.length + dp.state.books.scalps.trades.length, 0);
+      ['buy', 2, 0.3, 'dip buy: SPY turned up off 697.99 at 10:05'], ['sell', 1, 0.55, 'SPY closed back above VWAP at 10:11'], ['sell', 1, 0.6, 'gave back half its gain from $0.95']]);
+    eq('a buy journals the dip it bought: SPY, the open, the low, the dip in ATRs, the stop', [df[0].spy, df[0].open, df[0].low, df[0].dipAtr, df[0].stop], [698.14, 700, 697.99, 0.335, 697.39]);
+    eq('and each fill the minute it acted on against the chain: in step', df.map((j) => j.skewSec), [0, 0, 0]);
+    eq('the scalp book passed on its breakout (no delta in this chain)', dp.state.books.scalps.lots.length + dp.state.books.scalps.trades.length, 0);
     const snap = dp.snapshot();
-    eq('the page gets the dip day and where SPY stands against the dip', [snap.dips.enabled, snap.dips.day.entries, snap.dips.spy.open, snap.dips.spy.need], [true, 1, 700, 698.5]);
+    eq('the page gets the dip day and where SPY stands against the dip', [snap.dips.enabled, snap.dips.day.entries, snap.dips.spy.open, snap.dips.spy.need, snap.dips.spy.m], [true, 1, 700, 698.5, 621]);
     eq("its decisions are decisions, not routine", logLevel({ agent: 'BRAM', kind: 'PASS', text: 'dips: noon, done for today · no dip to buy by noon' }), 'info');
     // a losing trade ends the day
     dp.dipClosed(x.day, { pnl: -12 });

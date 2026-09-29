@@ -134,7 +134,7 @@ async function main() {
   // a morning dip replays to the penny too
   {
     const pdir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-check-'));
-    let TP = at('10:06');
+    let TP = at('10:05');
     const MP = fakeMarket(() => TP);
     const dp = new Desk(deskConfig(pdir), { feeds: MP.feeds, now: () => TP });
     dp.quiet = true;
@@ -146,7 +146,7 @@ async function main() {
     eq("the dip book's journal rebuilds its state to the penny", C.compare(bp, PS), []);
     eq('its cash and what it banked', [bp.dips.cash, bp.dips.realized, bp.dips.open], [1054.88, 54.88, 0]);
     const out = [];
-    eq('a healthy dip morning exits 0', C.run(['--dir', pd], { log: (l) => out.push(l), now: at('10:27') }), 0);
+    eq('a healthy dip morning exits 0', C.run(['--dir', pd], { log: (l) => out.push(l), now: at('10:23') }), 0);
     ok('its line counts the trade and what it made', out.some((l) => /dips .*1 trade closed \(1 made money\) · banked \+\$54\.88/.test(l)), out);
     ok("and today's dip trades are reported", out.some((l) => /^TODAY   dips today: 1 trade/.test(l)), out);
     ok('the desk line counts all five books', out.some((l) => /desk .*\$22,/.test(l)), out);

@@ -86,7 +86,8 @@ src/desk/books.js   the rules, pure: volatility targeting (crypto 40%/30 days, S
                   SCALP (2026-09-29): the stack's 0DTE scalp method (options §5) on a 30-minute breakout, one
                   contract near 0.40 delta, out at 1.5x / SPY back in the range / 15 min flat / 30 min / 3:15;
                   its FED list of 2 PM decisions ends 2026 (add 2027's when the stack has them);
-                  DIP (2026-09-29): Evan's own hand-traded pattern as rules: a turn up off a morning low
+                  DIP (2026-09-29), on ONE-MINUTE bars (he trades a 45-second chart; Cboe's finest is one
+                  minute): Evan's own hand-traded pattern as rules: a turn up off a morning low
                   0.25 ATR under the open, under VWAP, 10:05-noon; two calls 2-3 pts out; one sells on the VWAP
                   reclaim, the runner on a fade to its SPY price / half its gain back once doubled / 3:15
 src/desk/feeds.js   Coinbase (live) and Cboe (15 min late) parsers + fetches; five-minute bars, VWAP, ATR14
