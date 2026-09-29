@@ -7,7 +7,7 @@ const os = require('os');
 const path = require('path');
 const clock = require('../src/desk/clock');
 const { Desk } = require('../src/desk/engine');
-const { deskConfig, fakeMarket, playTrendDay, playScalpMorning, at } = require('./desk-fixture');
+const { deskConfig, fakeMarket, playTrendDay, playScalpMorning, playDipMorning, at } = require('./desk-fixture');
 const C = require('./desk-check');
 
 let pass = 0, fail = 0;
@@ -129,6 +129,28 @@ async function main() {
     held.books.scalps.lots = [{ expiry: '2026-09-23', qty: 1, osi: 'SPY260923C00702000' }];
     ok('a scalp still held after 3:40 is flagged', C.health(held, at('15:45')).problems.some((x) => /^scalps: 1 contract\(s\) still held past the 3:15 clock/.test(x)));
     fs.rmSync(sdir, { recursive: true, force: true });
+  }
+
+  // a morning dip replays to the penny too
+  {
+    const pdir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-check-'));
+    let TP = at('10:06');
+    const MP = fakeMarket(() => TP);
+    const dp = new Desk(deskConfig(pdir), { feeds: MP.feeds, now: () => TP });
+    dp.quiet = true;
+    await playDipMorning(dp, MP, (t) => { TP = t; });
+    dp.record(); dp.save();
+    const pd = path.join(pdir, 'desk');
+    const { state: PS, events: pev } = C.readDesk(pd);
+    const bp = C.rebuild(pev, PS, { until: C.stateTime(PS) });
+    eq("the dip book's journal rebuilds its state to the penny", C.compare(bp, PS), []);
+    eq('its cash and what it banked', [bp.dips.cash, bp.dips.realized, bp.dips.open], [1054.88, 54.88, 0]);
+    const out = [];
+    eq('a healthy dip morning exits 0', C.run(['--dir', pd], { log: (l) => out.push(l), now: at('10:27') }), 0);
+    ok('its line counts the trade and what it made', out.some((l) => /dips .*1 trade closed \(1 made money\) · banked \+\$54\.88/.test(l)), out);
+    ok("and today's dip trades are reported", out.some((l) => /^TODAY   dips today: 1 trade/.test(l)), out);
+    ok('the desk line counts all five books', out.some((l) => /desk .*\$22,/.test(l)), out);
+    fs.rmSync(pdir, { recursive: true, force: true });
   }
 
   // no state at all

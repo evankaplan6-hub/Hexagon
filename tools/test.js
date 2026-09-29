@@ -48,7 +48,7 @@ const SUITES = [
   ['restarts', "the desk's lifecycle: START, STOP and CRASH in the journal, a restart nothing explains, and every reader passes them by"],
   ['lookout', 'the lookout page: the painted room, read-only, fed by the same stream as the floor'],
   ['themes', 'what a market is about: leagues off the series, the tickers that only look like one, and the page filter built on it'],
-  ['desk', 'the stocks, crypto and options desk: the market calendar, the feeds, paper fills, every book\'s rules, and whole rounds of a trading day and a morning of scalps'],
+  ['desk', 'the stocks, crypto and options desk: the market calendar, the feeds, paper fills, every book\'s rules, and whole rounds of a trading day, a morning of scalps and a morning dip'],
   ['crypto-lab', "the crypto lab: next-open fills, the cost of a trade, the rebalance band, and the desk's own volatility rule"],
   ['desk-check', "the desk's daily check: a real day replays to the penny, every drift named, alive and today's checks at any hour of the week"],
   ['tokens', "the desk's design tokens: every text colour at 4.5:1 or better on every surface, no colour of desk.css's own, no token that is not there, every font weight loaded"],

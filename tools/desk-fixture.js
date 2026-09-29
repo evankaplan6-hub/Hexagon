@@ -26,9 +26,9 @@ function upDay({ to = 12 * 60 + 30, slope = 0.02, drops = {} } = {}) {
 const deskConfig = (dir) => ({
   dataDir: dir, buildSha: '',
   desk: {
-    on: true, cryptoUsd: 9000, stocksUsd: 10000, optionsUsd: 1000, scalpsUsd: 1000, coins: ['BTC-USD', 'ETH-USD', 'SOL-USD'],
+    on: true, cryptoUsd: 9000, stocksUsd: 10000, optionsUsd: 1000, scalpsUsd: 1000, dipsUsd: 1000, coins: ['BTC-USD', 'ETH-USD', 'SOL-USD'],
     cryptoVolTarget: 0.4, cryptoLookback: 30, stockSym: 'SPY', stockVolTarget: 0.15, stockLookback: 20,
-    rebalBand: 0.1, cryptoFeeBps: 40, stockFeeBps: 0, optionFee: 0.03, options: true, scalps: true, maxDailyDdPct: 0.05, everySec: 10,
+    rebalBand: 0.1, cryptoFeeBps: 40, stockFeeBps: 0, optionFee: 0.03, options: true, scalps: true, dips: true, maxDailyDdPct: 0.05, everySec: 10,
     chainSkewSec: 120,
   },
 });
@@ -113,4 +113,22 @@ async function playScalpMorning(desk, M, setNow) {
   await desk.step();
 }
 
-module.exports = { DAY, at, upDay, deskConfig, fakeMarket, playTrendDay, playScalpMorning };
+// A morning of the dip book, round by round. SPY opens at 700, climbs, and drops to 698 at 9:58 (0.33 of
+// its 6-point ATR under the open); the 10:05 bar turns up (it closes over the 10:00 bar's high, still under
+// the open and VWAP) and buys two 701 calls at 0.30. The 10:10 bar jumps back over VWAP and the first
+// sells at the bid, 0.55; the runner's bid reaches 0.95 on the 10:15 bar, more than double, and falls to
+// 0.60 on the 10:20 bar, under the halfway mark back to its cost (0.625), and goes. No call carries a
+// delta, so the scalp book, which needs one, passes on the 10:15 breakout.
+const DIP_PATH = { 598: 698, 611: 700.2, 616: 701.5, 621: 701 };
+async function playDipMorning(desk, M, setNow) {
+  const { W, call } = M;
+  const calls = (b700, b701, b702) => [call(700, b700, +(b700 + 0.02).toFixed(2), 1.5), call(701, b701, +(b701 + 0.02).toFixed(2), 1), call(702, b702, +(b702 + 0.02).toFixed(2), 0.6)];
+  const round = async (hhmm, to, spot, c) => { setNow(at(hhmm)); M.setMinutes(to, DIP_PATH); W.chain = { expiry: DAY, spot, at: at(`${String(Math.floor(to / 60)).padStart(2, '0')}:${String(to % 60).padStart(2, '0')}`), calls: c, puts: [] }; await desk.step(); };
+  await round('10:06', 10 * 60 + 5, 698.14, calls(0.5, 0.2, 0.08));        // the 10:00 bar: still falling, nothing
+  await round('10:11', 10 * 60 + 10, 698.24, calls(0.62, 0.28, 0.1));      // the 10:05 bar turns: buy two 701s at 0.30
+  await round('10:16', 10 * 60 + 15, 700.28, calls(1.2, 0.55, 0.25));      // back over VWAP: the first sells at 0.55
+  await round('10:21', 10 * 60 + 20, 701.58, calls(1.9, 0.95, 0.5));       // the runner's bid doubles, and more
+  await round('10:26', 10 * 60 + 25, 701.08, calls(1.5, 0.6, 0.3));        // and gives back over half: out at 0.60
+}
+
+module.exports = { DAY, at, upDay, deskConfig, fakeMarket, playTrendDay, playScalpMorning, playDipMorning };

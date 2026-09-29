@@ -5,8 +5,8 @@
 //   ALIVE   is its loop still running? It records the books' value once a minute; a state whose
 //           newest minute is old is a desk that stopped
 //   TODAY   did each book do today's check? Crypto once a UTC day, SPY once a trading day after the
-//           open, the options book's 12:30 verdict, the scalp book watching from 10:05 -- a book that
-//           skipped its day is a book that could not get prices or could not decide
+//           open, the options book's 12:30 verdict, the scalp and dip books watching from 10:05 -- a
+//           book that skipped its day is a book that could not get prices or could not decide
 //   LEDGER  does the state add up? Every fill and settlement in the journal is replayed, with the
 //           engine's own rounding, and each book's cash, holdings, realised P&L and fees must come out
 //           to the penny of what state.json says
@@ -33,7 +33,9 @@ const JOURNAL = /^journal-(\d{4}-\d{2}-\d{2})\.jsonl$/;
 const MIN = 60000;
 const short = (id) => String(id).replace(/-USD$/, '');
 const utcDay = (t) => new Date(t).toISOString().slice(0, 10);
-const OPTION_BOOKS = ['options', 'scalps'];
+const OPTION_BOOKS = ['options', 'scalps', 'dips'];
+// the option books that watch every morning from 10:05, and what each is called on a 1 PM close
+const MORNING = { scalps: 'scalps', dips: 'dip trades' };
 
 // ---------------------------------------------------------------- reading
 function readDesk(dir) {
@@ -105,7 +107,7 @@ function rebuild(events, S, { until = Infinity } = {}) {
     }
     sl.fees = r2(sl.fees + (e.fee || 0));
   }
-  return { sleeves, options: lots.options, scalps: lots.scalps, fills, unknown };
+  return { sleeves, ...lots, fills, unknown };
 }
 
 // Every difference between the rebuild and the state, as sentences.
@@ -178,14 +180,15 @@ function health(S, now) {
     else lines.push(optTxt(d));
   } else if (d && d.date === e.day) lines.push(optTxt(d));
   else lines.push(sess && sess.early ? 'options: no trade on a 1 PM close' : 'options: the next 12:30 test is on the next trading day');
-  const x = B.scalps, xd = x && x.day;
-  if (x) {
-    // the scalp book's day starts with the first bar it reads, so by 10:30 on the late tape a book that has
-    // run before has today's (one that never has, DESK_SCALPS=0 or new, has none to miss)
+  for (const [key, none] of Object.entries(MORNING)) {
+    const x = B[key], xd = x && x.day;
+    if (!x) continue;
+    // the book's day starts with the first bar it reads, so by 10:30 on the late tape a book that has run
+    // before has today's (one that never has, switched off or new, has none to miss)
     const count = xd ? `${xd.entries} trade${xd.entries === 1 ? '' : 's'}${xd.status === 'done' && xd.why ? `, done: ${xd.why}` : ''}` : '';
-    if (xd && xd.date === e.day) lines.push(`scalps today: ${xd.status === 'early-close' ? 'a 1 PM close, no scalps' : count}`);
-    else if (xd && sess && !sess.early && e.min >= 10 * 60 + 30 && !young) problems.push(`scalps: not watching today (${e.day}): SPY's minute bars did not reach the book`);
-    else lines.push(!xd ? 'scalps: has not watched a session yet' : sess && sess.early ? 'scalps: none on a 1 PM close' : 'scalps: watching from 10:05 on the next trading day');
+    if (xd && xd.date === e.day) lines.push(`${key} today: ${xd.status === 'early-close' ? `a 1 PM close, no ${none}` : count}`);
+    else if (xd && sess && !sess.early && e.min >= 10 * 60 + 30 && !young) problems.push(`${key}: not watching today (${e.day}): SPY's minute bars did not reach the book`);
+    else lines.push(!xd ? `${key}: has not watched a session yet` : sess && sess.early ? `${key}: no ${none} on a 1 PM close` : `${key}: watching from 10:05 on the next trading day`);
   }
   for (const key of OPTION_BOOKS) {
     const held = ((B[key] && B[key].lots) || []).filter((l) => l.expiry < e.day || (l.expiry === e.day && sess && e.min >= 15 * 60 + 40));
@@ -221,7 +224,7 @@ function bookLines(S) {
   const holding = (key, v, initial) => `holding would be ${signed(r2(v - initial))}${holdFee(key) > 0 ? ` after its ${money(holdFee(key))} fee to buy in` : ''}`;
   const row = (name, value, initial, extra) => `${name.padEnd(8)}${money(value).padStart(12)}  ${signed(r2(value - initial)).padStart(10)}  ${extra}`;
   const out = [];
-  const c = B.crypto, s = B.stocks, o = B.options, x = B.scalps;
+  const c = B.crypto, s = B.stocks, o = B.options;
   if (c) out.push(row('crypto', p.c, c.initial, traded('crypto') ? `${holding('crypto', p.bc, c.initial)} · banked ${signed(banked('crypto'))} · fees ${money(fees('crypto'))}` : 'not traded yet'));
   if (s) out.push(row('stocks', p.s, s.initial, traded('stocks') ? `${holding('stocks', p.bs, s.initial)} · banked ${signed(banked('stocks'))} · fees ${money(fees('stocks'))}` : 'not traded yet'));
   if (o) {
@@ -229,13 +232,15 @@ function bookLines(S) {
     const won = done.filter((t) => t.pnl > 0).length;
     out.push(row('options', p.o, o.initial, `${done.length} trade${done.length === 1 ? '' : 's'} closed (${won} made money) · banked ${signed(o.realized || 0)} · fees ${money(o.fees || 0)}`));
   }
-  if (x) {
+  for (const [key, field] of [['scalps', 'x'], ['dips', 'dp']]) {
+    const x = B[key];
+    if (!x) continue;
     const done = (x.trades || []).filter((t) => !t.open);
     const won = done.filter((t) => t.pnl > 0).length;
     // a minute from before the book joined the desk has no value for it: its cash, untouched
-    out.push(row('scalps', p.x ?? x.initial, x.initial, `${done.length} trade${done.length === 1 ? '' : 's'} closed (${won} made money) · banked ${signed(x.realized || 0)} · fees ${money(x.fees || 0)}`));
+    out.push(row(key, p[field] ?? x.initial, x.initial, `${done.length} trade${done.length === 1 ? '' : 's'} closed (${won} made money) · banked ${signed(x.realized || 0)} · fees ${money(x.fees || 0)}`));
   }
-  const init = [c, s, o, x].reduce((a, b) => a + (b ? b.initial : 0), 0);
+  const init = Object.values(B).reduce((a, b) => a + (b && Number.isFinite(b.initial) ? b.initial : 0), 0);
   out.push(row('desk', p.e, init, `as of ${new Date(p.t).toISOString().slice(0, 16).replace('T', ' ')}Z`));
   return out;
 }

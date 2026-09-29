@@ -35,14 +35,16 @@
   --bad: #ff7b7b;
   --focus: #eef1f6;                   /* the keyboard focus ring: never a book's colour */
 
-  /* ---- the four books: a book's edge, its line, its dot. The set was picked to stay apart under
+  /* ---- the five books: a book's edge, its line, its dot. The set was picked to stay apart under
      colour blindness (the review's validator, worst pair 13.2; the old blue and purple were 0.9). The
      scalp book's lavender (2026-09-29) is at least 26.9 (CIELAB, Machado's full-strength simulations)
-     from every other book and from the gain and loss colours, under all three kinds. */
+     from the books before it and the gain and loss colours, under all three kinds; the dip book's pale
+     cyan is at least 18.0 from all of them, lavender and --warn included. */
   --book-crypto: #c98500;
   --book-stocks: #3987e5;
   --book-options: #d55181;
   --book-scalps: #c9b8ff;
+  --book-dips: #9fe2f0;
 
   /* ---- washes and edges for tinted chips and badges, mixed from the colours above */
   --ok-wash: color-mix(in srgb, var(--ok) 10%, transparent);

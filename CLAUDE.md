@@ -5,9 +5,10 @@ until 2026-09-10; it was moved here with its full git history. There is no other
 checkout — if you find a reference to `~/claude/hexagon` anywhere, it is stale.
 
 **The Hexagon** is a paper trading desk for **stocks, crypto and options**, its main scope since
-2026-09-25: six bots run four paper books on free public prices -- crypto (BTC, ETH, SOL, live from
+2026-09-25: six bots run five paper books on free public prices -- crypto (BTC, ETH, SOL, live from
 Coinbase), stocks (SPY), options (SPY same-day, trend days) and, since 2026-09-29, scalps (SPY same-day,
-held minutes), the last three from Cboe about 15 minutes late -- and stream
+held minutes) and dips (Evan's own morning dip under VWAP, as rules), the last four from Cboe about 15
+minutes late -- and stream
 them to a live trading floor at `/`. The code is `src/desk/`; README's first section explains it.
 
 It began as a six-agent prediction-market desk that priced the same events on Polymarket and Kalshi and
@@ -21,7 +22,7 @@ file in `public/vendor/` on 2026-09-19 at Evan's request; see `public/vendor/REA
 package and nothing installs it. Do not add others without asking.)
 
 Read `README.md` before changing anything. Its first section is the stocks, crypto and options desk:
-the four books, the lab result behind each rule, the fill model and the 15-minute delay. The rest is
+the five books, the lab result behind each rule, the fill model and the 15-minute delay. The rest is
 the prediction-market desk's record, including the fee math and why the venue gap was not the edge.
 `ops/DEPLOY.md` covers cloud deployment (Fly app `hexagon-desk`, which runs both desks). Merging to `main` auto-deploys
 to Fly once tests pass (paper only; see ops/DEPLOY.md → Auto-deploy).
@@ -76,7 +77,7 @@ npm run reset                                 # wipe the prediction-market paper
 
 ```
                   THE STOCKS, CRYPTO AND OPTIONS DESK (the main scope since 2026-09-25; paper only, no broker)
-src/desk/engine.js  the desk: four books' ledgers, the six bots' jobs (HOLT prices, ILSA volatility, TESS risk,
+src/desk/engine.js  the desk: five books' ledgers, the six bots' jobs (HOLT prices, ILSA volatility, TESS risk,
                   RIGO marks and option exits, BRAM signals, KETT fills; PRED is the prediction-market desk,
                   trading in paper beside it), data/desk/state.json + journal-YYYY-MM-DD.jsonl, the page's snapshot
 src/desk/books.js   the rules, pure: volatility targeting (crypto 40%/30 days, SPY 15%/20 sessions, 10-point band)
@@ -84,7 +85,10 @@ src/desk/books.js   the rules, pure: volatility targeting (crypto 40%/30 days, S
                   an option is bought only off a chain within DESK_CHAIN_SKEW_SEC of the trigger bar's close;
                   SCALP (2026-09-29): the stack's 0DTE scalp method (options §5) on a 30-minute breakout, one
                   contract near 0.40 delta, out at 1.5x / SPY back in the range / 15 min flat / 30 min / 3:15;
-                  its FED list of 2 PM decisions ends 2026 (add 2027's when the stack has them)
+                  its FED list of 2 PM decisions ends 2026 (add 2027's when the stack has them);
+                  DIP (2026-09-29): Evan's own hand-traded pattern as rules: a turn up off a morning low
+                  0.25 ATR under the open, under VWAP, 10:05-noon; two calls 2-3 pts out; one sells on the VWAP
+                  reclaim, the runner on a fade to its SPY price / half its gain back once doubled / 3:15
 src/desk/feeds.js   Coinbase (live) and Cboe (15 min late) parsers + fetches; five-minute bars, VWAP, ATR14
 src/desk/broker.js  paper fills: crypto walks Coinbase's book + 0.40%, SPY at the touch, options at the touch + $0.03
 src/desk/clock.js   NYSE sessions, holidays and 1 PM closes through 2027 (TESS warns when the list runs out)

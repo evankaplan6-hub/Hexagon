@@ -1,5 +1,5 @@
 'use strict';
-// The four books' rules. Pure: bars, quotes and the book's own state in, a decision out. No clock,
+// The five books' rules. Pure: bars, quotes and the book's own state in, a decision out. No clock,
 // no network, no ledger -- src/desk/engine.js does all of that and asks these what to do.
 //
 // ---------------------------------------------------------------- crypto and stocks: volatility targeting
@@ -269,7 +269,84 @@ function scalpExit(lot, fresh, last, row, R = SCALP) {
   return null;
 }
 
+// ---------------------------------------------------------------- dips: Evan's own morning trade, on paper
+// A pattern Evan traded by hand in late September 2026 and asked to have run on paper (2026-09-29): calls
+// bought between 10 and noon while SPY was down on the day and under VWAP near its morning low, 2-3
+// points out for about $0.20-$0.40, sold as SPY got back above VWAP (the 25th and the 28th were the
+// examples). Two examples prove nothing, so this book runs the pattern every day to see whether it
+// holds. On that week's SPY minute bars the trigger below fired on the 23rd, 25th and 28th, and SPY got
+// back above VWAP after all three.
+//
+//   when      five-minute bars closing 10:05 to 12:00; never on a 1 PM close
+//   the dip   the day's low so far at least 0.25 ATR14 under the 9:30 open, made in the last 20 minutes
+//             (the trigger bar or the three before it)
+//   the turn  the bar closes above the high of the bar before it, still under the open and under VWAP
+//   contract  a call 2 to 3 points out, asking $0.20 to $0.45, the nearer strike if both are; two of them
+//   exits     both: a five-minute close under the morning low less 0.10 ATR14 (the dip was not the low),
+//             or no close back above VWAP by 12:30. The first: at the bid on the first close above VWAP.
+//             The runner, from then: a close back under the price SPY was bought at; once its bid has
+//             doubled, when it gives back half its gain from the best bid seen; 3:15
+//   the day   at most two trades, calls only, and done for the day after a trade that loses
+const DIP = {
+  open: 9 * 60 + 30,
+  firstBar: 10 * 60, lastBar: 11 * 60 + 55,
+  dipAtr: 0.25, lowWithin: 3, stopAtr: 0.10,
+  nearMin: 2, nearMax: 3, premiumMin: 0.20, premiumMax: 0.45, qty: 2,
+  reclaimBy: 12 * 60 + 25,      // the bar whose close is 12:30
+  trailAt: 2, giveBack: 0.5,
+  clock: 15 * 60 + 10,
+  maxTrades: 2,
+};
+
+// Does the bar at index `i` trigger? `atr` is ATR14 from the daily bars. The day's first bar must be the
+// 9:30 bar (it is the open) and the bar before the trigger must be the one right before it.
+// -> { idx, m, c, vwap, open, low, dip (in ATRs), stop } or null
+function dipTrigger(bars, vwap, i, atr, R = DIP) {
+  const b = bars[i], p = bars[i - 1];
+  if (!b || !p || !(atr > 0) || b.m < R.firstBar || b.m > R.lastBar || bars[0].m !== R.open || p.m !== b.m - 5) return null;
+  const open = bars[0].o;
+  let low = Infinity, at = -1;
+  for (let k = 0; k <= i; k++) if (bars[k].l <= low) { low = bars[k].l; at = k; }
+  if (open - low < R.dipAtr * atr - 1e-9 || i - at > R.lowWithin) return null;
+  if (!(b.c > p.h && b.c < open && b.c < vwap[i])) return null;
+  return { idx: i, m: b.m, c: b.c, vwap: vwap[i], open, low, dip: (open - low) / atr, stop: low - R.stopAtr * atr };
+}
+
+// Which call. `rows` are the day's calls. -> { row, dist } or { why }
+function pickDip(rows, spot, R = DIP) {
+  if (!(spot > 0)) return { why: 'no SPY price' };
+  const near = (rows || []).map((r) => ({ r, dist: r.strike - spot })).filter((x) => x.dist >= R.nearMin - 1e-9 && x.dist <= R.nearMax + 1e-9);
+  if (!near.length) return { why: `no call ${R.nearMin}-${R.nearMax} points out` };
+  const ok = near.filter((x) => x.r.bid > 0 && x.r.ask >= R.premiumMin - 1e-9 && x.r.ask <= R.premiumMax + 1e-9).sort((a, b) => a.dist - b.dist);
+  if (!ok.length) return { why: `the ${near.map((x) => x.r.strike).join(' and ')} call${near.length === 1 ? '' : 's'} ask${near.length === 1 ? 's' : ''} ${near.map((x) => fmt(x.r.ask)).join(' and ')}, outside ${fmt(R.premiumMin)}-${fmt(R.premiumMax)}` };
+  return { row: ok[0].r, dist: ok[0].dist };
+}
+
+// Should this lot go now? `lot` carries { role ('first' or 'runner'), stop, spy (SPY when bought), entry,
+// peak (the best bid seen, this read's included), reclaimM (the bar SPY closed back above VWAP on, or
+// null) }; `fresh` the bars finished since the last check, each with its `vw`; `last` the newest bar;
+// `row` the contract's line in the chain just read.
+// -> { exit: { kind, bar } | null, reclaimM } where kind is one of
+//   stop     a close under the morning low less 0.10 ATR          late   no reclaim by 12:30
+//   reclaim  the first close back above VWAP (the first contract)  fade   the runner: a close under its SPY price
+//   trail    the runner, doubled, gave back half its gain           clock  3:15
+function dipExit(lot, fresh, last, row, R = DIP) {
+  let reclaimM = lot.reclaimM ?? null;
+  for (const b of fresh || []) {
+    if (b.c < lot.stop) return { exit: { kind: 'stop', bar: b }, reclaimM };
+    if (reclaimM == null) {
+      if (b.c > b.vw) { reclaimM = b.m; if (lot.role !== 'runner') return { exit: { kind: 'reclaim', bar: b }, reclaimM }; }
+    } else if (lot.role === 'runner' && b.c < lot.spy) return { exit: { kind: 'fade', bar: b }, reclaimM };
+  }
+  if (last.m >= R.clock) return { exit: { kind: 'clock', bar: last }, reclaimM };
+  if (reclaimM == null && last.m >= R.reclaimBy) return { exit: { kind: 'late', bar: last }, reclaimM };
+  if (reclaimM != null && lot.role === 'runner' && row && lot.peak >= R.trailAt * lot.entry - 1e-9
+    && row.bid <= lot.entry + (lot.peak - lot.entry) * R.giveBack + 1e-9) return { exit: { kind: 'trail', bar: last }, reclaimM };
+  return { exit: null, reclaimM };
+}
+
 module.exports = {
   volTargetWeight, needsRebalance, trendTest, scanEntry, vwapBreak, pickContract, targetHit, chainSync, ZERO,
   scalpTrigger, scalpGate, pickScalp, scalpExit, SCALP, FED,
+  dipTrigger, pickDip, dipExit, DIP,
 };

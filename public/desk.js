@@ -60,9 +60,9 @@
     ? (+q).toLocaleString('en-US', { minimumFractionDigits: COIN_DP[sym] ?? 6, maximumFractionDigits: COIN_DP[sym] ?? 6 })
     : book === 'stocks' ? `${+(+q).toFixed(3)}` : String(q));
   const bookOf = (k) => (S && S.books || []).find((b) => b.key === k) || null;
-  const BOOK_COLOR = { crypto: 'var(--book-crypto)', stocks: 'var(--book-stocks)', options: 'var(--book-options)', scalps: 'var(--book-scalps)' };
-  // the two books that hold option contracts: their rows are contracts, and they are never "held" against a market
-  const optBook = (k) => k === 'options' || k === 'scalps';
+  const BOOK_COLOR = { crypto: 'var(--book-crypto)', stocks: 'var(--book-stocks)', options: 'var(--book-options)', scalps: 'var(--book-scalps)', dips: 'var(--book-dips)' };
+  // the books that hold option contracts: their rows are contracts, and they are never "held" against a market
+  const optBook = (k) => k === 'options' || k === 'scalps' || k === 'dips';
   // tokens.css, read once for the one thing that cannot take a var(): the chart library
   const TOK = (() => {
     const cs = getComputedStyle(document.documentElement), t = {};
@@ -227,6 +227,33 @@
       default: return d.status;
     }
   }
+  // the dip book's day, in one sentence
+  function dipsLine() {
+    const P = S.dips || {}, d = P.day;
+    if (!P.enabled) return 'switched off';
+    const rows = (bookOf('dips') || { rows: [] }).rows;
+    if (rows.length) {
+      const r = rows[0];
+      return rows.some((x) => x.role === 'first')
+        ? `holding ${rows.length} call${rows.length === 1 ? '' : 's'}: one sells when SPY closes back above VWAP; all out under ${Number(r.stop).toFixed(2)}, or with no reclaim by 12:30 PM`
+        : `riding the runner: out if SPY closes under ${Number(r.spy).toFixed(2)}, if it gives back half its gain once doubled, or at 3:15 PM`;
+    }
+    if (!d || d.date !== today()) {
+      if (S.market && S.market.open) return 'watching from 10:05 for a morning dip under VWAP';
+      const n = nextOpenDay();
+      return !n ? 'watching from 10:05 on the next trading day' : `watching from 10:05 ${n === 'today' || n === 'tomorrow' ? n : `on ${n}`}`;
+    }
+    const sp = P.spy;
+    switch (d.status) {
+      case 'waiting': return 'watching from 10:05 for a morning dip under VWAP';
+      case 'watching': return sp && sp.need != null
+        ? (sp.low <= sp.need ? `SPY has dipped to ${sp.low.toFixed(2)}: buying the first turn up under VWAP, until noon` : `waiting for SPY under ${sp.need.toFixed(2)} (low so far ${sp.low.toFixed(2)}), until noon`)
+        : 'watching for a morning dip under VWAP, until noon';
+      case 'done': return `done for today: ${d.why || `${d.entries} trade${d.entries === 1 ? '' : 's'}`}`;
+      case 'early-close': return 'no dip trades on a 1 PM close';
+      default: return d.status;
+    }
+  }
   // The options day used to have a row here too, word for word the Options card's last line.
   function deskHtml() {
     const mk = S.market || {}, C = S.cfg || {};
@@ -275,7 +302,7 @@
   function beganAt(t, start) { return start > 0 && t > start && t - start < 10 * 6e4; }
   // The book's own P&L over its history (and simply holding, dashed), from /api/desk/history's per-book values.
   function sparkSvg(key) {
-    const field = { crypto: 'c', stocks: 's', options: 'o', scalps: 'x' }[key], benchField = { crypto: 'bc', stocks: 'bs' }[key];
+    const field = { crypto: 'c', stocks: 's', options: 'o', scalps: 'x', dips: 'dp' }[key], benchField = { crypto: 'bc', stocks: 'bs' }[key];
     const init = (hist.books || {})[key], b = bookOf(key);
     let series = init ? hist.points.filter((p) => p[field] != null).map((p) => [p.t, p[field] - init, benchField && p[benchField] != null ? p[benchField] - init : null]) : [];
     // a line 36px tall needs a few hundred points, and the history sends up to three thousand
@@ -298,6 +325,12 @@
   const SWINGS = 'How much it moves in a year, measured over the last 30 days (crypto) or 20 sessions (SPY)';
   const TARGET = 'How much of its slot the book wants to hold: less when it swings more';
   function holdRow(b, r) {
+    if (b.key === 'dips') {
+      // no price target: the first sells on SPY's reclaim of VWAP, the runner on a trail
+      const plan = r.role === 'runner' ? (r.reclaimed ? `riding · best bid ${px(r.peak)}` : 'rides after the reclaim') : 'sells on the VWAP reclaim';
+      return `<tr data-k="${esc(r.sym)}-${esc(r.role)}"><th><span class="tk">${esc(r.name)}</span><small>${esc(cap(r.label))} · ${esc(plan)} · bid ${px(r.px)}</small></th>` +
+        `<td class="v">${money(r.value || 0)}</td><td>${Number.isFinite(r.pnl) ? figure(r.pnl) : '—'}</td></tr>`;
+    }
     if (optBook(b.key)) {
       // the price its target sells at, not just "2x", and what it is bid now
       const mult = r.entry > 0 && r.target > 0 ? ` (${+(r.target / r.entry).toFixed(1)}x)` : '';
@@ -336,6 +369,16 @@
     for (const t of (X.trades || []).slice(0, 3)) rows.push([t.date.slice(5).replace('-', '/'), `${t.strike}${t.right} at ${px(t.entry)}${t.open ? ' · open' : ` · ${t.pnl >= 0 ? 'made' : 'lost'} ${money(Math.abs(t.pnl))}`}`]);
     return rows.length ? `<dl class="bkfacts">${rows.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>` : '<p class="bksub">No contract open.</p>';
   }
+  // the dip book with nothing open: today's trades, SPY against the dip it needs, the last few
+  function dipFacts() {
+    const P = S.dips || {}, d = P.day, sp = P.spy, rows = [], td = today();
+    const on = (day) => (day && day !== td ? `${wd(day)} ` : '');
+    const done = (P.trades || []).filter((t) => t.date === (d && d.date) && !t.open);
+    if (d && d.entries) rows.push([d.date === td ? 'Today' : wd(d.date), `${d.entries} trade${d.entries === 1 ? '' : 's'} · ${plain(signed(r2(done.reduce((a, t) => a + t.pnl, 0))))}`]);
+    if (sp) rows.push([`SPY ${on(sp.day)}${minTxt(sp.m + 5)}`, `${sp.c.toFixed(2)} · open ${sp.open.toFixed(2)} · low ${sp.low.toFixed(2)}${sp.need != null ? ` · needs ${sp.need.toFixed(2)}` : ''}`]);
+    for (const t of (P.trades || []).slice(0, 3)) rows.push([t.date.slice(5).replace('-', '/'), `${t.qty} × ${t.strike}${t.right} at ${px(t.entry)}${t.open ? ' · open' : ` · ${t.pnl >= 0 ? 'made' : 'lost'} ${money(Math.abs(t.pnl))}`}`]);
+    return rows.length ? `<dl class="bkfacts">${rows.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>` : '<p class="bksub">No calls open.</p>';
+  }
   function nextLine(b) {
     if (b.key === 'crypto') return `Checks again after midnight UTC: <b>${esc(ET_HM.format(new Date(Math.floor(S.now / 864e5 + 1) * 864e5)))} ET</b>`;
     if (b.key === 'stocks') {
@@ -343,7 +386,7 @@
       return S.market && S.market.open ? (checked ? 'Checked today; checks again after the next open' : 'Checks once a trading day, after the open')
         : `Checks at the next open: <b>${esc(String((S.market && S.market.says) || '').replace(/^opens /, ''))}</b>`;
     }
-    return esc(cap(b.key === 'scalps' ? scalpsLine() : optionsLine()));
+    return esc(cap(b.key === 'scalps' ? scalpsLine() : b.key === 'dips' ? dipsLine() : optionsLine()));
   }
   // A book that has never traded is its figure, its markets and its next check: no line that has never
   // moved. On a phone every book is its figure until it is opened (the chip is the button), so the page
@@ -359,7 +402,7 @@
     // the two figures on each row are named once, over them, when the book holds something
     const head = optBook(b.key) || held ? '<thead><tr><th></th><th>Worth</th><th>P&amp;L</th></tr></thead>' : '';
     const body = b.rows.length ? `<table class="hold-t">${head}<tbody>${b.rows.map((r) => holdRow(b, r)).join('')}</tbody></table>`
-      : b.key === 'options' ? optionsFacts() : b.key === 'scalps' ? scalpFacts() : '<p class="bksub">Nothing held yet.</p>';
+      : b.key === 'options' ? optionsFacts() : b.key === 'scalps' ? scalpFacts() : b.key === 'dips' ? dipFacts() : '<p class="bksub">Nothing held yet.</p>';
     const open = openBooks.has(b.key);
     return `<article class="card bk${open ? ' open' : ''}" data-k="${b.key}" style="--bk:${BOOK_COLOR[b.key]}" aria-label="${esc(b.name)} book">` +
       `<header><i class="sw"></i><h3>${esc(b.name)}</h3><span class="chip">${esc(chip)}</span>` +
@@ -505,7 +548,7 @@
   const W_FULL = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   // points: [t, desk P&L, holding P&L|null]. The live end comes from the stream, the rest from history.
   function chartSeries() {
-    const bk = hist.books || {}, opt = (bk.options || 0) + (bk.scalps || 0);
+    const bk = hist.books || {}, opt = (bk.options || 0) + (bk.scalps || 0) + (bk.dips || 0);
     // holding: each book's benchmark, or its own value while it has not traded (the option books are never "held": their cash)
     const pts = hist.points.map((p) => [p.t, r2(p.e - hist.initial), p.bc != null && p.bs != null ? r2(p.bc + p.bs + opt - hist.initial) : null]);
     if (S && Number.isFinite(S.pnl)) {

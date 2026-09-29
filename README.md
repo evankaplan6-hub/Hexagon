@@ -2,7 +2,7 @@
 
 [![test](https://github.com/evankaplan6-hub/Hexagon/actions/workflows/test.yml/badge.svg)](https://github.com/evankaplan6-hub/Hexagon/actions/workflows/test.yml)
 
-A paper trading desk for **stocks, crypto and options**. Six bots run four books on free public prices -- crypto live from Coinbase, SPY and its same-day options from Cboe -- and stream everything to a live trading floor. Zero npm dependencies (the chart is one vendored file, TradingView Lightweight Charts); Node 20+. **Paper only: nothing here can place a real order.**
+A paper trading desk for **stocks, crypto and options**. Six bots run five books on free public prices -- crypto live from Coinbase, SPY and its same-day options from Cboe -- and stream everything to a live trading floor. Zero npm dependencies (the chart is one vendored file, TradingView Lightweight Charts); Node 20+. **Paper only: nothing here can place a real order.**
 
 It started on 2026-09-10 as a prediction-market desk trading the gaps between Polymarket and Kalshi. Fifteen days of paper said there was no edge after fees (-$1,753 on $10,000, every book lost), so on 2026-09-25 that desk stopped opening trades; since 2026-09-27 its arbs, maker and snipe trade again in paper beside the new desk, on their own floor at `/pm`, so the record keeps growing. Everything from [The prediction-market desk](#the-prediction-market-desk-winding-down) down is that desk's record.
 
@@ -16,7 +16,7 @@ Copy `.env.example` to `.env` to change anything. The desk keeps its ledger in `
 
 ## The stocks, crypto and options desk
 
-### The four books
+### The five books
 
 | Book | Holds | Rule | Checked | Paper cash |
 |---|---|---|---|---|
@@ -24,8 +24,9 @@ Copy `.env.example` to `.env` to change anything. The desk keeps its ledger in `
 | Stocks | SPY | the same at 15% a year, on 20 sessions | once a trading day, after the open | $10,000 |
 | Options | SPY same-day calls or puts | the afternoon trend-day rules, below | every five-minute bar, 12:30 to 3:15 | $1,000 |
 | Scalps | one SPY same-day call or put at a time, held minutes | the stack's 0DTE scalp method on a 30-minute breakout, below | every five-minute bar, 10:05 to 3:15 | $1,000 |
+| Dips | two SPY same-day calls at a time | Evan's own morning dip under VWAP, below | every five-minute bar, 10:05 to 3:15 | $1,000 |
 
-Each book keeps its own cash. The crypto and stocks books are scored against simply holding what they trade, from their first trade (the two option books against their own cash): the wall screen says "holding would be ..." beside every book, and the chart draws holding as a dashed line. Holding buys its whole slot at that trade's mid price and pays the fee the book pays on a buy (0.40% for crypto, none for SPY), once. Until 2026-09-26 it paid none, so every crypto book started about 0.4% of its slot behind holding before any price moved: the crypto book was $41.72 behind holding that morning, and with the fee about $1.55. The books still pay a fee on every trade after that, which holding never does, and that is the honest cost of their rule. A book trades only when its target moves 10 points from the last one it traded to (0.72 becoming 0.83) or goes back to full size, so prices drifting never trade on their own. Rarely trading is normal here, as it was on the old desk.
+Each book keeps its own cash. The crypto and stocks books are scored against simply holding what they trade, from their first trade (the three option books against their own cash): the wall screen says "holding would be ..." beside every book, and the chart draws holding as a dashed line. Holding buys its whole slot at that trade's mid price and pays the fee the book pays on a buy (0.40% for crypto, none for SPY), once. Until 2026-09-26 it paid none, so every crypto book started about 0.4% of its slot behind holding before any price moved: the crypto book was $41.72 behind holding that morning, and with the fee about $1.55. The books still pay a fee on every trade after that, which holding never does, and that is the honest cost of their rule. A book trades only when its target moves 10 points from the last one it traded to (0.72 becoming 0.83) or goes back to full size, so prices drifting never trade on their own. Rarely trading is normal here, as it was on the old desk.
 
 ### Why these rules
 
@@ -45,6 +46,7 @@ Nothing clever survived testing, so the books run the one thing that did.
   Volatility targeting beat holding on all four coins, with smaller drawdowns, and still did at 0.80% a side (`--bps 80`). The trend rules won big on one coin and lost big on the next. It is not magic: from 2024, in bitcoin's run, holding BTC did better (28.7% against 25.8% a year; `--from 2024-01-01`).
 - **Options.** Evan's own afternoon pattern, written down as rules in the investment stack (`~/Downloads/stack`, `strategies/2026-09-23-spy-0dte-afternoon-paper-test.md`) and ported line for line from its checker, `trend_day_check.py`. At 12:30 SPY must be at least half an ATR14 from the open, on the trend side of VWAP, and not have given back half its move. From 12:30 to 2:45 the first five-minute close at a new high (low) on the trend side of VWAP buys a call (put) 1 to 2 points out, priced $0.07 to $0.25, two contracts at $0.12 or less. One sells at 2x, the other at 3x; everything goes on a five-minute close back through VWAP, or at 3:15; one re-entry, only after a target hit; no trade on a 1 PM close. The stack's backtest found about one trend day in seven and too few trades to judge the rules; this book runs them every trading day so the sample grows on its own. It is small on purpose: at most two contracts a trade.
 - **Scalps** (since 2026-09-29, at Evan's asking). The stack has a method for a 0DTE scalp but no trigger for one (`references/options/5-choosing.md`: which contract, the exit plan, the day's limits), so this book is that method on the plainest breakout. From 10:05 to 2:30, a five-minute close above the high of the six bars before it (the last 30 minutes; at 10:05, the opening range) and above VWAP buys one call; below their low and below VWAP, one put. The contract is the one nearest 0.40 delta within 0.25 to 0.60, asking $0.15 to $1.50 ($0.20 from 2 PM). It goes at a 1.5x resting limit; on a five-minute close back inside the range it broke (the stop is on SPY, not the premium); from 15 minutes in, on any bar it is not bid above what it cost; at 30 minutes whatever it is bid; and at 3:15. One position, no adds, at most four trades a day, a 15-minute pause after a loss, done after two losses in a row, and nothing in the 30 minutes before a 2 PM Fed decision (Oct 28 and Dec 9 are the ones listed; 2027's go into `FED` in `src/desk/books.js` when the stack has them). **It is tested on nothing.** The stack's evidence finds no long-0DTE rule that survives costs, and its own bar for trusting one is 50 journaled trades whose expectancy's 95% lower bound is above zero; the book journals what the stack asks of every trade (SPY, the level broken, VWAP, the delta, the bid, ask and sizes) so that question can be answered from `data/desk/`. It joined a desk already running: a ledger from before it gets its $1,000 as cash, and the desk's recorded value is raised by the same, so no P&L moves.
+- **Dips** (since 2026-09-29, at Evan's asking). A pattern Evan traded by hand in late September, written down: calls bought between 10 and noon while SPY was down on the day and under VWAP near its morning low, 2-3 points out for about $0.20-$0.40, sold as SPY got back above VWAP (the 25th and the 28th were the examples). So from 10:05 to noon, when SPY's low so far is at least 0.25 ATR14 under the 9:30 open, was made in the last 20 minutes, and a five-minute bar closes over the high of the one before it while still under the open and VWAP, the book buys two calls 2 to 3 points out asking $0.20 to $0.45. The first sells at the bid on the first close back above VWAP. The runner then goes on a close back under the price SPY was bought at, on giving back half its gain once its bid has doubled, or at 3:15. Both go on a close 0.10 ATR under the morning low, or with no close above VWAP by 12:30. Calls only, at most two trades a day, done after a loss, none on a 1 PM close. On that week's SPY minute bars the trigger fired on the 23rd, 25th and 28th, and SPY got back above VWAP after all three. **Two examples are an anecdote, not evidence**; the book is here to find out whether the pattern holds, and journals the dip it bought (SPY, the open, the low, the dip in ATRs, VWAP, the stop, the quote).
 
 ### Fills, fees and the 15-minute delay
 
@@ -53,7 +55,7 @@ Nothing clever survived testing, so the books run the one thing that did.
 - Options fill at the bid or the ask, capped at the size shown, plus $0.03 a contract (`DESK_OPTION_FEE`). A target is a resting limit: it fills when the bid reaches it, or when the contract prints there after it was bought.
 - **Cboe's free feed is about 15 minutes late**, and the desk trades on it as exactly that: the price it decides on is the price it fills at, so a stock or option result is honest, just 15 minutes behind. It never buys off a tape that has stopped: after the close the SPY book waits for the next session rather than buy the 3:59 price at 4:30.
 - **An option is bought only off a chain from the trigger's own moment** (2026-09-26). The trigger is a five-minute SPY bar from Cboe's chart file and the fill is the ask on Cboe's option chain: two files on the same delay, and nothing tied them together, so a chain from before a breakout would have sold the call at its pre-breakout price and flattered every entry. At a trigger the desk fetches a fresh chain and compares its own time (SPY's last trade in it) with the trigger bar's close; more than `DESK_CHAIN_SKEW_SEC` (120 s) either way and the entry is skipped, journaled as `OPTIONS_SKIP` with both times, and said on the floor and in the daily check. Every option fill journals the same three fields (`barAt`, `chainAt`, `skewSec`), so the gap is measured on every trade, not assumed. A sale is never held back: one off a chain out of step is made and flagged.
-- The scalp book reads the same chain, under the same rule, at its trigger and once a finished bar while it holds its contract; a read from the last 20 seconds serves both option books.
+- The scalp and dip books read the same chain, under the same rule, at a trigger and once a finished bar while they hold anything; a read from the last 20 seconds serves every option book.
 - TESS stops all new buying for the rest of the Eastern day once the whole desk is down 5% (`DESK_MAX_DAILY_DD`). Selling is never blocked.
 
 ### The bots
@@ -64,7 +66,7 @@ Nothing clever survived testing, so the books run the one thing that did.
 | ILSA | measures how hard each market has been swinging |
 | TESS | risk: stale prices, the daily loss limit, the market calendar |
 | RIGO | marks every holding and takes the option books' exits |
-| BRAM | decides what each book should hold; runs the 12:30 test and watches for both option books' triggers |
+| BRAM | decides what each book should hold; runs the 12:30 test and watches for the option books' triggers |
 | KETT | fills every order at the real bid and ask, fees included |
 | PRED | the prediction-market desk, winding down: its P&L and what it still holds |
 
@@ -1542,7 +1544,7 @@ re-keying, not money.
 ## Layout
 ```
                        the stocks, crypto and options desk
-src/desk/engine.js     the four books' ledgers, the six bots' jobs, data/desk/, the floor's snapshot
+src/desk/engine.js     the five books' ledgers, the six bots' jobs, data/desk/, the floor's snapshot
 src/desk/books.js      the rules, pure: volatility targeting, and the SPY same-day options rules
 src/desk/feeds.js      Coinbase (live) and Cboe (15 minutes late): parsers, fetches, bars, VWAP, ATR14
 src/desk/broker.js     paper fills: the book or the touch, fees per asset; no live broker

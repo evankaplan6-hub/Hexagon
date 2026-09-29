@@ -1,5 +1,5 @@
 'use strict';
-// The stocks, crypto and options desk: four paper books, the six bots that run them, and the ledger.
+// The stocks, crypto and options desk: five paper books, the six bots that run them, and the ledger.
 //
 // PAPER ONLY. There is no broker here and no way to reach one: every fill is src/desk/broker.js
 // pricing an order against public market data, written into this desk's own ledger. It shares the
@@ -14,8 +14,9 @@
 //   stocks   SPY, volatility-targeted at 15% a year; checked once a trading day after the open
 //   options  SPY same-day options on trend days only, Evan's afternoon rules
 //   scalps   SPY same-day options held for minutes: the stack's 0DTE scalp method (since 2026-09-29)
+//   dips     SPY same-day calls on a morning dip under VWAP: Evan's own best trade, as rules (2026-09-29)
 // The crypto and stocks books are scored against simply holding what they trade, from their first trade;
-// the two option books against their own cash.
+// the three option books against their own cash.
 //
 // THE BOTS, one job each, in the order a round runs them:
 //   HOLT  market data     prices from Coinbase (live) and Cboe (15 minutes behind)
@@ -51,9 +52,13 @@ const AGENTS = [
   { key: 'PRED', n: '07', role: 'WIND-DOWN', color: '#a855f7' },
 ];
 const COIN_NAME = { 'BTC-USD': 'Bitcoin', 'ETH-USD': 'Ether', 'SOL-USD': 'Solana' };
-const BOOKS = ['crypto', 'stocks', 'options', 'scalps'];
-// the two books that hold option contracts rather than sleeves of a market
-const optionBook = (key) => key === 'options' || key === 'scalps';
+const BOOKS = ['crypto', 'stocks', 'options', 'scalps', 'dips'];
+// the books that hold option contracts rather than sleeves of a market
+const optionBook = (key) => key === 'options' || key === 'scalps' || key === 'dips';
+// the books that joined a desk already running, with the setting that gives each its cash
+const LATER = { scalps: 'scalpsUsd', dips: 'dipsUsd' };
+// each book's value in a minute of the history
+const FIELD = { crypto: 'c', stocks: 's', options: 'o', scalps: 'x', dips: 'dp' };
 const short = (id) => String(id).replace(/-USD$/, '');
 
 class Desk {
@@ -96,6 +101,7 @@ class Desk {
         stocks: { key: 'stocks', initial: D.stocksUsd, startedAt: t, sleeves: { [D.stockSym]: sleeve(D.stocksUsd) } },
         options: lotBook('options', D.optionsUsd, t),
         scalps: lotBook('scalps', D.scalpsUsd, t),
+        dips: lotBook('dips', D.dipsUsd, t),
       },
       fills: [], log: [], history: [],
       dayKey: null, dayStart: null,
@@ -110,19 +116,20 @@ class Desk {
     catch (e) { throw new Error(`desk state ${this.file} is unreadable (${e.message}). Refusing to start and overwrite it; move it aside to begin a fresh paper account.`); }
     if (!s || s.version !== 1 || !s.books) throw new Error(`desk state ${this.file} has unexpected version ${s && s.version}. Refusing to start.`);
     this.chargeHoldingFee(s);
-    this.addScalps(s);
+    for (const key of Object.keys(LATER)) this.addBook(s, key);
     return s;
   }
-  // The scalp book joined a desk that had been running since 2026-09-25 (Evan, 2026-09-29). A ledger from
-  // before then gets it as cash, and the desk's value in its history and at the start of today is raised
-  // by that cash, as if the book had been there idle all along: the P&L they show does not move.
-  addScalps(s) {
-    if (s.books.scalps) return;
-    const t = this.now(), cash = this.D.scalpsUsd;
-    s.books.scalps = lotBook('scalps', cash, t);
+  // The scalp and dip books joined a desk that had been running since 2026-09-25 (Evan, 2026-09-29). A
+  // ledger from before one of them gets it as cash, and the desk's value in its history and at the start
+  // of today is raised by that cash, as if the book had been there idle all along: the P&L they show does
+  // not move.
+  addBook(s, key) {
+    if (s.books[key]) return;
+    const t = this.now(), cash = this.D[LATER[key]];
+    s.books[key] = lotBook(key, cash, t);
     for (const p of s.history || []) p.e = r2(p.e + cash);
     if (s.dayStart > 0) s.dayStart = r2(s.dayStart + cash);
-    s.scalpsAdded = { at: t, cash, journaled: false };
+    (s.added || (s.added = {}))[key] = { at: t, cash, journaled: false };
   }
   // The fee a book pays to buy, in basis points; simply holding pays it to buy in too.
   feeBps(key) { return (key === 'crypto' ? this.fees.cryptoBps : this.fees.stockBps) || 0; }
@@ -246,8 +253,9 @@ class Desk {
     const B = this.state.books;
     this.log('TESS', 'OPS', null, `desk online · paper only · ${BOOKS.map((k) => `${k} ${usd(B[k].initial)}`).join(', ')} · equity ${usd(this.equity())}`);
     if (!this.state.startedJournaled) { this.journal('DESK_START', { books: Object.fromEntries(BOOKS.map((k) => [k, B[k].initial])) }); this.state.startedJournaled = true; }
-    const added = this.state.scalpsAdded;
-    if (added && !added.journaled) { this.journal('BOOK_START', { book: 'scalps', cash: added.cash }); added.journaled = true; this.dirty = true; }
+    for (const [book, a] of Object.entries(this.state.added || {})) {
+      if (!a.journaled) { this.journal('BOOK_START', { book, cash: a.cash }); a.journaled = true; this.dirty = true; }
+    }
     await this.step();
     setInterval(() => { this.step().catch((e) => console.error('desk step', e)); }, this.D.everySec * 1000);
     setInterval(() => { if (this.dirty) this.save(); }, 10000);
@@ -399,13 +407,14 @@ class Desk {
   // ---------------------------------------------------------------- RIGO: marks and the options book's exits
   async rigo() {
     const b = this.state.books;
-    const o = b.options, x = b.scalps;
+    const o = b.options, x = b.scalps, p = b.dips;
     if (o.lots.length) await this.optionExits();
     if (x.lots.length) await this.scalpExits();
-    for (const l of [...o.lots, ...x.lots]) l.mark = this.lotBid(l);
+    if (p.lots.length) await this.dipExits();
+    for (const l of [...o.lots, ...x.lots, ...p.lots]) l.mark = this.lotBid(l);
     if (this.due('rigo-say', 1800)) {
       const held = [...Object.entries(b.crypto.sleeves), ...Object.entries(b.stocks.sleeves)].filter(([, sl]) => sl.qty > 0).map(([id]) => short(id));
-      const n = o.lots.length + x.lots.length;
+      const n = o.lots.length + x.lots.length + p.lots.length;
       this.log('RIGO', 'RESEARCH', null, `marked ${held.length ? held.join(', ') : 'nothing held'}${n ? ` + ${n} option${n === 1 ? '' : 's'}` : ''} · desk ${usd(this.equity())}`);
     } else this.touch('RIGO');
   }
@@ -471,6 +480,7 @@ class Desk {
     if (tr) { tr.pnl = r2((tr.pnl || 0) + pnl); tr.open = Math.max(0, (tr.open || 0) - lot.qty); if (!tr.open) tr.closedAt = this.now(); }
     this.dirty = true;
     if (key === 'scalps') { if (tr && !tr.open && d && d.date === tr.date) this.scalpClosed(d, tr); return; }
+    if (key === 'dips') { if (tr && !tr.open && d && d.date === tr.date) this.dipClosed(d, tr); return; }
     // the re-entry is earned by the FIRST exit of the first trade hitting its target
     if (d && d.firstExitHit == null && lot.trade === d.firstTrade) d.firstExitHit = !!targetHit;
     if (d && !o.lots.length) d.flatAtIdx = this.mkt.spy.bars5.length - 1;
@@ -511,15 +521,69 @@ class Desk {
     if (!ex) return;
     const R = books.SCALP, at = hm(ex.bar.m + 5);
     const why = {
-      target: `${R.target}x target hit`,
-      stop: `SPY closed back ${lot.dir === 'up' ? 'under' : 'over'} ${lot.level.toFixed(2)} at ${at} (${ex.bar.c.toFixed(2)})`,
-      clock: '3:15 clock',
-      hold: `${R.hold} minutes up`,
-      time: `${R.timeStop} minutes in and bid ${prem(row.bid)}, not above its ${prem(lot.entry)}`,
-    }[ex.kind];
+      target: () => `${R.target}x target hit`,
+      stop: () => `SPY closed back ${lot.dir === 'up' ? 'under' : 'over'} ${lot.level.toFixed(2)} at ${at} (${ex.bar.c.toFixed(2)})`,
+      clock: () => '3:15 clock',
+      hold: () => `${R.hold} minutes up`,
+      time: () => `${R.timeStop} minutes in and bid ${prem(row.bid)}, not above its ${prem(lot.entry)}`,
+    }[ex.kind]();
     const sync = this.chainSync(ch, today, ex.kind === 'stop' ? ex.bar.m : last.m);
     if (!sync.ok) this.log('RIGO', 'OPS', null, `scalps: selling anyway · ${sync.why}`);
     await this.kett({ book: 'scalps', lot, side: 'sell', px: ex.kind === 'target' ? lot.target : null, market: row, sync: sync.rec, why });
+  }
+
+  // A dip trade has closed: a loss ends the day (the morning's low was not the low), and so do two trades.
+  dipClosed(d, tr) {
+    const R = books.DIP;
+    const done = tr.pnl < 0 ? `a trade lost ${usd(Math.abs(tr.pnl))}` : d.entries >= R.maxTrades ? `${R.maxTrades} trades, the most it takes in a day` : '';
+    if (done) {
+      d.status = 'done'; d.why = done;
+      this.log('BRAM', 'PASS', null, `dips: done for today · ${done}`);
+    }
+  }
+
+  // The dip book's exits, once per finished five-minute bar while it holds its calls (books.dipExit):
+  // both go on a close under the morning low less 0.10 ATR or with no reclaim of VWAP by 12:30; the first
+  // on the first close back above VWAP; the runner after that on a close under the price SPY was bought
+  // at, on giving back half its gain once doubled, or at 3:15.
+  async dipExits() {
+    const x = this.state.books.dips, S = this.mkt.spy, t = this.now();
+    const e = clock.et(t), today = e.day, s = clock.session(today);
+    const afterTape = !s || e.min >= s.close + 20;
+    for (const l of x.lots.filter((l) => l.expiry < today || (l.expiry === today && afterTape))) this.settleLot('dips', l);
+    const d = x.day, bars = S.bars5, last = bars[bars.length - 1];
+    if (!x.lots.length || !last || !d || !S.intra || S.intra.day !== d.date || d.exitBarM === last.m) return;
+    const since = d.exitBarM == null ? x.lots[0].barM : d.exitBarM;
+    const fresh = bars.map((b, i) => ({ ...b, vw: S.vwap[i] })).filter((b) => b.m > since);
+    if (!fresh.length) return;
+    await this.optionChain(today, true);
+    const ch = this.mkt.chain;
+    const lot0 = x.lots[0];
+    const row = ch && ch.expiry === today ? ch.calls.find((r) => r.osi === lot0.osi) : null;
+    if (!row) { if (this.due('dip-norow', 300)) this.log('RIGO', 'OPS', null, `dips: ${lotName(lot0)} is not in the option chain · trying again`); return; }
+    d.exitBarM = last.m;
+    this.dirty = true;
+    const R = books.DIP;
+    for (const lot of [...x.lots]) {
+      if (Number.isFinite(row.bid)) lot.peak = Math.max(lot.peak ?? lot.entry, row.bid);
+      const { exit, reclaimM } = books.dipExit(lot, fresh, last, row);
+      // the reclaim is the trade's, not one contract's: the runner rides from the bar the first one sold on
+      if (reclaimM != null) for (const l of x.lots) if (l.trade === lot.trade && l.reclaimM == null) l.reclaimM = reclaimM;
+      if (!exit) continue;
+      const at = hm(exit.bar.m + 5);
+      // only the chosen reason is written: `bar` is a fresh bar (with its VWAP) for the first three, the newest bar otherwise
+      const why = {
+        stop: () => `SPY closed under ${lot.stop.toFixed(2)} at ${at} (${exit.bar.c.toFixed(2)}): the morning's low did not hold`,
+        reclaim: () => `SPY closed back above VWAP at ${at} (${exit.bar.c.toFixed(2)} vs ${exit.bar.vw.toFixed(2)})`,
+        fade: () => `SPY closed back under ${lot.spy.toFixed(2)}, where it was bought, at ${at}`,
+        late: () => `no close back above VWAP by ${hm(R.reclaimBy + 5)}`,
+        trail: () => `gave back half its gain from ${prem(lot.peak)}`,
+        clock: () => '3:15 clock',
+      }[exit.kind]();
+      const sync = this.chainSync(ch, today, ['stop', 'reclaim', 'fade'].includes(exit.kind) ? exit.bar.m : last.m);
+      if (!sync.ok) this.log('RIGO', 'OPS', null, `dips: selling anyway · ${sync.why}`);
+      await this.kett({ book: 'dips', lot, side: 'sell', px: null, market: row, sync: sync.rec, why });
+    }
   }
 
   // Today's same-day chain, read at most once a bar (`force` re-reads for the exit check and a trigger).
@@ -548,6 +612,7 @@ class Desk {
     await this.stockBook();
     if (this.D.options) await this.optionsBook();
     if (this.D.scalps) await this.scalpBook();
+    if (this.D.dips) await this.dipBook();
     this.touch('BRAM');
   }
   // Once a UTC day, as soon as yesterday's daily candle is final -- the lab decided on the close
@@ -736,6 +801,56 @@ class Desk {
     });
   }
 
+  // The dip book (books.dipTrigger and the rules above it), on each new five-minute bar from 10:05 to noon
+  // on the delayed tape, only while it holds nothing.
+  async dipBook() {
+    const x = this.state.books.dips, S = this.mkt.spy, t = this.now(), R = books.DIP;
+    const today = clock.et(t).day;
+    if (!S.intra || S.intra.day !== today || !clock.isTradingDay(today)) return;
+    if (!x.day || x.day.date !== today) {
+      x.day = { date: today, status: clock.isEarlyClose(today) ? 'early-close' : 'waiting', why: '', entries: 0, scanIdx: null, exitBarM: null };
+      this.dirty = true;
+      if (x.day.status === 'early-close') this.log('BRAM', 'PASS', null, 'dips: 1 PM close today · no dip trades');
+    }
+    const d = x.day, bars = S.bars5, vw = S.vwap;
+    if (d.status === 'early-close' || d.status === 'done' || !bars.length) return;
+    const i = bars.length - 1, bar = bars[i];
+    if (d.scanIdx == null) d.scanIdx = i - 1;
+    if (d.scanIdx >= i) return;
+    d.scanIdx = i; this.dirty = true;
+    if (x.lots.length) return;
+    if (bar.m > R.lastBar) {
+      d.status = 'done'; d.why = d.entries ? `${d.entries} trade${d.entries === 1 ? '' : 's'}` : 'no dip to buy by noon';
+      this.log('BRAM', 'PASS', null, `dips: noon, done for today · ${d.why}`);
+      return;
+    }
+    if (bar.m < R.firstBar) return;
+    if (d.status === 'waiting') d.status = 'watching';
+    const atr = S.atr && !S.atr.stale ? S.atr.atr : null;
+    if (!atr) { if (this.due('dip-atr', 1800)) this.log('BRAM', 'PASS', null, `dips: no ATR14 from SPY's daily bars${S.atr && S.atr.stale ? ` (they end ${S.atr.asof})` : ''} · no dip trades until it loads`); return; }
+    const hit = books.dipTrigger(bars, vw, i, atr);
+    if (!hit) return;
+    const what = `SPY turned up off ${hit.low.toFixed(2)} (${hit.dip.toFixed(2)} ATR under the open) at ${hm(hit.m + 5)}`;
+    if (this.halt) { this.log('KETT', 'PASS', null, `dips: ${what} · not taken: ${this.halt}`); return; }
+    const ch = await this.optionChain(today, true);
+    if (!ch) { this.log('BRAM', 'PASS', null, `dips: ${what} · the option chain did not load`); return; }
+    const sync = this.chainSync(ch, today, hit.m);
+    if (!sync.ok) {
+      this.log('BRAM', 'PASS', null, `dips: ${what} · not taken: ${sync.why}`);
+      this.journal('DIP_SKIP', { date: today, bar: hm(hit.m + 5), ...sync.rec, why: sync.why });
+      return;
+    }
+    const pick = books.pickDip(ch.calls, ch.spot > 0 ? ch.spot : hit.c);
+    if (!pick.row) { this.log('BRAM', 'PASS', null, `dips: ${what} · ${pick.why}`); return; }
+    const row = pick.row, stop = r4(hit.stop);
+    this.log('BRAM', 'SIGNAL', null, `dips: ${what}, ${hit.c.toFixed(2)} under VWAP ${hit.vwap.toFixed(2)} · buy ${R.qty} ${row.strike} calls at ${prem(row.ask)} · the first sells when SPY closes back above VWAP; out under ${stop.toFixed(2)}, or with no reclaim by ${hm(R.reclaimBy + 5)}`);
+    await this.kett({
+      book: 'dips', side: 'buy', row, qty: R.qty, sync: sync.rec, why: `dip buy: SPY turned up off ${hit.low.toFixed(2)} at ${hm(hit.m + 5)}`,
+      lot: { dir: 'up', stop, spy: r4(hit.c), barM: hit.m, reclaimM: null },
+      detail: { dir: 'up', spy: r4(hit.c), open: r4(hit.open), low: r4(hit.low), dipAtr: r4(hit.dip), vwap: r4(hit.vwap), stop, delta: row.delta, bid: row.bid, ask: row.ask, bidSz: row.bidSz, askSz: row.askSz },
+    });
+  }
+
   // ---------------------------------------------------------------- KETT: fills
   async kett(order) {
     const b = this.state.books;
@@ -778,11 +893,13 @@ class Desk {
       const tradeId = `${d.date}-${d.entries + 1}`;
       const base = { expiry: d.date, osi: row.osi, strike: row.strike, right: row.right, entry: f.avg, high0: Number.isFinite(row.high) ? row.high : null, trade: tradeId, openedAt: this.now(), mark: f.avg, ...(order.lot || {}) };
       const each = r2(-f.cash / f.qty);
+      // the dip book has no price target: its first contract sells on SPY's reclaim of VWAP, its runner on a trail
       const plan = key === 'scalps' ? [['scalp', books.SCALP.target]]
-        : f.qty >= 2 ? [['first', books.ZERO.firstTarget], ['runner', books.ZERO.runnerTarget]] : [['runner', books.ZERO.runnerTarget]];
+        : key === 'dips' ? (f.qty >= 2 ? [['first', null], ['runner', null]] : [['first', null]])
+          : f.qty >= 2 ? [['first', books.ZERO.firstTarget], ['runner', books.ZERO.runnerTarget]] : [['runner', books.ZERO.runnerTarget]];
       for (let i = 0; i < f.qty; i++) {
         const [role, mult] = plan[Math.min(i, plan.length - 1)];
-        o.lots.push({ ...base, id: o.nextLot++, qty: 1, cost: each, role, target: r4(f.avg * mult) });
+        o.lots.push({ ...base, id: o.nextLot++, qty: 1, cost: each, role, target: mult == null ? null : r4(f.avg * mult), ...(key === 'dips' ? { peak: f.avg } : {}) });
       }
       o.cash = r2(o.cash + f.cash); o.fees = r2(o.fees + f.fee);
       d.entries++; if (!d.firstTrade) d.firstTrade = tradeId;
@@ -792,7 +909,8 @@ class Desk {
       const label = lotName(base);
       this.journal('FILL', { book: key, sym: row.osi, side: 'buy', qty: f.qty, px: f.avg, notional: f.notional, fee: f.fee, cash: f.cash, why: order.why, ...order.sync, ...(order.detail || {}) });
       this.pushFill({ book: key, sym: row.osi, label, side: 'buy', qty: f.qty, px: f.avg, value: f.notional, fee: f.fee, pnl: null, why: order.why });
-      this.log('KETT', 'FILL', null, `bought ${f.qty} ${label} at ${prem(f.avg)} · ${usd(f.notional)} · targets ${o.lots.filter((l) => l.trade === tradeId).map((l) => prem(l.target)).join(' and ')}`);
+      const targets = o.lots.filter((l) => l.trade === tradeId && l.target != null).map((l) => prem(l.target));
+      this.log('KETT', 'FILL', null, `bought ${f.qty} ${label} at ${prem(f.avg)} · ${usd(f.notional)}${targets.length ? ` · target${targets.length === 1 ? '' : 's'} ${targets.join(' and ')}` : ''}`);
       return f;
     }
     // a sale: at the target (a resting limit that filled) or at the bid
@@ -832,10 +950,10 @@ class Desk {
     const t = this.now(), h = this.state.history;
     const last = h[h.length - 1];
     if (last && t - last.t < MIN) return;
-    const c = this.bookValue('crypto'), s = this.bookValue('stocks'), o = this.bookValue('options'), x = this.bookValue('scalps');
+    const v = Object.fromEntries(BOOKS.map((k) => [FIELD[k], this.bookValue(k)]));
     // what holding would be worth; a book that has not traded yet is its own cash, so the line is whole from the start
     const bc = this.benchValue('crypto'), bs = this.benchValue('stocks');
-    h.push({ t, e: r2(c + s + o + x), c, s, o, x, bc: bc ?? c, bs: bs ?? s });
+    h.push({ t, e: r2(Object.values(v).reduce((a, x) => a + x, 0)), ...v, bc: bc ?? v.c, bs: bs ?? v.s });
     if (h.length > 30000) h.splice(0, h.length - 30000);
     this.dirty = true;
   }
@@ -878,7 +996,7 @@ class Desk {
     const stockRows = Object.entries(b.stocks.sleeves).map(([id, sl]) => sleeveRow('stocks', id, sl, this.spyBid(), {
       vol: S.vol, want: S.w, bid: S.quote && S.quote.bid, ask: S.quote && S.quote.ask, at: S.quote && S.quote.at, prevClose: S.quote && S.quote.prevClose,
     }));
-    const o = b.options, d = o.day, x = b.scalps, xd = x.day, SC = books.SCALP;
+    const o = b.options, d = o.day, x = b.scalps, xd = x.day, SC = books.SCALP, p = b.dips, pd = p.day, DP = books.DIP;
     const book = (key, name, rule, rows) => {
       const equity = this.bookValue(key), bench = this.benchValue(key), bk = b[key];
       const realized = bk.sleeves ? r2(Object.values(bk.sleeves).reduce((a, sl) => a + sl.realized, 0)) : bk.realized;
@@ -909,6 +1027,10 @@ class Desk {
           sym: l.osi, name: lotName(l), label: 'scalp', qty: l.qty, px: l.mark, value: r2(l.qty * 100 * (l.mark ?? l.entry)), cost: l.cost, pnl: r2(l.qty * 100 * (l.mark ?? l.entry) - l.cost), target: l.target, entry: l.entry,
           dir: l.dir, level: l.level, until: l.barM + 5 + SC.hold,
         }))),
+        book('dips', 'Dips', `Evan's own best trade, as rules: from 10:05 to noon, when SPY is at least ${DP.dipAtr} ATR under its open and turns up off a low made in the last 20 minutes, still under the open and VWAP, it buys ${DP.qty} calls ${DP.nearMin}-${DP.nearMax} points out for $${DP.premiumMin.toFixed(2)}-$${DP.premiumMax.toFixed(2)}. One sells when SPY closes back above VWAP; the other rides until SPY falls back to where it was bought, gives back half its gain once doubled, or 3:15. Both go if SPY closes ${DP.stopAtr} ATR under the morning low, or has not got back above VWAP by 12:30. At most ${DP.maxTrades} a day; done after a loss.`, p.lots.map((l) => ({
+          sym: l.osi, name: lotName(l), label: l.role === 'runner' ? 'runner' : 'first contract', qty: l.qty, px: l.mark, value: r2(l.qty * 100 * (l.mark ?? l.entry)), cost: l.cost, pnl: r2(l.qty * 100 * (l.mark ?? l.entry) - l.cost), target: null, entry: l.entry,
+          role: l.role, stop: l.stop, spy: l.spy, reclaimed: l.reclaimM != null, peak: l.peak,
+        }))),
       ],
       options: {
         enabled: !!D.options,
@@ -922,6 +1044,13 @@ class Desk {
         // the range the next bar has to close beyond: the last 30 minutes' high and low
         range: range6 ? { hi: range6.hi, lo: range6.lo, m: lastBar.m, day: S.intra.day } : null,
         trades: x.trades.slice(0, 20),
+      },
+      dips: {
+        enabled: !!D.dips,
+        day: pd ? { date: pd.date, status: pd.status, entries: pd.entries, why: pd.why || '', max: DP.maxTrades } : null,
+        // where SPY stands against the dip it needs: the open, the low so far, the line the low has to reach
+        spy: lastBar && S.bars5[0].m === DP.open ? { day: S.intra.day, m: lastBar.m, c: lastBar.c, open: S.bars5[0].o, low: Math.min(...S.bars5.map((z) => z.l)), need: S.atr ? r4(S.bars5[0].o - DP.dipAtr * S.atr.atr) : null, vwap: S.vwap.length ? r4(S.vwap[S.vwap.length - 1]) : null } : null,
+        trades: p.trades.slice(0, 20),
       },
       spy: quote ? { last: quote.last, bid: quote.bid, ask: quote.ask, prevClose: quote.prevClose, open: quote.open, high: quote.high, low: quote.low, at: quote.at, vol: S.vol, want: S.w, spark: S.intra ? S.intra.bars.filter((_, i) => i % 5 === 0).map((x) => x.c) : [] } : null,
       fills: this.state.fills.slice(0, 80),
@@ -969,7 +1098,7 @@ function logLevel(e) {
     case 'HOLT SCAN': case 'RIGO RESEARCH': case 'ILSA RESEARCH': return 'quiet';
     case 'TESS OPS': return /^all clear/i.test(t) || /desk online|new day/.test(t) ? 'quiet' : 'warn';
     case 'HOLT OPS': return 'warn';
-    case 'BRAM PASS': return /^(options|scalps)/.test(t) ? 'info' : 'quiet';
+    case 'BRAM PASS': return /^(options|scalps|dips)/.test(t) ? 'info' : 'quiet';
     default: return 'info';
   }
 }
