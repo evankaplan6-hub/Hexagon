@@ -12,7 +12,8 @@ minutes late -- and stream
 them to a live trading floor at `/`. The code is `src/desk/`; README's first section explains it.
 
 It began as a six-agent prediction-market desk that priced the same events on Polymarket and Kalshi and
-traded the disagreements. That desk still runs in the same process, in paper, on its own floor at `/pm`:
+traded the disagreements. That desk still runs in the same process, in paper; since 2026-09-29 its books are on the floor at `/` too
+(src/pmfloor.js; its old page at `/pm` still lists every market):
 it stopped trading 2026-09-25 to 09-27, and since 09-27 its arbs, maker and snipe trade again in
 simulation at Evan's request (not the main focus, but kept running). Everything below that names
 Polymarket, Kalshi, the maker, arbs, pairs or the tick tape is that desk.
@@ -31,7 +32,7 @@ to Fly once tests pass (paper only; see ops/DEPLOY.md → Auto-deploy).
 
 ```bash
 npm test                                      # every suite in tools/test.js's SUITES, no network, no clock
-node server.js                                # both desks, paper, live market data → localhost:8787 (the desk) and /pm
+node server.js                                # both desks, paper, live market data → localhost:8787 (both desks' books) and /pm (the old page)
 node tools/crypto-lab.js --fetch && node tools/crypto-lab.js   # the evidence for the crypto book's rule
 DEMO=1 DATA_DIR=./data-demo node server.js    # the prediction-market desk on synthetic fills/settles, separate account
 npm run reset                                 # wipe the prediction-market paper account (the desk's is data/desk/state.json)
@@ -96,7 +97,8 @@ src/desk/feeds.js   Coinbase (live) and Cboe (15 min late) parsers + fetches; Cb
 src/desk/broker.js  paper fills: crypto walks Coinbase's book + 0.40%, SPY at the touch, options at the touch + $0.03
 src/desk/clock.js   NYSE sessions, holidays and 1 PM closes through 2027 (TESS warns when the list runs out)
 public/desk.*     the floor at /: a wall of boards (headline vs holding, the desk, one card per book with the markets it
-                  trades, the P&L chart, the bots' activity), laid out for reading, 12px and up; no pixel room or bots drawn since 2026-09-25 (Evan's
+                  trades, the P&L chart, the bots' activity, and since 2026-09-29 the prediction-market desk's board and
+                  four books, fed by src/pmfloor.js; Evan: "Merge the desk to the new screen. It's data, not its look"), laid out for reading, 12px and up; no pixel room or bots drawn since 2026-09-25 (Evan's
                   call). desk.css is its own sheet on public/tokens.css, colours named by job; tools/tokens-test.js holds
                   every text colour to 4.5:1. desk.js patches boards in place (morph) so focus survives the 2s stream
 tools/crypto-lab.js the evidence for the crypto book (Coinbase daily candles → data/crypto/bars/)
@@ -104,7 +106,7 @@ tools/desk-check.js step 8 of the daily check: the desk's loop alive, each book'
                   rebuilding state.json to the penny, each book against holding (--box copies /data/desk first);
                   tests: tools/desk-test.js, tools/crypto-lab-test.js, tools/desk-check-test.js (tools/desk-fixture.js
                   is their shared fake market, not a suite)
-                  THE PREDICTION-MARKET DESK (paper, not the main focus: arbs, maker and snipe on since 2026-09-27; floor at /pm)
+                  THE PREDICTION-MARKET DESK (paper, not the main focus: arbs, maker and snipe on since 2026-09-27; its books on / since 2026-09-29, old page /pm)
 server.js         HTTP + SSE server for both desks, .env loader, live-mode gate; journals START/STOP/CRASH
 src/sse.js        the dashboard stream's per-tab gzip, flushed per frame (the frames leave out the P&L histories via engine.snapshot; GET /api/history serves them)
 src/config.js     all tunables          src/engine.js    state, cash, positions, cycle loop
