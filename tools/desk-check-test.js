@@ -7,7 +7,7 @@ const os = require('os');
 const path = require('path');
 const clock = require('../src/desk/clock');
 const { Desk } = require('../src/desk/engine');
-const { deskConfig, fakeMarket, playTrendDay, at } = require('./desk-fixture');
+const { deskConfig, fakeMarket, playTrendDay, playScalpMorning, at } = require('./desk-fixture');
 const C = require('./desk-check');
 
 let pass = 0, fail = 0;
@@ -100,6 +100,36 @@ async function main() {
   const hs = C.health(skewed, at('12:48'));
   ok('an option trade skipped for a chain out of step with the bars is a note', hs.notes.some((x) => /BRAM: .*out of step/.test(x)), hs.notes);
   ok('not a problem with the desk', !hs.problems.some((x) => /out of step/.test(x)), hs.problems);
+
+  // a morning of scalps replays to the penny too, and the scalp book has its own line
+  {
+    const sdir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-check-'));
+    let TS = at('10:06');
+    const MS = fakeMarket(() => TS);
+    const ds = new Desk(deskConfig(sdir), { feeds: MS.feeds, now: () => TS });
+    ds.quiet = true;
+    await playScalpMorning(ds, MS, (t) => { TS = t; });
+    ds.record(); ds.save();
+    const sd = path.join(sdir, 'desk');
+    const { state: SS, events: ev } = C.readDesk(sd);
+    const bs = C.rebuild(ev, SS, { until: C.stateTime(SS) });
+    eq("the scalp book's journal rebuilds its state to the penny", C.compare(bs, SS), []);
+    eq('its cash and what it banked', [bs.scalps.cash, bs.scalps.realized, bs.scalps.open], [1028.88, 28.88, 0]);
+    const drift = JSON.parse(JSON.stringify(SS));
+    drift.books.scalps.realized += 1;
+    ok('a drift in it is named on its book', C.compare(C.rebuild(ev, drift, { until: C.stateTime(drift) }), drift).some((x) => /^scalps: realised/.test(x)));
+    const out = [];
+    eq('a healthy scalp morning exits 0', C.run(['--dir', sd], { log: (l) => out.push(l), now: at('10:22') }), 0);
+    ok('its line counts the trades and what they made', out.some((l) => /scalps .*2 trades closed \(1 made money\) · banked \+\$28\.88/.test(l)), out);
+    ok("and today's scalps are reported", out.some((l) => /^TODAY   scalps today: 2 trades/.test(l)), out);
+    const nextDay = clock.etToUtc('2026-09-24T11:00:00');
+    const moved = JSON.parse(JSON.stringify(SS)); moved.history.push({ ...moved.history[moved.history.length - 1], t: nextDay - 60000 });
+    ok('a book that ran yesterday and is not watching by 10:30 today is flagged', C.health(moved, nextDay).problems.some((x) => /^scalps: not watching today/.test(x)), C.health(moved, nextDay).problems);
+    const held = JSON.parse(JSON.stringify(SS));
+    held.books.scalps.lots = [{ expiry: '2026-09-23', qty: 1, osi: 'SPY260923C00702000' }];
+    ok('a scalp still held after 3:40 is flagged', C.health(held, at('15:45')).problems.some((x) => /^scalps: 1 contract\(s\) still held past the 3:15 clock/.test(x)));
+    fs.rmSync(sdir, { recursive: true, force: true });
+  }
 
   // no state at all
   const none = [];

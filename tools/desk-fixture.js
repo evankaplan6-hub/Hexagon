@@ -1,7 +1,8 @@
 'use strict';
 // A fake market for the stocks, crypto and options desk (src/desk/), shared by tools/desk-test.js and
 // tools/desk-check-test.js: a quiet crypto market, a calm SPY with a 6-point ATR, and a Wednesday
-// afternoon that trends up, triggers the options book, hits a 2x target and breaks VWAP. No network:
+// that climbs all day (every five-minute bar a new 30-minute high: the scalp book's trigger) and whose
+// afternoon trends up, triggers the options book, hits a 2x target and breaks VWAP. No network:
 // every feed is an object the test edits between rounds. (Not a *-test.js file, so tools/test.js
 // does not run it on its own.)
 const clock = require('../src/desk/clock');
@@ -25,9 +26,9 @@ function upDay({ to = 12 * 60 + 30, slope = 0.02, drops = {} } = {}) {
 const deskConfig = (dir) => ({
   dataDir: dir, buildSha: '',
   desk: {
-    on: true, cryptoUsd: 9000, stocksUsd: 10000, optionsUsd: 1000, coins: ['BTC-USD', 'ETH-USD', 'SOL-USD'],
+    on: true, cryptoUsd: 9000, stocksUsd: 10000, optionsUsd: 1000, scalpsUsd: 1000, coins: ['BTC-USD', 'ETH-USD', 'SOL-USD'],
     cryptoVolTarget: 0.4, cryptoLookback: 30, stockSym: 'SPY', stockVolTarget: 0.15, stockLookback: 20,
-    rebalBand: 0.1, cryptoFeeBps: 40, stockFeeBps: 0, optionFee: 0.03, options: true, maxDailyDdPct: 0.05, everySec: 10,
+    rebalBand: 0.1, cryptoFeeBps: 40, stockFeeBps: 0, optionFee: 0.03, options: true, scalps: true, maxDailyDdPct: 0.05, everySec: 10,
     chainSkewSec: 120,
   },
 });
@@ -59,7 +60,8 @@ function fakeMarket(now) {
     const last = ones[ones.length - 1];
     W.quote = { sym: 'SPY', bid: last.c - 0.01, ask: last.c + 0.01, last: last.c, prevClose: 700, open: 700, at: now() - 60000, fileAt: now() };
   };
-  const call = (k, bid, ask, high) => ({ osi: `SPY260923C00${k}000`, strike: k, right: 'C', bid, ask, bidSz: 100, askSz: 100, high });
+  const call = (k, bid, ask, high, delta) => ({ osi: `SPY260923C00${k}000`, strike: k, right: 'C', bid, ask, bidSz: 100, askSz: 100, high, delta });
+  const put = (k, bid, ask, high, delta) => ({ osi: `SPY260923P00${k}000`, strike: k, right: 'P', bid, ask, bidSz: 100, askSz: 100, high, delta });
   const feeds = {
     stats: { ok: 0, err: 0, lastError: null, bytes: 0 },
     async ticker(id) { return W.ticks[id]; },
@@ -70,7 +72,7 @@ function fakeMarket(now) {
     async daily() { return W.spyDaily; },
     async expiry(sym, day) { return W.chain && W.chain.expiry === day ? W.chain : null; },
   };
-  return { W, feeds, setMinutes, call };
+  return { W, feeds, setMinutes, call, put };
 }
 
 // The whole afternoon, round by round, for a test that only needs the ledger it leaves behind:
@@ -90,4 +92,25 @@ async function playTrendDay(desk, M, setNow) {
   await desk.step();
 }
 
-module.exports = { DAY, at, upDay, deskConfig, fakeMarket, playTrendDay };
+// A morning of the scalp book, round by round: the 10:00 bar breaks the opening range and buys the
+// 701 call at 1.00 (delta 0.45, the nearest 0.40); the 10:05 bar breaks again while it is held, and
+// nothing is added; the 10:10 bar the call is bid 1.51 and its 1.50 target fills, and the same bar,
+// another break, buys the 702 call at 0.91; the 10:15 bar closes back under the range it broke
+// (700.81) and the 702 goes at the bid, 0.70.
+async function playScalpMorning(desk, M, setNow) {
+  const { W, call } = M;
+  setNow(at('10:06')); M.setMinutes(10 * 60 + 5);
+  W.chain = { expiry: DAY, spot: 700.7, at: at('10:05'), calls: [call(700, 1.5, 1.51, 1.6, 0.58), call(701, 0.99, 1, 1.2, 0.45), call(702, 0.6, 0.61, 0.7, 0.33)], puts: [] };
+  await desk.step();
+  setNow(at('10:11')); M.setMinutes(10 * 60 + 10);
+  W.chain = { ...W.chain, spot: 700.8, at: at('10:10'), calls: [call(700, 1.7, 1.71, 1.75, 0.6), call(701, 1.2, 1.21, 1.25, 0.49), call(702, 0.75, 0.76, 0.8, 0.37)] };
+  await desk.step();
+  setNow(at('10:16')); M.setMinutes(10 * 60 + 15);
+  W.chain = { ...W.chain, spot: 700.9, at: at('10:15'), calls: [call(700, 2, 2.01, 2.1, 0.62), call(701, 1.51, 1.52, 1.55, 0.5), call(702, 0.9, 0.91, 0.95, 0.4)] };
+  await desk.step();
+  setNow(at('10:21')); M.setMinutes(10 * 60 + 20, { 616: 700.6 });
+  W.chain = { ...W.chain, spot: 700.68, at: at('10:20'), calls: [call(700, 1.4, 1.41, 2.1, 0.55), call(701, 1.05, 1.06, 1.55, 0.44), call(702, 0.7, 0.71, 0.95, 0.35)] };
+  await desk.step();
+}
+
+module.exports = { DAY, at, upDay, deskConfig, fakeMarket, playTrendDay, playScalpMorning };

@@ -5,8 +5,8 @@
 //   ALIVE   is its loop still running? It records the books' value once a minute; a state whose
 //           newest minute is old is a desk that stopped
 //   TODAY   did each book do today's check? Crypto once a UTC day, SPY once a trading day after the
-//           open, the options book's 12:30 verdict -- a book that skipped its day is a book that
-//           could not get prices or could not decide
+//           open, the options book's 12:30 verdict, the scalp book watching from 10:05 -- a book that
+//           skipped its day is a book that could not get prices or could not decide
 //   LEDGER  does the state add up? Every fill and settlement in the journal is replayed, with the
 //           engine's own rounding, and each book's cash, holdings, realised P&L and fees must come out
 //           to the penny of what state.json says
@@ -33,6 +33,7 @@ const JOURNAL = /^journal-(\d{4}-\d{2}-\d{2})\.jsonl$/;
 const MIN = 60000;
 const short = (id) => String(id).replace(/-USD$/, '');
 const utcDay = (t) => new Date(t).toISOString().slice(0, 10);
+const OPTION_BOOKS = ['options', 'scalps'];
 
 // ---------------------------------------------------------------- reading
 function readDesk(dir) {
@@ -71,11 +72,14 @@ function rebuild(events, S, { until = Infinity } = {}) {
   for (const key of ['crypto', 'stocks']) {
     for (const [sym, sl] of Object.entries((B[key] && B[key].sleeves) || {})) sleeves[`${key}:${sym}`] = { cash: sl.initial, qty: 0, realized: 0, fees: 0 };
   }
-  const o = { cash: (B.options && B.options.initial) || 0, realized: 0, fees: 0, open: 0 };
+  // the two books of option contracts, each from its own starting cash
+  const lots = {};
+  for (const key of OPTION_BOOKS) if (B[key]) lots[key] = { cash: B[key].initial || 0, realized: 0, fees: 0, open: 0 };
   let fills = 0, unknown = 0;
   for (const e of events) {
     if (Date.parse(e.t) > until) continue;
-    if (e.kind === 'SETTLE' && e.book === 'options') {
+    const o = lots[e.book];
+    if (e.kind === 'SETTLE' && o) {
       const cash = r2(e.value * 100 * e.qty);
       o.cash = r2(o.cash + cash); o.realized = r2(o.realized + e.pnl); o.open -= e.qty;
       fills++;
@@ -83,7 +87,7 @@ function rebuild(events, S, { until = Infinity } = {}) {
     }
     if (e.kind !== 'FILL') continue;
     fills++;
-    if (e.book === 'options') {
+    if (o) {
       o.cash = r2(o.cash + e.cash); o.fees = r2(o.fees + (e.fee || 0));
       if (e.side === 'buy') o.open += e.qty;
       else { o.open -= e.qty; o.realized = r2(o.realized + (e.pnl || 0)); }
@@ -101,7 +105,7 @@ function rebuild(events, S, { until = Infinity } = {}) {
     }
     sl.fees = r2(sl.fees + (e.fee || 0));
   }
-  return { sleeves, options: o, fills, unknown };
+  return { sleeves, options: lots.options, scalps: lots.scalps, fills, unknown };
 }
 
 // Every difference between the rebuild and the state, as sentences.
@@ -118,12 +122,15 @@ function compare(built, S) {
       if (cent(b.fees, sl.fees)) problems.push(`${name}: fees ${money(sl.fees)} in the state, ${money(b.fees)} by the journal`);
     }
   }
-  const o = S.books.options || {}, bo = built.options;
-  const open = (o.lots || []).reduce((a, l) => a + (l.qty || 0), 0);
-  if (cent(bo.cash, o.cash)) problems.push(`options: cash ${money(o.cash)} in the state, ${money(bo.cash)} by the journal`);
-  if (cent(bo.realized, o.realized)) problems.push(`options: realised ${money(o.realized)} in the state, ${money(bo.realized)} by the journal`);
-  if (cent(bo.fees, o.fees)) problems.push(`options: fees ${money(o.fees)} in the state, ${money(bo.fees)} by the journal`);
-  if (bo.open !== open) problems.push(`options: ${open} contract(s) held in the state, ${bo.open} by the journal`);
+  for (const key of OPTION_BOOKS) {
+    const o = S.books[key], bo = built[key];
+    if (!o || !bo) continue;
+    const open = (o.lots || []).reduce((a, l) => a + (l.qty || 0), 0);
+    if (cent(bo.cash, o.cash)) problems.push(`${key}: cash ${money(o.cash)} in the state, ${money(bo.cash)} by the journal`);
+    if (cent(bo.realized, o.realized)) problems.push(`${key}: realised ${money(o.realized)} in the state, ${money(bo.realized)} by the journal`);
+    if (cent(bo.fees, o.fees)) problems.push(`${key}: fees ${money(o.fees)} in the state, ${money(bo.fees)} by the journal`);
+    if (bo.open !== open) problems.push(`${key}: ${open} contract(s) held in the state, ${bo.open} by the journal`);
+  }
   if (built.unknown) problems.push(`${built.unknown} journal fill(s) name a book or coin the state does not have`);
   return problems;
 }
@@ -171,8 +178,19 @@ function health(S, now) {
     else lines.push(optTxt(d));
   } else if (d && d.date === e.day) lines.push(optTxt(d));
   else lines.push(sess && sess.early ? 'options: no trade on a 1 PM close' : 'options: the next 12:30 test is on the next trading day');
-  const held = (o.lots || []).filter((l) => l.expiry < e.day || (l.expiry === e.day && sess && e.min >= 15 * 60 + 40));
-  if (held.length) problems.push(`options: ${held.length} contract(s) still held past the 3:15 clock`);
+  const x = B.scalps, xd = x && x.day;
+  if (x) {
+    // the scalp book's day starts with the first bar it reads, so by 10:30 on the late tape a book that has
+    // run before has today's (one that never has, DESK_SCALPS=0 or new, has none to miss)
+    const count = xd ? `${xd.entries} trade${xd.entries === 1 ? '' : 's'}${xd.status === 'done' && xd.why ? `, done: ${xd.why}` : ''}` : '';
+    if (xd && xd.date === e.day) lines.push(`scalps today: ${xd.status === 'early-close' ? 'a 1 PM close, no scalps' : count}`);
+    else if (xd && sess && !sess.early && e.min >= 10 * 60 + 30 && !young) problems.push(`scalps: not watching today (${e.day}): SPY's minute bars did not reach the book`);
+    else lines.push(!xd ? 'scalps: has not watched a session yet' : sess && sess.early ? 'scalps: none on a 1 PM close' : 'scalps: watching from 10:05 on the next trading day');
+  }
+  for (const key of OPTION_BOOKS) {
+    const held = ((B[key] && B[key].lots) || []).filter((l) => l.expiry < e.day || (l.expiry === e.day && sess && e.min >= 15 * 60 + 40));
+    if (held.length) problems.push(`${key}: ${held.length} contract(s) still held past the 3:15 clock`);
+  }
   // what the bots flagged in the last day, most recent first, each wording once
   const since = now - 24 * 3600000, seen = new Set();
   for (const l of S.log || []) {
@@ -203,7 +221,7 @@ function bookLines(S) {
   const holding = (key, v, initial) => `holding would be ${signed(r2(v - initial))}${holdFee(key) > 0 ? ` after its ${money(holdFee(key))} fee to buy in` : ''}`;
   const row = (name, value, initial, extra) => `${name.padEnd(8)}${money(value).padStart(12)}  ${signed(r2(value - initial)).padStart(10)}  ${extra}`;
   const out = [];
-  const c = B.crypto, s = B.stocks, o = B.options;
+  const c = B.crypto, s = B.stocks, o = B.options, x = B.scalps;
   if (c) out.push(row('crypto', p.c, c.initial, traded('crypto') ? `${holding('crypto', p.bc, c.initial)} · banked ${signed(banked('crypto'))} · fees ${money(fees('crypto'))}` : 'not traded yet'));
   if (s) out.push(row('stocks', p.s, s.initial, traded('stocks') ? `${holding('stocks', p.bs, s.initial)} · banked ${signed(banked('stocks'))} · fees ${money(fees('stocks'))}` : 'not traded yet'));
   if (o) {
@@ -211,7 +229,13 @@ function bookLines(S) {
     const won = done.filter((t) => t.pnl > 0).length;
     out.push(row('options', p.o, o.initial, `${done.length} trade${done.length === 1 ? '' : 's'} closed (${won} made money) · banked ${signed(o.realized || 0)} · fees ${money(o.fees || 0)}`));
   }
-  const init = (c ? c.initial : 0) + (s ? s.initial : 0) + (o ? o.initial : 0);
+  if (x) {
+    const done = (x.trades || []).filter((t) => !t.open);
+    const won = done.filter((t) => t.pnl > 0).length;
+    // a minute from before the book joined the desk has no value for it: its cash, untouched
+    out.push(row('scalps', p.x ?? x.initial, x.initial, `${done.length} trade${done.length === 1 ? '' : 's'} closed (${won} made money) · banked ${signed(x.realized || 0)} · fees ${money(x.fees || 0)}`));
+  }
+  const init = [c, s, o, x].reduce((a, b) => a + (b ? b.initial : 0), 0);
   out.push(row('desk', p.e, init, `as of ${new Date(p.t).toISOString().slice(0, 16).replace('T', ' ')}Z`));
   return out;
 }

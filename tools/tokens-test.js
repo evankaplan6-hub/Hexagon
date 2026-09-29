@@ -39,7 +39,7 @@ for (const [name, c] of Object.entries(claims)) {
   const r = ratio(hex(name), hex(c.on));
   ok(`${name}'s comment says ${c.ratio}:1 on ${c.on}, and it is`, Math.abs(r - c.ratio) < 0.06, +r.toFixed(2));
 }
-ok('the books are three different colours from the money colours', new Set(['--book-crypto', '--book-stocks', '--book-options', '--gain', '--loss'].map((n) => T[n])).size === 5);
+ok('the books are four different colours from the money colours', new Set(['--book-crypto', '--book-stocks', '--book-options', '--book-scalps', '--gain', '--loss'].map((n) => T[n])).size === 6);
 
 // ---- desk.css writes no colour of its own (a mask's colour is only its alpha, so masks may)
 const RAW = /#[0-9a-f]{3,8}\b|\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch)\(|\b(?:white|black|red|green|blue|gray|grey|silver|orange|yellow|purple|pink)\b/i;

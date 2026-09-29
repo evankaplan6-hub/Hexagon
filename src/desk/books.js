@@ -1,5 +1,5 @@
 'use strict';
-// The three books' rules. Pure: bars, quotes and the book's own state in, a decision out. No clock,
+// The four books' rules. Pure: bars, quotes and the book's own state in, a decision out. No clock,
 // no network, no ledger -- src/desk/engine.js does all of that and asks these what to do.
 //
 // ---------------------------------------------------------------- crypto and stocks: volatility targeting
@@ -174,4 +174,102 @@ function chainSync(chainAt, barAt, maxSec) {
   return { ok: false, skewSec, why: `the option chain is out of step with the bars: its prices are ${Math.abs(skewSec)}s ${skewSec < 0 ? 'older' : 'newer'} than the bar's close (limit ${maxSec}s)` };
 }
 
-module.exports = { volTargetWeight, needsRebalance, trendTest, scanEntry, vwapBreak, pickContract, targetHit, chainSync, ZERO };
+// ---------------------------------------------------------------- scalps: SPY same-day, held for minutes
+// Evan asked for it on 2026-09-29 ("start paper trading 0DTE option scalps"). The investment stack has a
+// method for a 0DTE scalp but no trigger for one: options §5, "Choosing a contract, getting out, and
+// sizing" (~/Downloads/stack/.agents/skills/investment-research-stack/references/options/5-choosing.md).
+// This book is that method with the plainest breakout trigger, and it is tested on nothing yet. The
+// stack's evidence (§6) finds no long-0DTE rule that survives costs; the book is here to measure one
+// every trading day, and §7's bar for trusting a rule is 50 journaled trades whose expectancy's 95%
+// lower bound is above zero.
+//
+//   when      five-minute bars closing 10:05 to 2:30 (§3: nothing before 9:45, singles 10:00-14:30);
+//             never on a 1 PM close, nor in the 30 minutes before a 2 PM Fed decision (§1)
+//   trigger   a close above the high of the six bars before it (the last 30 minutes; at 10:05 that is
+//             the opening range) and above VWAP buys a call; below their low and below VWAP, a put
+//   contract  delta 0.25 to 0.60 (§4.1), the one nearest 0.40; ask at least $0.15, $0.20 from 2 PM (§4.3),
+//             at most $1.50, a $150 contract on the book's $1,000. One contract, one position, no adds (§7)
+//   exits     a resting limit at 1.5x (§6.1); SPY back inside the range it broke, on a five-minute close
+//             (§6.2: the stop is on SPY, not the premium); from 15 minutes in, out on any bar it is not
+//             bid above what it cost (§6.3: the time stop at half a 30-minute hold); out at 30 minutes
+//             whatever it is bid; everything at 3:15 (§6.4)
+//   the day   at most four trades; done after two losses in a row; 15 minutes' pause after a loss (§8)
+const SCALP = {
+  firstBar: 10 * 60,            // the first bar that can trigger: it closes at 10:05, after the 30-minute opening range
+  lastBar: 14 * 60 + 25,        // the last closes at 2:30
+  pmBar: 13 * 60 + 55,          // a bar closing at 2:00 or later needs the higher premium floor
+  range: 6,                     // the bars before the trigger whose range it breaks: 30 minutes
+  deltaMin: 0.25, deltaMax: 0.60, deltaAim: 0.40,
+  premiumMin: 0.15, premiumPm: 0.20, premiumMax: 1.50,
+  target: 1.5, timeStop: 15, hold: 30,
+  clock: 15 * 60 + 10,          // the bar whose close is 3:15
+  maxTrades: 4, maxLossRun: 2, pause: 15,
+  fedBefore: 30,
+};
+// The Fed's 2 PM decisions left in 2026, from the stack's §1 list. Add 2027's when the stack has them.
+const FED = { '2026-10-28': 14 * 60, '2026-12-09': 14 * 60 };
+const hm = (m) => `${((Math.floor(m / 60) + 11) % 12) + 1}:${String(m % 60).padStart(2, '0')}`;
+
+// Does the bar at index `i` trigger? `bars` are five-minute bars labelled by their start, `vwap` the
+// series from vwapSeries(bars). The six bars before it must all be there: a gap hides the range.
+// -> { dir, level (the high or low it broke), idx, m, c, vwap } or null
+function scalpTrigger(bars, vwap, i, R = SCALP) {
+  const b = bars[i];
+  if (!b || b.m < R.firstBar || b.m > R.lastBar || i < R.range) return null;
+  const prior = bars.slice(i - R.range, i);
+  if (prior.some((p, k) => p.m !== b.m - (R.range - k) * 5)) return null;
+  const hi = Math.max(...prior.map((p) => p.h)), lo = Math.min(...prior.map((p) => p.l));
+  if (b.c > hi && b.c > vwap[i]) return { dir: 'up', level: hi, idx: i, m: b.m, c: b.c, vwap: vwap[i] };
+  if (b.c < lo && b.c < vwap[i]) return { dir: 'down', level: lo, idx: i, m: b.m, c: b.c, vwap: vwap[i] };
+  return null;
+}
+
+// May the book take a trigger on the bar starting at minute `m` of `day`? `d` is its day so far:
+// { entries, lossRun, pauseUntil (a minute of the day) }. -> '' when it may, else why not.
+function scalpGate(d, day, m, R = SCALP) {
+  const close = m + 5;
+  if (d.entries >= R.maxTrades) return `${R.maxTrades} trades today, the most it takes`;
+  if (d.lossRun >= R.maxLossRun) return `${R.maxLossRun} losses in a row`;
+  if (d.pauseUntil != null && close < d.pauseUntil) return `pausing after a loss until ${hm(d.pauseUntil)}`;
+  const fed = FED[day];
+  if (fed != null && close >= fed - R.fedBefore && close <= fed) return `the ${R.fedBefore} minutes before the Fed's ${hm(fed)} decision`;
+  return '';
+}
+
+// Which contract. `rows` are the day's calls (dir up) or puts (dir down), each with Cboe's delta;
+// `m` the trigger bar's start. -> { row } or { why }
+function pickScalp(rows, dir, m, R = SCALP) {
+  const side = dir === 'up' ? 'call' : 'put';
+  const floor = m >= R.pmBar ? R.premiumPm : R.premiumMin;
+  const band = (rows || []).filter((r) => Number.isFinite(r.delta) && Math.abs(r.delta) >= R.deltaMin - 1e-9 && Math.abs(r.delta) <= R.deltaMax + 1e-9);
+  if (!band.length) return { why: `no ${side} with a delta of ${R.deltaMin.toFixed(2)} to ${R.deltaMax.toFixed(2)}` };
+  const priced = band.filter((r) => r.bid > 0 && r.ask >= floor - 1e-9 && r.ask <= R.premiumMax + 1e-9);
+  if (!priced.length) return { why: `no ${side} with a delta of ${R.deltaMin.toFixed(2)} to ${R.deltaMax.toFixed(2)} asks ${fmt(floor)} to ${fmt(R.premiumMax)}` };
+  priced.sort((a, b) => Math.abs(Math.abs(a.delta) - R.deltaAim) - Math.abs(Math.abs(b.delta) - R.deltaAim) || a.ask - b.ask);
+  return { row: priced[0] };
+}
+
+// Should the lot go now? `lot` carries { dir, level, barM (the trigger bar's start), entry, target, high0 };
+// `fresh` the bars finished since the last check, `last` the newest bar, `row` the contract's line in the
+// chain just read. The first that applies:
+//   target  a resting limit at 1.5x filled (targetHit)          -> sold at the target
+//   stop    a five-minute close back inside the range it broke   -> at the bid
+//   clock   the 3:15 bar
+//   hold    30 minutes since the trigger bar closed
+//   time    15 minutes or more in, not bid above what it cost
+// -> { kind, bar } or null
+function scalpExit(lot, fresh, last, row, R = SCALP) {
+  if (targetHit(lot, row)) return { kind: 'target', bar: last };
+  const brk = (fresh || []).find((b) => (lot.dir === 'up' ? b.c < lot.level : b.c > lot.level));
+  if (brk) return { kind: 'stop', bar: brk };
+  if (last.m >= R.clock) return { kind: 'clock', bar: last };
+  const held = last.m - lot.barM;
+  if (held >= R.hold) return { kind: 'hold', bar: last };
+  if (held >= R.timeStop && !(row && row.bid > lot.entry)) return { kind: 'time', bar: last };
+  return null;
+}
+
+module.exports = {
+  volTargetWeight, needsRebalance, trendTest, scanEntry, vwapBreak, pickContract, targetHit, chainSync, ZERO,
+  scalpTrigger, scalpGate, pickScalp, scalpExit, SCALP, FED,
+};
