@@ -129,9 +129,10 @@ function parseCboeExpiry(j, expiry) {
 
 // ------------------------------------------------------------------ bar arithmetic (pure)
 // One-minute bars (labelled by their END minute) -> five-minute bars labelled by their START, the way
-// the stack's checker and most charts label them: the 12:25 bar covers 12:25 to 12:30. A five-minute
-// bar is returned only once all five of its minutes are in: a bar still forming, or one with a minute
-// missing, is not a bar a rule may read.
+// most charts label them: the 12:25 bar covers 12:25 to 12:30. The scalp book reads these; the options
+// and dip books read the minutes themselves (the options book since 2026-09-29, when the stack's checker
+// moved to one-minute bars). A five-minute bar is returned only once all five of its minutes are in: a
+// bar still forming, or one with a minute missing, is not a bar a rule may read.
 function fiveMinute(bars1) {
   const by = new Map();
   for (const b of bars1 || []) {

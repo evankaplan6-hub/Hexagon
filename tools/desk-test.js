@@ -148,39 +148,51 @@ const near = (name, got, want, tol = 1e-6) => ok(`${name} (want ~${want})`, Numb
   ok('full to full does not', !B.needsRebalance(1, 1, 0.1));
 }
 
-// the 12:30 test and the trigger, on a made-up up day: a steady climb from 700 (tools/desk-fixture.js)
+// the 12:30 test and the trigger, on a made-up up day: a steady climb from 700 (tools/desk-fixture.js), in
+// one-minute bars labelled by the minute they close, as Cboe's are and as the options book reads them since
+// 2026-09-29. Every number here is the stack's checker's on the same minutes (trend_day_check.py run_day):
+// 0.60 ATR at the 12:30 close, 0.49 on a 7.3 ATR, the spike 0.90 ATR with 60% given back, the trigger on the
+// minute that closes 12:31 at 703.62. (On five-minute bars, trend_day_check.py --bar 5, the same days gave the
+// same verdicts and a trigger at 12:35, 703.70: what these tests said until then.)
 {
-  const bars = F.fiveMinute(upDay()), vw = F.vwapSeries(bars);
-  eq('9:30 to 12:25 is 36 five-minute bars', bars.length, 36);
+  const bars = upDay(), vw = F.vwapSeries(bars);
+  eq('9:30 to 12:30 is 180 one-minute bars, the first closing 9:31', [bars.length, bars[0].m, bars[179].m], [180, 571, 750]);
   const r = B.trendTest(bars, vw, 6);
   eq('a steady climb of 3.6 points on a 6-point ATR passes', [r.status, r.dir], ['pass', 'up']);
   near('0.6 ATR', r.moveAtr, 0.6, 0.01);
+  near('on the close of the minute that ends at 12:30', r.c1230, 703.6, 1e-9);
   eq('half an ATR is the bar: 7.3 fails', B.trendTest(bars, vw, 7.3).status, 'fail');
-  ok('and says why', /needs 0.5/.test(B.trendTest(bars, vw, 7.3).why));
+  ok('and says why', /moved 0.49 ATR, needs 0.5/.test(B.trendTest(bars, vw, 7.3).why), B.trendTest(bars, vw, 7.3).why);
   eq('no ATR: no verdict', B.trendTest(bars, vw, null).status, 'none');
-  eq('before the 12:25 bar is in: wait', B.trendTest(bars.slice(0, 30), vw, 6).status, 'wait');
+  eq('before the 12:30 minute is in: wait', B.trendTest(bars.slice(0, 179), vw, 6).status, 'wait');
   const holed = bars.filter((b) => b.m !== 600);
-  eq('a bar missing: no verdict', B.trendTest(holed, F.vwapSeries(holed), 6).status, 'none');
+  const rh = B.trendTest(holed, F.vwapSeries(holed), 6);
+  eq('a minute missing: no verdict', [rh.status, rh.why], ['none', '1 one-minute bar missing before 12:30']);
+  const noOpen = bars.slice(1);
+  eq('without the 9:31 minute there is no open: no verdict', B.trendTest(noOpen, F.vwapSeries(noOpen), 6).status, 'none');
+  const no1230 = upDay({ to: 12 * 60 + 32 }).filter((b) => b.m !== 750);
+  eq('the 12:30 minute missing while later ones are in: no verdict, not a wait', B.trendTest(no1230, F.vwapSeries(no1230), 6), { status: 'none', why: 'the minute that closes at 12:30 is missing' });
   // gave back more than half of the move by 12:30
-  const back = F.fiveMinute(upDay({ drops: { 700: 706, 740: 702.5 } })), bvw = F.vwapSeries(back);
+  const back = upDay({ drops: { 700: 706, 740: 702.5 } }), bvw = F.vwapSeries(back);
   const rb = B.trendTest(back, bvw, 3);
   eq('a spike that gave most of it back fails', rb.status, 'fail');
-  ok('on the giveback', /gave back/.test(rb.why), rb.why);
+  ok('on the giveback', /gave back 60%/.test(rb.why), rb.why);
 
-  // the trigger: the 12:30 bar closes at a new high above VWAP
-  const more = F.fiveMinute(upDay({ to: 12 * 60 + 35 })), mvw = F.vwapSeries(more);
+  // the trigger: the next minute, the one that closes at 12:31, closes at a new high above VWAP
+  const more = upDay({ to: 12 * 60 + 35 }), mvw = F.vwapSeries(more);
   const t0 = B.trendTest(more, mvw, 6);
   const s = B.scanEntry(more, mvw, 'up', t0.idx, t0.ext);
-  eq('the next bar closing at a new high triggers', s.hit && s.hit.m, 750);
-  // a bar that pokes a new high but closes under the old one does not, and its high becomes the bar to beat
+  eq('the next minute closing at a new high triggers: the one that closes 12:31, at 703.62', s.hit && [s.hit.m, +s.hit.c.toFixed(2)], [751, 703.62]);
+  // a minute that pokes a new high but closes under the old one does not, and its high becomes the extreme to beat
   const flat = more.map((b) => ({ ...b }));
-  flat[36] = { ...flat[36], h: t0.ext + 1, c: t0.ext - 0.05 };
+  flat[180] = { ...flat[180], h: t0.ext + 1, c: t0.ext - 0.05 };
   const s2 = B.scanEntry(flat, F.vwapSeries(flat), 'up', t0.idx, t0.ext);
   eq('a close under the old high is not a trigger', s2.hit, null);
   near('but its high raises the extreme', s2.ext, t0.ext + 1, 1e-9);
-  const late = [...more.slice(0, 36), ...[885, 890].map((m) => ({ m, o: 710, h: 711, l: 709, c: 710.5, v: 1000 }))];
-  eq('nothing after the 2:40 bar (it closes 2:45) triggers', B.scanEntry(late, F.vwapSeries(late), 'up', 35, t0.ext).hit, null);
+  const lateAt = (m) => { const bs = [...more.slice(0, 180), { m, o: 710, h: 711, l: 709, c: 710.5, v: 1000 }]; return B.scanEntry(bs, F.vwapSeries(bs), 'up', 179, t0.ext).hit; };
+  eq('the minute that closes at 2:45 (the checker\'s 14:44 bar) is the last that can trigger', [lateAt(885) && lateAt(885).m, lateAt(886)], [885, null]);
   ok('a close back under VWAP is the trend stop', B.vwapBreak({ c: 99 }, 100, 'up') && !B.vwapBreak({ c: 101 }, 100, 'up') && B.vwapBreak({ c: 101 }, 100, 'down'));
+  eq('the 3:15 clock is the minute that closes at 3:15 (the checker\'s 15:14 bar)', B.ZERO.clock, 15 * 60 + 15);
 
   const calls = [704, 705, 706, 707, 708].map((k, i) => ({ strike: k, ask: [0.4, 0.3, 0.1, 0.05, 0.02][i], bid: 0 }));
   eq('the first strike 1-2 points out; over $0.25, one further', B.pickContract(calls, 703.7, 'up').row.strike, 706);
@@ -355,46 +367,85 @@ async function engineTests() {
   T += 10000; await desk.step();
   eq('a second round trades nothing', desk.state.fills.length, fills1);
 
-  // round 3: 12:36. The 12:30 bar closed at a new high above VWAP: buy the 705 call at 0.10, two of them.
-  T = clock.etToUtc('2026-09-23T12:36:00');
-  setMinutes(12 * 60 + 35);
-  W.chain = { expiry: '2026-09-23', spot: 703.7, at: clock.etToUtc('2026-09-23T12:35:00'), calls: [call(704, 0.3, 0.31, 0.5), call(705, 0.09, 0.1, 0.15), call(706, 0.04, 0.05, 0.1)], puts: [] };
+  // The options book on one-minute bars (since 2026-09-29): each round ten seconds after the minute it acts
+  // on closed, as the stack's checks run (a second later each time, so that rounds a minute apart are more
+  // than the minute the desk waits between reads of the minute bars), and each chain carrying that minute's
+  // close as its own time.
+  const min = (hhmm) => clock.etToUtc(`2026-09-23T${hhmm}:00`);
+  let k = 0;
+  const after = (hhmm) => min(hhmm) + 10000 + 1000 * k++;
+  let reads = 0;
+  const expiry = feeds.expiry;
+  feeds.expiry = async (...a) => { reads++; return expiry(...a); };
+
+  // round 3: 12:32. The minute that closed at 12:31 made a new high above VWAP: buy the 705 call at 0.10, two of them.
+  T = after('12:32');
+  setMinutes(12 * 60 + 31);
+  W.chain = { expiry: '2026-09-23', spot: 703.62, at: min('12:31'), calls: [call(704, 0.3, 0.31, 0.5), call(705, 0.09, 0.1, 0.15), call(706, 0.04, 0.05, 0.1)], puts: [] };
   await desk.step();
   const lots = b.options.lots;
   eq('two contracts bought at the trigger', lots.map((l) => [l.strike, l.role, l.target]), [[705, 'first', 0.2], [705, 'runner', 0.3]]);
   near('cash: $20 of premium and 6 cents of fees', b.options.cash, 979.94, 0.001);
   eq('each contract names its role, and its target (the page writes the price it sells at)', desk.snapshot().books[2].rows.map((r) => [r.label, r.target]), [['first contract', 0.2], ['runner', 0.3]]);
+  ok('the floor names the minute that triggered', desk.state.log.some((l) => /^options: new high at 12:31, SPY 703\.62 · buy 2 705 call at \$0\.10/.test(l.text)), desk.state.log.map((l) => l.text));
 
-  // round 4: 12:41. The 705 call is bid 0.21: the first contract's 2x target (0.20) fills. The runner stays.
-  T = clock.etToUtc('2026-09-23T12:41:00');
-  setMinutes(12 * 60 + 40);
-  W.chain = { ...W.chain, at: clock.etToUtc('2026-09-23T12:40:00'), calls: [call(704, 0.5, 0.51, 0.6), call(705, 0.21, 0.22, 0.22), call(706, 0.08, 0.09, 0.1)] };
+  // round 4: 12:33. The next minute is in, and the chain is read for it: the 705 call is bid 0.21, so the
+  // first contract's 2x target (0.20) fills. The runner stays.
+  T = after('12:33');
+  setMinutes(12 * 60 + 32);
+  W.chain = { ...W.chain, spot: 703.64, at: min('12:32'), calls: [call(704, 0.5, 0.51, 0.6), call(705, 0.21, 0.22, 0.22), call(706, 0.08, 0.09, 0.1)] };
+  reads = 0;
   await desk.step();
+  eq('a minute later the chain is read for the targets', reads, 1);
   eq('the first contract sold at its target', b.options.lots.map((l) => l.role), ['runner']);
   near('made $9.94 on it', b.options.realized, 9.94, 0.001);
   eq('the first exit hit its target: a re-entry is allowed', b.options.day.firstExitHit, true);
 
-  // round 5: 12:46. SPY falls through VWAP on the 12:40 bar: the runner goes at the bid, 0.05.
-  T = clock.etToUtc('2026-09-23T12:46:00');
-  setMinutes(12 * 60 + 45, { 761: 701.5, 762: 701.2, 763: 701, 764: 700.9, 765: 700.8 });
-  W.chain = { ...W.chain, at: clock.etToUtc('2026-09-23T12:45:00'), calls: [call(704, 0.1, 0.11, 0.6), call(705, 0.05, 0.06, 0.22), call(706, 0.01, 0.02, 0.1)] };
+  // round 5: 12:41. Still climbing, over VWAP: the runner is held.
+  T = after('12:41');
+  setMinutes(12 * 60 + 40);
+  W.chain = { ...W.chain, spot: 703.8, at: min('12:40'), calls: [call(704, 0.4, 0.41, 0.6), call(705, 0.15, 0.16, 0.22), call(706, 0.06, 0.07, 0.1)] };
   await desk.step();
-  eq('flat after the VWAP break', b.options.lots.length, 0);
+  eq('12:40 closes over VWAP: the runner rides', b.options.lots.map((l) => l.role), ['runner']);
+
+  // round 6: 12:42. The minute that closed at 12:41 fell through VWAP: the runner goes at the bid, 0.05.
+  T = after('12:42');
+  setMinutes(12 * 60 + 41, { 761: 701.5 });
+  W.chain = { ...W.chain, spot: 701.5, at: min('12:41'), calls: [call(704, 0.1, 0.11, 0.6), call(705, 0.05, 0.06, 0.22), call(706, 0.01, 0.02, 0.1)] };
+  await desk.step();
+  eq('flat after a one-minute close through VWAP', b.options.lots.length, 0);
   near('realised: +9.94 on the first, -5.06 on the runner', b.options.realized, 4.88, 0.001);
   near('cash reconciles to the penny', b.options.cash, 1004.88, 0.001);
   eq('one trade on the scorecard', b.options.trades.map((t) => [t.strike, t.qty, t.pnl, t.open]), [[705, 2, 4.88, 0]]);
+  ok('the floor names the minute that broke VWAP', desk.state.log.some((l) => /SPY closed below VWAP at 12:41 \(701\.50 vs 70\d\.\d\d\)/.test(l.text)), desk.state.log.map((l) => l.text));
   {
     const js = fs.readFileSync(path.join(dir, 'desk', 'journal-2026-09-23.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
     const opt = js.filter((j) => j.kind === 'FILL' && j.book === 'options');
-    eq("every option fill journals the bar's close, the chain's time and the gap between them", opt.map((j) => [j.side, j.barAt, j.chainAt, j.skewSec]), [
-      ['buy', '2026-09-23T16:35:00.000Z', '2026-09-23T16:35:00.000Z', 0],
-      ['sell', '2026-09-23T16:40:00.000Z', '2026-09-23T16:40:00.000Z', 0],
-      ['sell', '2026-09-23T16:45:00.000Z', '2026-09-23T16:45:00.000Z', 0],
+    eq("every option fill journals the minute's close, the chain's time and the gap between them", opt.map((j) => [j.side, j.barAt, j.chainAt, j.skewSec]), [
+      ['buy', '2026-09-23T16:31:00.000Z', '2026-09-23T16:31:00.000Z', 0],
+      ['sell', '2026-09-23T16:32:00.000Z', '2026-09-23T16:32:00.000Z', 0],
+      ['sell', '2026-09-23T16:41:00.000Z', '2026-09-23T16:41:00.000Z', 0],
     ]);
   }
 
-  // An option is not bought off a chain out of step with the bars (2026-09-26). The trigger is the 12:30 bar,
-  // closed at 12:35; a chain whose prices are from 12:30 would sell the call at its price before the new high.
+  // round 7: 12:51. SPY is back over the high it made before the trade ended (703.81, the 12:40 minute's)
+  // on the minute that closed 12:50: a fresh one-minute trigger, and the first exit hit its target, so
+  // the one re-entry, one contract.
+  T = after('12:50');
+  setMinutes(12 * 60 + 49, { 761: 701.5 });
+  await desk.step();
+  eq('SPY under the old high: no re-entry yet', [b.options.lots.length, b.options.day.entries], [0, 1]);
+  T = after('12:51');
+  setMinutes(12 * 60 + 50, { 761: 701.5, 770: 704 });
+  W.chain = { ...W.chain, spot: 704, at: min('12:50'), calls: [call(705, 0.09, 0.1, 0.12), call(706, 0.04, 0.05, 0.06)] };
+  await desk.step();
+  eq('the re-entry: one 705 call, on the minute that closed 12:50', [b.options.lots.map((l) => [l.strike, l.role, l.qty]), b.options.day.entries, b.options.day.entryBarM], [[[705, 'runner', 1]], 2, 770]);
+  ok('said as the one re-entry', desk.state.log.some((l) => /^options: new high at 12:50, SPY 704\.00 · buy 1 705 call at \$0\.10 \(the one re-entry\)/.test(l.text)), desk.state.log.map((l) => l.text));
+  eq('the page gets the newest minute the book read, labelled by its close, and the 9:30 open', [desk.snapshot().options.spy.m, desk.snapshot().options.spy.c, desk.snapshot().options.spy.open], [770, 704, 700]);
+  feeds.expiry = expiry;
+
+  // An option is not bought off a chain out of step with the bars (2026-09-26). The trigger is the minute
+  // that closed at 12:31; a chain whose prices are from 12:26 would sell the call at its price before the new high.
   {
     const sdir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-test-'));
     let T2 = clock.etToUtc('2026-09-23T12:31:00');
@@ -403,18 +454,18 @@ async function engineTests() {
     const d5 = new Desk(deskConfig(sdir), { feeds: M2.feeds, now: () => T2 });
     d5.quiet = true;
     await d5.step();
-    T2 = clock.etToUtc('2026-09-23T12:36:00');
-    M2.setMinutes(12 * 60 + 35);
-    M2.W.chain = { expiry: '2026-09-23', spot: 703.7, at: clock.etToUtc('2026-09-23T12:30:00'), calls: [M2.call(705, 0.09, 0.1, 0.15)], puts: [] };
+    T2 = after('12:32');
+    M2.setMinutes(12 * 60 + 31);
+    M2.W.chain = { expiry: '2026-09-23', spot: 703.62, at: min('12:26'), calls: [M2.call(705, 0.09, 0.1, 0.15)], puts: [] };
     await d5.step();
     eq('nothing is bought off a chain five minutes older than the trigger bar', d5.state.books.options.lots.length, 0);
     const js = fs.readFileSync(path.join(sdir, 'desk', 'journal-2026-09-23.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
     const skip = js.find((j) => j.kind === 'OPTIONS_SKIP');
-    eq('the skip is journaled with both times', skip && [skip.bar, skip.barAt, skip.chainAt, skip.skewSec], ['12:35', '2026-09-23T16:35:00.000Z', '2026-09-23T16:30:00.000Z', -300]);
+    eq('the skip is journaled with both times', skip && [skip.bar, skip.barAt, skip.chainAt, skip.skewSec], ['12:31', '2026-09-23T16:31:00.000Z', '2026-09-23T16:26:00.000Z', -300]);
     eq('and no option fill', js.filter((j) => j.kind === 'FILL' && j.book === 'options').length, 0);
     ok('the floor says why', d5.state.log.some((l) => l.kind === 'PASS' && /not taken/.test(l.text) && /300s older/.test(l.text)), d5.state.log.map((l) => l.text));
     eq('the book stays armed for a later trigger', d5.state.books.options.day.status, 'armed');
-    eq('and this one is spent: the scan has moved past its bar', d5.state.books.options.day.scanIdx, d5.mkt.spy.bars5.length - 1);
+    eq('and this one is spent: the scan has moved past its minute', d5.state.books.options.day.scanIdx, d5.mkt.spy.intra.bars.length - 1);
     fs.rmSync(sdir, { recursive: true, force: true });
   }
 

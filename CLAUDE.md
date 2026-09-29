@@ -81,7 +81,8 @@ src/desk/engine.js  the desk: five books' ledgers, the six bots' jobs (HOLT pric
                   RIGO marks and option exits, BRAM signals, KETT fills; PRED is the prediction-market desk,
                   trading in paper beside it), data/desk/state.json + journal-YYYY-MM-DD.jsonl, the page's snapshot
 src/desk/books.js   the rules, pure: volatility targeting (crypto 40%/30 days, SPY 15%/20 sessions, 10-point band)
-                  and the SPY same-day options rules ported from the stack's trend_day_check.py, plus chainSync:
+                  and the SPY same-day options rules ported from the stack's trend_day_check.py, on ONE-MINUTE bars since
+                  2026-09-29 (the stack's move; five-minute before), plus chainSync:
                   an option is bought only off a chain within DESK_CHAIN_SKEW_SEC of the trigger bar's close;
                   SCALP (2026-09-29): the stack's 0DTE scalp method (options §5) on a 30-minute breakout, one
                   contract near 0.40 delta, out at 1.5x / SPY back in the range / 15 min flat / 30 min / 3:15;
@@ -90,7 +91,8 @@ src/desk/books.js   the rules, pure: volatility targeting (crypto 40%/30 days, S
                   minute): Evan's own hand-traded pattern as rules: a turn up off a morning low
                   0.25 ATR under the open, under VWAP, 10:05-noon; two calls 2-3 pts out; one sells on the VWAP
                   reclaim, the runner on a fade to its SPY price / half its gain back once doubled / 3:15
-src/desk/feeds.js   Coinbase (live) and Cboe (15 min late) parsers + fetches; five-minute bars, VWAP, ATR14
+src/desk/feeds.js   Coinbase (live) and Cboe (15 min late) parsers + fetches; Cboe's one-minute bars (options, dips), five-minute
+                  bars (scalps), VWAP, ATR14
 src/desk/broker.js  paper fills: crypto walks Coinbase's book + 0.40%, SPY at the touch, options at the touch + $0.03
 src/desk/clock.js   NYSE sessions, holidays and 1 PM closes through 2027 (TESS warns when the list runs out)
 public/desk.*     the floor at /: a wall of boards (headline vs holding, the desk, one card per book with the markets it

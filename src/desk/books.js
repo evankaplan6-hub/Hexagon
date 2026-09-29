@@ -48,45 +48,53 @@ function needsRebalance(want, last, band) {
 // strategies/scripts/trend_day_check.py, run_day). Ported line for line; where the two differ, the
 // checker's code is what this follows, because it is what the stack's backtest ran.
 //
-//   12:30 test  SPY at least 0.5 ATR14 from the 9:30 open; the 12:25 bar's close on the trend side of
-//               session VWAP; and that close has given back less than half of the move from the open
-//               to the day's extreme. All three, or no trade today.
-//   entry       12:30 to 2:45: the first five-minute close at a new high of the day (a new low on a
-//               down day) that is also on the trend side of VWAP.
+//   12:30 test  SPY at least 0.5 ATR14 from the 9:30 open; the 12:30 close (the minute that closes at
+//               12:30, the checker's "12:29 bar") on the trend side of session VWAP; and that close has
+//               given back less than half of the move from the open to the day's extreme. All three, or
+//               no trade today.
+//   entry       12:30 to 2:45: the first one-minute close at a new high of the day (a new low on a
+//               down day) that is also on the trend side of VWAP: a minute closing 12:31 through 2:45
+//               (the checker's bars starting 12:30 through 14:44).
 //   contract    the first strike 1 to 2 points beyond SPY; if its ask is over $0.25, one strike further;
 //               never more than 3 points out; the ask must be $0.07 to $0.25. Two contracts at $0.12 or
 //               less, one above.
 //   exits       the first of two contracts at 2x its price, the other (or the only one) at 3x; no
-//               premium stop. Everything out on a five-minute close back through VWAP, and at 3:15.
+//               premium stop. Everything out on a one-minute close back through VWAP, and at 3:15 (the
+//               minute that closes at 3:15, the checker's "15:14 bar").
 //   re-entry    once, only after the first trade's first exit hit its target, on a fresh new-high (or
-//               new-low) close before 2:45, one contract.
+//               new-low) one-minute close before 2:45, one contract.
 //   no trade    on a 1 PM close: SPY's same-day options stop trading at 1 PM.
-// Bars here are five-minute bars labelled by their START (src/desk/feeds.js fiveMinute): the "12:25
-// bar" covers 12:25 to 12:30. Minutes are minutes since midnight Eastern.
+// ONE-MINUTE BARS since 2026-09-29, as the checker reads them (Evan, in that day's paper session: every
+// intraday bar the rules read is a one-minute bar, and the checks run every minute); five-minute bars
+// before. ATR14, the contract, the size, the targets and the early-close rule did not change. The bars are
+// Cboe's minutes as they come, the ones the dip book reads, labelled by the minute they END
+// (src/desk/feeds.js parseCboeIntraday): `m` 750 is the minute from 12:29 to 12:30. Minutes are minutes
+// since midnight Eastern.
 const ZERO = {
   trendAtr: 0.5,
-  open: 9 * 60 + 30,
-  check: 12 * 60 + 25,          // the bar whose close is the 12:30 price
-  lastEntry: 14 * 60 + 40,      // the last bar that can trigger an entry (it closes at 2:45)
-  clock: 15 * 60 + 10,          // the bar whose close is 3:15: everything goes then
+  open: 9 * 60 + 31,            // the session's first minute closes at 9:31 and carries the open
+  check: 12 * 60 + 30,          // the minute whose close is the 12:30 price
+  lastEntry: 14 * 60 + 45,      // the last minute that can trigger an entry closes at 2:45
+  clock: 15 * 60 + 15,          // the minute that closes at 3:15: everything goes then
   premiumMin: 0.07, premiumMax: 0.25, twoAt: 0.12,
   nearMin: 1, nearMax: 2, farMax: 3,
   firstTarget: 2, runnerTarget: 3,
 };
 
-// The 12:30 verdict. `bars` are the day's five-minute bars (oldest first), `vwap` the series from
+// The 12:30 verdict. `bars` are the day's one-minute bars (oldest first), `vwap` the series from
 // vwapSeries(bars), `atr` a number or null.
-//   { status: 'wait' }                       the 12:25 bar is not in yet
-//   { status: 'none', why }                  no verdict: a bar missing, no ATR
+//   { status: 'wait' }                       the 12:30 minute is not in yet
+//   { status: 'none', why }                  no verdict: a minute missing, no ATR
 //   { status: 'fail' | 'pass', dir, ... }    the verdict, with every number it was made from
 function trendTest(bars, vwap, atr, R = ZERO) {
   const i = bars.findIndex((b) => b.m === R.check);
-  if (i < 0) return { status: 'wait' };
-  // every bar from 9:30 through 12:25: without the 9:30 bar the open is wrong, and a missing bar
-  // skews VWAP and can hide a new high
-  const want = (R.check - R.open) / 5 + 1;
+  // later minutes in without the 12:30 one: it is missing, not late (the checker's NO VERDICT)
+  if (i < 0) return bars.length && bars[bars.length - 1].m > R.check ? { status: 'none', why: 'the minute that closes at 12:30 is missing' } : { status: 'wait' };
+  // every minute from 9:30 to 12:30: without the first the open is wrong, and a missing one skews VWAP
+  // and can hide a new high
+  const want = R.check - R.open + 1;
   const have = bars.slice(0, i + 1).filter((b) => b.m >= R.open && b.m <= R.check);
-  if (bars[0].m !== R.open || have.length !== want) return { status: 'none', why: `${want - have.length} five-minute bar${want - have.length === 1 ? '' : 's'} missing before 12:30` };
+  if (bars[0].m !== R.open || have.length !== want) return { status: 'none', why: `${want - have.length} one-minute bar${want - have.length === 1 ? '' : 's'} missing before 12:30` };
   if (!(atr > 0)) return { status: 'none', why: 'no ATR14 from the daily bars' };
   const o = bars[0].o, c = bars[i].c, move = c - o, dir = move > 0 ? 'up' : 'down';
   const hi = Math.max(...bars.slice(0, i + 1).map((b) => b.h)), lo = Math.min(...bars.slice(0, i + 1).map((b) => b.l));
@@ -123,7 +131,7 @@ function scanEntry(bars, vwap, dir, from, ext, R = ZERO) {
   return { hit: null, ext: run, scanned: bars.length - 1 };
 }
 
-// A five-minute close back through VWAP: the trend stop.
+// A one-minute close back through VWAP: the trend stop.
 const vwapBreak = (bar, vw, dir) => (dir === 'up' ? bar.c < vw : bar.c > vw);
 
 // Which contract, and how many. `rows` are the day's calls (dir up) or puts (dir down), any order.
@@ -150,16 +158,16 @@ const fmt = (x) => (Number.isFinite(x) ? `$${x.toFixed(2)}` : 'no ask');
 
 // Did a resting limit sell at `target` fill since the lot was bought? Yes if the bid now reaches it,
 // or if the contract has printed at or above it since: its day high has risen past the target from
-// where it stood when the lot was bought. The chain is read every five minutes, not streamed, so the
-// high is what catches a spike between reads.
+// where it stood when the lot was bought. The chain is read once a bar (a minute for the options book, five
+// for the scalp book), not streamed, so the high is what catches a spike between reads.
 function targetHit(lot, row) {
   if (!row) return false;
   if (row.bid >= lot.target - 1e-9) return true;
   return Number.isFinite(row.high) && Number.isFinite(lot.high0) && row.high > lot.high0 + 1e-9 && row.high >= lot.target - 1e-9;
 }
 
-// Is the option chain from the moment the rule acted on? The rule reads SPY's five-minute bars from
-// Cboe's delayed chart file and fills at Cboe's delayed option chain: two files on the same ~15-minute
+// Is the option chain from the moment the rule acted on? The rule reads SPY's bars (one or five minutes)
+// from Cboe's delayed chart file and fills at Cboe's delayed option chain: two files on the same ~15-minute
 // delay, and nothing ties one to the other. A chain from before a breakout sells the call at its price
 // before the breakout, which would flatter every entry. `chainAt` is the chain's own time (SPY's last
 // trade in it), `barAt` the instant the bar the rule acted on closed. Both are market time, so the
@@ -277,7 +285,8 @@ function scalpExit(lot, fresh, last, row, R = SCALP) {
 //
 // ONE-MINUTE BARS. He traded it off a 45-second chart. The desk's only intraday feed, Cboe's, has
 // one-minute bars at the finest (labelled by the minute they END: `m` below is a bar's close), so this
-// book reads those, not the five-minute bars the other books use. On that week's SPY minute bars the
+// book reads those, not the five-minute bars the scalp book uses (the options book has read the same
+// minutes since the stack's rules moved to them the same day). On that week's SPY minute bars the
 // rule bought within one to three minutes of his own entries on the 25th and 28th and sold its first
 // call on the 28th in the minute he sold his; on five-minute bars it was 15 to 25 minutes late. The
 // cost: on the 23rd the one-minute version was stopped out where the five-minute one made a little.

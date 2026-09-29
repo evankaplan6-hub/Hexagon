@@ -354,8 +354,8 @@
     const O = S.options || {}, d = O.day, sp = O.spy, rows = [], td = today();
     const on = (day) => (day && day !== td ? `${wd(day)} ` : '');
     if (d && d.test && Number.isFinite(d.test.moveAtr)) rows.push([`${on(d.date)}12:30 test`, `${d.test.dir || d.dir || ''} ${d.test.moveAtr.toFixed(2)} ATR from the open${Number.isFinite(d.test.retr) ? `, gave back ${Math.round(d.test.retr * 100)}%` : ''}`]);
-    // the last five-minute bar, by the time it closed
-    if (sp && Number.isFinite(sp.c)) rows.push([`SPY ${on(sp.day)}${Number.isFinite(sp.m) ? minTxt(sp.m + 5) : ''}`, `${sp.c.toFixed(2)} · VWAP ${sp.vwap != null ? sp.vwap.toFixed(2) : '—'} · ATR ${sp.atr != null ? sp.atr.toFixed(2) : '—'}`]);
+    // the last one-minute bar, by the time it closed (the minute it is labelled by)
+    if (sp && Number.isFinite(sp.c)) rows.push([`SPY ${on(sp.day)}${Number.isFinite(sp.m) ? minTxt(sp.m) : ''}`, `${sp.c.toFixed(2)} · VWAP ${sp.vwap != null ? sp.vwap.toFixed(2) : '—'} · ATR ${sp.atr != null ? sp.atr.toFixed(2) : '—'}`]);
     for (const t of (O.trades || []).slice(0, 3)) rows.push([t.date.slice(5).replace('-', '/'), `${t.qty} × ${t.strike}${t.right} at ${px(t.entry)}${t.open ? ' · open' : ` · ${t.pnl >= 0 ? 'made' : 'lost'} ${money(Math.abs(t.pnl))}`}`]);
     return rows.length ? `<dl class="bkfacts">${rows.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>` : '<p class="bksub">No contracts open.</p>';
   }
