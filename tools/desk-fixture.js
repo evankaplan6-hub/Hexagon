@@ -2,7 +2,8 @@
 // A fake market for the stocks, crypto and options desk (src/desk/), shared by tools/desk-test.js and
 // tools/desk-check-test.js: a quiet crypto market, a calm SPY with a 6-point ATR, and a Wednesday
 // that climbs all day (every five-minute bar a new 30-minute high: the scalp book's trigger) and whose
-// afternoon trends up, triggers the options book, hits a 2x target and breaks VWAP. No network:
+// afternoon trends up, triggers the options book on a one-minute close, hits a 2x target and breaks
+// VWAP. No network:
 // every feed is an object the test edits between rounds. (Not a *-test.js file, so tools/test.js
 // does not run it on its own.)
 const clock = require('../src/desk/clock');
@@ -75,20 +76,23 @@ function fakeMarket(now) {
   return { W, feeds, setMinutes, call, put };
 }
 
-// The whole afternoon, round by round, for a test that only needs the ledger it leaves behind:
-// crypto and SPY bought at 12:31, two 705 calls at 12:36, the first sold at its 2x target at 12:41,
-// the runner at the bid on a VWAP break at 12:46. Each chain carries its own time, the close of the
-// bar that round acts on, as Cboe's does. `setNow(t)` moves the test's clock.
+// The whole afternoon, round by round, on the options book's one-minute bars, for a test that only needs
+// the ledger it leaves behind: crypto and SPY bought at 12:31 (the 12:30 test passes); two 705 calls at
+// 12:32 on the 12:31 close, a new high; the first sold at its 2x target at 12:33; the runner at the bid at
+// 12:42, SPY having closed through VWAP at 12:41. Each round comes ten seconds after the minute it acts on
+// closed, as the stack's checks do (a second later each time, so that rounds a minute apart are more than
+// the minute the desk waits between reads of the minute bars), and each chain carries its own time, that
+// minute's close, as Cboe's does. `setNow(t)` moves the test's clock.
 async function playTrendDay(desk, M, setNow) {
   setNow(at('12:31')); M.setMinutes(12 * 60 + 30); await desk.step();
-  setNow(at('12:36')); M.setMinutes(12 * 60 + 35);
-  M.W.chain = { expiry: DAY, spot: 703.7, at: at('12:35'), calls: [M.call(704, 0.3, 0.31, 0.5), M.call(705, 0.09, 0.1, 0.15), M.call(706, 0.04, 0.05, 0.1)], puts: [] };
+  setNow(at('12:32') + 10000); M.setMinutes(12 * 60 + 31);
+  M.W.chain = { expiry: DAY, spot: 703.62, at: at('12:31'), calls: [M.call(704, 0.3, 0.31, 0.5), M.call(705, 0.09, 0.1, 0.15), M.call(706, 0.04, 0.05, 0.1)], puts: [] };
   await desk.step();
-  setNow(at('12:41')); M.setMinutes(12 * 60 + 40);
-  M.W.chain = { ...M.W.chain, at: at('12:40'), calls: [M.call(704, 0.5, 0.51, 0.6), M.call(705, 0.21, 0.22, 0.22), M.call(706, 0.08, 0.09, 0.1)] };
+  setNow(at('12:33') + 11000); M.setMinutes(12 * 60 + 32);
+  M.W.chain = { ...M.W.chain, spot: 703.64, at: at('12:32'), calls: [M.call(704, 0.5, 0.51, 0.6), M.call(705, 0.21, 0.22, 0.22), M.call(706, 0.08, 0.09, 0.1)] };
   await desk.step();
-  setNow(at('12:46')); M.setMinutes(12 * 60 + 45, { 761: 701.5, 762: 701.2, 763: 701, 764: 700.9, 765: 700.8 });
-  M.W.chain = { ...M.W.chain, at: at('12:45'), calls: [M.call(704, 0.1, 0.11, 0.6), M.call(705, 0.05, 0.06, 0.22), M.call(706, 0.01, 0.02, 0.1)] };
+  setNow(at('12:42') + 12000); M.setMinutes(12 * 60 + 41, { 761: 701.5 });
+  M.W.chain = { ...M.W.chain, spot: 701.5, at: at('12:41'), calls: [M.call(704, 0.1, 0.11, 0.6), M.call(705, 0.05, 0.06, 0.22), M.call(706, 0.01, 0.02, 0.1)] };
   await desk.step();
 }
 

@@ -330,9 +330,10 @@ class Desk {
     if (!S.daily || t - S.dailyAt > 3 * HOUR || clock.et(S.dailyAt).day !== e.day) jobs.push(this.feeds.daily(this.D.stockSym).then((x) => { if (x && x.length) { S.daily = x; S.dailyAt = t; } }).catch(fail('SPY daily bars')));
     await Promise.all(jobs);
     if (S.intra) {
+      // the scalp book reads five-minute bars
       S.bars5 = feedsLib.fiveMinute(S.intra.bars);
       S.vwap = feedsLib.vwapSeries(S.bars5);
-      // the dip book reads the one-minute bars themselves (Cboe publishes a minute only once it is over)
+      // the options and dip books read the one-minute bars themselves (Cboe publishes a minute only once it is over)
       S.vwap1 = feedsLib.vwapSeries(S.intra.bars);
     }
     if (S.daily) {
@@ -421,10 +422,12 @@ class Desk {
     } else this.touch('RIGO');
   }
 
-  // The option book's exits, once per finished five-minute bar while it holds anything: a target hit
-  // sells that contract at its target, a close back through VWAP or the 3:15 bar sells everything at
-  // the bid. A book still holding after the close (a feed outage all afternoon) is settled at what the
-  // option is worth against SPY's close.
+  // The options book's exits, once per finished one-minute bar while it holds anything (five-minute bars
+  // until 2026-09-29): a target hit sells that contract at its target, a one-minute close back through
+  // VWAP or the 3:15 minute sells everything at the bid. The chain is read every one of those minutes, as
+  // the checks run every minute: a target is a resting limit, and one that filled lets the re-entry look
+  // for its fresh trigger from the next minute on. A book still holding after the close (a feed outage all
+  // afternoon) is settled at what the option is worth against SPY's close.
   async optionExits() {
     const o = this.state.books.options, S = this.mkt.spy, t = this.now();
     const e = clock.et(t), today = e.day, s = clock.session(today);
@@ -432,13 +435,13 @@ class Desk {
     const afterTape = !s || e.min >= s.close + 20;
     for (const l of o.lots.filter((x) => x.expiry < today || (x.expiry === today && afterTape))) this.settleLot('options', l);
     if (!o.lots.length) return;
-    const bars = S.bars5, last = bars[bars.length - 1];
-    if (!last || !o.day || !S.intra || S.intra.day !== o.day.date) return;
-    if (o.day.exitBarM === last.m) return;          // this bar was already handled
-    // every finished bar since the last one handled (normally just the one), from the bar the
-    // position was bought on: a feed that skipped a bar must not skip a VWAP break with it
+    const bars = S.intra ? S.intra.bars : [], last = bars[bars.length - 1];
+    if (!last || !o.day || S.intra.day !== o.day.date) return;
+    if (o.day.exitBarM === last.m) return;          // this minute was already handled
+    // every finished minute since the last one handled (normally just the one), from the minute the
+    // position was bought on: a feed that skipped a minute must not skip a VWAP break with it
     const since = o.day.exitBarM == null ? o.day.entryBarM : o.day.exitBarM;
-    const fresh = bars.map((b, i) => ({ b, vw: S.vwap[i] })).filter((x) => x.b.m > since);
+    const fresh = bars.map((b, i) => ({ b, vw: S.vwap1[i] })).filter((x) => x.b.m > since);
     o.day.exitBarM = last.m;
     this.dirty = true;
     await this.optionChain(today, true);
@@ -446,7 +449,7 @@ class Desk {
     const byOsi = (osi, right) => { const ch = this.mkt.chain; return ch && ch.expiry === today ? (right === 'C' ? ch.calls : ch.puts).find((r) => r.osi === osi) : null; };
     // a sale is never held back for a chain out of step with the bars (selling is never blocked), but
     // it is journaled with both times like a buy, and said once on the floor
-    const onLast = this.chainSync(this.mkt.chain, today, last.m);
+    const onLast = this.chainSyncAt(this.mkt.chain, today, last.m);
     let said = false;
     const flag = (sync) => { if (!sync.ok && !said) { said = true; this.log('RIGO', 'OPS', null, `options: selling anyway · ${sync.why}`); } };
     for (const lot of [...o.lots]) {
@@ -457,8 +460,8 @@ class Desk {
     const brk = fresh.find((x) => books.vwapBreak(x.b, x.vw, dir));
     const clockOut = last.m >= books.ZERO.clock;
     if (brk || clockOut) {
-      const why = brk ? `SPY closed ${dir === 'up' ? 'below' : 'above'} VWAP at ${hm(brk.b.m + 5)} (${brk.b.c.toFixed(2)} vs ${brk.vw.toFixed(2)})` : '3:15 clock';
-      const sync = brk ? this.chainSync(this.mkt.chain, today, brk.b.m) : onLast;
+      const why = brk ? `SPY closed ${dir === 'up' ? 'below' : 'above'} VWAP at ${hm(brk.b.m)} (${brk.b.c.toFixed(2)} vs ${brk.vw.toFixed(2)})` : '3:15 clock';
+      const sync = brk ? this.chainSyncAt(this.mkt.chain, today, brk.b.m) : onLast;
       flag(sync);
       for (const lot of [...o.lots]) await this.kett({ book: 'options', lot, side: 'sell', market: byOsi(lot.osi, lot.right), sync: sync.rec, why });
     }
@@ -485,7 +488,8 @@ class Desk {
     if (key === 'dips') { if (tr && !tr.open && d && d.date === tr.date) this.dipClosed(d, tr); return; }
     // the re-entry is earned by the FIRST exit of the first trade hitting its target
     if (d && d.firstExitHit == null && lot.trade === d.firstTrade) d.firstExitHit = !!targetHit;
-    if (d && !o.lots.length) d.flatAtIdx = this.mkt.spy.bars5.length - 1;
+    // the re-entry's fresh extreme is counted from the minute the book went flat
+    if (d && !o.lots.length) d.flatAtIdx = (this.mkt.spy.intra ? this.mkt.spy.intra.bars.length : 0) - 1;
   }
   // A scalp has closed: a loss starts the pause and counts toward the run that ends the day.
   scalpClosed(d, tr) {
@@ -606,9 +610,9 @@ class Desk {
     return this.mkt.chain && this.mkt.chain.expiry === day ? this.mkt.chain : null;
   }
   // The chain against the close of the five-minute bar that starts at minute `barM` (Eastern) on
-  // `day`: books.chainSync's verdict, and in `rec` the three fields every option fill journals.
+  // `day` (the scalp book's bars): books.chainSync's verdict, and in `rec` the three fields every option fill journals.
   chainSync(ch, day, barM) { return this.chainSyncAt(ch, day, barM + 5); }
-  // The same against the minute `closeM` (Eastern) on `day` that a bar closed at: the dip book's one-minute bars.
+  // The same against the minute `closeM` (Eastern) on `day` that a bar closed at: the options and dip books' one-minute bars.
   chainSyncAt(ch, day, closeM) {
     const barAt = clock.atMin(day, closeM);
     const chainAt = ch && ch.expiry === day && Number.isFinite(ch.at) ? ch.at : null;
@@ -677,7 +681,8 @@ class Desk {
     this.dirty = true;
   }
 
-  // The options book, from 12:30 on the delayed tape.
+  // The options book, from 12:30 on the delayed tape, on each new one-minute bar (books.trendTest and the rules
+  // above it; five-minute bars until 2026-09-29).
   async optionsBook() {
     const o = this.state.books.options, S = this.mkt.spy, t = this.now();
     const today = clock.et(t).day;
@@ -689,13 +694,13 @@ class Desk {
     }
     const d = o.day;
     if (d.status === 'early-close' || d.status === 'no-trade' || d.status === 'done') return;
-    const bars = S.bars5, vw = S.vwap;
+    const bars = S.intra.bars, vw = S.vwap1;
     if (d.status === 'waiting') {
       const r = books.trendTest(bars, vw, S.atr && !S.atr.stale ? S.atr.atr : null);
       if (r.status === 'wait') return;
       if (r.status === 'none' && S.atr && S.atr.stale) r.why = `SPY's daily bars end ${S.atr.asof}, a session short (stale ATR)`;
       if (r.status === 'none') {
-        // a bar can still arrive late; give it until 12:45 on the tape before calling the day
+        // a minute can still arrive late; give it until 12:45 on the tape before calling the day
         const lastM = bars.length ? bars[bars.length - 1].m : 0;
         if (lastM < books.ZERO.check + 15) return;
         d.status = 'no-trade'; d.why = r.why;
@@ -715,12 +720,12 @@ class Desk {
       this.log('BRAM', 'SIGNAL', null, `options: trend day ${r.dir}, ${r.moveAtr.toFixed(2)} ATR from the open and ${r.dir === 'up' ? 'above' : 'below'} VWAP · watching for a new ${r.dir === 'up' ? 'high' : 'low'} until 2:45`);
       return;
     }
-    // armed: hunt the trigger on bars not yet scanned, only while flat
+    // armed: hunt the trigger on minutes not yet scanned, only while flat
     if (o.lots.length || d.status !== 'armed') return;
     const canEnter = d.entries === 0 || (d.entries === 1 && d.firstExitHit === true);
     if (!canEnter) { if (d.entries >= 1 && d.firstExitHit != null) { d.status = 'done'; this.dirty = true; } return; }
     if (d.entries === 1 && d.flatAtIdx != null && d.scanIdx < d.flatAtIdx) {
-      // the re-entry needs a FRESH extreme: everything up to the bar the first trade ended on is the bar to beat
+      // the re-entry needs a FRESH extreme: everything up to the minute the first trade ended on is the extreme to beat
       const upto = bars.slice(0, d.flatAtIdx + 1);
       d.ext = d.dir === 'up' ? Math.max(...upto.map((b) => b.h)) : Math.min(...upto.map((b) => b.l));
       d.scanIdx = d.flatAtIdx;
@@ -733,27 +738,27 @@ class Desk {
     // Whatever happens to this trigger, the next one has to beat this bar's own extreme.
     const hb = bars[s.hit.idx];
     d.ext = d.dir === 'up' ? Math.max(d.ext, hb.h) : Math.min(d.ext, hb.l);
-    // A trigger is only worth acting on while it is the newest bar: after a restart the scan can land
+    // A trigger is only worth acting on while it is the newest minute: after a restart the scan can land
     // on one from half an hour ago, and buying it at the current price is not the rule.
-    if (s.hit.idx < bars.length - 1) { this.log('BRAM', 'PASS', null, `options: new ${d.dir === 'up' ? 'high' : 'low'} at ${hm(s.hit.m + 5)} was missed (the desk was not running) · waiting for the next one`); return; }
-    if (this.halt) { this.log('KETT', 'PASS', null, `options: trigger at ${hm(s.hit.m + 5)} not taken · ${this.halt}`); return; }
+    if (s.hit.idx < bars.length - 1) { this.log('BRAM', 'PASS', null, `options: new ${d.dir === 'up' ? 'high' : 'low'} at ${hm(s.hit.m)} was missed (the desk was not running) · waiting for the next one`); return; }
+    if (this.halt) { this.log('KETT', 'PASS', null, `options: trigger at ${hm(s.hit.m)} not taken · ${this.halt}`); return; }
     // a fresh chain, never the four-minute cache: the fill has to be from the trigger's moment
     const ch = await this.optionChain(today, true);
-    if (!ch) { this.log('BRAM', 'PASS', null, `options: trigger at ${hm(s.hit.m + 5)} but the chain did not load`); return; }
-    const sync = this.chainSync(ch, today, s.hit.m);
+    if (!ch) { this.log('BRAM', 'PASS', null, `options: trigger at ${hm(s.hit.m)} but the chain did not load`); return; }
+    const sync = this.chainSyncAt(ch, today, s.hit.m);
     if (!sync.ok) {
-      this.log('BRAM', 'PASS', null, `options: new ${d.dir === 'up' ? 'high' : 'low'} at ${hm(s.hit.m + 5)} not taken · ${sync.why}`);
-      this.journal('OPTIONS_SKIP', { date: today, bar: hm(s.hit.m + 5), ...sync.rec, why: sync.why });
+      this.log('BRAM', 'PASS', null, `options: new ${d.dir === 'up' ? 'high' : 'low'} at ${hm(s.hit.m)} not taken · ${sync.why}`);
+      this.journal('OPTIONS_SKIP', { date: today, bar: hm(s.hit.m), ...sync.rec, why: sync.why });
       return;
     }
     const rows = d.dir === 'up' ? ch.calls : ch.puts;
     const spot = ch.spot > 0 ? ch.spot : s.hit.c;
     const pick = books.pickContract(rows, spot, d.dir);
-    if (!pick.row) { this.log('BRAM', 'PASS', null, `options: new ${d.dir === 'up' ? 'high' : 'low'} at ${hm(s.hit.m + 5)} (${s.hit.c.toFixed(2)}) but ${pick.why}`); return; }
+    if (!pick.row) { this.log('BRAM', 'PASS', null, `options: new ${d.dir === 'up' ? 'high' : 'low'} at ${hm(s.hit.m)} (${s.hit.c.toFixed(2)}) but ${pick.why}`); return; }
     const qty = d.entries === 1 ? 1 : pick.qty;
-    this.log('BRAM', 'SIGNAL', null, `options: new ${d.dir === 'up' ? 'high' : 'low'} at ${hm(s.hit.m + 5)}, SPY ${s.hit.c.toFixed(2)} · buy ${qty} ${pick.row.strike} ${d.dir === 'up' ? 'call' : 'put'} at ${prem(pick.row.ask)}${d.entries === 1 ? ' (the one re-entry)' : ''}`);
-    const f = await this.kett({ book: 'options', side: 'buy', row: pick.row, qty, sync: sync.rec, why: d.entries === 1 ? 're-entry on a fresh extreme' : `trend-day trigger at ${hm(s.hit.m + 5)}` });
-    // exits are judged on the bars after the one it was bought on
+    this.log('BRAM', 'SIGNAL', null, `options: new ${d.dir === 'up' ? 'high' : 'low'} at ${hm(s.hit.m)}, SPY ${s.hit.c.toFixed(2)} · buy ${qty} ${pick.row.strike} ${d.dir === 'up' ? 'call' : 'put'} at ${prem(pick.row.ask)}${d.entries === 1 ? ' (the one re-entry)' : ''}`);
+    const f = await this.kett({ book: 'options', side: 'buy', row: pick.row, qty, sync: sync.rec, why: d.entries === 1 ? 're-entry on a fresh extreme' : `trend-day trigger at ${hm(s.hit.m)}` });
+    // exits are judged on the minutes after the one it was bought on
     if (f) { d.entryBarM = s.hit.m; d.exitBarM = null; }
   }
 
@@ -1033,7 +1038,7 @@ class Desk {
       books: [
         book('crypto', 'Crypto', `Holds ${D.coins.map(short).join(', ')}, a third each, sized to swing about ${Math.round(D.cryptoVolTarget * 100)}% a year: less of a coin while it has been wild. Checked once a day after midnight UTC.`, coinRows),
         book('stocks', 'Stocks', `Holds ${D.stockSym}, sized to swing about ${Math.round(D.stockVolTarget * 100)}% a year: trims when the market gets jumpy. Checked once a trading day after the open.`, stockRows),
-        book('options', 'Options', 'SPY same-day options on trend days only (the stack\'s afternoon rules): a new high after a 12:30 trend test buys a call 1-2 points out; out at 2x or 3x, a VWAP break, or 3:15.', o.lots.map((l) => ({
+        book('options', 'Options', 'SPY same-day options on trend days only (the stack\'s afternoon rules, on one-minute bars): a new high after a 12:30 trend test buys a call 1-2 points out; out at 2x or 3x, a one-minute close back through VWAP, or 3:15.', o.lots.map((l) => ({
           sym: l.osi, name: lotName(l), label: l.role === 'first' ? 'first contract' : 'runner', qty: l.qty, px: l.mark, value: r2(l.qty * 100 * (l.mark ?? l.entry)), cost: l.cost, pnl: r2(l.qty * 100 * (l.mark ?? l.entry) - l.cost), target: l.target, entry: l.entry,
         }))),
         book('scalps', 'Scalps', `SPY same-day options held for minutes (the stack's 0DTE scalp method): a five-minute close beyond the last 30 minutes' range, on the same side of VWAP, buys one call or put near 0.40 delta, 10:05 to 2:30. Out at ${SC.target}x, on SPY closing back inside the range, from ${SC.timeStop} minutes in unless it is bid above its cost, at ${SC.hold} minutes, or 3:15. At most ${SC.maxTrades} a day; done after ${SC.maxLossRun} losses in a row.`, x.lots.map((l) => ({
@@ -1048,7 +1053,8 @@ class Desk {
       options: {
         enabled: !!D.options,
         day: d ? { date: d.date, status: d.status, test: d.test, dir: d.dir, entries: d.entries, why: d.why || (d.test && d.test.why) || '' } : null,
-        spy: lastBar ? { m: lastBar.m, c: lastBar.c, vwap: S.vwap.length ? r4(S.vwap[S.vwap.length - 1]) : null, open: S.bars5[0].o, atr: S.atr ? r4(S.atr.atr) : null, day: S.intra.day } : null,
+        // the newest minute (m is the minute it closed), as the book reads it
+        spy: one.length ? { m: one[one.length - 1].m, c: one[one.length - 1].c, vwap: S.vwap1.length ? r4(S.vwap1[S.vwap1.length - 1]) : null, open: one[0].o, atr: S.atr ? r4(S.atr.atr) : null, day: S.intra.day } : null,
         trades: o.trades.slice(0, 20),
       },
       scalps: {
