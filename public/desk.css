@@ -120,7 +120,8 @@ main.gone { opacity: .45; }
 
 /* ---- a book: its figure against holding, its line, what it holds, what happens next ---------- */
 .bk { display: flex; flex-direction: column; gap: var(--space-2); }
-.bk header { display: flex; align-items: center; gap: var(--space-2); }
+/* a header that runs out of room puts its chip on a line of its own, never past the card's edge */
+.bk header { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-1) var(--space-2); }
 .bk h3 { margin: 0; font: 600 var(--type-title)/1.2 var(--sans); }
 .sw { width: 10px; height: 10px; flex: none; border-radius: 3px; background: var(--bk); }
 .chip { margin-left: auto; padding: 4px var(--space-2); border-radius: var(--radius-sm); background: var(--tint-2); border: 1px solid var(--line-1);
@@ -179,6 +180,14 @@ main.gone { opacity: .45; }
 .pmbooks > [data-k="pm-arbs"] { grid-column: span 5; }
 .pmbooks > [data-k="pm-maker"] { grid-column: span 4; }
 .pmside { grid-column: span 3; display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+/* the five books' grid gives a card two of its columns (.bk above); these cards take one of theirs */
+.pmside > .bk { grid-column: auto; }
+/* under 1,280px wide that last column is too narrow for "Convergence" and its chip (at 1,024 the chip ran
+   22px past the card's edge): the arbs and the maker side by side, the snipe and convergence under them */
+@media (max-width: 1279px) {
+  .pmbooks > [data-k="pm-arbs"], .pmbooks > [data-k="pm-maker"] { grid-column: span 6; }
+  .pmside { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+}
 /* a market's name is words, not a ticker: the sans, and it wraps */
 .hold-t .nm { font-weight: 600; color: var(--ink-1); overflow-wrap: anywhere; }
 .hold-t thead th.lead { text-align: left; }
@@ -277,8 +286,6 @@ footer { font-size: var(--type-label); color: var(--ink-3); }
   .chartcard, .act { grid-column: 1 / -1; contain: none; }
   .chartcard { height: 340px; }
   .act { max-height: 560px; }
-  .pmbooks > [data-k="pm-arbs"], .pmbooks > [data-k="pm-maker"] { grid-column: span 6; }
-  .pmside { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
 }
 @media (max-width: 767px) {
   .hero, .desk { grid-column: 1 / -1; }
