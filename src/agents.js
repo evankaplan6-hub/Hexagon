@@ -352,7 +352,20 @@ function BRAM(E) {
       if (E.due(`snipe-seen-${p.id}`, 300)) E.log('BRAM', 'RESEARCH', null, `${p.label}: Polymarket has settled ${s.won.toUpperCase()} · Kalshi still offers it at ${(s.legs[0].px * 100).toFixed(0)}c${s.size ? ` (${s.size} at the touch)` : ''} · ${c(s.edge)} net`);
     }
   }
-  E.signals = [...snipes, ...held.kept];
+  // Every game (decide.betSignal): one bet a game, found the first cycle it can be. `done` is every pair
+  // the book already holds or has settled, from the ledger itself, so a restart does not bet a game twice.
+  const bets = [];
+  if (E.cfg.bets && E.cfg.mode !== 'live') {
+    const now = Date.now();
+    const done = new Set([...E.state.positions, ...(E.state.closed || [])].filter((p) => p.strategy === 'bet').map((p) => p.pairId));
+    for (const p of E.pairs) {
+      const s = decide.betSignal(p, E.cfg, now, done);
+      if (!s) continue;
+      if (s.veto) { if (E.due(`bet-veto-${p.id}`, 1800)) E.log('BRAM', 'RESEARCH', null, `${p.label}: no game bet yet, ${s.veto}`); continue; }
+      bets.push(s);
+    }
+  }
+  E.signals = [...snipes, ...bets, ...held.kept];
   E.touch('BRAM', widest ? `widest ${c(Math.abs(widest.gap))} ${widest.p.label}` : inPlayN ? `${inPlayN} pairs live or closing, none tradeable` : 'no pairs');
   if (staleN && E.due('bram-stale', 300)) E.log('BRAM', 'RESEARCH', null, `${staleN} pair${staleN > 1 ? 's' : ''} skipped on stale quotes (older than ${E.cfg.maxDataAgeSec}s) \u00b7 desk-wide data age is fine, these instruments individually are not`);
   // "Nothing traded" is this desk's normal output, so the useful thing to narrate is which rail
@@ -442,7 +455,10 @@ async function KETT(E) {
   for (const s of E.signals) {
     if (standDown(E)) return;
     if (considered >= 2) break; // pace: at most two new positions per cycle
-    if (E.state.positions.some((p) => p.pairId === s.pair.id)) continue;
+    // A game bet sits beside an arb on the same game (each is its own position); only a bet already
+    // placed stops another. Every other book still stands aside from a pair anything holds.
+    if (E.state.positions.some((p) => p.pairId === s.pair.id && (s.type !== 'bet' || p.strategy === 'bet'))) continue;
+    if (s.type === 'bet' && live) continue; // paper only (decide.betSignal makes none in live mode either)
     if (Date.now() - (E.cooldown.get(s.pair.id) || 0) < E.cfg.reentryCooldownMs) continue; // no churn after an exit
     if (live && s.legs.some((l) => l.venue !== 'KS')) continue; // live mode trades Kalshi legs only
     const full = decide.bookFull(E.state.positions, s, E.cfg, Date.now());
@@ -533,6 +549,15 @@ async function KETT(E) {
       }
       s.edge = liveEdge; s.legs[0].px = top.price;
     }
+    if (s.type === 'bet') {
+      // bought off the live book just fetched; the listing only chose the side and the venue
+      const top = books[0] && books[0].asks && books[0].asks[0];
+      if (!top || top.price > E.cfg.betMaxPx) {
+        if (E.due(`bet-book-${s.pair.id}`, 300)) E.log('KETT', 'PASS', null, `${s.pair.label}: game bet on ${s.pick}, but ${VEN[s.legs[0].venue]}'s live book ${top ? `asks ${top.price.toFixed(2)}, over the ${(E.cfg.betMaxPx * 100).toFixed(0)}c limit` : 'has nothing offered'}`);
+        continue;
+      }
+      s.legs[0].px = top.price;
+    }
     if (s.type === 'converge') {
       const leg = s.legs[0];
       let far;
@@ -564,7 +589,7 @@ async function KETT(E) {
       }
       s.edge = edgeLive; s.fair = fairLive; s.gap = liveQ.ksMid - liveQ.pmMid; leg.px = pxLive;
     }
-    let { qty, capped } = decide.sizePlan(s, { budget, sizeMult, books, cfg: E.cfg });
+    let { qty, capped } = decide.sizePlan(s, { budget: s.type === 'bet' ? Math.min(E.cfg.betUsd, budget) : budget, sizeMult, books, cfg: E.cfg });
     if (s.type === 'snipe') qty = Math.min(qty, E.cfg.snipeMaxQty);   // a settlement is a one-shot, sized like one
     // Say so when the risk limit -- not depth, not cash -- is what set the size. Silently clipping
     // a position back to the cap is how a rail stops being visible enough to argue with.
@@ -631,7 +656,7 @@ async function KETT(E) {
       if (s.type === 'arb') E.journal(E, 'ARB_UNWOUND', { group, label: s.pair.label, reason: failed, knownLegs: fills.length });
       continue;
     }
-    for (const { leg, f } of fills) E.open(s, leg, f, group, s.type === 'arb' ? 'locked arb leg' : s.type === 'snipe' ? 'settlement snipe' : `gap ${c(Math.abs(s.gap))}`);
+    for (const { leg, f } of fills) E.open(s, leg, f, group, s.type === 'arb' ? 'locked arb leg' : s.type === 'snipe' ? 'settlement snipe' : s.type === 'bet' ? `game bet on ${s.pick}` : `gap ${c(Math.abs(s.gap))}`);
     if (s.type === 'arb') E.completeArbGroup(group);
     const totalCost = fills.reduce((a, x) => a + x.f.cost, 0);
     const q = s.pair.q;
@@ -640,6 +665,9 @@ async function KETT(E) {
     } else if (s.type === 'snipe') {
       const leg = fills[0].leg, f = fills[0].f;
       E.log('KETT', 'FILL', -totalCost, `${s.pair.label} · settlement snipe: Polymarket has settled ${leg.side.toUpperCase()}, bought ${qty} ${leg.side.toUpperCase()} @ Kalshi ${f.avg.toFixed(3)} · pays $1.00 at settlement, ${c(s.edge)} net of fee`);
+    } else if (s.type === 'bet') {
+      const leg = fills[0].leg, f = fills[0].f;
+      E.log('KETT', 'FILL', -totalCost, `${s.pair.label} · game bet on ${s.pick}, the favourite: ${qty} ${leg.side.toUpperCase()} @ ${VEN[leg.venue]} ${f.avg.toFixed(3)}, fee ${money(f.fee)} · pays ${money(qty)} if the ${s.pick} win, held to the final`);
     } else {
       const leg = fills[0].leg, f = fills[0].f;
       const fairSide = leg.side === 'yes' ? s.fair : 1 - s.fair;

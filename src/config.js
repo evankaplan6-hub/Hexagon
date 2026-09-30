@@ -394,6 +394,15 @@ module.exports = {
   snipeWatch: env('SNIPE_WATCH', '1') !== '0',
   snipeWatchSec: num('SNIPE_WATCH_SEC', 3600),
   snipeWatchAskSec: num('SNIPE_WATCH_ASK_SEC', 30),
+
+  // ---- every game (decide.betSignal, BRAM finds, KETT buys; 2026-09-30) ----
+  // Evan on the MLB Wild Card's second night: "every game should be bet". One bet a game in BET_SERIES,
+  // BET_USD on the favourite at whichever venue sells it cheaper after fees, held to the final. Paper
+  // only: betSignal returns nothing in live mode. Off unless BETS=1 (fly.toml sets it).
+  bets: env('BETS', '0') !== '0',
+  betSeries: env('BET_SERIES', 'KXMLBGAME').split(',').map((s) => s.trim()).filter(Boolean),
+  betUsd: num('BET_USD', 100),
+  betMaxPx: num('BET_MAX_PX', 0.9),     // a favourite dearer than this is a game all but decided: left alone
   exitGap: num('EXIT_GAP', 0.01),
   stopLoss: num('STOP_LOSS', 0.06),
   // Paper positions also use a percentage stop so a cheap contract cannot lose nearly all of

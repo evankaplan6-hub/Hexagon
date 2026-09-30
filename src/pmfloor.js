@@ -25,9 +25,10 @@ const unellipsis = (s) => String(s || '').replace(/\s*-?\s*(?:\.{3}|…)/g, '…
 // (Kalshi's Senate series say "Will Democratics win..." in every state: the venue's typo, not a party)
 const question = (s) => unellipsis(String(s || '').replace(/\*\*/g, '').replace(/\bDemocratics\b/g, 'Democrats').replace(/^Will\s+/i, '').replace(/\?$/, ''));
 
-// Every book's positions are one of three: a locked arb (two legs, one per venue), a settlement snipe,
-// or a convergence bet (any other signal the taker opened; the book has been off since 2026-09-21).
-const kindOf = (p) => (p.strategy === 'arb' || p.strategy === 'snipe' ? p.strategy : 'converge');
+// Every book's positions are one of four: a locked arb (two legs, one per venue), a settlement snipe, a
+// game bet (every game, since 2026-09-30), or a convergence bet (any other signal the taker opened; the
+// book has been off since 2026-09-21).
+const kindOf = (p) => (p.strategy === 'arb' || p.strategy === 'snipe' || p.strategy === 'bet' ? p.strategy : 'converge');
 
 // ------------------------------------------------------------------ the log, in the floor's words
 // The engine writes its log for itself ("venue gap 9.5c: Polymarket over Kalshi @ ..."), and /pm turns
@@ -128,8 +129,8 @@ function pmFloor(engine, cfg, now = Date.now()) {
   // Banked, per book, from the closed legs. The ledger keeps its newest 2,000 closes, and its realised
   // total counts every one ever: were the oldest to go, they would be convergence's (the first book, off
   // since 2026-09-21), so convergence takes the difference and the books still add up to the account.
-  const bankedArb = sum(shut('arb'), (c) => c.pnl), bankedSnipe = sum(shut('snipe'), (c) => c.pnl);
-  const bankedConv = r2(s.stats.realized - bankedArb - bankedSnipe);
+  const bankedArb = sum(shut('arb'), (c) => c.pnl), bankedSnipe = sum(shut('snipe'), (c) => c.pnl), bankedBet = sum(shut('bet'), (c) => c.pnl);
+  const bankedConv = r2(s.stats.realized - bankedArb - bankedSnipe - bankedBet);
 
   // A group /pm's scorecard cannot vouch for has no settlement figure and counts at what it would sell
   // for now (engine.pnlScorecard's arbUnvouched), so "at settlement" never reads a broken hedge as $0.
@@ -187,6 +188,19 @@ function pmFloor(engine, cfg, now = Date.now()) {
   converge.rule = `Bet that two venues disagreeing on the same outcome by ${Math.round((cfg.minGap || 0.03) * 100)}¢ or more would come back together, and sold when they did.` +
     (converge.on ? '' : ` Switched off on 2026-09-21 after losing on paper: ${converge.wins} of ${converge.trades} made money.`);
 
+  // Every game (decide.betSignal): one bet a game on the favourite, held to the final
+  const betOpen = open('bet'), betShut = shut('bet');
+  const league = (cfg.betSeries || []).map((x) => ({ KXMLBGAME: 'MLB', KXNFLGAME: 'NFL', KXNBAGAME: 'NBA' }[x] || x)).join(', ') || 'no';
+  const bets = {
+    key: 'bets', name: 'Every game', on: !!cfg.bets,
+    pnl: r2(bankedBet + marked(betOpen)), realized: bankedBet,
+    games: betShut.length + betOpen.length, settled: betShut.length, wins: betShut.filter((c) => c.pnl > 0).length, stake: cfg.betUsd,
+    rows: betOpen.map(posRow),
+    rule: `Bets every ${league} game once: $${cfg.betUsd} on the favourite, bought at whichever venue sells it cheaper after its fee, and held to the final. ` +
+      `A game already all but decided (the favourite over ${Math.round((cfg.betMaxPx || 0.9) * 100)}¢) is left alone. It claims no edge: bought at the market's own price, ` +
+      'it should lose about the fee over many games. Evan, on the Wild Card\'s second night: "every game should be bet".',
+  };
+
   // The ledger's own fills, newest first: the taker's legs as they opened and closed, and the maker's.
   const fills = [];
   for (const p of [...s.positions, ...closed.slice(-80)]) {
@@ -221,7 +235,7 @@ function pmFloor(engine, cfg, now = Date.now()) {
     now, initial, equity: r2(takerEq + (Number.isFinite(M.equity) ? M.equity : 0)),
     beat: engine.beat ? { taker: engine.beat.taker, maker: engine.beat.maker } : null, every: { taker: cfg.priceEvery, maker: cfg.makerEverySec },
     halt: engine.halt || null,
-    books: [arbs, maker, snipe, converge],
+    books: [arbs, maker, snipe, converge, bets],
     fills: fills.slice(0, 40),
     log,
   };

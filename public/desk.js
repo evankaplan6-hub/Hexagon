@@ -468,7 +468,7 @@
   // a no-break space keeps "Oct 3" on one line; a date in another year says the year
   const settleDay = (t) => (yearOf(t) === yearOf(nowT()) ? ET_DAY : ET_DAY_Y).format(new Date(t)).replace(' ', ' ');
   const whenTxt = (t) => `${dayKey(t) === today() ? '' : `${dayName(t, today())} `}${ET_HM.format(new Date(t))}`;
-  const BOOK_NAME = { arb: 'arb', snipe: 'snipe', converge: 'convergence', maker: 'maker' };
+  const BOOK_NAME = { arb: 'arb', snipe: 'snipe', converge: 'convergence', maker: 'maker', bet: 'every game' };
   // Its loop's own heartbeat, like the desk's (stalled): two minutes, or twelve of its rounds
   function pmState(L) {
     const stuck = L.beat && L.now - L.beat.taker > Math.max(120000, 12 * ((L.every && L.every.taker) || 15) * 1000);
@@ -517,6 +517,11 @@
       body = b.rows.length ? `<table class="hold-t">${HEAD('Worth', 'P&amp;L')}<tbody>${b.rows.map(legRow).join('')}</tbody></table>`
         : b.seen.length ? `<dl class="bkfacts">${b.seen.map((e) => `<div><dt>${esc(ET_HM.format(new Date(e.t)))}</dt><dd>${esc(e.text)}${e.sub ? `<small>${esc(e.sub)}</small>` : ''}</dd></div>`).join('')}</dl>` : '';
       next = b.on ? 'Watches every game as it finishes' : b.watching ? 'Switched off: still watches finished games, buying nothing' : 'Switched off';
+    } else if (b.key === 'bets') {
+      chip = b.on ? `${b.rows.length} open` : b.rows.length ? `${b.rows.length} open · off` : 'switched off';
+      vs = b.settled ? `<span class="vs">${b.wins} of ${nOf(b.settled, 'game')} won</span>` : `<span class="vs">${b.games ? `${nOf(b.games, 'game')} bet` : 'no game bet yet'}</span>`;
+      body = b.rows.length ? `<table class="hold-t">${HEAD('Worth', 'P&amp;L')}<tbody>${b.rows.map(legRow).join('')}</tbody></table>` : '';
+      next = b.on ? `Bets each game once, $${b.stake} on the favourite` : 'Switched off: open bets ride to the final';
     } else {
       chip = b.on ? `${b.rows.length} open` : b.rows.length ? `${b.rows.length} open · off` : 'switched off';
       vs = b.trades ? `<span class="vs">${b.wins} of ${nOf(b.trades, 'trade')} made money</span>` : '';
@@ -540,7 +545,7 @@
       `<span class="pill ${cls}"><i></i>${esc(state)}<span class="mode">Paper</span></span></div><a class="pmold" href="/pm">Every market, on its old page ›</a>` +
       `<div class="figline"><span class="fig ${tone(L.pnl)}">${signed(L.pnl)}</span><span class="vs">on ${money(L.initial, 0)} of its own paper · the same outcomes on Polymarket and Kalshi` +
       `${L.halt ? ` · ${esc(L.halt)}` : ''}</span></div></div>` +
-      `<div class="pmbooks">${book('arbs')}${book('maker')}<div class="pmside">${book('snipe')}${book('converge')}</div></div>`);
+      `<div class="pmbooks">${book('arbs')}${book('maker')}<div class="pmside">${book('bets')}${book('snipe')}${book('converge')}</div></div>`);
   }
   $('pm').addEventListener('click', (ev) => {
     const t = ev.target.closest('.bktog, [data-all]');

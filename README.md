@@ -601,6 +601,23 @@ was at the touch. The snipe buys only after the close, so the close is its test.
 cannot reach one: `snipeSignal` gives up `SNIPE_HOLD_SEC` after Polymarket's last quote, half an hour
 before a typical close, so turning `SNIPE` back on would take more than the switch.
 
+## Every game (2026-09-30)
+
+Evan, on the MLB Wild Card's second night: "every game should be bet". So each game in `BET_SERIES`
+(`KXMLBGAME` by default, which since the regular season ended means every postseason game) gets one
+bet: `BET_USD` ($100) on the favourite, the side the two venues' mids, averaged, make likelier. It is
+bought at whichever venue sells that side cheaper after its own fee (Kalshi charges MLB half its usual
+rate, Polymarket 5% of p(1-p)), off the live book, and held to the final: no stop, no early exit. A game
+is bet the first cycle it can be, before first pitch or during the game, and never twice (the book's
+own open and settled positions say which games are done, so a restart does not double up). A favourite
+already over `BET_MAX_PX` (90c) is a game all but decided and is left alone, and so is a game
+Polymarket reads settled. It sits beside an arb on the same game rather than waiting for it.
+
+It claims no edge. Bought at the market's own price, a book like this should lose about the fee over
+many games, and that is the yardstick to read it against. Paper only: `decide.betSignal` makes nothing
+in live mode, and KETT refuses one there too. `BETS=1` in fly.toml turns it on; it has its own card on
+the floor ("Every game"). Code: `decide.betSignal`, BRAM finds, KETT buys.
+
 ## The MAKER desk (07)
 
 Everything above this line TAKES liquidity: buy the ask, sell the bid, pay a taker fee both ways.
