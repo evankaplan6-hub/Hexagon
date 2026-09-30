@@ -43,13 +43,14 @@ function feeFor(kind, qty, notional, fees) {
   return r2(notional * (bps || 0) / 10000);
 }
 
-// order: { kind, side: 'buy'|'sell', qty, cash? (buys: the most this may spend, fee included) }
+// order: { kind, side: 'buy'|'sell', qty, cash? (buys: the most this may spend, fee included),
+//          step? (a coin Coinbase sells in coarser steps than a millionth: DOGE in tenths) }
 // market: { bid, ask, bidSz, askSz } and, for crypto, book: { bids, asks }
 // -> { qty, avg, notional, fee, cash } where `cash` is the change to the book's cash (negative on a
 //    buy), or { qty: 0, reason } when nothing can fill.
 function fill(order, market, fees) {
   const { kind, side } = order;
-  const mult = MULT[kind], step = STEP[kind];
+  const mult = MULT[kind], step = order.step > 0 ? order.step : STEP[kind];
   if (!mult) return { qty: 0, reason: `unknown asset kind ${kind}` };
   let want = floorTo(order.qty, step);
   if (!(want > 0)) return { qty: 0, reason: 'nothing to trade' };

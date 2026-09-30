@@ -48,14 +48,15 @@
   --bad: light-dark(#d70015, #ff453a);
   --focus: light-dark(#0071e3, #2997ff);              /* the keyboard focus ring, Apple's blue */
 
-  /* ---- the five books: a book's swatch beside its name, and the line on its own card. Apple's system
-     orange, blue, pink, purple and teal. A book's colour is never the only thing that says which book
+  /* ---- the six books: a book's swatch beside its name, and the line on its own card. Apple's system
+     orange, blue, pink, purple, teal and indigo. A book's colour is never the only thing that says which book
      it is: it sits beside the book's name, and no chart draws two books. */
   --book-crypto: light-dark(#ff9500, #ff9f0a);
   --book-stocks: light-dark(#007aff, #0a84ff);
   --book-options: light-dark(#ff2d55, #ff375f);
   --book-scalps: light-dark(#af52de, #bf5af2);
   --book-dips: light-dark(#30b0c7, #40c8e0);
+  --book-runners: light-dark(#5856d6, #5e5ce6);
 
   /* ---- the app icon: graphite, the mark in white, its core in the gain's green. The same in both
      appearances, as an icon on a Home Screen is; tools/icons.js draws the PNGs in these colours. */

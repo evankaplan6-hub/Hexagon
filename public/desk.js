@@ -55,15 +55,23 @@
   const wd = (k) => WD.format(new Date(`${k}T12:00:00Z`));
   const minTxt = (m) => `${((Math.floor(m / 60) + 11) % 12) + 1}:${String(m % 60).padStart(2, '0')} ${m >= 720 ? 'PM' : 'AM'}`;
   const coin = (sym) => String(sym).replace(/-USD$/, '');
-  // a coin to the decimals its price needs: a thousandth of a bitcoin is $80, of a SOL twelve cents
-  const COIN_DP = { 'BTC-USD': 6, 'ETH-USD': 4, 'SOL-USD': 2 };
+  // a coin to the decimals its price needs: a thousandth of a bitcoin is $80, of a SOL twelve cents; DOGE
+  // is sold in tenths
+  const COIN_DP = { 'BTC-USD': 6, 'ETH-USD': 4, 'SOL-USD': 2, 'XRP-USD': 2, 'DOGE-USD': 1 };
+  // a coin's price to the decimals it is quoted in: cents from $10, four places under that (XRP $1.4921),
+  // five under a dime (DOGE $0.09447); at cents a cheap coin's move is lost
+  const coinPx = (p) => (Number.isFinite(p) && p > 0 && p < 10 ? (p < 0.01 ? `$${p.toPrecision(4)}` : `$${p.toFixed(p < 0.1 ? 5 : 4)}`) : px(p));
+  // a runner's size: whole coins when there are thousands, two places from one coin, six under one
+  const runQty = (q) => (+q).toLocaleString('en-US', { maximumFractionDigits: q >= 1000 ? 0 : q >= 1 ? 2 : 6 });
   const qtyTxt = (q, book, sym) => (book === 'crypto'
     ? (+q).toLocaleString('en-US', { minimumFractionDigits: COIN_DP[sym] ?? 6, maximumFractionDigits: COIN_DP[sym] ?? 6 })
     : book === 'stocks' ? `${+(+q).toFixed(3)}` : String(q));
   const bookOf = (k) => (S && S.books || []).find((b) => b.key === k) || null;
-  const BOOK_COLOR = { crypto: 'var(--book-crypto)', stocks: 'var(--book-stocks)', options: 'var(--book-options)', scalps: 'var(--book-scalps)', dips: 'var(--book-dips)' };
+  const BOOK_COLOR = { crypto: 'var(--book-crypto)', stocks: 'var(--book-stocks)', options: 'var(--book-options)', scalps: 'var(--book-scalps)', dips: 'var(--book-dips)', runners: 'var(--book-runners)' };
   // the books that hold option contracts: their rows are contracts, and they are never "held" against a market
   const optBook = (k) => k === 'options' || k === 'scalps' || k === 'dips';
+  // the books whose rows are positions opened and closed, not a market held: the option books and the runners
+  const lotBook = (k) => optBook(k) || k === 'runners';
   // tokens.css, read for the one thing that cannot take a var(): the chart library. Each colour there is
   // light-dark(), which only an element can resolve, so a hidden one is given the token and its colour read
   // back; and it is read again when the iPhone or the Mac changes between light and dark (see the chart).
@@ -176,7 +184,7 @@
         insight += ` ${isZero(extra) ? 'The fees are even' : 'Holding paid more in fees'}, so the gap is how much the books hold: their rule keeps some money in cash when prices swing hard.`;
       }
     }
-    // the five books' headline; the prediction-market desk's has its own board below (renderPm)
+    // the six books' headline; the prediction-market desk's has its own board below (renderPm)
     return `<span class="label">Stocks, crypto and options</span>` +
       `<div class="big ${tone(S.pnl)}">${signed(S.pnl)}</div>` +
       `<div class="sub">on ${money(S.initial, 0)} of paper · marked ${esc(ET_HM.format(new Date(S.now)))} ET</div>` +
@@ -305,7 +313,7 @@
   function beganAt(t, start) { return start > 0 && t > start && t - start < 10 * 6e4; }
   // The book's own P&L over its history (and simply holding, dashed), from /api/desk/history's per-book values.
   function sparkSvg(key) {
-    const field = { crypto: 'c', stocks: 's', options: 'o', scalps: 'x', dips: 'dp' }[key], benchField = { crypto: 'bc', stocks: 'bs' }[key];
+    const field = { crypto: 'c', stocks: 's', options: 'o', scalps: 'x', dips: 'dp', runners: 'rn' }[key], benchField = { crypto: 'bc', stocks: 'bs' }[key];
     const init = (hist.books || {})[key], b = bookOf(key);
     let series = init ? hist.points.filter((p) => p[field] != null).map((p) => [p.t, p[field] - init, benchField && p[benchField] != null ? p[benchField] - init : null]) : [];
     // a line 36px tall needs a few hundred points, and the history sends up to three thousand
@@ -330,6 +338,11 @@
   const SWINGS = 'How much it moves in a year, measured over the last 30 days (crypto) or 20 sessions (SPY)';
   const TARGET = 'How much of its slot the book wants to hold: less when it swings more';
   function holdRow(b, r) {
+    if (b.key === 'runners') {
+      return `<tr data-k="${esc(r.sym)}"><th><span class="tk">${esc(r.name)}</span><span class="mk">${coinPx(r.px)}</span>` +
+        `<small>${esc(`${runQty(r.qty)} held · bought at ${plain(coinPx(r.entry))} · out under ${plain(coinPx(r.stop))}`)}</small></th>` +
+        `<td class="v">${money(r.value || 0)}</td><td>${Number.isFinite(r.pnl) ? figure(r.pnl) : '—'}</td></tr>`;
+    }
     if (b.key === 'dips') {
       // no price target: the first sells on SPY's reclaim of VWAP, the runner on a trail
       const plan = r.role === 'runner' ? (r.reclaimed ? `riding · best bid ${px(r.peak)}` : 'rides after the reclaim') : 'sells on the VWAP reclaim';
@@ -351,7 +364,7 @@
     if (Number.isFinite(r.vol)) bits.push(`<span title="${SWINGS}">swings ${pct(r.vol)}</span>`);
     if (Number.isFinite(want)) bits.push(`<span title="${TARGET}">target ${pct(want)}</span>`);
     const worth = r.qty > 0 ? `<td class="v">${money(r.value || 0, 0)}</td><td>${Number.isFinite(r.pnl) ? figure(r.pnl) : '—'}</td>` : '<td class="v"></td><td></td>';
-    return `<tr data-k="${esc(r.sym)}"><th><span class="tk">${esc(r.name)}</span><span class="mk">${px(last)}${chg == null ? '' : ` ${change(chg)}`}</span>` +
+    return `<tr data-k="${esc(r.sym)}"><th><span class="tk">${esc(r.name)}</span><span class="mk">${b.key === 'crypto' ? coinPx(last) : px(last)}${chg == null ? '' : ` ${change(chg)}`}</span>` +
       `<small>${bits.join(' · ')}</small></th>${worth}</tr>`;
   }
   // the options book with nothing open: how today's test went, and where SPY is
@@ -384,7 +397,20 @@
     for (const t of (P.trades || []).slice(0, 3)) rows.push([t.date.slice(5).replace('-', '/'), `${t.qty} × ${t.strike}${t.right} at ${px(t.entry)}${t.open ? ' · open' : ` · ${t.pnl >= 0 ? 'made' : 'lost'} ${money(Math.abs(t.pnl))}`}`]);
     return rows.length ? `<dl class="bkfacts">${rows.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>` : '<p class="bksub">No calls open.</p>';
   }
+  // the runner book: the coins moving most at the last scan and what it made of each, then its last trades
+  function runnerFacts() {
+    const N = S.runners || {}, rows = [];
+    for (const r of (N.top || []).slice(0, 4)) rows.push([coin(r.id), `${r.move > 0 ? '+' : r.move < 0 ? MINUS : ''}${Math.abs(r.move * 100).toFixed(1)}% in 24h · ${r.status}`]);
+    for (const t of (N.trades || []).filter((x) => !x.open).slice(0, 3)) rows.push([`${wd(dayKey(t.closedAt))} ${coin(t.sym)}`, `${t.pnl >= 0 ? 'made' : 'lost'} ${money(Math.abs(t.pnl))} · ${t.why || 'sold'}`]);
+    return rows.length ? `<dl class="bkfacts">${rows.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>` : '<p class="bksub">No coin held.</p>';
+  }
   function nextLine(b) {
+    if (b.key === 'runners') {
+      const N = S.runners || {};
+      if (!N.enabled) return 'Switched off';
+      const every = Math.round((N.every || 180) / 60);
+      return N.scanAt ? `Scans every ${every} minutes: last at <b>${esc(ET_HM.format(new Date(N.scanAt)))} ET</b>, ${N.n} coins` : `Scans every ${every} minutes: the first scan is on its way`;
+    }
     if (b.key === 'crypto') return `Checks again after midnight UTC: <b>${esc(ET_HM.format(new Date(Math.floor(S.now / 864e5 + 1) * 864e5)))} ET</b>`;
     if (b.key === 'stocks') {
       const checked = b.rows.some((r) => r.checkDay === today());
@@ -400,13 +426,14 @@
   try { const v = JSON.parse(localStorage.getItem('desk-books-open') || 'null'); if (Array.isArray(v)) openBooks = new Set(v); } catch { /* defaults */ }
   function bookCard(b) {
     const held = b.rows.filter((r) => r.qty > 0).length;
-    const chip = optBook(b.key) ? (b.rows.length ? `${b.rows.length} open` : 'no position') : held ? `${held} held` : 'not holding yet';
-    const traded = held || b.fees || !isZero(b.realized || 0) || (optBook(b.key) && ((S[b.key] || {}).trades || []).length);
+    const chip = lotBook(b.key) ? (b.rows.length ? `${b.rows.length} open` : 'no position') : held ? `${held} held` : 'not holding yet';
+    const traded = held || b.fees || !isZero(b.realized || 0) || (lotBook(b.key) && ((S[b.key] || {}).trades || []).length);
     const vs = b.bench != null ? `<span class="vs" title="Simply holding what this book trades, from its first trade${b.benchFee ? `, after its ${plain(money(b.benchFee))} fee to buy in` : ''}">` +
       `holding <b class="${tone(b.benchPnl)}">${signed(b.benchPnl)}</b></span>` : '';
     // the two figures on each row are named once, over them, when the book holds something
-    const head = optBook(b.key) || held ? '<thead><tr><th></th><th>Worth</th><th>P&amp;L</th></tr></thead>' : '';
-    const body = b.rows.length ? `<table class="hold-t">${head}<tbody>${b.rows.map((r) => holdRow(b, r)).join('')}</tbody></table>`
+    const head = lotBook(b.key) || held ? '<thead><tr><th></th><th>Worth</th><th>P&amp;L</th></tr></thead>' : '';
+    const body = b.key === 'runners' ? (b.rows.length ? `<table class="hold-t">${head}<tbody>${b.rows.map((r) => holdRow(b, r)).join('')}</tbody></table>` : '') + runnerFacts()
+      : b.rows.length ? `<table class="hold-t">${head}<tbody>${b.rows.map((r) => holdRow(b, r)).join('')}</tbody></table>`
       : b.key === 'options' ? optionsFacts() : b.key === 'scalps' ? scalpFacts() : b.key === 'dips' ? dipFacts() : '<p class="bksub">Nothing held yet.</p>';
     const open = openBooks.has(b.key);
     return `<article class="card bk${open ? ' open' : ''}" data-k="${b.key}" style="--bk:${BOOK_COLOR[b.key]}" aria-label="${esc(b.name)} book">` +
@@ -431,9 +458,9 @@
   // ------------------------------------------------------------ the prediction-market desk: its board and four books
   // The desk Hexagon began as, pricing the same outcomes on Polymarket and Kalshi, trades in paper in the
   // same process. Until 2026-09-29 it was a line on the desk board and a link to its own page at /pm; now
-  // its books are cards like the five above (src/pmfloor.js builds what the frame carries as `legacy`),
+  // its books are cards like the six above (src/pmfloor.js builds what the frame carries as `legacy`),
   // with a contract's price in cents, the way those markets quote it. Its money is its own paper, apart
-  // from the five books' headline.
+  // from the six books' headline.
   const cents = (p) => (!Number.isFinite(p) ? '—' : Math.abs(p) >= 0.9995 ? `$${(+p).toFixed(2)}` : `${+(p * 100).toFixed(1)}¢`);
   const nOf = (n, one, many = `${one}s`) => `${Number(n || 0).toLocaleString('en-US')} ${n === 1 ? one : many}`;
   const ET_DAY_Y = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', year: 'numeric' });
@@ -544,13 +571,13 @@
   // "Nothing of those kinds yet" beside a book holding all three coins; the frame's eighty fills do not
   // age out that way. A fill's log line says the same thing, so it is left out.
   function fillRow(f) {
-    const opt = optBook(f.book), name = opt ? f.label : f.book === 'crypto' ? coin(f.sym) : f.sym;
+    const opt = optBook(f.book), coinish = f.book === 'crypto' || f.book === 'runners', name = opt ? f.label : coinish ? coin(f.sym) : f.sym;
     const why = String(f.why || ''), expired = /^expired/.test(why);
     const row = { t: f.at, who: expired ? 'RIGO' : 'KETT', level: 'trade', pnl: f.side === 'sell' ? f.pnl : null, key: `fill|${f.id}` };
     if (expired) return { ...row, text: `${name} expired worth ${px(f.px)}`, sub: '' };
     if (f.side === 'sell' && !(f.px > 0)) return { ...row, text: `${name} written off: no bid`, sub: cap(why.replace(/,? no bid$/, '')) };
-    const qty = opt ? String(f.qty) : qtyTxt(f.qty, f.book, f.sym);
-    return { ...row, text: `${f.side === 'buy' ? 'Bought' : 'Sold'} ${qty} ${name} at ${px(f.px)}`,
+    const qty = opt ? String(f.qty) : f.book === 'runners' ? runQty(f.qty) : qtyTxt(f.qty, f.book, f.sym);
+    return { ...row, text: `${f.side === 'buy' ? 'Bought' : 'Sold'} ${qty} ${name} at ${coinish ? coinPx(f.px) : px(f.px)}`,
       sub: [`${money(f.value)}${f.fee ? `, fee ${money(f.fee)}` : ''}`, why].filter(Boolean).join(' · ') };
   }
   // The prediction-market desk's lines and fills (src/pmfloor.js has already put its log in plain words and
@@ -677,7 +704,7 @@
   const W_FULL = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   // points: [t, desk P&L, holding P&L|null]. The live end comes from the stream, the rest from history.
   function chartSeries() {
-    const bk = hist.books || {}, opt = (bk.options || 0) + (bk.scalps || 0) + (bk.dips || 0);
+    const bk = hist.books || {}, opt = (bk.options || 0) + (bk.scalps || 0) + (bk.dips || 0) + (bk.runners || 0);
     // holding: each book's benchmark, or its own value while it has not traded (the option books are never "held": their cash)
     const pts = hist.points.map((p) => [p.t, r2(p.e - hist.initial), p.bc != null && p.bs != null ? r2(p.bc + p.bs + opt - hist.initial) : null]);
     if (S && Number.isFinite(S.pnl)) {

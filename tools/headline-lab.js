@@ -6,7 +6,7 @@
 //
 //   node tools/headline-lab.js --fetch       Coinbase one-minute candles for the log's span -> data/crypto/minutes/
 //                                            (again whenever the log has grown; it fetches only what is missing)
-//   node tools/headline-lab.js               the table: BTC, ETH, SOL; held 5, 15, 30, 60 minutes; 0.40% a side
+//   node tools/headline-lab.js               the table: the crypto book's five coins; held 5, 15, 30, 60 minutes; 0.40% a side
 //   node tools/headline-lab.js --bps 10 --log path/to/x.jsonl
 //
 // RESEARCH ONLY. It reads the feed's log on this Mac (~/.local/share/xfeed/x.jsonl) and Coinbase's public
@@ -30,10 +30,10 @@
 // A bot holds one position per coin, so a headline while it is still holding is not a new trade, and
 // every figure uses the same headlines: a burst of posts on one story counts once.
 //
-// WHAT IT FOUND (2026-09-30, 270 posts from four headline accounts, 2026-09-28 03:48 to 09-30 17:07 ET): the
-// coins moved no more after a post than at the same time on other days (x 0.8 to 1.2); the ceiling lost to
-// the fee on average on every coin at every hold; following the first minute earned nothing before fees
-// (BTC 15m -0.03%) and -0.83% after. The 21 crypto-or-Fed posts moved BTC up to twice as much, too few to
+// WHAT IT FOUND (2026-09-30, 274 posts from four headline accounts, 2026-09-28 03:48 to 09-30 18:11 ET): the
+// coins moved no more after a post than at the same time on other days (x 0.8 to 1.1); the ceiling lost to
+// the fee on average on all five coins at every hold; following the first minute earned nothing before fees
+// (BTC 15m -0.02%) and -0.82% after. The 24 crypto-or-Fed posts moved BTC up to twice as much, too few to
 // judge. Not wired in. README, "Headlines: tested, not wired in". Three days is a first look: rerun it.
 const fs = require('fs');
 const os = require('os');
@@ -42,7 +42,7 @@ const { et, etToUtc } = require('../src/desk/clock');
 
 const DIR = path.join(__dirname, '..', 'data', 'crypto', 'minutes');
 const LOG = path.join(os.homedir(), '.local', 'share', 'xfeed', 'x.jsonl');
-const COINS = ['BTC-USD', 'ETH-USD', 'SOL-USD'];
+const COINS = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'DOGE-USD'];   // the crypto book's coins
 const HOLDS = [5, 15, 30, 60];
 const LAG_S = 5;          // the live stream's delay from posting: a median of 4.8 s over its first 111 live posts
 const MATCH_DAYS = 5;     // the same clock time up to this many days either side is the "any other day" baseline
