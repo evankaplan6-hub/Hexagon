@@ -69,10 +69,10 @@ group('the books add up to the desk, the way /pm counts it');
 {
   const { E, cfg } = engine(); boxLike(E);
   const F = pmFloor(E, cfg, T);
-  const [arbs, maker, snipe, conv] = F.books;
-  ok('four books, in the order the page draws them', F.books.map((b) => b.key).join() === 'arbs,maker,snipe,converge', F.books.map((b) => b.key));
+  const [arbs, maker, snipe, conv, bets] = F.books;
+  ok('five books, every game last (2026-09-30)', F.books.map((b) => b.key).join() === 'arbs,maker,snipe,converge,bets', F.books.map((b) => b.key));
   ok('the total is the account plus the maker, as the floor has always said', F.pnl === r2(E.equity() - 10000 + (9512.34 - 10000)), [F.pnl, E.equity()]);
-  ok('the books add up to the total, to the cent', r2(arbs.pnl + maker.pnl + snipe.pnl + conv.pnl) === F.pnl, F.books.map((b) => b.pnl));
+  ok('the books add up to the total, to the cent', r2(arbs.pnl + maker.pnl + snipe.pnl + conv.pnl + bets.pnl) === F.pnl, F.books.map((b) => b.pnl));
   ok('its paper is both accounts', F.initial === 20000, F.initial);
   const sc = E.pnlScorecard(E.arbScorecard(), E.maker.snapshot());
   ok('the arbs at settlement are /pm\'s locked figure plus what the closed arbs banked', arbs.atSettle === r2(2.25 + sc.arbLocked + sc.arbUnvouched), [arbs.atSettle, sc]);
@@ -154,6 +154,7 @@ group('the log in the floor\'s words and levels');
   ok('a newly matched pair is routine', L('HOLT', 'SCAN', '203 pairs live (123 elections) · +1 new: MLB Cubs v Padres · Cubs').level === 'quiet');
   ok('a HALT kind always needs a look', L('RIGO', 'HALT', 'x: exit response unknown · awaiting reconciliation').level === 'warn');
   ok('the positions kind: arb, snipe, and everything else is convergence', kindOf({ strategy: 'arb' }) === 'arb' && kindOf({ strategy: 'snipe' }) === 'snipe' && kindOf({ strategy: 'brain' }) === 'converge');
+  ok('a game bet is its own book', kindOf({ strategy: 'bet' }) === 'bet');
 }
 
 group('a box-sized desk fits the frame');

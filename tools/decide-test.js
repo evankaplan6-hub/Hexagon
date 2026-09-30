@@ -652,5 +652,41 @@ group("the snipe's watch: SNIPE=0 still keeps finished game pairs until after Po
   ok('an empty 0/1 book and a live 81/83 read nothing', d.pmReadsSettled({ pmBid: 0, pmAsk: 1 }, cfg) === null && d.pmReadsSettled({ pmBid: 0.81, pmAsk: 0.83 }, cfg) === null);
 }
 
+group('every game: one bet a game, on the favourite, at the cheaper venue');
+{
+  const cfg = { ...require('../src/config'), mode: 'paper', bets: true, betSeries: ['KXMLBGAME'], betUsd: 100, betMaxPx: 0.9, snipePmBid: 0.99, maxDataAgeSec: 90 };
+  const now = 1_800_000_000_000;
+  const mid = (q) => ({ pmMid: (q.pmBid + q.pmAsk) / 2, ksMid: (q.ksBid + q.ksAsk) / 2, ...q });
+  const pair = (q, over = {}) => ({ id: 'pmG:0|KXMLBGAME-26SEP302000BOSNYY-BOS', label: 'MLB Red Sox v Yankees · Red Sox', kind: 'game', series: 'KXMLBGAME', inPlay: false,
+    pm: { id: 'pmG', tokenIndex: 0 }, ks: { ticker: 'KXMLBGAME-26SEP302000BOSNYY-BOS' }, q: { pmVol: 1, ksVol: 1, pmFeeRate: 0.05, t: now, ...mid(q) }, ...over });
+  const fav = d.betSignal(pair({ pmBid: 0.6, pmAsk: 0.62, ksBid: 0.59, ksAsk: 0.6 }), cfg, now, new Set());
+  ok('the favourite (Red Sox at 60c) is YES, bought on Kalshi where it is cheaper after the fee', fav && fav.type === 'bet' && fav.legs[0].side === 'yes' && fav.legs[0].venue === 'KS' && fav.legs[0].px === 0.6 && fav.pick === 'Red Sox', fav);
+  const dog = d.betSignal(pair({ pmBid: 0.4, pmAsk: 0.41, ksBid: 0.4, ksAsk: 0.41 }), cfg, now, new Set());
+  ok('Red Sox at 40c: the bet is NO, which is the Yankees', dog && dog.legs[0].side === 'no' && dog.pick === 'Yankees', dog);
+  const at = d.betPrices(pair({ pmBid: 0.4, pmAsk: 0.41, ksBid: 0.4, ksAsk: 0.41 }), 'no', cfg);
+  ok('and NO is priced off each venue\'s YES bid', Math.abs(at.PM.px - 0.6) < 1e-9 && Math.abs(at.KS.px - 0.6) < 1e-9, at);
+  const pmSide = d.betSignal(pair({ pmBid: 0.55, pmAsk: 0.56, ksBid: 0.58, ksAsk: 0.6 }), cfg, now, new Set());
+  ok('Polymarket 4c cheaper: bought on Polymarket', pmSide && pmSide.legs[0].venue === 'PM' && pmSide.legs[0].px === 0.56, pmSide);
+  const q = { pmBid: 0.6, pmAsk: 0.62, ksBid: 0.59, ksAsk: 0.6 };
+  ok('a game already bet is not bet again', d.betSignal(pair(q), cfg, now, new Set([pair(q).id])) === null);
+  ok('another league is left alone', d.betSignal(pair(q, { series: 'KXNFLGAME' }), cfg, now, new Set()) === null);
+  ok('BETS off: nothing', d.betSignal(pair(q), { ...cfg, bets: false }, now, new Set()) === null);
+  ok('live mode: nothing, ever', d.betSignal(pair(q), { ...cfg, mode: 'live' }, now, new Set()) === null);
+  ok('a game pair Polymarket has dropped: nothing', d.betSignal(pair(q, { pmGone: true }), cfg, now, new Set()) === null);
+  ok('Polymarket reading it settled: nothing', d.betSignal(pair({ pmBid: 0.99, pmAsk: 1, ksBid: 0.97, ksAsk: 0.98 }), cfg, now, new Set()) === null);
+  const late = d.betSignal(pair({ pmBid: 0.93, pmAsk: 0.94, ksBid: 0.93, ksAsk: 0.94 }), cfg, now, new Set());
+  ok('a favourite at 94c is a game all but decided: vetoed, and says why', late && late.veto && /all but decided/.test(late.veto), late);
+  const inPlay = d.betSignal(pair({ pmBid: 0.7, pmAsk: 0.71, ksBid: 0.7, ksAsk: 0.71 }, { inPlay: true }), cfg, now, new Set());
+  ok('a game under way and still open is bet', inPlay && inPlay.type === 'bet', inPlay);
+  const stale = d.betSignal(pair(q, { q: { ...mid(q), pmFeeRate: 0.05, t: now - 5 * 60000 } }), cfg, now, new Set());
+  ok('a quote five minutes old is vetoed', stale && stale.veto === 'quote stale', stale);
+  ok('the pick reads the label: YES the named team, NO the other', d.betPick('MLB Cubs v Padres · Cubs', 'no') === 'Padres' && d.betPick('MLB Cubs v Padres · Padres', 'no') === 'Cubs' && d.betPick('MLB Cubs v Padres · Cubs', 'yes') === 'Cubs');
+  ok('a label it cannot read is the side', d.betPick('Something else', 'yes') === 'YES');
+  const full = Array.from({ length: 50 }, (_, i) => ({ strategy: 'converge', group: `g${i}` }));
+  ok('a full book never stops a game bet', d.bookFull(full, fav, { ...cfg, maxOpenPositions: 5 }, now) === null);
+  const bets = Array.from({ length: 10 }, (_, i) => ({ strategy: 'bet', group: `b${i}` }));
+  ok('and game bets never fill the other books', d.bookFull(bets, { type: 'snipe', legs: [{}] }, { ...cfg, maxOpenPositions: 5 }, now) === null);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

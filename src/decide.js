@@ -507,6 +507,8 @@ function gapUnseen(history, cfg) {
 // anything else, and a book of year-long arbs would be full for a year. `now` is optional; without
 // it the long-dated budget is not checked.
 function bookFull(positions, signal, cfg, now) {
+  // one bet a game, and the games are the limit: it neither fills nor is filled by the other books
+  if (signal.type === 'bet') return null;
   if (signal.type === 'arb') {
     const arbLegs = positions.filter((p) => p.strategy === 'arb');
     const groups = new Set(arbLegs.map((p) => p.group)).size;
@@ -519,7 +521,7 @@ function bookFull(positions, signal, cfg, now) {
     }
     return null;
   }
-  const open = positions.filter((p) => p.strategy !== 'arb').length;
+  const open = positions.filter((p) => p.strategy !== 'arb' && p.strategy !== 'bet').length;
   return open + signal.legs.length > cfg.maxOpenPositions ? `book full at ${open} positions` : null;
 }
 
@@ -660,4 +662,46 @@ function pmReadsSettled(q, cfg) {
   return null;
 }
 
-module.exports = { fairValue, quoteFault, snipeEdge, snipeSignal, keepClosedGamePairs, pmReadsSettled, convEdge, pairSignals, scan, liveWindow, exitIntent, gainLockIntent, arbUnwind, arbUnwindLive, arbReturn, arbEdgeLive, riskState, biasFor, standingGap, gapUnseen, bookFull, persistFilter, sizePlan, rankSignals, pmRate };
+// ---------------------------------------------------------------- every game (2026-09-30)
+// Evan on the MLB Wild Card's second night: "every game should be bet". Each game in BET_SERIES gets one
+// bet, BET_USD on the favourite (the side both venues' mids, averaged, make likelier), bought at
+// whichever venue sells it cheaper after its fee, and held to the final. No edge is claimed: bought at
+// the market's own price, a book like this should lose about the fee over many games; it is paper, and
+// it is the bet Evan asked for. A game is bet once (`done`: the pair ids the book already holds or has
+// settled). It is bet the first cycle it can be, before or during the game, unless it is all but decided
+// (the favourite over BET_MAX_PX) or Polymarket reads it settled. Never in live mode.
+function betPrices(pair, side, cfg) {
+  const q = pair.q, ref = pair.ks && pair.ks.ticker, rate = pmRate(q, cfg);
+  const pmPx = side === 'yes' ? q.pmAsk : 1 - q.pmBid, ksPx = side === 'yes' ? q.ksAsk : 1 - q.ksBid;
+  const ok = (x) => Number.isFinite(x) && x > 0 && x < 1;
+  return {
+    PM: ok(pmPx) ? { px: pmPx, cost: pmPx + pm.feePerShare(pmPx, rate) } : null,
+    KS: ok(ksPx) ? { px: ksPx, cost: ksPx + ks.fee(1, ksPx, cfg.ksFeeRate, ref) } : null,
+  };
+}
+function betSignal(pair, cfg, now, done) {
+  if (!cfg.bets || cfg.mode === 'live' || !pair || pair.kind !== 'game' || !pair.q || pair.pmGone) return null;
+  if (!(cfg.betSeries || []).includes(pair.series)) return null;
+  if (done && done.has(pair.id)) return null;
+  const q = pair.q;
+  if (pmReadsSettled(q, cfg)) return null;
+  if (!Number.isFinite(q.t) || now - q.t > cfg.maxDataAgeSec * 1000) return { veto: 'quote stale' };
+  if (![q.pmMid, q.ksMid].every(Number.isFinite)) return { veto: 'one venue has no price' };
+  const side = (q.pmMid + q.ksMid) / 2 >= 0.5 ? 'yes' : 'no';
+  const at = betPrices(pair, side, cfg);
+  const venue = at.KS && (!at.PM || at.KS.cost <= at.PM.cost) ? 'KS' : at.PM ? 'PM' : null;
+  if (!venue) return { veto: 'nothing offered on either venue' };
+  const { px, cost } = at[venue];
+  if (px > cfg.betMaxPx) return { veto: `the favourite is at ${(px * 100).toFixed(0)}c: the game is all but decided` };
+  return { type: 'bet', pair, legs: [{ venue, side, px }], edge: null, cost, pick: betPick(pair.label, side) };
+}
+// The team a side of a game pair is: "MLB Red Sox v Yankees · Red Sox" is YES on the Red Sox, so NO is
+// the Yankees. The label is the matcher's; anything else reads as the side itself.
+function betPick(label, side) {
+  const m = String(label || '').match(/^(?:\S+\s+)?(.+?) v (.+?) · (.+)$/);
+  if (!m) return side.toUpperCase();
+  const [, a, b, yes] = m;
+  return side === 'yes' ? yes : yes === a ? b : yes === b ? a : `not ${yes}`;
+}
+
+module.exports = { betSignal, betPrices, betPick, fairValue, quoteFault, snipeEdge, snipeSignal, keepClosedGamePairs, pmReadsSettled, convEdge, pairSignals, scan, liveWindow, exitIntent, gainLockIntent, arbUnwind, arbUnwindLive, arbReturn, arbEdgeLive, riskState, biasFor, standingGap, gapUnseen, bookFull, persistFilter, sizePlan, rankSignals, pmRate };

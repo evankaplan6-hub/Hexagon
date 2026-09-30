@@ -11,7 +11,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { Engine } = require('../src/engine');
-const { KETT, RIGO, watchCloses } = require('../src/agents');
+const { BRAM, KETT, RIGO, watchCloses } = require('../src/agents');
 const decide = require('../src/decide');
 const base = require('../src/config');
 
@@ -936,6 +936,42 @@ const position = (over = {}) => ({
     ok('the kept pair quotes: Polymarket\'s last 99/100, Kalshi\'s new 85/88, with Kalshi\'s own time and sizes', q && q.pmBid === 0.99 && q.pmAsk === 1 && q.ksBid === 0.85 && q.ksAsk === 0.88 && q.ksAt === now + 15000 && q.ksAskSize === 70 && q.pmAt === now, q);
     ok('...and it still says snipe', (decide.snipeSignal({ ...kept, q }, E3.cfg, now + 15000) || {}).type === 'snipe');
   } finally { pmvSnipe.fetchMarket = realFetchMarket; }
+
+  group('every game: BRAM finds the bet, KETT buys $100 of the favourite, once, beside an arb on the same game');
+  {
+    const now = Date.now();
+    const game = () => ({ id: 'pmB:0|KXMLBGAME-26SEP302000BOSNYY-BOS', label: 'MLB Red Sox v Yankees · Red Sox', kind: 'game', series: 'KXMLBGAME', inPlay: false, startsAt: now + 3600000,
+      pm: { id: 'pmB', tokenIndex: 0 }, ks: { ticker: 'KXMLBGAME-26SEP302000BOSNYY-BOS', eventTicker: 'KXMLBGAME-26SEP302000BOSNYY' },
+      q: { pmBid: 0.44, pmAsk: 0.45, ksBid: 0.44, ksAsk: 0.45, pmMid: 0.445, ksMid: 0.445, pmVol: 1e6, ksVol: 1e6, pmFeeRate: 0.05, t: now, pmAt: now, ksAt: now } });
+    const E = engine({ bets: true, betSeries: ['KXMLBGAME'], betUsd: 100, betMaxPx: 0.9 });
+    E.halt = null;
+    const said = [];
+    E.log = (agent, kind, pnl, text) => said.push({ agent, kind, text });
+    E.pairs = [game()];
+    // an arb already holds this game: the bet goes on beside it
+    E.state.positions.push({ id: 'arb1-KSy', group: 'arb1', pairId: game().id, label: game().label, venue: 'KS', side: 'yes', qty: 10, entry: 0.45, cost: 4.5, strategy: 'arb', openedAt: now });
+    BRAM(E);
+    const s = E.signals.find((x) => x.type === 'bet');
+    ok('BRAM makes the bet: NO, the Yankees, the favourite at 55-56c', s && s.legs[0].side === 'no' && s.pick === 'Yankees', s);
+    E.book = async () => ({ asks: [{ price: 0.56, size: 5000 }], yesBid: 0.44, yesAsk: 0.45 });
+    E.quotes.pm.set('pmB', { tokenIds: ['tBOS', 'tNYY'] });   // a Polymarket NO leg buys the other token
+    await KETT(E);
+    const pos = E.state.positions.find((p) => p.strategy === 'bet');
+    ok('KETT buys it: strategy bet, NO, about $100 all in', pos && pos.side === 'no' && pos.cost <= 100 && pos.cost > 95, pos);
+    ok('the arb is still there', E.state.positions.some((p) => p.strategy === 'arb'));
+    ok('its fill line names the team and the payout', said.some((l) => l.kind === 'FILL' && /game bet on Yankees, the favourite/.test(l.text) && /if the Yankees win/.test(l.text)), said);
+    BRAM(E);
+    ok('the next cycle: no second bet on the same game', !E.signals.some((x) => x.type === 'bet'));
+    // it settles, and the pair is still listed: still not bet again
+    E.state.closed.push({ ...pos, exit: 1, exitAt: now, pnl: 10 });
+    E.state.positions = E.state.positions.filter((p) => p !== pos);
+    BRAM(E);
+    ok('a game already settled is not bet again', !E.signals.some((x) => x.type === 'bet'));
+    const L = engine({ bets: true, betSeries: ['KXMLBGAME'] });
+    L.cfg = { ...L.cfg, mode: 'live' };   // a live engine needs a key to build; the rule reads cfg.mode
+    L.pairs = [game()]; BRAM(L);
+    ok('live mode: BRAM makes no bet', !L.signals.some((x) => x.type === 'bet'));
+  }
 
   group('a snipe buys only once Polymarket has closed the market: 99c is a reading, not a settlement');
   {

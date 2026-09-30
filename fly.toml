@@ -107,6 +107,9 @@ primary_region = "iad"          # Ashburn, Virginia — close to the exchange, a
   ARBS = "1"
   MAKER_QUOTE = "1"
   SNIPE = "1"
+  # Every game (2026-09-30, Evan: "every game should be bet"): one BET_USD bet on the favourite of
+  # every game in BET_SERIES (MLB by default, the postseason from the Wild Card on), held to the final.
+  BETS = "1"
   # The option-chain recorder runs inside the desk here (src/chainsched.js) since 2026-09-23: the
   # box has no cron, so its Stocks and Options tabs had read an empty folder since they shipped.
   # Same tool, same three Eastern times as the Mac's launchd job, weekdays only, as a child
