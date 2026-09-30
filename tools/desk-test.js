@@ -21,6 +21,7 @@ const ok = (name, cond, got) => {
 };
 const eq = (name, got, want) => ok(`${name}\n        want: ${JSON.stringify(want)}`, JSON.stringify(got) === JSON.stringify(want), got);
 const near = (name, got, want, tol = 1e-6) => ok(`${name} (want ~${want})`, Number.isFinite(got) && Math.abs(got - want) <= tol, got);
+const r2 = (x) => Math.round(x * 100) / 100;
 
 // ------------------------------------------------------------------ the calendar
 {
@@ -123,6 +124,11 @@ const near = (name, got, want, tol = 1e-6) => ok(`${name} (want ~${want})`, Numb
   const capped = broker.fill({ kind: 'crypto', side: 'buy', qty: 10, cash: 150 }, { bid: 100, ask: 101, book }, fees);
   ok('a buy never spends more than the cash, fee included', capped.qty > 0 && -capped.cash <= 150, capped);
   ok('and spends most of it', -capped.cash > 149, capped);
+  // DOGE is sold in tenths of a coin: a fill in millionths is one no exchange gives
+  const dogeBook = { bids: [{ price: 0.0944, size: 1e6 }], asks: [{ price: 0.0945, size: 1e6 }] };
+  eq('a coin with a coarser step fills in that step', broker.fill({ kind: 'crypto', side: 'buy', qty: 12345.678, step: 0.1 }, { bid: 0.0944, ask: 0.0945, book: dogeBook }, fees).qty, 12345.6);
+  const dogeCap = broker.fill({ kind: 'crypto', side: 'buy', qty: 1e5, cash: 1000, step: 0.1 }, { bid: 0.0944, ask: 0.0945, book: dogeBook }, fees);
+  ok('and a buy capped by its cash still does', -dogeCap.cash <= 1000 && Math.abs(dogeCap.qty * 10 - Math.round(dogeCap.qty * 10)) < 1e-6 && -dogeCap.cash > 999, dogeCap);
   const st = broker.fill({ kind: 'stock', side: 'buy', qty: 3.3336 }, { bid: 700, ask: 700.02 }, fees);
   eq('a stock buy fills at the ask in fractional shares, no commission', [st.qty, st.avg, st.fee], [3.333, 700.02, 0]);
   const op = broker.fill({ kind: 'option', side: 'buy', qty: 5 }, { bid: 0.09, ask: 0.1, askSz: 2 }, fees);
@@ -655,6 +661,70 @@ async function engineTests() {
     const d9 = new Desk({ ...cfg, dataDir: odir }, { feeds, now: () => T });
     eq('only once', d9.state.history.map((p) => p.e), [22000, 21990]);
     fs.rmSync(odir, { recursive: true, force: true });
+  }
+
+  // XRP and DOGE joined a crypto book already holding BTC, ETH and SOL (2026-09-30). A three-coin ledger
+  // gets each new coin as a slot of cash the size of the others, and the book's value and holding's in the
+  // history, and the start of the day, go up by that cash: the P&L they show does not move. Nothing the book
+  // already holds is sold; the new coins buy in on the next round with fresh prices. Once.
+  {
+    const cdir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-test-'));
+    const c1 = new Desk({ ...cfg, dataDir: cdir }, { feeds, now: () => T });
+    c1.quiet = true;
+    await c1.step();
+    const s = JSON.parse(JSON.stringify(c1.state));
+    const held = Object.fromEntries(Object.entries(s.books.crypto.sleeves).map(([id, sl]) => [id, [sl.qty, sl.cash, sl.target]]));
+    s.history = [{ t: T - 120000, e: 22000, c: 9000, s: 10000, o: 1000, x: 1000, dp: 1000, bc: 9000, bs: 10000 }, { t: T - 60000, e: 21990, c: 8990, s: 10000, o: 1000, x: 1000, dp: 1000, bc: 8995, bs: 10000 }];
+    s.dayStart = 21990;
+    fs.writeFileSync(path.join(cdir, 'desk', 'state.json'), JSON.stringify(s));
+    // the market grows the two coins: DOGE near a dime, sold in tenths
+    const quietDaily = (px) => W.daily['BTC-USD'].map((d) => ({ ...d, o: d.o * px / 84000, h: d.h * px / 84000, l: d.l * px / 84000, c: d.c * px / 84000 }));
+    W.ticks['XRP-USD'] = { bid: 1.4919, ask: 1.4921, last: 1.492, at: T }; W.ticks['DOGE-USD'] = { bid: 0.09447, ask: 0.09451, last: 0.0945, at: T };
+    W.daily['XRP-USD'] = quietDaily(1.492); W.daily['DOGE-USD'] = quietDaily(0.0945);
+    for (const id of ['XRP-USD', 'DOGE-USD']) W.books[id] = { bids: [{ price: W.ticks[id].bid, size: 1e7 }], asks: [{ price: W.ticks[id].ask, size: 1e7 }] };
+    const five = { ...cfg, dataDir: cdir, desk: { ...cfg.desk, coins: [...cfg.desk.coins, 'XRP-USD', 'DOGE-USD'] } };
+    const c2 = new Desk(five, { feeds, now: () => T });
+    c2.quiet = true;
+    const cb = c2.state.books.crypto;
+    eq('each new coin gets a slot the size of the three it joins, in cash', ['XRP-USD', 'DOGE-USD'].map((id) => [cb.sleeves[id].initial, cb.sleeves[id].cash, cb.sleeves[id].qty]), [[3000, 3000, 0], [3000, 3000, 0]]);
+    eq('the book grows by that cash', cb.initial, 15000);
+    eq('nothing it holds is touched', Object.fromEntries(['BTC-USD', 'ETH-USD', 'SOL-USD'].map((id) => [id, [cb.sleeves[id].qty, cb.sleeves[id].cash, cb.sleeves[id].target]])), held);
+    eq("the book's and holding's recorded values carry the new cash from the start", c2.state.history.map((p) => [p.e, p.c, p.bc]), [[28000, 15000, 15000], [27990, 14990, 14995]]);
+    eq('and so does the start of the day', c2.state.dayStart, 27990);
+    eq('the P&L the chart draws is what it was', c2.state.history.map((p) => [r2(p.e - c2.initial()), r2(p.c - cb.initial), r2(p.bc - cb.initial)]), [[0, 0, 0], [-10, -10, -5]]);
+    eq('HOLT reads all five coins', Object.keys(c2.mkt.coins), ['BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'DOGE-USD']);
+    eq('their arrival is journaled when the desk starts', Object.entries(c2.state.addedCoins).map(([id, a]) => [id, a.cash, a.journaled]), [['XRP-USD', 3000, false], ['DOGE-USD', 3000, false]]);
+    await c2.step();
+    const want = 0.4 / (Math.sqrt(30 * 0.03 * 0.03 / 29) * Math.sqrt(365));
+    near('XRP buys in to its target that round', cb.sleeves['XRP-USD'].qty * 1.492 / 3000, want, 0.01);
+    near('and DOGE', cb.sleeves['DOGE-USD'].qty * 0.0945 / 3000, want, 0.01);
+    ok('DOGE in tenths, as Coinbase sells it', Math.abs(cb.sleeves['DOGE-USD'].qty * 10 - Math.round(cb.sleeves['DOGE-USD'].qty * 10)) < 1e-6, cb.sleeves['DOGE-USD'].qty);
+    eq('the three it joined are not traded again today', c2.state.fills.filter((f) => f.book === 'crypto').map((f) => f.sym).sort(), ['BTC-USD', 'DOGE-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD']);
+    const snap = c2.snapshot();
+    ok("the book's line names the five and the share each has", /^Holds BTC, ETH, SOL, XRP, DOGE, a fifth each,/.test(snap.books[0].rule), snap.books[0].rule);
+    eq('its markets on the floor are the five', snap.books[0].rows.map((r) => [r.name, r.label]), [['BTC', 'Bitcoin'], ['ETH', 'Ether'], ['SOL', 'Solana'], ['XRP', 'XRP'], ['DOGE', 'Dogecoin']]);
+    // the daily check replays the journal from each slot's own starting cash: the new slots need nothing more
+    const dc = require('./desk-check');
+    const ev = dc.readDesk(path.join(cdir, 'desk'));
+    eq('and the journal rebuilds the five-coin ledger to the penny', dc.compare(dc.rebuild(ev.events, c2.state), c2.state), []);
+    c2.save();
+    const c3 = new Desk(five, { feeds, now: () => T });
+    eq('only once', [c3.state.books.crypto.initial, c3.state.history.slice(0, 2).map((p) => p.e)], [15000, [28000, 27990]]);
+    for (const id of ['XRP-USD', 'DOGE-USD']) { delete W.ticks[id]; delete W.daily[id]; delete W.books[id]; }
+    fs.rmSync(cdir, { recursive: true, force: true });
+  }
+  // A book with some slots bought in and one not yet is held against holding the bought ones and the other's cash
+  {
+    const pd = new Desk({ ...cfg, dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'desk-test-')) }, { feeds, now: () => T });
+    pd.quiet = true;
+    eq('a book none of whose slots has bought in has no holding', [pd.benchValue('crypto'), pd.benchFee('crypto')], [null, null]);
+    await pd.step();
+    const sol = pd.state.books.crypto.sleeves['SOL-USD'];
+    const both = pd.benchValue('crypto'), fee = pd.benchFee('crypto');
+    const solHeld = r2(sol.initial * pd.coinBid('SOL-USD') / (sol.benchPx * 1.004));
+    Object.assign(sol, { benchPx: null, benchAt: null });
+    near('a slot not bought in yet counts as its cash', pd.benchValue('crypto'), r2(both - solHeld + sol.initial), 0.011);
+    near('and has paid no fee to buy in', pd.benchFee('crypto'), r2(fee * 2 / 3), 0.011);
   }
 
   // the loss limit: no new buying, selling still allowed

@@ -16,6 +16,10 @@
 // year, ETH 5.4% vs -6.4%, SOL 10.6% vs -7.7%, LTC 1.7% vs -13.9% -- with smaller drawdowns, at 0.40% a
 // side, and still at 0.80%. It is not magic: from 2024, in bitcoin's strong run, holding BTC did
 // better (28.7% vs 25.8%). So both books run the one rule that survived both labs, with its settings.
+// XRP and DOGE (2026-09-30, the crypto book's fourth and fifth coins) were put through the same lab
+// first: DOGE 14.9% a year vs -11.8% holding it, XRP 37.4% vs 46.6% in its 2024-26 run (it trailed, as
+// bitcoin did in its), both with smaller drawdowns. The rule holds less of a wilder coin, so a DOGE slot
+// swings about as much as a BTC slot: they widen the book, they do not make it swing harder.
 //
 // A book only trades when its target has moved 10 points (a weight of 0.72 becoming 0.83) since the
 // last target it traded to, or when it goes back to full size -- exactly the lab's rule, so drift

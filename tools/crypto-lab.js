@@ -23,13 +23,19 @@
 // four coins from 2022, at 0.40% and at 0.80% a side, with smaller drawdowns; the trend rules won big
 // on one coin and lost big on the next (a 50-day filter made SOL +31% a year and cost LTC 39%). From
 // 2024, in bitcoin's strong run, holding BTC beat it (28.7% vs 25.8% a year).
-// README, "The crypto book", has the table.
+// 2026-09-30, bars to 2026-09-29, with XRP and DOGE (asked for in the book): the rule beat holding DOGE
+// (14.9% vs -11.8% a year from 2022) and trailed holding XRP in its run (37.4% vs 46.6% from 2024-01-30,
+// its first decision after Coinbase's halt), smaller drawdowns on both; so both joined the book.
+// README, "Why these rules", has the table.
 const fs = require('fs');
 const path = require('path');
 const books = require('../src/desk/books');
 
 const DIR = path.join(__dirname, '..', 'data', 'crypto', 'bars');
-const COINS = [['BTC-USD', '2015-07-20'], ['ETH-USD', '2016-05-18'], ['SOL-USD', '2021-06-17'], ['LTC-USD', '2016-08-17']];
+// XRP from its return to Coinbase: trading was halted 2021-01-19 to 2023-07-13, and a series that
+// jumps that gap would score two and a half years as one day
+const COINS = [['BTC-USD', '2015-07-20'], ['ETH-USD', '2016-05-18'], ['SOL-USD', '2021-06-17'], ['LTC-USD', '2016-08-17'],
+  ['XRP-USD', '2023-07-13'], ['DOGE-USD', '2021-06-03']];
 const WARM = 200;   // days of history every rule may need before its first decision
 
 // ------------------------------------------------------------------ the rules (pure)

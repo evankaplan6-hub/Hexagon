@@ -5,8 +5,8 @@ until 2026-09-10; it was moved here with its full git history. There is no other
 checkout — if you find a reference to `~/claude/hexagon` anywhere, it is stale.
 
 **The Hexagon** is a paper trading desk for **stocks, crypto and options**, its main scope since
-2026-09-25: six bots run five paper books on free public prices -- crypto (BTC, ETH, SOL, live from
-Coinbase), stocks (SPY), options (SPY same-day, trend days) and, since 2026-09-29, scalps (SPY same-day,
+2026-09-25: six bots run five paper books on free public prices -- crypto (BTC, ETH, SOL and, since 2026-09-30,
+XRP and DOGE, live from Coinbase), stocks (SPY), options (SPY same-day, trend days) and, since 2026-09-29, scalps (SPY same-day,
 held minutes) and dips (Evan's own morning dip under VWAP, as rules), the last four from Cboe about 15
 minutes late -- and stream
 them to a live trading floor at `/`. The code is `src/desk/`; README's first section explains it.
@@ -106,7 +106,8 @@ public/desk.*     the floor at /: a wall of boards (headline vs holding, the des
                   a translucent bar, a phone's large title, the large chart as a sheet; addable to an iPhone's Home Screen
                   or a Mac's Dock (manifest.webmanifest; tools/icons.js draws the icons; server.js OPEN_FILES serves those
                   five files, and only those, before the login). Checked in the iOS Simulator (Xcode 27, iPhone 18 Pro Max)
-tools/crypto-lab.js the evidence for the crypto book (Coinbase daily candles → data/crypto/bars/)
+tools/crypto-lab.js the evidence for the crypto book (Coinbase daily candles → data/crypto/bars/; XRP from its 2023-07-13
+                  return to Coinbase, DOGE from 2021-06-03)
 tools/desk-check.js step 8 of the daily check: the desk's loop alive, each book's check done today, its journal
                   rebuilding state.json to the penny, each book against holding (--box copies /data/desk first);
                   tests: tools/desk-test.js, tools/crypto-lab-test.js, tools/desk-check-test.js (tools/desk-fixture.js

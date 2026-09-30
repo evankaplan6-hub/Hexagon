@@ -634,7 +634,9 @@ module.exports = {
     scalpsUsd: num('DESK_SCALPS_USD', 1000),
     // the dip book (src/desk/books.js DIP): two calls of at most $0.45 at a time
     dipsUsd: num('DESK_DIPS_USD', 1000),
-    coins: env('DESK_COINS', 'BTC-USD,ETH-USD,SOL-USD').split(',').map((s) => s.trim()).filter(Boolean),
+    // XRP and DOGE since 2026-09-30 (Evan: BTC and ETH "barely move"); a coin added here joins a running
+    // ledger with its own slot of cash (src/desk/engine.js addCoins), and one taken out keeps its slot
+    coins: env('DESK_COINS', 'BTC-USD,ETH-USD,SOL-USD,XRP-USD,DOGE-USD').split(',').map((s) => s.trim()).filter(Boolean),
     cryptoVolTarget: num('DESK_CRYPTO_VOL', 0.40),
     cryptoLookback: num('DESK_CRYPTO_LOOKBACK', 30),
     // not a setting: the options book's rules are written in SPY points, and both books read one SPY feed

@@ -55,8 +55,12 @@
   const wd = (k) => WD.format(new Date(`${k}T12:00:00Z`));
   const minTxt = (m) => `${((Math.floor(m / 60) + 11) % 12) + 1}:${String(m % 60).padStart(2, '0')} ${m >= 720 ? 'PM' : 'AM'}`;
   const coin = (sym) => String(sym).replace(/-USD$/, '');
-  // a coin to the decimals its price needs: a thousandth of a bitcoin is $80, of a SOL twelve cents
-  const COIN_DP = { 'BTC-USD': 6, 'ETH-USD': 4, 'SOL-USD': 2 };
+  // a coin to the decimals its price needs: a thousandth of a bitcoin is $80, of a SOL twelve cents; DOGE
+  // is sold in tenths
+  const COIN_DP = { 'BTC-USD': 6, 'ETH-USD': 4, 'SOL-USD': 2, 'XRP-USD': 2, 'DOGE-USD': 1 };
+  // a coin's price to the decimals it is quoted in: cents from $10, four places under that (XRP $1.4921),
+  // five under a dime (DOGE $0.09447); at cents a cheap coin's move is lost
+  const coinPx = (p) => (Number.isFinite(p) && p > 0 && p < 10 ? `$${p.toFixed(p < 0.1 ? 5 : 4)}` : px(p));
   const qtyTxt = (q, book, sym) => (book === 'crypto'
     ? (+q).toLocaleString('en-US', { minimumFractionDigits: COIN_DP[sym] ?? 6, maximumFractionDigits: COIN_DP[sym] ?? 6 })
     : book === 'stocks' ? `${+(+q).toFixed(3)}` : String(q));
@@ -351,7 +355,7 @@
     if (Number.isFinite(r.vol)) bits.push(`<span title="${SWINGS}">swings ${pct(r.vol)}</span>`);
     if (Number.isFinite(want)) bits.push(`<span title="${TARGET}">target ${pct(want)}</span>`);
     const worth = r.qty > 0 ? `<td class="v">${money(r.value || 0, 0)}</td><td>${Number.isFinite(r.pnl) ? figure(r.pnl) : '—'}</td>` : '<td class="v"></td><td></td>';
-    return `<tr data-k="${esc(r.sym)}"><th><span class="tk">${esc(r.name)}</span><span class="mk">${px(last)}${chg == null ? '' : ` ${change(chg)}`}</span>` +
+    return `<tr data-k="${esc(r.sym)}"><th><span class="tk">${esc(r.name)}</span><span class="mk">${b.key === 'crypto' ? coinPx(last) : px(last)}${chg == null ? '' : ` ${change(chg)}`}</span>` +
       `<small>${bits.join(' · ')}</small></th>${worth}</tr>`;
   }
   // the options book with nothing open: how today's test went, and where SPY is
@@ -550,7 +554,7 @@
     if (expired) return { ...row, text: `${name} expired worth ${px(f.px)}`, sub: '' };
     if (f.side === 'sell' && !(f.px > 0)) return { ...row, text: `${name} written off: no bid`, sub: cap(why.replace(/,? no bid$/, '')) };
     const qty = opt ? String(f.qty) : qtyTxt(f.qty, f.book, f.sym);
-    return { ...row, text: `${f.side === 'buy' ? 'Bought' : 'Sold'} ${qty} ${name} at ${px(f.px)}`,
+    return { ...row, text: `${f.side === 'buy' ? 'Bought' : 'Sold'} ${qty} ${name} at ${f.book === 'crypto' ? coinPx(f.px) : px(f.px)}`,
       sub: [`${money(f.value)}${f.fee ? `, fee ${money(f.fee)}` : ''}`, why].filter(Boolean).join(' · ') };
   }
   // The prediction-market desk's lines and fills (src/pmfloor.js has already put its log in plain words and
