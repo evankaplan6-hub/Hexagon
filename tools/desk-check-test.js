@@ -67,7 +67,8 @@ async function main() {
 
   // today's checks, across the week (the state's history moved along so the loop reads alive)
   const MIN = 60000;
-  const alive = (t) => { const s = JSON.parse(JSON.stringify(S)); s.history.push({ ...s.history[s.history.length - 1], t: t - MIN }); return s; };
+  // (the runner book's scan too: it runs every 3 minutes with the loop)
+  const alive = (t) => { const s = JSON.parse(JSON.stringify(S)); s.history.push({ ...s.history[s.history.length - 1], t: t - MIN }); if (s.books.runners.scan) s.books.runners.scan.at = t - MIN; return s; };
   const thu2am = Date.parse('2026-09-24T02:00:00Z');
   const pc = C.health(alive(thu2am), thu2am).problems;
   ok('crypto not checked by 2 AM UTC on the next day is flagged, coin by coin', pc.some((x) => /crypto: BTC, ETH, SOL not checked today \(2026-09-24 UTC\)/.test(x)), pc);
@@ -82,6 +83,9 @@ async function main() {
   const thu13 = clock.etToUtc('2026-09-24T13:05:00');
   ok('no 12:30 verdict by 1 PM on a trading day is flagged', C.health(alive(thu13), thu13).problems.some((x) => /^options: no 12:30 verdict today/.test(x)));
   eq('on the day it had one, it is reported', C.health(alive(at('13:05')), at('13:05')).problems, []);
+  const quiet = alive(at('13:05')); quiet.books.runners.scan.at = at('12:40');
+  ok("a runner book that has not scanned for a quarter of an hour is flagged, whatever the day", C.health(quiet, at('13:05')).problems.some((x) => /^runners: no scan for 25 minutes/.test(x)), C.health(quiet, at('13:05')).problems);
+  ok('a scan three minutes old is reported with what the book holds', C.health(alive(at('13:05')), at('13:05')).lines.some((x) => /^runners: scanned 1 min ago, \d+ coins · holding nothing/.test(x)));
   const thanksgivingFri = clock.etToUtc('2026-11-27T13:30:00');
   eq('a 1 PM close has no 12:30 test to miss', C.health(alive(thanksgivingFri), thanksgivingFri).problems.filter((x) => /options/.test(x)), []);
   const stuck = JSON.parse(JSON.stringify(S));
@@ -149,7 +153,7 @@ async function main() {
     eq('a healthy dip morning exits 0', C.run(['--dir', pd], { log: (l) => out.push(l), now: at('10:23') }), 0);
     ok('its line counts the trade and what it made', out.some((l) => /dips .*1 trade closed \(1 made money\) · banked \+\$54\.88/.test(l)), out);
     ok("and today's dip trades are reported", out.some((l) => /^TODAY   dips today: 1 trade/.test(l)), out);
-    ok('the desk line counts all five books', out.some((l) => /desk .*\$22,/.test(l)), out);
+    ok('the desk line counts all six books', out.some((l) => /desk .*\$23,/.test(l)), out);
     fs.rmSync(pdir, { recursive: true, force: true });
   }
 

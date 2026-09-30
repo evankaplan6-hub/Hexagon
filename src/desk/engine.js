@@ -1,5 +1,5 @@
 'use strict';
-// The stocks, crypto and options desk: five paper books, the six bots that run them, and the ledger.
+// The stocks, crypto and options desk: six paper books, the six bots that run them, and the ledger.
 //
 // PAPER ONLY. There is no broker here and no way to reach one: every fill is src/desk/broker.js
 // pricing an order against public market data, written into this desk's own ledger. It shares the
@@ -16,8 +16,10 @@
 //   options  SPY same-day options on trend days only, Evan's afternoon rules
 //   scalps   SPY same-day options held for minutes: the stack's 0DTE scalp method (since 2026-09-29)
 //   dips     SPY same-day calls on a morning dip under VWAP: Evan's own best trade, as rules (2026-09-29)
+//   runners  coins popping right now, scanned every 3 minutes, held until they fall 10% from their best
+//            (2026-09-30, after Evan's QNT)
 // The crypto and stocks books are scored against simply holding what they trade, from their first trade;
-// the three option books against their own cash.
+// the three option books and the runner book against their own cash.
 //
 // THE BOTS, one job each, in the order a round runs them:
 //   HOLT  market data     prices from Coinbase (live) and Cboe (15 minutes behind)
@@ -55,13 +57,13 @@ const AGENTS = [
 const COIN_NAME = { 'BTC-USD': 'Bitcoin', 'ETH-USD': 'Ether', 'SOL-USD': 'Solana', 'XRP-USD': 'XRP', 'DOGE-USD': 'Dogecoin' };
 // the coins Coinbase sells in coarser steps than the millionth the paper broker otherwise fills in
 const COIN_STEP = { 'DOGE-USD': 0.1 };
-const BOOKS = ['crypto', 'stocks', 'options', 'scalps', 'dips'];
+const BOOKS = ['crypto', 'stocks', 'options', 'scalps', 'dips', 'runners'];
 // the books that hold option contracts rather than sleeves of a market
 const optionBook = (key) => key === 'options' || key === 'scalps' || key === 'dips';
 // the books that joined a desk already running, with the setting that gives each its cash
-const LATER = { scalps: 'scalpsUsd', dips: 'dipsUsd' };
+const LATER = { scalps: 'scalpsUsd', dips: 'dipsUsd', runners: 'runnersUsd' };
 // each book's value in a minute of the history
-const FIELD = { crypto: 'c', stocks: 's', options: 'o', scalps: 'x', dips: 'dp' };
+const FIELD = { crypto: 'c', stocks: 's', options: 'o', scalps: 'x', dips: 'dp', runners: 'rn' };
 const short = (id) => String(id).replace(/-USD$/, '');
 
 class Desk {
@@ -80,6 +82,8 @@ class Desk {
     this.fees = { cryptoBps: this.D.cryptoFeeBps, stockBps: this.D.stockFeeBps, optionPerContract: this.D.optionFee };
     this.state = this.load();
     this.mkt = { coins: {}, spy: { quote: null, quoteAt: 0, intra: null, intraAt: 0, bars5: [], vwap: [], vwap1: [], daily: null, dailyAt: 0, atr: null }, chain: null };
+    // the runner book's list of what Coinbase trades and in what steps (read every six hours), and when its scan last failed
+    this.mkt.runners = { steps: null, stepsAt: 0, failAt: 0 };
     for (const id of Object.keys(this.state.books.crypto.sleeves)) this.mkt.coins[id] = { tick: null, tickAt: 0, daily: null, dailyAt: 0, vol: null, w: null };
     this.agentStatus = Object.fromEntries(AGENTS.map((a) => [a.key, { lastActive: 0, runs: 0, note: '' }]));
     this.timers = {};
@@ -104,6 +108,7 @@ class Desk {
         options: lotBook('options', D.optionsUsd, t),
         scalps: lotBook('scalps', D.scalpsUsd, t),
         dips: lotBook('dips', D.dipsUsd, t),
+        runners: lotBook('runners', D.runnersUsd, t),
       },
       fills: [], log: [], history: [],
       dayKey: null, dayStart: null,
@@ -122,7 +127,8 @@ class Desk {
     this.addCoins(s);
     return s;
   }
-  // The scalp and dip books joined a desk that had been running since 2026-09-25 (Evan, 2026-09-29). A
+  // The scalp and dip books joined a desk that had been running since 2026-09-25 (Evan, 2026-09-29), and the
+  // runner book on 2026-09-30. A
   // ledger from before one of them gets it as cash, and the desk's value in its history and at the start
   // of today is raised by that cash, as if the book had been there idle all along: the P&L they show does
   // not move.
@@ -239,6 +245,8 @@ class Desk {
     const b = this.state.books[key];
     if (key === 'crypto') return r2(Object.entries(b.sleeves).reduce((a, [id, sl]) => a + this.sleeveValue(sl, this.coinBid(id)), 0));
     if (key === 'stocks') return r2(Object.values(b.sleeves).reduce((a, sl) => a + this.sleeveValue(sl, this.spyBid()), 0));
+    // coins, marked at the last scan's price
+    if (key === 'runners') return r2(b.cash + b.lots.reduce((a, l) => a + l.qty * (l.mark ?? l.entry), 0));
     return r2(b.cash + b.lots.reduce((a, l) => a + l.qty * 100 * (l.mark ?? l.entry), 0));
   }
   // What simply holding the same thing from the book's first trade would be worth now: the whole slot,
@@ -665,6 +673,7 @@ class Desk {
     if (this.D.options) await this.optionsBook();
     if (this.D.scalps) await this.scalpBook();
     if (this.D.dips) await this.dipBook();
+    if (this.D.runners) await this.runnerBook();
     this.touch('BRAM');
   }
   // Once a UTC day, as soon as yesterday's daily candle is final -- the lab decided on the close
@@ -906,6 +915,105 @@ class Desk {
     if (f) { d.exitM = null; d.chainM = hit.m; }
   }
 
+  // ---------------------------------------------------------------- the runner book: coins popping right now
+  // Every DESK_RUNNER_EVERY_SEC (3 minutes), one call for every coin's last 24 hours (src/desk/books.js RUNNER
+  // has the rule and why). What the book holds is marked at the scan's price and sold first if it has fallen
+  // 10% from its best; then, with a slot free, it buys the strongest runner it does not hold. Coinbase's
+  // product list, read every six hours, gives the step each coin is sold in; a coin missing from it (delisted,
+  // halted, cancel-only) is never bought. The scan runs whatever the stock market is doing: crypto never closes.
+  async runnerBook() {
+    const t = this.now(), b = this.state.books.runners, M = this.mkt.runners, R = books.RUNNER;
+    const every = this.D.runnerEverySec * 1000;
+    if ((b.scan && t - b.scan.at < every) || t - M.failAt < MIN) return;
+    let stats = null;
+    try {
+      if (!M.steps || t - M.stepsAt > 6 * HOUR) { const p = await this.feeds.coinProducts(); if (p) { M.steps = p; M.stepsAt = t; } }
+      stats = await this.feeds.coinStats();
+    } catch (e) {
+      M.failAt = t;
+      if (this.due('runner-feed', 600)) this.log('HOLT', 'OPS', null, `runners: Coinbase's 24-hour figures did not load: ${String(e && e.message).slice(0, 80)} · trying again in a minute`);
+      return;
+    }
+    if (!stats || !M.steps) { M.failAt = t; return; }
+    // "still climbing" is against the scan before, and only when that scan was the last one (not before an outage)
+    const prev = b.scan && t - b.scan.at <= 2 * every ? b.scan.px : null;
+    const rows = books.runnerScan(stats, prev, R);
+    for (const lot of [...b.lots]) {
+      const s = stats[lot.sym], last = s ? s.last : null;
+      if (!(last > 0)) continue;
+      lot.mark = last; lot.peak = Math.max(lot.peak, last);
+      const why = books.runnerExit(lot, last, t, R);
+      if (why) await this.kettRunner({ side: 'sell', lot, why });
+    }
+    b.cool = b.cool || {};
+    for (const [id, at] of Object.entries(b.cool)) if (t - at >= R.coolHours * HOUR) delete b.cool[id];
+    const held = () => new Set(b.lots.map((l) => l.sym));
+    for (const r of rows) {
+      if (r.why || held().has(r.id) || b.cool[r.id] || !M.steps[r.id]) continue;
+      if (b.lots.length >= R.slots) break;
+      const spend = r2(Math.min(b.cash, this.bookValue('runners') / R.slots));
+      if (spend < 5) break;
+      const what = `${short(r.id)} is running: up ${pctTxt(r.move)} in 24 hours, ${pctTxt(-r.offHigh)} off its high, still climbing, $${Math.round(r.volUsd / 1e6)}M traded`;
+      if (this.halt) { this.log('KETT', 'PASS', null, `runners: ${what} · not buying: ${this.halt}`); break; }
+      this.log('BRAM', 'SIGNAL', null, `runners: ${what} · buy ${usd(spend)}`);
+      await this.kettRunner({ side: 'buy', row: r, spend, why: `running: up ${pctTxt(r.move)} in 24 hours, ${pctTxt(-r.offHigh)} off its high` });
+    }
+    // what the floor shows: the coins moving most, and what the book made of each
+    const h = held();
+    const top = rows.slice(0, 6).map((r) => ({
+      id: r.id, move: r4(r.move), offHigh: r4(r.offHigh), volUsd: Math.round(r.volUsd), last: r.last,
+      status: h.has(r.id) ? 'held' : b.cool[r.id] ? 'sold in the last 12 hours' : r.why ? r.why : !M.steps[r.id] ? 'not trading on Coinbase' : this.halt ? 'not buying today' : 'running, no slot free',
+    }));
+    b.scan = { at: t, n: rows.length, px: Object.fromEntries(rows.map((r) => [r.id, r.last])), top };
+    b.scans = (b.scans || 0) + 1;
+    this.dirty = true;
+    if (this.due('runner-say', 1800)) {
+      const running = rows.filter((r) => !r.why).map((r) => `${short(r.id)} +${pctTxt(r.move)}`);
+      this.log('BRAM', 'PASS', null, `runners: scanned ${rows.length} coins with $${R.minVolUsd / 1e6}M+ traded · ${running.length ? `running: ${running.slice(0, 4).join(', ')}` : 'none running'} · holding ${b.lots.length ? b.lots.map((l) => short(l.sym)).join(', ') : 'nothing'}`);
+    }
+  }
+  // The runner book's fills: a buy spends its quarter walking Coinbase's asks, a sale walks the bids, both
+  // paying DESK_RUNNER_FEE_BPS (Robinhood's 0.95%), in the step Coinbase sells the coin in.
+  async kettRunner(order) {
+    const b = this.state.books.runners, M = this.mkt.runners, t = this.now();
+    const buy = order.side === 'buy', sym = buy ? order.row.id : order.lot.sym, name = short(sym);
+    let book = null;
+    try { book = await this.feeds.book(sym); } catch (e) { /* said below */ }
+    if (!book || !book.bids.length || !book.asks.length) { this.log('KETT', 'PASS', null, `runners: ${name} ${order.side} not filled · its order book did not load`); return null; }
+    const market = { bid: book.bids[0].price, ask: book.asks[0].price, book };
+    const step = Math.max(1e-6, (M.steps && M.steps[sym]) || 1e-6);
+    const f = broker.fill(buy ? { kind: 'crypto', side: 'buy', qty: order.spend / market.ask, cash: order.spend, step } : { kind: 'crypto', side: 'sell', qty: order.lot.qty, step },
+      market, { ...this.fees, cryptoBps: this.D.runnerFeeBps });
+    if (!(f.qty > 0)) { this.log('KETT', 'PASS', null, `runners: ${name} ${order.side} not filled · ${f.reason}`); return null; }
+    let pnl = null;
+    if (buy) {
+      const id = `R${b.nextLot}`, r = order.row;
+      b.lots.push({ id: b.nextLot++, trade: id, sym, qty: f.qty, cost: r2(-f.cash), entry: f.avg, peak: r.last, mark: r.last, openedAt: t });
+      b.trades.unshift({ id, sym, qty: f.qty, entry: f.avg, cost: r2(-f.cash), openedAt: t, open: true, pnl: 0 });
+      if (b.trades.length > 120) b.trades.length = 120;
+    } else {
+      const lot = order.lot, sold = Math.min(f.qty, lot.qty), out = r2(lot.cost * (sold / lot.qty));
+      pnl = r2(f.cash - out);
+      lot.qty = r6(lot.qty - sold); lot.cost = r2(lot.cost - out);
+      b.realized = r2(b.realized + pnl);
+      const tr = b.trades.find((x) => x.id === lot.trade);
+      if (tr) tr.pnl = r2(tr.pnl + pnl);
+      // the rest of a sale the book's depth could not take goes at the next scan
+      if (lot.qty < 1e-6) {
+        b.lots = b.lots.filter((x) => x !== lot);
+        (b.cool || (b.cool = {}))[sym] = t;
+        if (tr) Object.assign(tr, { open: false, exit: f.avg, closedAt: t, why: order.why });
+      }
+    }
+    b.cash = r2(b.cash + f.cash); b.fees = r2(b.fees + f.fee);
+    this.dirty = true;
+    const detail = buy ? { move: r4(order.row.move), offHigh: r4(order.row.offHigh), volUsd: Math.round(order.row.volUsd), last: order.row.last, was: order.row.was } : {};
+    this.journal('FILL', { book: 'runners', sym, side: order.side, qty: f.qty, px: f.avg, notional: f.notional, fee: f.fee, cash: f.cash, pnl, why: order.why, ...detail });
+    this.pushFill({ book: 'runners', sym, label: name, side: order.side, qty: f.qty, px: f.avg, value: f.notional, fee: f.fee, pnl, why: order.why });
+    this.log('KETT', 'FILL', pnl, `${buy ? 'bought' : 'sold'} ${fmtCoins(f.qty)} ${name} at ${fmtPx(f.avg)} · ${usd(f.notional)}, fee ${usd(f.fee)}${buy ? '' : ` · ${pnl >= 0 ? 'made' : 'lost'} ${usd(Math.abs(pnl))}`} · ${order.why}`);
+    return f;
+  }
+
   // ---------------------------------------------------------------- KETT: fills
   async kett(order) {
     const b = this.state.books;
@@ -1051,7 +1159,7 @@ class Desk {
     const stockRows = Object.entries(b.stocks.sleeves).map(([id, sl]) => sleeveRow('stocks', id, sl, this.spyBid(), {
       vol: S.vol, want: S.w, bid: S.quote && S.quote.bid, ask: S.quote && S.quote.ask, at: S.quote && S.quote.at, prevClose: S.quote && S.quote.prevClose,
     }));
-    const o = b.options, d = o.day, x = b.scalps, xd = x.day, SC = books.SCALP, p = b.dips, pd = p.day, DP = books.DIP;
+    const o = b.options, d = o.day, x = b.scalps, xd = x.day, SC = books.SCALP, p = b.dips, pd = p.day, DP = books.DIP, rn = b.runners, RN = books.RUNNER;
     const book = (key, name, rule, rows) => {
       const equity = this.bookValue(key), bench = this.benchValue(key), bk = b[key];
       const realized = bk.sleeves ? r2(Object.values(bk.sleeves).reduce((a, sl) => a + sl.realized, 0)) : bk.realized;
@@ -1087,6 +1195,10 @@ class Desk {
           sym: l.osi, name: lotName(l), label: l.role === 'runner' ? 'runner' : 'first contract', qty: l.qty, px: l.mark, value: r2(l.qty * 100 * (l.mark ?? l.entry)), cost: l.cost, pnl: r2(l.qty * 100 * (l.mark ?? l.entry) - l.cost), target: null, entry: l.entry,
           role: l.role, stop: l.stop, spy: l.spy, reclaimed: l.reclaimM != null, peak: l.peak,
         }))),
+        book('runners', 'Runners', `Coins popping right now, as Evan bought QNT: every ${Math.round(D.runnerEverySec / 60)} minutes it scans every coin Robinhood sells, and one with $${RN.minVolUsd / 1e6}M or more traded in 24 hours, up ${pctTxt(RN.minMove)} or more on 24 hours ago, within ${pctTxt(RN.nearHigh)} of its 24-hour high and above its price at the last scan is a runner. It buys the strongest it does not hold, up to ${RN.slots} at once, each a quarter of the book. Out when it falls ${pctTxt(RN.trail)} from its best since bought, or after ${RN.staleHours} hours not above what it cost; a coin sold waits ${RN.coolHours} hours. At Robinhood's ${+(D.runnerFeeBps / 100).toFixed(2)}% a side.`, rn.lots.map((l) => ({
+          sym: l.sym, name: short(l.sym), label: 'runner', qty: l.qty, px: l.mark, value: r2(l.qty * (l.mark ?? l.entry)), cost: l.cost, pnl: r2(l.qty * (l.mark ?? l.entry) - l.cost), entry: l.entry,
+          peak: l.peak, stop: r6(l.peak * (1 - RN.trail)), openedAt: l.openedAt,
+        }))),
       ],
       options: {
         enabled: !!D.options,
@@ -1108,6 +1220,12 @@ class Desk {
         // where SPY stands against the dip it needs: the open, the low so far, the line the low has to reach
         spy: one.length && one[0].m === DP.open ? { day: S.intra.day, m: one[one.length - 1].m, c: one[one.length - 1].c, open: one[0].o, low: Math.min(...one.map((z) => z.l)), need: S.atr ? r4(one[0].o - DP.dipAtr * S.atr.atr) : null, vwap: S.vwap1.length ? r4(S.vwap1[S.vwap1.length - 1]) : null } : null,
         trades: p.trades.slice(0, 20),
+      },
+      runners: {
+        enabled: !!D.runners, every: D.runnerEverySec,
+        // the last scan: when, how many coins it could look at, and the six moving most with what the book made of each
+        scanAt: rn.scan ? rn.scan.at : null, n: rn.scan ? rn.scan.n : 0, top: rn.scan ? rn.scan.top : [],
+        slots: RN.slots, trades: rn.trades.slice(0, 20),
       },
       spy: quote ? { last: quote.last, bid: quote.bid, ask: quote.ask, prevClose: quote.prevClose, open: quote.open, high: quote.high, low: quote.low, at: quote.at, vol: S.vol, want: S.w, spark: S.intra ? S.intra.bars.filter((_, i) => i % 5 === 0).map((x) => x.c) : [] } : null,
       fills: this.state.fills.slice(0, 80),
@@ -1144,10 +1262,13 @@ const usd = (x) => `$${x.toLocaleString('en-US', { minimumFractionDigits: 2, max
 const fmtQty = (q, kind, sym) => (kind === 'crypto' ? q.toLocaleString('en-US', { minimumFractionDigits: COIN_DP[sym] ?? 6, maximumFractionDigits: COIN_DP[sym] ?? 6 })
   : kind === 'stock' ? String(+q.toFixed(3)) : String(q));
 // a price to the decimals it is quoted in: cents from $10, four places under that (XRP $1.4921), five
-// under a dime (DOGE $0.09447)
-const fmtPx = (p) => (p >= 10 ? usd(p) : `$${p.toFixed(p < 0.1 ? 5 : 4)}`);
+// under a dime (DOGE $0.09447), four figures under a cent (BONK $0.000003740)
+const fmtPx = (p) => (p >= 10 ? usd(p) : p >= 0.01 ? `$${p.toFixed(p < 0.1 ? 5 : 4)}` : `$${p.toPrecision(4)}`);
 // an option's premium, in dollars and cents like every other price
 const prem = (p) => `$${p.toFixed(2)}`;
+// a runner's size: whole coins when there are thousands of them, cents' worth of places otherwise
+const fmtCoins = (q) => q.toLocaleString('en-US', { maximumFractionDigits: q >= 1000 ? 0 : q >= 1 ? 2 : 6 });
+const pctTxt = (x) => `${+(Math.abs(x) * 100).toFixed(1)}%`;
 
 // What a log line is, for the page's filters and for which lines the ring keeps:
 //   trade  money moved       warn   needs a look

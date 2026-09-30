@@ -22,6 +22,7 @@ const ok = (name, cond, got) => {
 const eq = (name, got, want) => ok(`${name}\n        want: ${JSON.stringify(want)}`, JSON.stringify(got) === JSON.stringify(want), got);
 const near = (name, got, want, tol = 1e-6) => ok(`${name} (want ~${want})`, Number.isFinite(got) && Math.abs(got - want) <= tol, got);
 const r2 = (x) => Math.round(x * 100) / 100;
+const r6 = (x) => Math.round(x * 1e6) / 1e6;
 
 // ------------------------------------------------------------------ the calendar
 {
@@ -109,6 +110,36 @@ const r2 = (x) => Math.round(x * 100) / 100;
   ] } }, '2026-09-25');
   eq('one expiry, calls and puts, calls by strike', [chain.calls.map((c) => c.strike), chain.puts.map((c) => c.strike)], [[704, 705], [702]]);
   eq('a row keeps its size and its day high', [chain.calls[1].askSz, chain.calls[1].high], [60, 0.4]);
+}
+
+// ------------------------------------------------------------------ the runner book's rules
+{
+  const R = B.RUNNER;
+  const stats = {
+    'QNT-USD': { open: 250, high: 300, last: 298, volume: 1e5 },        // +19%, 0.7% off its high, $29.8M: a runner
+    'WLD-USD': { open: 0.5, high: 0.6, last: 0.55, volume: 1e8 },       // +10% but 8% off its high: fading
+    'NEAR-USD': { open: 5, high: 5.3, last: 5.25, volume: 1e7 },        // +5%: not enough
+    'SKR-USD': { open: 1, high: 1.3, last: 1.29, volume: 1e6 },         // +29% on $1.3M: too thin
+    'PUMP-USD': { open: 1, high: 2, last: 2, volume: 1e8 },             // Robinhood does not sell it
+    'QNT-EUR': { open: 1, high: 2, last: 2, volume: 1e8 },              // not a dollar pair
+  };
+  const rows = B.runnerScan(stats, { 'QNT-USD': 295 });
+  eq('the scan keeps coins Robinhood sells with $2M traded, strongest first', rows.map((r) => r.id), ['QNT-USD', 'WLD-USD', 'NEAR-USD']);
+  eq('a coin up 8%+, near its high and above the last scan is a runner; the others say why not', rows.map((r) => r.why),
+    [null, '8.3% off its high: fading', 'needs 8%']);
+  eq('with no scan before, climbing waits for the next', B.runnerScan(stats, null)[0].why, 'first look: climbing is checked at the next scan');
+  eq('a runner no higher than at the last scan is not climbing', B.runnerScan(stats, { 'QNT-USD': 298 })[0].why, 'not climbing since the last scan');
+  const lot = { entry: 100, peak: 130, openedAt: 0 };
+  eq('held while under 10% off its best', B.runnerExit(lot, 117.1, 3600000), null);
+  eq('out at 10% off its best since bought', B.runnerExit(lot, 117, 3600000), 'fell 10% from its best since bought');
+  eq('out after 48 hours not above what it cost', B.runnerExit({ entry: 100, peak: 105, openedAt: 0 }, 99, 48 * 3600000), '48 hours and not above what it cost');
+  eq('...but a coin above its cost at 48 hours rides on', B.runnerExit({ entry: 100, peak: 105, openedAt: 0 }, 101, 48 * 3600000), null);
+  eq('the rule: four at once, a 10% trail, a 12-hour wait after a sale, every 3 minutes', [R.slots, R.trail, R.coolHours, R.everySec], [4, 0.1, 12, 180]);
+  const st = F.parseCoinbaseStats({ 'QNT-USD': { stats_24hour: { open: '250', high: '300', low: '240', last: '298', volume: '100000' } }, 'X-USD': { stats_24hour: { open: '0', last: '1' } }, 'Y-USD': {} });
+  eq("Coinbase's 24-hour figures parse to numbers, and a coin with no open or last is left out", st, { 'QNT-USD': { open: 250, high: 300, low: 240, last: 298, volume: 100000 } });
+  const pr = F.parseCoinbaseProducts([{ id: 'DOGE-USD', status: 'online', base_increment: '0.1' }, { id: 'OLD-USD', status: 'delisted', base_increment: '1' },
+    { id: 'HALT-USD', status: 'online', trading_disabled: true, base_increment: '1' }, { id: 'CXL-USD', status: 'online', cancel_only: true, base_increment: '1' }]);
+  eq('the product list gives each tradable coin its step, and leaves out the delisted, halted and cancel-only', pr, { 'DOGE-USD': 0.1 });
 }
 
 // ------------------------------------------------------------------ paper fills
@@ -366,7 +397,7 @@ async function engineTests() {
   eq('every fill is journaled', journal.filter((j) => j.kind === 'FILL').length, 4);
   ok('with the 12:30 verdict', journal.some((j) => j.kind === 'OPTIONS_DAY' && j.status === 'pass'));
   const eq1 = desk.equity();
-  ok('the desk is worth what it paid, less spreads and fees', eq1 < 22000 && eq1 > 21900, eq1);
+  ok('the desk is worth what it paid, less spreads and fees', eq1 < 23000 && eq1 > 22900, eq1);
 
   // round 2, same day: nothing re-trades (the target has not moved, the day is checked)
   const fills1 = desk.state.fills.length;
@@ -494,10 +525,10 @@ async function engineTests() {
   // the snapshot the page reads
   const snap = desk.snapshot();
   eq('seven desks on the floor', snap.agents.map((a) => a.key), ['BRAM', 'KETT', 'RIGO', 'TESS', 'HOLT', 'ILSA', 'PRED']);
-  eq('five books', snap.books.map((x) => x.key), ['crypto', 'stocks', 'options', 'scalps', 'dips']);
+  eq('six books', snap.books.map((x) => x.key), ['crypto', 'stocks', 'options', 'scalps', 'dips', 'runners']);
   ok('the prediction-market desk sits at the seventh', snap.agents[6].note === 'winding down: 3 held');
   ok('each book carries its benchmark', snap.books[0].bench > 0 && snap.books[1].bench > 0 && snap.books.slice(2).every((x) => x.bench === null), snap.books.map((x) => x.bench));
-  eq('and what that holding paid to buy in (the option books are never "held")', snap.books.map((x) => x.benchFee), [35.86, 0, null, null, null]);
+  eq('and what that holding paid to buy in (the option books and the runners are never "held")', snap.books.map((x) => x.benchFee), [35.86, 0, null, null, null, null]);
   ok('paper, always', snap.mode === 'paper');
   near('the headline is every book together', snap.equity, snap.books.reduce((a, x) => a + x.equity, 0), 0.02);
   eq('the frame says when the last round finished', snap.beat, T);
@@ -639,27 +670,28 @@ async function engineTests() {
     fs.rmSync(pdir, { recursive: true, force: true });
   }
 
-  // A ledger from before the scalp and dip books (2026-09-29) gets them as cash, and the desk's recorded
-  // value and today's starting mark go up by that cash, so the P&L they show does not move. Once.
+  // A ledger from before the scalp and dip books (2026-09-29) and the runner book (2026-09-30) gets them as
+  // cash, and the desk's recorded value and today's starting mark go up by that cash, so the P&L they show
+  // does not move. Once.
   {
     const odir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-test-'));
     const d7 = new Desk({ ...cfg, dataDir: odir }, { feeds, now: () => T });
     d7.quiet = true;
     await d7.step();
     const s = JSON.parse(JSON.stringify(d7.state));
-    delete s.books.scalps; delete s.books.dips;
+    delete s.books.scalps; delete s.books.dips; delete s.books.runners;
     s.history = [{ t: T - 120000, e: 20000, c: 9000, s: 10000, o: 1000, bc: 9000, bs: 10000 }, { t: T - 60000, e: 19990, c: 8995, s: 9995, o: 1000, bc: 9000, bs: 10000 }];
     s.dayStart = 19990;
     fs.writeFileSync(path.join(odir, 'desk', 'state.json'), JSON.stringify(s));
     const d8 = new Desk({ ...cfg, dataDir: odir }, { feeds, now: () => T });
-    eq('each arrives as $1,000 of cash', ['scalps', 'dips'].map((k) => [d8.state.books[k].cash, d8.state.books[k].initial, d8.state.books[k].lots.length]), [[1000, 1000, 0], [1000, 1000, 0]]);
-    eq("the desk's recorded value carries them from the start", d8.state.history.map((p) => p.e), [22000, 21990]);
-    eq('and so does the start of the day', d8.state.dayStart, 21990);
+    eq('each arrives as $1,000 of cash', ['scalps', 'dips', 'runners'].map((k) => [d8.state.books[k].cash, d8.state.books[k].initial, d8.state.books[k].lots.length]), [[1000, 1000, 0], [1000, 1000, 0], [1000, 1000, 0]]);
+    eq("the desk's recorded value carries them from the start", d8.state.history.map((p) => p.e), [23000, 22990]);
+    eq('and so does the start of the day', d8.state.dayStart, 22990);
     eq('the P&L the chart draws is what it was', d8.state.history.map((p) => p.e - d8.initial()), [0, -10]);
-    eq('their starts are journaled when the desk starts', Object.entries(d8.state.added).map(([k, a]) => [k, a.cash, a.journaled]), [['scalps', 1000, false], ['dips', 1000, false]]);
+    eq('their starts are journaled when the desk starts', Object.entries(d8.state.added).map(([k, a]) => [k, a.cash, a.journaled]), [['scalps', 1000, false], ['dips', 1000, false], ['runners', 1000, false]]);
     d8.save();
     const d9 = new Desk({ ...cfg, dataDir: odir }, { feeds, now: () => T });
-    eq('only once', d9.state.history.map((p) => p.e), [22000, 21990]);
+    eq('only once', d9.state.history.map((p) => p.e), [23000, 22990]);
     fs.rmSync(odir, { recursive: true, force: true });
   }
 
@@ -674,8 +706,8 @@ async function engineTests() {
     await c1.step();
     const s = JSON.parse(JSON.stringify(c1.state));
     const held = Object.fromEntries(Object.entries(s.books.crypto.sleeves).map(([id, sl]) => [id, [sl.qty, sl.cash, sl.target]]));
-    s.history = [{ t: T - 120000, e: 22000, c: 9000, s: 10000, o: 1000, x: 1000, dp: 1000, bc: 9000, bs: 10000 }, { t: T - 60000, e: 21990, c: 8990, s: 10000, o: 1000, x: 1000, dp: 1000, bc: 8995, bs: 10000 }];
-    s.dayStart = 21990;
+    s.history = [{ t: T - 120000, e: 23000, c: 9000, s: 10000, o: 1000, x: 1000, dp: 1000, rn: 1000, bc: 9000, bs: 10000 }, { t: T - 60000, e: 22990, c: 8990, s: 10000, o: 1000, x: 1000, dp: 1000, rn: 1000, bc: 8995, bs: 10000 }];
+    s.dayStart = 22990;
     fs.writeFileSync(path.join(cdir, 'desk', 'state.json'), JSON.stringify(s));
     // the market grows the two coins: DOGE near a dime, sold in tenths
     const quietDaily = (px) => W.daily['BTC-USD'].map((d) => ({ ...d, o: d.o * px / 84000, h: d.h * px / 84000, l: d.l * px / 84000, c: d.c * px / 84000 }));
@@ -689,8 +721,8 @@ async function engineTests() {
     eq('each new coin gets a slot the size of the three it joins, in cash', ['XRP-USD', 'DOGE-USD'].map((id) => [cb.sleeves[id].initial, cb.sleeves[id].cash, cb.sleeves[id].qty]), [[3000, 3000, 0], [3000, 3000, 0]]);
     eq('the book grows by that cash', cb.initial, 15000);
     eq('nothing it holds is touched', Object.fromEntries(['BTC-USD', 'ETH-USD', 'SOL-USD'].map((id) => [id, [cb.sleeves[id].qty, cb.sleeves[id].cash, cb.sleeves[id].target]])), held);
-    eq("the book's and holding's recorded values carry the new cash from the start", c2.state.history.map((p) => [p.e, p.c, p.bc]), [[28000, 15000, 15000], [27990, 14990, 14995]]);
-    eq('and so does the start of the day', c2.state.dayStart, 27990);
+    eq("the book's and holding's recorded values carry the new cash from the start", c2.state.history.map((p) => [p.e, p.c, p.bc]), [[29000, 15000, 15000], [28990, 14990, 14995]]);
+    eq('and so does the start of the day', c2.state.dayStart, 28990);
     eq('the P&L the chart draws is what it was', c2.state.history.map((p) => [r2(p.e - c2.initial()), r2(p.c - cb.initial), r2(p.bc - cb.initial)]), [[0, 0, 0], [-10, -10, -5]]);
     eq('HOLT reads all five coins', Object.keys(c2.mkt.coins), ['BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'DOGE-USD']);
     eq('their arrival is journaled when the desk starts', Object.entries(c2.state.addedCoins).map(([id, a]) => [id, a.cash, a.journaled]), [['XRP-USD', 3000, false], ['DOGE-USD', 3000, false]]);
@@ -709,7 +741,7 @@ async function engineTests() {
     eq('and the journal rebuilds the five-coin ledger to the penny', dc.compare(dc.rebuild(ev.events, c2.state), c2.state), []);
     c2.save();
     const c3 = new Desk(five, { feeds, now: () => T });
-    eq('only once', [c3.state.books.crypto.initial, c3.state.history.slice(0, 2).map((p) => p.e)], [15000, [28000, 27990]]);
+    eq('only once', [c3.state.books.crypto.initial, c3.state.history.slice(0, 2).map((p) => p.e)], [15000, [29000, 28990]]);
     for (const id of ['XRP-USD', 'DOGE-USD']) { delete W.ticks[id]; delete W.daily[id]; delete W.books[id]; }
     fs.rmSync(cdir, { recursive: true, force: true });
   }
@@ -725,6 +757,69 @@ async function engineTests() {
     Object.assign(sol, { benchPx: null, benchAt: null });
     near('a slot not bought in yet counts as its cash', pd.benchValue('crypto'), r2(both - solHeld + sol.initial), 0.011);
     near('and has paid no fee to buy in', pd.benchFee('crypto'), r2(fee * 2 / 3), 0.011);
+  }
+
+  // The runner book, round by round: a first scan only looks, the next buys the runners still climbing (a
+  // quarter of the book each, Robinhood's 0.95%, in the coin's own step), the trail sells one 10% off its
+  // best, and a coin sold waits 12 hours. The journal rebuilds the book to the penny.
+  {
+    const rdir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-test-'));
+    let t = T;
+    const rd = new Desk({ ...cfg, dataDir: rdir }, { feeds, now: () => t });
+    rd.quiet = true;
+    const saved = { stats: W.stats, books: { ...W.books } };
+    const run = (id, open, last, high, volume) => ({ [id]: { open, high: high ?? last, low: open, last, volume } });
+    W.stats = { ...run('QNT-USD', 250, 298, 300, 1e5), ...run('NEAR-USD', 5, 5.25, 5.3, 1e7), ...run('ENA-USD', 0.2, 0.23, 0.231, 1e8) };
+    const setBook = (id, px) => { W.books[id] = { bids: [{ price: px - px * 0.001, size: 1e9 }], asks: [{ price: px + px * 0.001, size: 1e9 }] }; };
+    setBook('QNT-USD', 298); setBook('ENA-USD', 0.23);
+    W.products['ENA-USD'] = 0.1;
+    const rb = rd.state.books.runners;
+    await rd.runnerBook();
+    eq('the first scan only looks: climbing needs a scan before it', [rb.lots.length, rb.scan.top.map((r) => r.status)], [0, ['first look: climbing is checked at the next scan', 'first look: climbing is checked at the next scan', 'needs 8%']]);
+    t += 60000; W.stats['QNT-USD'].last = 299;
+    await rd.runnerBook();
+    eq('a minute on, the book does not scan again', rb.scans, 1);
+    t += 120000; W.stats['QNT-USD'].last = 299; W.stats['ENA-USD'].last = 0.2305;
+    await rd.runnerBook();
+    eq('three minutes on, both runners still climbing are bought, strongest first', rb.lots.map((l) => l.sym), ['QNT-USD', 'ENA-USD']);
+    const [qnt, ena] = rb.lots;
+    ok('each for a quarter of the book, the fee inside it, to the coin\'s step', qnt.cost <= 250 && qnt.cost > 249.69 && ena.cost <= 250 && ena.cost > 248.5, rb.lots.map((l) => l.cost));
+    near("at Robinhood's 0.95%", ena.cost - ena.qty * ena.entry, ena.qty * ena.entry * 0.0095, 0.011);
+    ok('in the step Coinbase sells the coin in (QNT in thousandths)', Math.abs(qnt.qty * 1000 - Math.round(qnt.qty * 1000)) < 1e-6, qnt.qty);
+    eq('its best so far is the scan price it was bought at', [ena.peak, qnt.peak], [0.2305, 299]);
+    const jr = fs.readFileSync(path.join(rdir, 'desk', `journal-${clock.et(t).day}.jsonl`), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((j) => j.kind === 'FILL' && j.book === 'runners');
+    eq('each buy is journaled with the run it bought: the move, how far off the high, the dollars traded', [jr[1].sym, jr[1].move, jr[1].volUsd], ['ENA-USD', 0.1525, 23050000]);
+    ok('and said on the floor as a signal', rd.state.log.some((l) => l.agent === 'BRAM' && l.kind === 'SIGNAL' && /^runners: ENA is running: up 15\.3% in 24 hours/.test(l.text)));
+    // QNT climbs to 330, then falls back: 297 is exactly 10% under its best, and it goes
+    t += 180000; W.stats['QNT-USD'].last = 330; W.stats['QNT-USD'].high = 330;
+    await rd.runnerBook();
+    eq('a new high raises its best', qnt.peak, 330);
+    near('and marks the book at the scan', rd.bookValue('runners'), r2(rb.cash + ena.qty * 0.2305 + qnt.qty * 330), 0.011);
+    t += 180000; W.stats['QNT-USD'].last = 297; setBook('QNT-USD', 297);
+    await rd.runnerBook();
+    eq('10% under its best, it is sold', rb.lots.map((l) => l.sym), ['ENA-USD']);
+    const qt = rb.trades.find((x) => x.sym === 'QNT-USD');
+    eq('the trade is closed with why', [qt.open, qt.why], [false, 'fell 10% from its best since bought']);
+    near('its P&L is what the sale brought less what it cost', qt.pnl, rb.realized, 0.001);
+    ok('a coin sold waits 12 hours', rb.cool['QNT-USD'] === t);
+    t += 180000; W.stats['QNT-USD'].last = 320; W.stats['QNT-USD'].high = 320;
+    await rd.runnerBook();
+    eq('...even when it runs again', [rb.lots.map((l) => l.sym), rb.scan.top.find((r) => r.id === 'QNT-USD').status], [['ENA-USD'], 'sold in the last 12 hours']);
+    // the daily check replays the book from its journal
+    const dc = require('./desk-check');
+    const ev = dc.readDesk(path.join(rdir, 'desk'));
+    eq('the journal rebuilds the runner book to the penny', dc.compare(dc.rebuild(ev.events, rd.state), rd.state), []);
+    const snap = rd.snapshot(), rbk = snap.books.find((x) => x.key === 'runners');
+    eq('the floor gets the book, its coin, where it goes out, and the scan', [rbk.rows.map((r) => [r.name, r.stop]), snap.runners.n, snap.runners.slots],
+      [[['ENA', r6(0.2305 * 0.9)]], 3, 4]);
+    // past the day's loss limit it buys nothing, and says so
+    t += 180000; W.stats['NEAR-USD'] = run('NEAR-USD', 5, 5.6, 5.61, 1e7)['NEAR-USD']; rd.halt = 'down 6% today';
+    await rd.runnerBook();
+    t += 180000; W.stats['NEAR-USD'].last = 5.605;
+    await rd.runnerBook();
+    ok('halted, a runner is not bought', !rb.lots.some((l) => l.sym === 'NEAR-USD') && rd.state.log.some((l) => /^runners: NEAR is running.*not buying: down 6% today/.test(l.text)), rb.lots.map((l) => l.sym));
+    W.stats = saved.stats; W.books = saved.books; delete W.products['ENA-USD'];
+    fs.rmSync(rdir, { recursive: true, force: true });
   }
 
   // the loss limit: no new buying, selling still allowed

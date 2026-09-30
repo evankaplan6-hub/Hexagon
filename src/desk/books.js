@@ -1,5 +1,5 @@
 'use strict';
-// The five books' rules. Pure: bars, quotes and the book's own state in, a decision out. No clock,
+// The six books' rules. Pure: bars, quotes and the book's own state in, a decision out. No clock,
 // no network, no ledger -- src/desk/engine.js does all of that and asks these what to do.
 //
 // ---------------------------------------------------------------- crypto and stocks: volatility targeting
@@ -364,8 +364,82 @@ function dipExit(lot, fresh, last, row, R = DIP) {
   return { exit: null, reclaimM };
 }
 
+// ---------------------------------------------------------------- runners: coins popping right now
+// Evan, 2026-09-30, after QNT doubled on him in four days ("i saw it was popping risked it and its paying
+// off"): look for runners, every 3 minutes. The crypto book does the opposite (it holds less of a coin the
+// harder it swings), so this is a book of its own, with its own cash.
+//
+//   the scan    every 3 minutes, Coinbase's 24-hour figures for every coin in one call. A coin is a runner
+//               when it is one Robinhood sells (where Evan trades crypto), at least $2M of it traded on
+//               Coinbase in the last 24 hours, it is up 8% or more on 24 hours ago, it is within 3% of its
+//               24-hour high (still running, not fading), and it is above its price at the last scan
+//               (still climbing). The strongest move first.
+//   the size    at most four coins at once, each a quarter of the book's value, never more than its cash.
+//   the exit    when its price falls 10% from the best it has been since the book bought it (a trailing
+//               stop, checked each scan), or after 48 hours not above what it cost. A coin sold waits 12
+//               hours before it can be bought again.
+//   the cost    Robinhood's 0.95% a side (DESK_RUNNER_FEE_BPS, from Evan's own QNT fills of 26-27
+//               September), on top of walking Coinbase's book.
+//
+// Fixed before the one check it had: the last 37 days of hourly prices (2026-08-25 to 09-30) for the 81 of
+// Robinhood's coins Coinbase lists, scanned hourly. $1,000 became about $1,160, after $279 in fees, on 48
+// trades; 15 made money, the median trade lost $13, and two coins (SKR, ARB) made most of it. A 5% trail
+// lost 31%, all to fees; 15% and 20% did better than 10% in that month, and 10% was kept rather than fitted
+// to it. One month in which the average coin rose a third is not evidence: like the scalp book, it is
+// judged on its own journal, from 50 trades.
+const RUNNER = {
+  everySec: 180,
+  minVolUsd: 2e6,
+  minMove: 0.08,
+  nearHigh: 0.03,
+  slots: 4,
+  trail: 0.10,
+  staleHours: 48,
+  coolHours: 12,
+};
+// The coins Robinhood sells to an individual account, as its crypto list gave them on 2026-09-30 (the
+// ones halted only in New York included; stablecoins and gold left out). Add a coin when Robinhood lists
+// one: a runner Evan cannot buy is not one this book should either.
+const RUNNER_COINS = new Set(['AAVE', 'ADA', 'AERO', 'ALGO', 'ARB', 'ASTER', 'ATOM', 'AVAX', 'AVNT', 'AXS', 'BAT', 'BCH', 'BILL',
+  'BIO', 'BNB', 'BONK', 'BTC', 'CASHCAT', 'CC', 'CHIP', 'COMP', 'CRV', 'DOGE', 'DOT', 'EIGEN', 'ENA', 'ETC', 'ETH', 'FET', 'FLOKI',
+  'FLR', 'GRAM', 'GRT', 'HBAR', 'HYPE', 'IMX', 'INJ', 'JTO', 'LDO', 'LINK', 'LIT', 'LTC', 'MEGA', 'MEW', 'MNT', 'MOODENG', 'MORPHO',
+  'NEAR', 'ONDO', 'OP', 'ORCA', 'PENGU', 'PEPE', 'PNUT', 'POPCAT', 'PYTH', 'QNT', 'RAY', 'RE', 'RENDER', 'SEI', 'SENT', 'SHIB', 'SKR',
+  'SKY', 'SNX', 'SOL', 'STRK', 'SUI', 'SYRUP', 'TRUMP', 'UNI', 'VIRTUAL', 'VVV', 'W', 'WIF', 'WLD', 'WLFI', 'XCN', 'XLM', 'XPL', 'XRP',
+  'XTZ', 'ZEC', 'ZORA', 'ZRO', 'ZRX']);
+
+// One scan. `stats` is Coinbase's 24-hour figures, { 'QNT-USD': { open, high, last, volume } } (volume in
+// coins); `prev` the prices at the last scan, { id: last }, or null when there was none. Every coin that
+// can be a runner (Robinhood sells it, $2M traded), strongest move first, each with why it is not one
+// (`why` null: it is).
+function runnerScan(stats, prev, R = RUNNER) {
+  const out = [];
+  for (const [id, s] of Object.entries(stats || {})) {
+    if (!/-USD$/.test(id) || !RUNNER_COINS.has(id.slice(0, -4)) || !s) continue;
+    const { open, high, last, volume } = s;
+    if (!(open > 0 && high > 0 && last > 0 && volume > 0)) continue;
+    const volUsd = volume * last;
+    if (volUsd < R.minVolUsd) continue;
+    const move = last / open - 1, offHigh = last / high - 1, was = prev && prev[id] > 0 ? prev[id] : null;
+    const why = move < R.minMove ? `needs ${pctTxt(R.minMove)}`
+      : offHigh < -R.nearHigh ? `${pctTxt(-offHigh)} off its high: fading`
+        : was == null ? 'first look: climbing is checked at the next scan'
+          : !(last > was) ? 'not climbing since the last scan' : null;
+    out.push({ id, move, offHigh, volUsd, last, was, why });
+  }
+  return out.sort((a, b) => b.move - a.move);
+}
+// Out? `lot` { entry, peak, openedAt }, `last` its price now and `t` the time. The reason, or null.
+function runnerExit(lot, last, t, R = RUNNER) {
+  if (!(last > 0)) return null;
+  if (last <= lot.peak * (1 - R.trail)) return `fell ${pctTxt(R.trail)} from its best since bought`;
+  if (t - lot.openedAt >= R.staleHours * 3600000 && last <= lot.entry) return `${R.staleHours} hours and not above what it cost`;
+  return null;
+}
+const pctTxt = (x) => `${+(Math.abs(x) * 100).toFixed(1)}%`;
+
 module.exports = {
   volTargetWeight, needsRebalance, trendTest, scanEntry, vwapBreak, pickContract, targetHit, chainSync, ZERO,
   scalpTrigger, scalpGate, pickScalp, scalpExit, SCALP, FED,
   dipTrigger, pickDip, dipExit, DIP,
+  runnerScan, runnerExit, RUNNER, RUNNER_COINS,
 };

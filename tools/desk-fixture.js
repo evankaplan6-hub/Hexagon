@@ -27,9 +27,10 @@ function upDay({ to = 12 * 60 + 30, slope = 0.02, drops = {} } = {}) {
 const deskConfig = (dir) => ({
   dataDir: dir, buildSha: '',
   desk: {
-    on: true, cryptoUsd: 9000, stocksUsd: 10000, optionsUsd: 1000, scalpsUsd: 1000, dipsUsd: 1000, coins: ['BTC-USD', 'ETH-USD', 'SOL-USD'],
+    on: true, cryptoUsd: 9000, stocksUsd: 10000, optionsUsd: 1000, scalpsUsd: 1000, dipsUsd: 1000, runnersUsd: 1000, coins: ['BTC-USD', 'ETH-USD', 'SOL-USD'],
     cryptoVolTarget: 0.4, cryptoLookback: 30, stockSym: 'SPY', stockVolTarget: 0.15, stockLookback: 20,
     rebalBand: 0.1, cryptoFeeBps: 40, stockFeeBps: 0, optionFee: 0.03, options: true, scalps: true, dips: true, maxDailyDdPct: 0.05, everySec: 10,
+    runners: true, runnerFeeBps: 95, runnerEverySec: 180,
     chainSkewSec: 120,
   },
 });
@@ -49,6 +50,13 @@ function fakeMarket(now) {
   W.daily = { 'BTC-USD': cryptoDaily(84000), 'ETH-USD': cryptoDaily(2700), 'SOL-USD': cryptoDaily(200) };
   W.books = {};
   for (const [id, t] of Object.entries(W.ticks)) W.books[id] = { bids: [{ price: t.bid, size: 1e6 }], asks: [{ price: t.ask, size: 1e6 }] };
+  // every coin's last 24 hours, for the runner book: a quiet day, nothing running (a test sets a runner)
+  W.stats = {
+    'BTC-USD': { open: 83800, high: 84100, low: 83500, last: 84000, volume: 5000 },
+    'SOL-USD': { open: 199, high: 201, low: 198, last: 200, volume: 1e6 },
+    'NEAR-USD': { open: 5, high: 5.1, low: 4.9, last: 5.05, volume: 1e7 },
+  };
+  W.products = { 'BTC-USD': 1e-8, 'ETH-USD': 1e-8, 'SOL-USD': 1e-8, 'NEAR-USD': 0.1, 'QNT-USD': 0.001, 'WLD-USD': 0.1 };
   // SPY: 30 calm sessions to Tuesday with a 6-point range (ATR 6)
   const spyDaily = [];
   for (let i = 30, day = '2026-09-22'; i > 0; i--, day = clock.prevTradingDay(day)) spyDaily.unshift({ day, o: 700, h: 703 + (i % 2), l: 697 + (i % 2), c: 700 + (i % 2), v: 1 });
@@ -68,6 +76,8 @@ function fakeMarket(now) {
     async ticker(id) { return W.ticks[id]; },
     async book(id) { return W.books[id]; },
     async cryptoDaily(id) { return W.daily[id]; },
+    async coinStats() { return W.stats; },
+    async coinProducts() { return W.products; },
     async quote() { return W.quote; },
     async intraday() { return W.intra; },
     async daily() { return W.spyDaily; },

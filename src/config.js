@@ -634,6 +634,11 @@ module.exports = {
     scalpsUsd: num('DESK_SCALPS_USD', 1000),
     // the dip book (src/desk/books.js DIP): two calls of at most $0.45 at a time
     dipsUsd: num('DESK_DIPS_USD', 1000),
+    // the runner book (src/desk/books.js RUNNER, 2026-09-30): coins popping right now, four at most, a
+    // quarter of the book each, scanned every 3 minutes, at Robinhood's 0.95% a side (Evan's own fills)
+    runnersUsd: num('DESK_RUNNERS_USD', 1000),
+    runnerFeeBps: num('DESK_RUNNER_FEE_BPS', 95),
+    runnerEverySec: Math.max(60, num('DESK_RUNNER_EVERY_SEC', 180)),
     // XRP and DOGE since 2026-09-30 (Evan: BTC and ETH "barely move"); a coin added here joins a running
     // ledger with its own slot of cash (src/desk/engine.js addCoins), and one taken out keeps its slot
     coins: env('DESK_COINS', 'BTC-USD,ETH-USD,SOL-USD,XRP-USD,DOGE-USD').split(',').map((s) => s.trim()).filter(Boolean),
@@ -650,6 +655,7 @@ module.exports = {
     options: env('DESK_OPTIONS', '1') !== '0',
     scalps: env('DESK_SCALPS', '1') !== '0',
     dips: env('DESK_DIPS', '1') !== '0',
+    runners: env('DESK_RUNNERS', '1') !== '0',
     // no new buying for the rest of the Eastern day past this loss on the whole desk; selling is never blocked
     maxDailyDdPct: num('DESK_MAX_DAILY_DD', 0.05),
     // an option is bought only off a chain whose own time is within this many seconds of the trigger

@@ -1,7 +1,8 @@
 'use strict';
 // Market data for the stocks, crypto and options desk. Free, public, no key and no account.
 //
-//   Crypto   Coinbase Exchange's public REST API: live bid/ask, the order book, daily candles.
+//   Crypto   Coinbase Exchange's public REST API: live bid/ask, the order book, daily candles, and
+//            every coin's last 24 hours in one call (the runner book's scan).
 //   Stocks   Cboe's delayed quotes (cdn.cboe.com): SPY's quote, its one-minute bars for the day, and
 //            daily bars back to 2004. About 15 minutes behind the market.
 //   Options  Cboe's delayed option chain, the same feed src/venues/cboe.js records for the chain tape.
@@ -50,6 +51,32 @@ function parseCoinbaseCandles(j, now = Date.now()) {
     out.push({ day: new Date(t).toISOString().slice(0, 10), t, o, h, l, c, v });
   }
   return out.sort((a, b) => a.t - b.t);
+}
+
+// Every product's last 24 hours in one call (/products/stats): { 'QNT-USD': { open, high, low, last,
+// volume } }, volume in the coin. The runner book's scan (src/desk/books.js RUNNER).
+function parseCoinbaseStats(j) {
+  if (!j || typeof j !== 'object' || Array.isArray(j)) return null;
+  const out = {};
+  for (const [id, x] of Object.entries(j)) {
+    const d = x && x.stats_24hour;
+    if (!d) continue;
+    const row = { open: fin(d.open), high: fin(d.high), low: fin(d.low), last: fin(d.last), volume: fin(d.volume) };
+    if (row.last > 0 && row.open > 0) out[id] = row;
+  }
+  return out;
+}
+// The products Coinbase trades now, and the step each is sold in: { 'DOGE-USD': 0.1, ... }. A product that
+// is delisted, halted or cancel-only is left out, so it is never bought.
+function parseCoinbaseProducts(j) {
+  if (!Array.isArray(j)) return null;
+  const out = {};
+  for (const p of j) {
+    if (!p || typeof p.id !== 'string' || p.status !== 'online' || p.trading_disabled || p.cancel_only || p.limit_only) continue;
+    const step = fin(p.base_increment);
+    out[p.id] = step > 0 ? step : 1e-8;
+  }
+  return out;
 }
 
 // ------------------------------------------------------------------ Cboe
@@ -205,6 +232,9 @@ function makeFeeds({ fetchImpl = fetch, timeoutMs = 15000 } = {}) {
     async book(id) { return parseCoinbaseBook(await getJSON(`${COINBASE}/products/${sym(id)}/book?level=2`)); },
     // the last ~300 finished UTC days (one call; plenty for a 30-day volatility)
     async cryptoDaily(id, now = Date.now()) { return parseCoinbaseCandles(await getJSON(`${COINBASE}/products/${sym(id)}/candles?granularity=86400`), now); },
+    // every coin's last 24 hours in one call (about 100 KB), and the list of what trades and in what steps
+    async coinStats() { return parseCoinbaseStats(await getJSON(`${COINBASE}/products/stats`)); },
+    async coinProducts() { return parseCoinbaseProducts(await getJSON(`${COINBASE}/products`)); },
     async quote(s) { return parseCboeQuote(await getJSON(`${CBOE}/quotes/${sym(s)}.json`)); },
     async intraday(s) { return parseCboeIntraday(await getJSON(`${CBOE}/charts/intraday/${sym(s)}.json`)); },
     async daily(s) { return parseCboeDaily(await getJSON(`${CBOE}/charts/historical/${sym(s)}.json`)); },
@@ -213,7 +243,7 @@ function makeFeeds({ fetchImpl = fetch, timeoutMs = 15000 } = {}) {
 }
 
 module.exports = {
-  makeFeeds, parseCoinbaseTicker, parseCoinbaseBook, parseCoinbaseCandles,
+  makeFeeds, parseCoinbaseTicker, parseCoinbaseBook, parseCoinbaseCandles, parseCoinbaseStats, parseCoinbaseProducts,
   parseCboeQuote, parseCboeIntraday, parseCboeDaily, parseCboeExpiry,
   fiveMinute, vwapSeries, atr14, realizedVol,
 };
