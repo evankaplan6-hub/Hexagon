@@ -57,7 +57,12 @@ function deskStalled(stalled) {
 const clients = new Set();
 const deskClients = new Set();
 const PUBLIC = path.join(__dirname, 'public');
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json' };
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json',
+  '.webmanifest': 'application/manifest+json' };
+// What an iPhone, an iPad or a Mac fetches to put the floor on its Home Screen or in its Dock, before anyone
+// has logged in: the icons and the manifest that names them. They hold no figure from either desk, so they
+// are served to anyone, and nothing else is: without them the icon a phone saved was a picture of the login.
+const OPEN_FILES = new Set(['/favicon.svg', '/apple-touch-icon.png', '/icon-192.png', '/icon-512.png', '/manifest.webmanifest']);
 
 function json(res, obj) {
   res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
@@ -112,33 +117,52 @@ function authed(req) {
   return false;
 }
 
-const LOGIN_PAGE = (err) => `<!doctype html><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>The Hexagon</title>
+// Drawn as the floor is (public/tokens.css, Apple's colours, light or dark as the device is set), and as
+// the first thing an iPhone shows when the floor is opened from its Home Screen: the app's icon, and the
+// two fields as an iOS grouped list. Their type is 17px: under 16, Safari on an iPhone zooms the page to
+// a field as it is tapped.
+const attr = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const LOGIN_PAGE = (err) => `<!doctype html><html lang="en"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Hexagon">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.webmanifest"><title>The Hexagon</title>
 <style>
-  :root { color-scheme: dark; }
-  body { margin:0; min-height:100vh; display:grid; place-items:center; background:#06080c;
-         color:#e6e8ee; font:14px/1.5 'JetBrains Mono',ui-monospace,Menlo,monospace; }
-  form { width:min(320px,90vw); background:#0d1119; border:1px solid #1a2233; border-radius:8px;
-         padding:26px; box-shadow:0 18px 50px -20px #000; }
-  h1 { margin:0 0 4px; font:700 17px/1 system-ui,sans-serif; letter-spacing:-0.01em; }
-  p.sub { margin:0 0 20px; color:#5b6270; font-size:11px; letter-spacing:.1em; text-transform:uppercase; }
-  label { display:block; font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:#5b6270; margin:12px 0 5px; }
-  input { width:100%; box-sizing:border-box; padding:9px 10px; background:#06080c; color:#e6e8ee;
-          border:1px solid #243047; border-radius:4px; font:13px 'JetBrains Mono',monospace; }
-  input:focus { outline:none; border-color:#3b82f6; }
-  button { width:100%; margin-top:18px; padding:10px; background:#1b2a1e; color:#4ade80; cursor:pointer;
-           border:1px solid #2a5a38; border-radius:4px; font:700 12px 'JetBrains Mono',monospace; letter-spacing:.1em; }
-  button:hover { background:#22331f; }
-  .err { margin-top:14px; color:#f87171; font-size:11px; }
-  .hex { display:block; margin:0 auto 14px; }
+  :root { color-scheme: light dark; --bg: light-dark(#f2f2f7, #000000); --card: light-dark(#ffffff, #1c1c1e); --ink: light-dark(#1d1d1f, #f5f5f7);
+    --ink-3: light-dark(#5d5d62, #9d9da4); --sep: light-dark(#e5e5ea, #38383a); --bad: light-dark(#d70015, #ff453a); --focus: light-dark(#0071e3, #2997ff); }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; padding: max(24px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+    background: var(--bg); color: var(--ink); font: 400 15px/1.4 -apple-system, BlinkMacSystemFont, system-ui, 'Segoe UI', Roboto, sans-serif; letter-spacing: -.01em;
+    -webkit-font-smoothing: antialiased; -webkit-text-size-adjust: 100%; }
+  form { width: min(360px, 100%); text-align: center; }
+  .icon { display: block; width: 76px; height: 76px; margin: 0 auto 18px; border-radius: 17px; box-shadow: 0 8px 24px light-dark(rgba(0, 0, 0, .16), rgba(0, 0, 0, .5)); }
+  h1 { margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -.02em; }
+  .sub { margin: 4px 0 28px; color: var(--ink-3); }
+  .fields { overflow: hidden; border-radius: 14px; background: var(--card); text-align: left; }
+  label { display: flex; align-items: center; gap: 12px; min-height: 50px; margin-left: 16px; padding-right: 16px; font-size: 17px; }
+  label + label { border-top: 1px solid var(--sep); }
+  label span { flex: none; width: 88px; }
+  input { flex: 1; min-width: 0; padding: 12px 0; border: 0; outline: 0; background: none; color: inherit; font: inherit; }
+  .fields:focus-within { box-shadow: 0 0 0 3px var(--focus); }
+  button { width: 100%; min-height: 50px; margin-top: 20px; border: 0; border-radius: 14px; cursor: pointer;
+    background: #0071e3; color: #ffffff; font: 600 17px/1 -apple-system, BlinkMacSystemFont, system-ui, sans-serif; letter-spacing: -.01em; }
+  button:active { opacity: .7; }
+  button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+  .err { margin-top: 14px; color: var(--bad); font-size: 13px; }
 </style>
 <form method="POST" action="/login">
-  <svg class="hex" viewBox="0 0 40 40" width="34" height="34"><polygon points="20,3 35,11.5 35,28.5 20,37 5,28.5 5,11.5" fill="none" stroke="#55617a" stroke-width="2"/><polygon points="20,15.5 24.5,18 24.5,22 20,24.5 15.5,22 15.5,18" fill="#6b7488"/></svg>
-  <h1>The Hexagon</h1><p class="sub">paper trading desk</p>
-  <label for="u">User</label><input id="u" name="u" value="${cfg.dashUser}" autocomplete="username">
-  <label for="p">Password</label><input id="p" name="p" type="password" autofocus autocomplete="current-password">
-  <button type="submit">ENTER</button>
-  ${err ? '<div class="err">wrong user or password</div>' : ''}
+  <img class="icon" src="/apple-touch-icon.png" alt="">
+  <h1>The Hexagon</h1><p class="sub">Paper trading desk</p>
+  <div class="fields">
+    <label><span>User</span><input name="u" value="${attr(cfg.dashUser)}" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
+    <label><span>Password</span><input name="p" type="password" autofocus autocomplete="current-password" placeholder="Required"></label>
+  </div>
+  <button type="submit">Sign In</button>
+  ${err ? '<p class="err" role="alert">Wrong user or password.</p>' : ''}
 </form>`;
 
 function readBody(req) {
@@ -181,6 +205,10 @@ function handle(req, res) {
     }
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     return res.end(LOGIN_PAGE(false));
+  }
+  if (OPEN_FILES.has(p)) {
+    res.writeHead(200, { 'content-type': MIME[path.extname(p)], 'cache-control': 'max-age=3600' });
+    return fs.createReadStream(path.join(PUBLIC, p)).on('error', () => res.end()).pipe(res);
   }
   if (!authed(req)) {
     // an API caller gets a 401 it can act on; a browser gets somewhere to type

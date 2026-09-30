@@ -100,7 +100,12 @@ public/desk.*     the floor at /: a wall of boards (headline vs holding, the des
                   trades, the P&L chart, the bots' activity, and since 2026-09-29 the prediction-market desk's board and
                   four books, fed by src/pmfloor.js; Evan: "Merge the desk to the new screen. It's data, not its look"), laid out for reading, 12px and up; no pixel room or bots drawn since 2026-09-25 (Evan's
                   call). desk.css is its own sheet on public/tokens.css, colours named by job; tools/tokens-test.js holds
-                  every text colour to 4.5:1. desk.js patches boards in place (morph) so focus survives the 2s stream
+                  every text colour to 4.5:1. desk.js patches boards in place (morph) so focus survives the 2s stream.
+                  Since 2026-09-29 drawn as Apple draws its apps (Evan: "making the website iOS and macOS and Apple beautiful"):
+                  the system font (no web fonts), Apple's colours as light-dark() pairs, light or dark as the device is set,
+                  a translucent bar, a phone's large title, the large chart as a sheet; addable to an iPhone's Home Screen
+                  or a Mac's Dock (manifest.webmanifest; tools/icons.js draws the icons; server.js OPEN_FILES serves those
+                  five files, and only those, before the login). Checked in the iOS Simulator (Xcode 27, iPhone 18 Pro Max)
 tools/crypto-lab.js the evidence for the crypto book (Coinbase daily candles → data/crypto/bars/)
 tools/desk-check.js step 8 of the daily check: the desk's loop alive, each book's check done today, its journal
                   rebuilding state.json to the penny, each book against holding (--box copies /data/desk first);

@@ -2,25 +2,39 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- viewport-fit=cover lets the page reach round an iPhone's notch; desk.css pads by the safe areas -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<!-- Safari tints its bars in the page's own colour (tokens.css --bg-0), light or dark -->
+<meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<!-- added to a Home Screen or the Dock, it opens as an app of its own, with no browser around it -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Hexagon">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<!-- a figure is not a phone number -->
+<meta name="format-detection" content="telephone=no">
 <title>The Hexagon</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<!-- every weight desk.css uses, 400 to 800, as one variable file per family (tools/tokens-test.js checks) -->
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400..800&family=Inter:wght@400..800&display=swap" rel="stylesheet">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<!-- the system's own font (San Francisco on Apple's devices): nothing to load -->
 <link rel="stylesheet" href="tokens.css">
 <link rel="stylesheet" href="desk.css">
 </head>
 <body>
-<div class="wrap">
-
-  <header class="top">
+<!-- the bar across the top, full width and translucent; on a phone its title scrolls away -->
+<header class="top" id="top">
+  <div class="bar">
     <div class="brand">
-      <svg viewBox="0 0 40 40" width="26" height="26" aria-hidden="true">
-        <polygon points="20,3 35,11.5 35,28.5 20,37 5,28.5 5,11.5" fill="none" stroke="currentColor" stroke-width="2"/>
-        <polygon points="20,10 29,15 29,25 20,30 11,25 11,15" fill="none" stroke="currentColor" stroke-width="1.5"/>
-        <polygon points="20,15.5 24.5,18 24.5,22 20,24.5 15.5,22 15.5,18" fill="currentColor"/>
-      </svg>
+      <span class="appicon" aria-hidden="true">
+        <svg viewBox="0 0 40 40">
+          <polygon points="20,3 35,11.5 35,28.5 20,37 5,28.5 5,11.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round"/>
+          <polygon points="20,10 29,15 29,25 20,30 11,25 11,15" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" opacity=".7"/>
+          <polygon class="core" points="20,15.5 24.5,18 24.5,22 20,24.5 15.5,22 15.5,18"/>
+        </svg>
+      </span>
       <h1>The Hexagon</h1>
     </div>
     <!-- the one thing a glance is asking: is the desk working, and with whose money -->
@@ -28,8 +42,10 @@
     <span class="clock" id="clock"></span>
     <!-- the prediction-market desk, arbs, maker and snipe in paper: its board is at the foot of this page -->
     <a id="pmlink" href="#pm" title="The prediction-market desk: arbs, maker and snipe, in paper">Prediction markets ↓</a>
-  </header>
+  </div>
+</header>
 
+<div class="wrap">
   <p class="banner" id="banner" role="status" hidden></p>
 
   <!-- A wall of boards, one screen each. Until 2026-09-25 they were painted into a pixel room with the
@@ -51,11 +67,11 @@
   <footer>Paper only: no broker is connected to this desk, and it has no way to place a real order. Crypto prices are live from Coinbase; stock and option prices come from Cboe about 15 minutes late, and the desk trades at those same late prices. The prediction-market desk prices Polymarket and Kalshi live and fills on paper against their books.</footer>
 </div>
 
-<!-- the P&L chart opened large -->
+<!-- the P&L chart opened large: a sheet, with Done where iOS puts it -->
 <div id="chartbig" hidden role="dialog" aria-modal="true" aria-label="Profit and loss chart">
   <div class="cbbox">
     <!-- the chart's one title in here (the chart leaves its own out); a phone keeps the first half -->
-    <div class="cbh"><button type="button" class="cbback" data-close="1">‹ Back</button><span>Profit and loss · stocks, crypto and options<span class="more">, and what holding would have made</span></span></div>
+    <div class="cbh"><span>Profit and loss<span class="more"> · stocks, crypto and options, and what holding would have made</span></span><button type="button" class="cbback" data-close="1">Done</button></div>
     <div id="chartbig-pnl" class="pnl big"></div>
   </div>
 </div>
