@@ -50,6 +50,7 @@ const SUITES = [
   ['themes', 'what a market is about: leagues off the series, the tickers that only look like one, and the page filter built on it'],
   ['desk', 'the stocks, crypto and options desk: the market calendar, the feeds, paper fills, every book\'s rules, and whole rounds of a trading day, a morning of scalps and a morning dip'],
   ['crypto-lab', "the crypto lab: next-open fills, the cost of a trade, the rebalance band, and the desk's own volatility rule"],
+  ['headline-lab', 'the headline lab: Eastern post times, one position at a time, no buying before the bot has the post, the fee both ways, a baseline from the same kind of day'],
   ['desk-check', "the desk's daily check: a real day replays to the penny, every drift named, alive and today's checks at any hour of the week"],
   ['pmfloor', "the prediction-market desk on the floor at /: its books add up to its own P&L to the cent, the log in the floor's words and levels, trades from the ledger, a box-sized desk in one frame"],
   ['tokens', "the desk's design tokens: every text colour at 4.5:1 or better on every surface in light and in dark, no colour of desk.css's own, no token that is not there, the system font, the app icons, and only they served before the login"],
