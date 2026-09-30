@@ -1549,9 +1549,12 @@ src/desk/books.js      the rules, pure: volatility targeting, and the SPY same-d
 src/desk/feeds.js      Coinbase (live) and Cboe (15 minutes late): parsers, fetches, bars, VWAP, ATR14
 src/desk/broker.js     paper fills: the book or the touch, fees per asset; no live broker
 src/desk/clock.js      the NYSE calendar: sessions, holidays, 1 PM closes
-public/desk.*          the floor at /: desk.html, desk.js, and desk.css, its own sheet built on tokens.css; the prediction-market desk's board and books too since 2026-09-29
+public/desk.*          the floor at /: desk.html, desk.js, and desk.css, its own sheet built on tokens.css; the prediction-market desk's board and books too since 2026-09-29;
+                       drawn as Apple draws its apps since 2026-09-29 (San Francisco, Apple's colours, light or dark as the device is set), and an app of its own
+                       once added to an iPhone's Home Screen or a Mac's Dock (manifest.webmanifest; the icons and it are all the server gives out before the login)
 src/pmfloor.js         what the floor is sent about the prediction-market desk: its four books from its own ledger, its log in the floor's words
-public/tokens.css      the desk's design tokens: colours named by job (every text colour 4.5:1 or better), type, space, radius, shadow
+public/tokens.css      the desk's design tokens: colours named by job, each light-dark() (every text colour 4.5:1 or better in both), type, space, radius, shadow
+tools/icons.js         draws the app icon (public/apple-touch-icon.png, icon-192.png, icon-512.png) in tokens.css's --icon-* colours, no package
 tools/crypto-lab.js    the evidence for the crypto book's rule (Coinbase daily candles)
                        the prediction-market desk (winding down), and everything both share
 server.js              HTTP + SSE server for both desks, .env loader, live-mode gate

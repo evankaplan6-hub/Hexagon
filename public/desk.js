@@ -64,13 +64,20 @@
   const BOOK_COLOR = { crypto: 'var(--book-crypto)', stocks: 'var(--book-stocks)', options: 'var(--book-options)', scalps: 'var(--book-scalps)', dips: 'var(--book-dips)' };
   // the books that hold option contracts: their rows are contracts, and they are never "held" against a market
   const optBook = (k) => k === 'options' || k === 'scalps' || k === 'dips';
-  // tokens.css, read once for the one thing that cannot take a var(): the chart library
-  const TOK = (() => {
-    const cs = getComputedStyle(document.documentElement), t = {};
-    for (const k of ['ink-1', 'ink-2', 'ink-3', 'gain', 'loss', 'rule-1']) t[k] = cs.getPropertyValue(`--${k}`).trim();
+  // tokens.css, read for the one thing that cannot take a var(): the chart library. Each colour there is
+  // light-dark(), which only an element can resolve, so a hidden one is given the token and its colour read
+  // back; and it is read again when the iPhone or the Mac changes between light and dark (see the chart).
+  const probe = document.body.appendChild(document.createElement('i'));
+  probe.hidden = true;
+  const color = (k) => { probe.style.color = `var(--${k})`; return getComputedStyle(probe).color; };
+  const readTokens = () => {
+    const t = { font: getComputedStyle(document.documentElement).getPropertyValue('--sans').trim() };
+    for (const k of ['ink-1', 'ink-2', 'ink-3', 'gain-line', 'loss-line', 'rule-1']) t[k] = color(k);
     return t;
-  })();
-  const withAlpha = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16}, ${(n >> 8) & 255}, ${n & 255}, ${a})`; };
+  };
+  let TOK = readTokens();
+  // "rgb(52, 199, 89)" at another alpha
+  const withAlpha = (c, a) => { const [r, g, b] = String(c).match(/[\d.]+/g).map(Number); return `rgba(${r}, ${g}, ${b}, ${a})`; };
 
   // ------------------------------------------------------------ rendering that keeps what a person is doing
   // The stream lands every two seconds, and replacing a board's HTML each time would throw away whatever
@@ -315,7 +322,9 @@
     const t0 = series[0][0], t1 = series[series.length - 1][0];
     const X = (t) => (((t - t0) / Math.max(1, t1 - t0)) * 1000).toFixed(1), Y = (v) => (96 - ((v - lo) / (hi - lo)) * 92).toFixed(1);
     const path = (i) => series.filter((s) => s[i] != null).map((s, j) => `${j ? 'L' : 'M'}${X(s[0])},${Y(s[i])}`).join('');
-    return box(`<line x1="0" x2="1000" y1="${Y(0)}" y2="${Y(0)}"/>${benchField ? `<path class="hold" d="${path(2)}"/>` : ''}<path class="line" d="${path(1)}"/>`);
+    // a wash of the book's colour under its line, to the foot of the box, the way Stocks draws one
+    const area = `${path(1)}L${X(t1)},100L${X(t0)},100Z`;
+    return box(`<path class="area" d="${area}"/><line x1="0" x2="1000" y1="${Y(0)}" y2="${Y(0)}"/>${benchField ? `<path class="hold" d="${path(2)}"/>` : ''}<path class="line" d="${path(1)}"/>`);
   }
   const change = (c) => (c == null ? '' : `<span class="${tone(c, 4)}">${isZero(c, 4) ? '0.00%' : `${c > 0 ? '+' : MINUS}${Math.abs(c * 100).toFixed(2)}%`}</span>`);
   const SWINGS = 'How much it moves in a year, measured over the last 30 days (crypto) or 20 sessions (SPY)';
@@ -685,7 +694,8 @@
   function chartSkeleton(big) {
     const seg = `<span class="seg">${RANGES.map(([r]) => `<button type="button" data-range="${r}" class="${chart.range === r ? 'on' : ''}">${r}</button>`).join('')}</span>`;
     // opened large, the dialog's header names the chart, so the chart leaves its own title out
-    return (big ? '' : '<div class="ct"><span class="ctitle">Profit and loss · stocks, crypto and options</span><button type="button" class="cx" data-expand="1" title="Open large" aria-label="Open the chart large">⤢</button></div>') +
+    const grow = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M9.5 2.5h4v4M13.5 2.5 9 7M6.5 13.5h-4v-4M2.5 13.5 7 9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    return (big ? '' : `<div class="ct"><span class="ctitle">Profit and loss<span class="csub"> · stocks, crypto and options</span></span><button type="button" class="cx" data-expand="1" title="Open large" aria-label="Open the chart large">${grow}</button></div>`) +
       `<div class="chead"><span class="cv"></span><span class="cd"></span></div>` +
       `<div class="cplot"></div><div class="cb">${seg}<span class="cr"></span></div>`;
   }
@@ -694,7 +704,7 @@
     if (!LW) return null;
     const c = LW.createChart(el.querySelector('.cplot'), {
       autoSize: true, handleScroll: false, handleScale: false,
-      layout: { background: { type: LW.ColorType.Solid, color: 'transparent' }, textColor: TOK['ink-3'], fontFamily: "'JetBrains Mono', ui-monospace, Menlo, monospace", fontSize: 12, attributionLogo: true },
+      layout: { background: { type: LW.ColorType.Solid, color: 'transparent' }, textColor: TOK['ink-3'], fontFamily: TOK.font, fontSize: 12, attributionLogo: true },
       grid: { vertLines: { visible: false }, horzLines: { color: TOK['rule-1'] } },
       // a label at the plot's edge is drawn whole or not at all, never cut in half; the bottom margin
       // is set in drawChart from the plot's height, to keep the line clear of the licence's logo
@@ -708,8 +718,8 @@
     });
     // Above zero the line and its fill are the gain colour, below it the loss colour, whatever the range.
     const desk = c.addSeries(LW.BaselineSeries, { baseValue: { type: 'price', price: 0 },
-      topLineColor: TOK.gain, topFillColor1: withAlpha(TOK.gain, 0.22), topFillColor2: withAlpha(TOK.gain, 0.02),
-      bottomLineColor: TOK.loss, bottomFillColor1: withAlpha(TOK.loss, 0.02), bottomFillColor2: withAlpha(TOK.loss, 0.22),
+      topLineColor: TOK['gain-line'], topFillColor1: withAlpha(TOK['gain-line'], 0.24), topFillColor2: withAlpha(TOK['gain-line'], 0.02),
+      bottomLineColor: TOK['loss-line'], bottomFillColor1: withAlpha(TOK['loss-line'], 0.02), bottomFillColor2: withAlpha(TOK['loss-line'], 0.24),
       lineWidth: big ? 3 : 2, priceLineVisible: false, lastValueVisible: big, crosshairMarkerRadius: 3,
       priceFormat: { type: 'custom', minMove: 0.01, formatter: (v) => plain(signed(v)) } });
     const hold = c.addSeries(LW.LineSeries, { color: TOK['ink-3'], lineWidth: 1, lineStyle: LW.LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
@@ -819,6 +829,15 @@
     else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus(); }
   });
   window.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') closeBigChart(); });
+  // The device went from light to dark or back (on a schedule, at sunset): the page's colours follow by
+  // themselves, and the charts are built again in the new ones.
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+    TOK = readTokens();
+    for (const [el, p] of plots) {
+      if (p.plot) { p.plot.c.remove(); p.plot = null; p.bottom = null; }
+      drawChart(el);
+    }
+  });
 
   // ------------------------------------------------------------ wiring: a frame every two seconds, a clock every second
   function render() {
@@ -840,6 +859,11 @@
     es.onmessage = (ev) => { try { S = JSON.parse(ev.data); S._rxPerf = performance.now(); lastFrameAt = Date.now(); render(); } catch (e) { console.error(e); } };
     es.onerror = () => { es.close(); setTimeout(connect, 3000); };
   }
+  // The bar's hairline shows once the page has scrolled under it; on a phone, once the large title has gone.
+  const bar = $('top');
+  const onScroll = () => bar.classList.toggle('scrolled', window.scrollY > (phone.matches ? 50 : 2));
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
   // Nothing redraws at rest: the clock ticks, and the page notices when the stream has gone quiet.
   setInterval(() => { if (!S) return; renderClock(); if (!!stale() !== shownGone) renderHeader(); }, 1000);
   morph($('hero'), '<span class="label">All paper books</span><p class="sub">Connecting to the desk…</p>');
