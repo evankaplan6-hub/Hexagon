@@ -5,8 +5,9 @@
 //   ALIVE   is its loop still running? It records the books' value once a minute; a state whose
 //           newest minute is old is a desk that stopped
 //   TODAY   did each book do today's check? Crypto once a UTC day, SPY once a trading day after the
-//           open, the options book's 12:30 verdict, the scalp and dip books watching from 10:05 -- a
-//           book that skipped its day is a book that could not get prices or could not decide
+//           open, the options book's 12:30 verdict, the scalp and dip books watching from 10:05, the
+//           runner book's scan every 3 minutes -- a book that skipped its day is a book that could not
+//           get prices or could not decide
 //   LEDGER  does the state add up? Every fill and settlement in the journal is replayed, with the
 //           engine's own rounding, and each book's cash, holdings, realised P&L and fees must come out
 //           to the penny of what state.json says
@@ -77,9 +78,19 @@ function rebuild(events, S, { until = Infinity } = {}) {
   // the two books of option contracts, each from its own starting cash
   const lots = {};
   for (const key of OPTION_BOOKS) if (B[key]) lots[key] = { cash: B[key].initial || 0, realized: 0, fees: 0, open: 0 };
+  // the runner book: coins, a holding per coin
+  const runners = B.runners ? { cash: B.runners.initial || 0, realized: 0, fees: 0, qty: {} } : null;
   let fills = 0, unknown = 0;
   for (const e of events) {
     if (Date.parse(e.t) > until) continue;
+    if (e.kind === 'FILL' && e.book === 'runners' && runners) {
+      fills++;
+      runners.cash = r2(runners.cash + e.cash); runners.fees = r2(runners.fees + (e.fee || 0));
+      const q = runners.qty[e.sym] || 0;
+      if (e.side === 'buy') runners.qty[e.sym] = r6(q + e.qty);
+      else { runners.qty[e.sym] = r6(Math.max(0, q - e.qty)); runners.realized = r2(runners.realized + (e.pnl || 0)); }
+      continue;
+    }
     const o = lots[e.book];
     if (e.kind === 'SETTLE' && o) {
       const cash = r2(e.value * 100 * e.qty);
@@ -107,7 +118,7 @@ function rebuild(events, S, { until = Infinity } = {}) {
     }
     sl.fees = r2(sl.fees + (e.fee || 0));
   }
-  return { sleeves, ...lots, fills, unknown };
+  return { sleeves, ...lots, runners, fills, unknown };
 }
 
 // Every difference between the rebuild and the state, as sentences.
@@ -132,6 +143,17 @@ function compare(built, S) {
     if (cent(bo.realized, o.realized)) problems.push(`${key}: realised ${money(o.realized)} in the state, ${money(bo.realized)} by the journal`);
     if (cent(bo.fees, o.fees)) problems.push(`${key}: fees ${money(o.fees)} in the state, ${money(bo.fees)} by the journal`);
     if (bo.open !== open) problems.push(`${key}: ${open} contract(s) held in the state, ${bo.open} by the journal`);
+  }
+  const rn = S.books.runners, br = built.runners;
+  if (rn && br) {
+    if (cent(br.cash, rn.cash)) problems.push(`runners: cash ${money(rn.cash)} in the state, ${money(br.cash)} by the journal`);
+    if (cent(br.realized, rn.realized)) problems.push(`runners: realised ${money(rn.realized)} in the state, ${money(br.realized)} by the journal`);
+    if (cent(br.fees, rn.fees)) problems.push(`runners: fees ${money(rn.fees)} in the state, ${money(br.fees)} by the journal`);
+    const held = {};
+    for (const l of rn.lots || []) held[l.sym] = r6((held[l.sym] || 0) + l.qty);
+    for (const sym of new Set([...Object.keys(held), ...Object.keys(br.qty)])) {
+      if (Math.abs((held[sym] || 0) - (br.qty[sym] || 0)) > 1e-6) problems.push(`runners ${short(sym)}: holds ${held[sym] || 0} in the state, ${br.qty[sym] || 0} by the journal`);
+    }
   }
   if (built.unknown) problems.push(`${built.unknown} journal fill(s) name a book or coin the state does not have`);
   return problems;
@@ -190,6 +212,16 @@ function health(S, now) {
     else if (xd && sess && !sess.early && e.min >= 10 * 60 + 30 && !young) problems.push(`${key}: not watching today (${e.day}): SPY's minute bars did not reach the book`);
     else lines.push(!xd ? `${key}: has not watched a session yet` : sess && sess.early ? `${key}: no ${none} on a 1 PM close` : `${key}: watching from 10:05 on the next trading day`);
   }
+  // the runner book scans every 3 minutes, whatever the day: a quarter of an hour without one is a scan that stopped
+  const R = B.runners;
+  if (R) {
+    const hold = (R.lots || []).map((l) => short(l.sym));
+    const scanAge = R.scan ? Math.round((now - R.scan.at) / MIN) : null;
+    const joined = S.added && S.added.runners ? S.added.runners.at : R.startedAt || 0;
+    if (scanAge != null && scanAge > 15) problems.push(`runners: no scan for ${scanAge} minutes (Coinbase's 24-hour figures not loading, or the book switched off)`);
+    else if (scanAge == null && now - joined > 15 * MIN) problems.push('runners: has never scanned (Coinbase\'s 24-hour figures not loading, or the book switched off)');
+    else lines.push(scanAge == null ? 'runners: first scan due' : `runners: scanned ${scanAge < 1 ? 'under a minute' : `${scanAge} min`} ago, ${R.scan.n} coins · holding ${hold.length ? hold.join(', ') : 'nothing'}`);
+  }
   for (const key of OPTION_BOOKS) {
     const held = ((B[key] && B[key].lots) || []).filter((l) => l.expiry < e.day || (l.expiry === e.day && sess && e.min >= 15 * 60 + 40));
     if (held.length) problems.push(`${key}: ${held.length} contract(s) still held past the 3:15 clock`);
@@ -239,6 +271,10 @@ function bookLines(S) {
     const won = done.filter((t) => t.pnl > 0).length;
     // a minute from before the book joined the desk has no value for it: its cash, untouched
     out.push(row(key, p[field] ?? x.initial, x.initial, `${done.length} trade${done.length === 1 ? '' : 's'} closed (${won} made money) · banked ${signed(x.realized || 0)} · fees ${money(x.fees || 0)}`));
+  }
+  if (B.runners) {
+    const x = B.runners, done = (x.trades || []).filter((t) => !t.open), won = done.filter((t) => t.pnl > 0).length;
+    out.push(row('runners', p.rn ?? x.initial, x.initial, `${done.length} trade${done.length === 1 ? '' : 's'} closed (${won} made money) · holding ${(x.lots || []).length} · banked ${signed(x.realized || 0)} · fees ${money(x.fees || 0)}`));
   }
   const init = Object.values(B).reduce((a, b) => a + (b && Number.isFinite(b.initial) ? b.initial : 0), 0);
   out.push(row('desk', p.e, init, `as of ${new Date(p.t).toISOString().slice(0, 16).replace('T', ' ')}Z`));

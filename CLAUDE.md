@@ -5,8 +5,9 @@ until 2026-09-10; it was moved here with its full git history. There is no other
 checkout — if you find a reference to `~/claude/hexagon` anywhere, it is stale.
 
 **The Hexagon** is a paper trading desk for **stocks, crypto and options**, its main scope since
-2026-09-25: six bots run five paper books on free public prices -- crypto (BTC, ETH, SOL and, since 2026-09-30,
-XRP and DOGE, live from Coinbase), stocks (SPY), options (SPY same-day, trend days) and, since 2026-09-29, scalps (SPY same-day,
+2026-09-25: six bots run six paper books on free public prices -- crypto (BTC, ETH, SOL and, since 2026-09-30,
+XRP and DOGE, live from Coinbase), runners (since 2026-09-30: coins popping right now, scanned on Coinbase every
+3 minutes, at Robinhood's 0.95% fee), stocks (SPY), options (SPY same-day, trend days) and, since 2026-09-29, scalps (SPY same-day,
 held minutes) and dips (Evan's own morning dip under VWAP, as rules), the last four from Cboe about 15
 minutes late -- and stream
 them to a live trading floor at `/`. The code is `src/desk/`; README's first section explains it.
@@ -23,7 +24,7 @@ file in `public/vendor/` on 2026-09-19 at Evan's request; see `public/vendor/REA
 package and nothing installs it. Do not add others without asking.)
 
 Read `README.md` before changing anything. Its first section is the stocks, crypto and options desk:
-the five books, the lab result behind each rule, the fill model and the 15-minute delay. The rest is
+the six books, the lab result behind each rule, the fill model and the 15-minute delay. The rest is
 the prediction-market desk's record, including the fee math and why the venue gap was not the edge.
 `ops/DEPLOY.md` covers cloud deployment (Fly app `hexagon-desk`, which runs both desks). Merging to `main` auto-deploys
 to Fly once tests pass (paper only; see ops/DEPLOY.md → Auto-deploy).
@@ -78,7 +79,7 @@ npm run reset                                 # wipe the prediction-market paper
 
 ```
                   THE STOCKS, CRYPTO AND OPTIONS DESK (the main scope since 2026-09-25; paper only, no broker)
-src/desk/engine.js  the desk: five books' ledgers, the six bots' jobs (HOLT prices, ILSA volatility, TESS risk,
+src/desk/engine.js  the desk: six books' ledgers, the six bots' jobs (HOLT prices, ILSA volatility, TESS risk,
                   RIGO marks and option exits, BRAM signals, KETT fills; PRED is the prediction-market desk,
                   trading in paper beside it), data/desk/state.json + journal-YYYY-MM-DD.jsonl, the page's snapshot
 src/desk/books.js   the rules, pure: volatility targeting (crypto 40%/30 days, SPY 15%/20 sessions, 10-point band)
@@ -91,8 +92,11 @@ src/desk/books.js   the rules, pure: volatility targeting (crypto 40%/30 days, S
                   DIP (2026-09-29), on ONE-MINUTE bars (he trades a 45-second chart; Cboe's finest is one
                   minute): Evan's own hand-traded pattern as rules: a turn up off a morning low
                   0.25 ATR under the open, under VWAP, 10:05-noon; two calls 2-3 pts out; one sells on the VWAP
-                  reclaim, the runner on a fade to its SPY price / half its gain back once doubled / 3:15
-src/desk/feeds.js   Coinbase (live) and Cboe (15 min late) parsers + fetches; Cboe's one-minute bars (options, dips), five-minute
+                  reclaim, the runner on a fade to its SPY price / half its gain back once doubled / 3:15;
+                  RUNNER (2026-09-30, Evan's QNT): every 3 min, a coin Robinhood sells (RUNNER_COINS, a dated list)
+                  up 8%+ in 24h, $2M+ traded, within 3% of its high and still climbing; 4 at once, a quarter each;
+                  out 10% off its best or 48h not above cost; a coin sold waits 12h
+src/desk/feeds.js   Coinbase (live; /products/stats is every coin's 24h in one call) and Cboe (15 min late) parsers + fetches; Cboe's one-minute bars (options, dips), five-minute
                   bars (scalps), VWAP, ATR14
 src/desk/broker.js  paper fills: crypto walks Coinbase's book + 0.40%, SPY at the touch, options at the touch + $0.03
 src/desk/clock.js   NYSE sessions, holidays and 1 PM closes through 2027 (TESS warns when the list runs out)
