@@ -178,20 +178,29 @@ function readBody(req) {
 // arrives BEFORE the login check. One malformed request from anywhere on the internet was enough
 // to stop the desk and lose whatever the ledger had not saved. A throw is now a 500 (or a 400 for
 // the URL) with the stack in the log, and a rejected branch is caught the same way.
+const guard = require('./src/loginguard').loginGuard();
 function handle(req, res) {
   let url;
   try { url = new URL(req.url, 'http://localhost'); }
   catch { res.writeHead(400); return res.end('bad request'); }
   const p = url.pathname;
   if (cfg.dashPass && p === '/login') {
+    // Fly puts the real address in Fly-Client-IP; elsewhere it is the socket's
+    const who = String(req.headers['fly-client-ip'] || req.socket.remoteAddress || '');
     if (req.method === 'POST') {
+      if (guard.blocked(who)) {
+        res.writeHead(429, { 'content-type': 'text/plain; charset=utf-8', 'retry-after': String(guard.retryAfterSec(who)) });
+        return res.end('too many wrong passwords from this address; try again later');
+      }
       return readBody(req).then((body) => {
         const f = new URLSearchParams(body);
         if (timingEq(f.get('u') || '', cfg.dashUser) && timingEq(f.get('p') || '', cfg.dashPass)) {
+          guard.ok(who);
           const secure = (req.headers['x-forwarded-proto'] || '').includes('https') ? '; Secure' : '';
           res.writeHead(302, { location: '/', 'set-cookie': `${COOKIE}=${sessionToken()}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000${secure}` });
           return res.end();
         }
+        guard.fail(who);
         res.writeHead(401, { 'content-type': 'text/html; charset=utf-8' });
         res.end(LOGIN_PAGE(true));
       });
@@ -367,7 +376,7 @@ function handle(req, res) {
     res.writeHead(404); return res.end('not found');
   }
   res.writeHead(200, { 'content-type': MIME[path.extname(file)] || 'application/octet-stream', 'cache-control': 'no-store' });
-  fs.createReadStream(file).pipe(res);
+  fs.createReadStream(file).on('error', () => res.destroy()).pipe(res);   // an unreadable file must not be an uncaught exception
 }
 
 function failed(res, e) {

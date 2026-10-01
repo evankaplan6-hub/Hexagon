@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 
 const SUITES = [
+  ['loginguard', 'the login throttle: ten wrong passwords in ten minutes, per address, forgiven by time and a right password'],
   ['decide', 'the taker decision core: ranking, vetoes, sizing rails, exits'],
   ['probe', 'the thin-market probe: threshold, in-play exclusion, cooldown, darkness'],
   ['maker', 'the maker core: quoting, queue and fills, and the realised-P&L invariant'],
