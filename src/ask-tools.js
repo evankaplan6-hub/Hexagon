@@ -329,7 +329,7 @@ function markets(E, input, now) {
     matchedPairs: E.pairs.length, inPlay: E.pairs.filter((p) => p.inPlay).length, rejectedMatches: E.rejected.length,
     watchOnlyUntilRulesChecked: E.pairs.filter((p) => p.watchOnly).length,
     anyMarketScanner: E.any ? E.any.snapshot() : { enabled: false },
-    tradeSignalsThisCycle: (E.signals || []).slice(0, 5).map((s) => ({ market: clip(s.pair.label, 80), type: s.type === 'arb' ? 'locked arb' : 'convergence', netEdge: cents(s.edge) })),
+    tradeSignalsThisCycle: (E.signals || []).slice(0, 5).map((s) => ({ market: clip(s.pair.label, 80), type: s.type === 'arb' ? 'locked arb' : s.type === 'snipe' ? 'settlement snipe' : s.type === 'bet' ? 'game bet' : 'convergence', netEdge: s.edge == null ? null : cents(s.edge) })),
     whyPairsAreNotTrading: whyNot,
     rules: {
       minGap: `${cents(cfg.minGap)} (venues must disagree by this much to be interesting)`,

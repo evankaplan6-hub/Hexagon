@@ -70,6 +70,7 @@ group('arbs outrank convergence in the ranked list regardless of edge');
 {
   const arb = { type: 'arb', edge: 0.001 }, conv = { type: 'converge', edge: 0.900 };
   ok('a 0.1c arb sorts above a 90c convergence', [conv, arb].sort(d.rankSignals)[0] === arb);
+  ok('a snipe sorts first and a game bet (no edge) last, with no NaN', [{ type: 'bet', edge: null }, { type: 'snipe', edge: 0.05 }, conv, arb].sort(d.rankSignals).map((x) => x.type).join() === 'snipe,arb,converge,bet');
 }
 
 group('malformed books are rejected by name rather than priced');
