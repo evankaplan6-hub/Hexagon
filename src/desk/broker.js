@@ -24,7 +24,8 @@ const MULT = { crypto: 1, stock: 1, option: 100 };
 // the smallest amount each can be bought in: a millionth of a coin, a thousandth of a share (the
 // fractional shares every broker Evan uses sells), whole option contracts
 const STEP = { crypto: 1e-6, stock: 1e-3, option: 1 };
-const floorTo = (x, step) => Math.floor(x / step + 1e-9) * step;
+// the nudge grows with the ratio: a float's error does, and a fixed 1e-9 floored 9,899,431.2 in tenths to .1
+const floorTo = (x, step) => { const r = x / step; return Math.floor(r + Math.max(1e-9, Math.abs(r) * 1e-12)) * step; };
 
 // Walk levels (best first) for `qty`; { filled, cost } with cost the sum of price x size taken.
 function walk(levels, qty) {

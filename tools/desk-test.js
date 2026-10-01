@@ -158,6 +158,7 @@ const r6 = (x) => Math.round(x * 1e6) / 1e6;
   // DOGE is sold in tenths of a coin: a fill in millionths is one no exchange gives
   const dogeBook = { bids: [{ price: 0.0944, size: 1e6 }], asks: [{ price: 0.0945, size: 1e6 }] };
   eq('a coin with a coarser step fills in that step', broker.fill({ kind: 'crypto', side: 'buy', qty: 12345.678, step: 0.1 }, { bid: 0.0944, ask: 0.0945, book: dogeBook }, fees).qty, 12345.6);
+  eq('a quantity that is many steps is floored to the right step (not one low)', broker.fill({ kind: 'crypto', side: 'buy', qty: 9899431.2, step: 0.1 }, { bid: 0.0944, ask: 0.0945, book: { bids: [], asks: [{ price: 0.0945, size: 1e9 }] } }, fees).qty, 9899431.2);
   const dogeCap = broker.fill({ kind: 'crypto', side: 'buy', qty: 1e5, cash: 1000, step: 0.1 }, { bid: 0.0944, ask: 0.0945, book: dogeBook }, fees);
   ok('and a buy capped by its cash still does', -dogeCap.cash <= 1000 && Math.abs(dogeCap.qty * 10 - Math.round(dogeCap.qty * 10)) < 1e-6 && -dogeCap.cash > 999, dogeCap);
   const st = broker.fill({ kind: 'stock', side: 'buy', qty: 3.3336 }, { bid: 700, ask: 700.02 }, fees);
@@ -818,6 +819,22 @@ async function engineTests() {
     t += 180000; W.stats['NEAR-USD'].last = 5.605;
     await rd.runnerBook();
     ok('halted, a runner is not bought', !rb.lots.some((l) => l.sym === 'NEAR-USD') && rd.state.log.some((l) => /^runners: NEAR is running.*not buying: down 6% today/.test(l.text)), rb.lots.map((l) => l.sym));
+    // Coinbase's product list failing (only buying needs it) or a held coin dropping out of the figures must
+    // not stop the book from selling what it holds
+    rd.halt = null; rb.lots.length = 0; rb.cool = {};
+    rb.lots.push({ id: 90, trade: 'R90', sym: 'ENA-USD', qty: 1000, cost: 230, entry: 0.23, peak: 0.2305, mark: 0.2305, openedAt: t });
+    rd.mkt.runners.steps = null; rd.mkt.runners.stepsAt = 0; rd.mkt.runners.failAt = 0;
+    const realProducts = feeds.coinProducts;
+    feeds.coinProducts = async () => { throw new Error('503'); };
+    t += 180000; W.stats['ENA-USD'].last = 0.2; setBook('ENA-USD', 0.2);
+    await rd.runnerBook();
+    eq('with the product list down, a coin 10% off its best is still sold', rb.lots.length, 0);
+    feeds.coinProducts = realProducts;
+    rb.lots.push({ id: 91, trade: 'R91', sym: 'ENA-USD', qty: 1000, cost: 230, entry: 0.23, peak: 0.2305, mark: 0.2305, openedAt: t - 49 * 3600000 });
+    delete W.stats['ENA-USD']; setBook('ENA-USD', 0.2);
+    t += 180000;
+    await rd.runnerBook();
+    eq('a coin gone from the 24-hour figures is sold once it has been held 48 hours', rb.lots.length, 0);
     W.stats = saved.stats; W.books = saved.books; delete W.products['ENA-USD'];
     fs.rmSync(rdir, { recursive: true, force: true });
   }
