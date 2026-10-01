@@ -886,7 +886,7 @@ group('the recorder: any-market pairs are written on change and on a heartbeat')
   ok('a quote going stale is a change, and says so', st && st.stale === true && !st.hb, st);
 }
 
-group("the recorder: the snipe's watch stamps Polymarket's close on a finished game's rows");
+group("the recorder: the snipe's watch stamps Polymarket's proposal and close on a finished game's rows");
 {
   const rcfg = { record: true, dataDir: '/fake/data', tapeMinFreeMb: 0 };
   const d = fakeDisk({}, 10000);
@@ -895,13 +895,13 @@ group("the recorder: the snipe's watch stamps Polymarket's close on a finished g
   const E = { ...fakeE(), cycle: 1, pairs: [
     { id: 'done', label: 'A v B', kind: 'game', inPlay: true, pmGone: true, q },
     { id: 'live', label: 'C v D', kind: 'game', inPlay: true, q: { ...q, pmBid: 0.6, pmAsk: 0.62, t: NOW, pmAt: NOW, ksAt: NOW } },
-  ], pmCloses: new Map([['done', { askedAt: NOW - 10000, haltedAt: NOW - 400000, closedAt: NOW - 60000 }]]) };
+  ], pmCloses: new Map([['done', { askedAt: NOW - 10000, proposedAt: NOW - 400000, closedAt: NOW - 60000 }]]) };
   rec(E);
   const rows = d.appended.flatMap((a) => a.text.trim().split('\n')).map((l) => JSON.parse(l));
   const done = rows.find((r) => r.pair === 'done'), live = rows.find((r) => r.pair === 'live');
-  ok('a kept row carries when Polymarket stopped taking orders and when it closed', done && done.pmGone === true && done.pmHaltedAt === new Date(NOW - 400000).toISOString() && done.pmClosedAt === new Date(NOW - 60000).toISOString(), done);
+  ok("a kept row carries when Polymarket's resolver proposed the result and when it closed", done && done.pmGone === true && done.pmProposedAt === new Date(NOW - 400000).toISOString() && done.pmClosedAt === new Date(NOW - 60000).toISOString() && !('pmHaltedAt' in done), done);
   ok("...and Kalshi's own quote time, since qt is the frozen Polymarket side's", done && done.ksQt === new Date(NOW - 2000).toISOString() && done.qt === new Date(NOW - 600000).toISOString(), done);
-  ok('a game still being played carries none of them', live && !('pmClosedAt' in live) && !('pmHaltedAt' in live) && !('ksQt' in live), live);
+  ok('a game still being played carries none of them', live && !('pmClosedAt' in live) && !('pmProposedAt' in live) && !('ksQt' in live), live);
 }
 
 group('config: the brake is on by default only on a Fly machine');

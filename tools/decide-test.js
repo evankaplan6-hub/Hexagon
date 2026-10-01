@@ -650,6 +650,22 @@ group("the snipe's watch: SNIPE=0 still keeps finished game pairs until after Po
   ok('a 99/100 book reads YES settled', d.pmReadsSettled({ pmBid: 0.99, pmAsk: 1 }, cfg) === 'yes');
   ok('a 0/0.01 book reads NO settled', d.pmReadsSettled({ pmBid: 0, pmAsk: 0.01 }, cfg) === 'no');
   ok('an empty 0/1 book and a live 81/83 read nothing', d.pmReadsSettled({ pmBid: 0, pmAsk: 1 }, cfg) === null && d.pmReadsSettled({ pmBid: 0.81, pmAsk: 0.83 }, cfg) === null);
+  // MLB Phillies v Braves, 2026-09-29: Polymarket read 0/0.01 at 20:41:36Z, Kalshi's quote stopped when it
+  // closed its market at 20:44:38Z, and Polymarket closed only at 21:48:21Z. The pair goes five minutes
+  // after Kalshi's quote stops, however long the watch would keep it otherwise.
+  const phi = { ...gone, id: 'pmP:0|KXMLBGAME-26SEP291400PHIATL-PHI', q: { ...gone.q, pmBid: 0, pmAsk: 0.01, ksBid: 0, ksAsk: 0.01 } };
+  const phiAt = (ksAgo) => new Map([[phi.id, { ...phi, pmGoneAt: now - 200000, q: { ...phi.q, ksAt: now - ksAgo } }]]);
+  const long = { ...cfg, snipeWatchSec: 7200 };
+  ok("Phillies: Kalshi's quote stopped 4 minutes ago, no close seen: still kept", d.keepClosedGamePairs(phiAt(240000), [], long, now).length === 1);
+  ok('...5 minutes and a second: let go, though SNIPE_WATCH_SEC has two hours to run', d.keepClosedGamePairs(phiAt(301000), [], long, now).length === 0);
+  ok('the default SNIPE_WATCH_SEC reaches the latest close seen (111 minutes after the reading)', require('../src/config').snipeWatchSec >= 111 * 60);
+}
+
+group("Polymarket's record: when the result is in (2026-09-30)");
+{
+  ok('closed or resolved: closed', d.pmRecordSays({ closed: true }) === 'closed' && d.pmRecordSays({ resolved: true, proposed: true }) === 'closed');
+  ok("the resolver has proposed it, the challenge window still open: proposed", d.pmRecordSays({ closed: false, resolved: false, proposed: true }) === 'proposed');
+  ok('nothing yet, or no record: null', d.pmRecordSays({ closed: false, resolved: false, proposed: false, accepting: false }) === null && d.pmRecordSays(null) === null);
 }
 
 group('every game: one bet a game, on the favourite, at the cheaper venue');

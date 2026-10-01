@@ -92,10 +92,19 @@ async function fetchUniverse(limit = 300) {
   return out;
 }
 
+// One market's record. Three stages matter for a finished game (2026-09-30): `proposed`, when its
+// resolver has put forward the result (UMA's umaResolutionStatus, about 20 seconds after an MLB final),
+// then `closed`/`resolved` once the challenge window is over, a median half an hour later. `closedTime`
+// is Polymarket's own time for that (ms), "2026-09-29 21:48:21+00" on the record; it equals umaEndDate.
+// acceptingOrders stays true until the close, so it says nothing earlier.
 async function fetchMarket(id) {
   const raw = await http.getJSON(`${GAMMA}/markets/${id}`);
   const m = normalize(raw);
-  return m && { ...m, closed: !!raw.closed, resolved: raw.umaResolutionStatus === 'resolved' };
+  const closedTime = Date.parse(raw.closedTime || raw.umaEndDate || '');
+  return m && {
+    ...m, closed: !!raw.closed, resolved: raw.umaResolutionStatus === 'resolved', proposed: raw.umaResolutionStatus === 'proposed',
+    closedTime: Number.isFinite(closedTime) ? closedTime : null,
+  };
 }
 
 // Order book for one outcome token. Returns bids (best first) and asks (best first).

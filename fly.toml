@@ -101,9 +101,10 @@ primary_region = "iad"          # Ashburn, Virginia — close to the exchange, a
   # MAKER_QUOTE latches nothing, so no /api/resume is needed either way.
   #   ARBS           locked arbs (19 groups closed to 09-25, -$222; five mismatched pairs lost $244)
   #   MAKER_QUOTE    the maker's quotes (-$888 on 98,785 contracts; fills 0.6-1.2c worse at 30 min)
-  #   SNIPE          the settlement snipe, which had never fired; it buys only once Polymarket's
-  #                  record says closed and Kalshi still offers the winner 2c+ under par, net of fees
-  #                  (node tools/settle-lag.js --day 2026-09-27 scores the watch-only Sunday)
+  #   SNIPE          the settlement snipe, which has never fired; since 2026-09-30 it buys once
+  #                  Polymarket's resolver has proposed the result and Kalshi still offers the winner
+  #                  2c+ under par, net of fees (until then it waited for Polymarket's close, which
+  #                  comes half an hour after Kalshi has closed; node tools/settle-lag.js --day <date>)
   ARBS = "1"
   MAKER_QUOTE = "1"
   SNIPE = "1"

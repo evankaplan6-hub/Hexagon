@@ -601,6 +601,44 @@ was at the touch. The snipe buys only after the close, so the close is its test.
 cannot reach one: `snipeSignal` gives up `SNIPE_HOLD_SEC` after Polymarket's last quote, half an hour
 before a typical close, so turning `SNIPE` back on would take more than the switch.
 
+**Kalshi closes first, every time (2026-09-30).** Three days of the watch (09-27 to 09-29) stamped
+no row, and `tools/settle-lag.js` said "no row on this tape says when Polymarket stopped or closed a
+game" each day. The watch was not broken. What it waited for never came while the pair was on the
+tape. Asked afterwards, the venues' own records say why. In all 105 games that read settled, Kalshi
+closed its market a median 4.4 minutes after Polymarket's 99c reading (`close_time`, the market
+"closes and expires after a winner is declared") and paid it out about two minutes later. Polymarket's
+record said closed a median 32 minutes after the reading (11 to 111), never sooner than 9.7 minutes
+after Kalshi had paid out. Kalshi's quote stops at its close, HOLT lets the pair go `SNIPE_HOLD_SEC`
+later, and there is nothing left to buy at Polymarket's close. Phillies v Braves on 09-29: read
+20:41:36Z, Kalshi closed 20:44:38Z, paid out 20:46:46Z, Polymarket closed 21:48:21Z. (Its tape
+also stops a few minutes early, at 20:45:23Z, because a deploy restarted the box at 20:45:32Z.) So a
+snipe that buys only after Polymarket's close could never fire. "Not accepting orders" was no earlier
+signal either: Polymarket keeps accepting orders until the close. What does come in time is
+Polymarket's resolver *proposing* the result (`umaResolutionStatus: proposed`). On White Sox v Astros
+(09-30) it came about 20 seconds after the 99c reading, two minutes before Kalshi closed at 00:19:44Z,
+and Polymarket was still accepting orders when Kalshi paid out at 00:23:46Z. A proposal is a result,
+not a price: Panthers v Browns read 0/0.01 ten minutes before Kalshi closed it, and Cardinals v Brewers
+46 minutes before, the NC State mistake waiting to happen again. So, since 2026-09-30:
+- KETT buys a snipe once Polymarket's record says the resolver has proposed the winner, or closed it
+  (`decide.pmRecordSays`), and not when it says the other side. Every other gate stands: Kalshi already bidding
+  `SNIPE_MIN_KS_PRICE`, a fresh Kalshi quote, `SNIPE_MIN_EDGE` after the fee on the live book. A
+  proposal can still be disputed. On paper that is a loss to learn from.
+- The watch notes the proposal (`pmProposedAt` on the rows, in place of `pmHaltedAt`). It follows
+  each finished game after HOLT lets it go, every `SNIPE_WATCH_LATE_ASK_SEC` (120s), until
+  Polymarket closes it. Then it reads Kalshi's record once and journals one `SNIPE_WATCH` line with
+  both venues' own times. BRAM says on the floor which venue closed first. The open watches are kept
+  in `state.json`, so a deploy no longer cuts one off.
+- `tools/settle-lag.js` reports from the proposal on what Kalshi offered the winner, and which venue
+  closed each game first, from the journal lines (the day's and the next day's). `--venues` asks the
+  two venues' records for games with no line: `node tools/settle-lag.js --day 2026-09-29 --venues`
+  says "Kalshi closed first in 22 of 22".
+- `SNIPE_WATCH_SEC` is two hours, the latest close seen. It matters only for a game Kalshi leaves
+  open, which has not happened yet. The rule that lets a pair go five minutes after Kalshi's quote
+  stops is unchanged: that is the right moment.
+
+The MLB Division Series (from 2026-10-03) is the next test: `node tools/settle-lag.js --day <date>`
+the morning after.
+
 ## Every game (2026-09-30)
 
 Evan, on the MLB Wild Card's second night: "every game should be bet". So each game in `BET_SERIES`

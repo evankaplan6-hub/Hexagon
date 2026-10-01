@@ -31,6 +31,7 @@ function normalize(m) {
     canCloseEarly: !!m.can_close_early,
     status: m.status,
     result: m.result || '',
+    settledAt: m.settlement_ts || null,   // when Kalshi paid it out; a game is a couple of minutes after its close
     settlementValue: num(m.settlement_value_dollars),
     marketType: m.market_type || null,
     url: `https://kalshi.com/markets/${String(m.ticker || '').split('-')[0].toLowerCase()}`,

@@ -603,9 +603,14 @@ function arbEdgeLive(signal, books, cfg) {
 // NC State v Vanderbilt read 0.99/1 for 2m15s from 20:13Z with Kalshi at 94/96, then traded back to
 // 86c and 4c; NC State lost (Kalshi finalized "no"), and this signal would have bought 100 at 96c.
 // Temple did the same that day. So this signal only says "look": KETT buys only once Polymarket's own
-// market record says closed or resolved (agents.js). Every snipe edge measured so far was seen while
-// Polymarket was still open, so the edge after a real close has to be measured again; the first
-// Sunday with the check (09-27) may show little or none.
+// market record says the result is in (agents.js, pmRecordSays).
+//
+// Which part of the record, changed 2026-09-30. Until then it had to say closed or resolved, and that
+// can never happen while Kalshi trades: on 105 finished games (09-27 to 09-29) Kalshi closed its own
+// market a median 4.4 minutes after the 99c reading and paid it out two minutes later, while
+// Polymarket's record said closed a median 32 minutes after it, never sooner than 9.7 minutes after
+// Kalshi had paid out. What does come in time is Polymarket's resolver proposing the result: on
+// White Sox v Astros (09-30) about 20 seconds after the 99c reading, two minutes before Kalshi closed.
 function snipeEdge(px, ref, cfg) { return 1 - px - ks.feePerContract(px, cfg.ksFeeRate, ref); }
 function snipeSignal(pair, cfg, now) {
   if (!cfg.snipe || !pair || pair.kind !== 'game' || !pair.inPlay || !pair.q) return null;
@@ -634,6 +639,11 @@ function snipeSignal(pair, cfg, now) {
 // after Polymarket's market record said closed (`closes`, pair id -> { closedAt }, from
 // agents.watchCloses), or snipeWatchSec after the listing drop while no close has been seen, and
 // never once Kalshi's side has gone snipeHoldSec without repricing (Kalshi closed it too).
+//
+// That last rule is what lets them go, every time (2026-09-30): Kalshi closes a finished game a median
+// 4.4 minutes after Polymarket's 99c reading, and its quote stops there. Polymarket closes half an hour
+// later, so no kept row has ever carried a close; the watch now follows the game past this
+// (agents.watchCloses) and journals both venues' close times instead.
 function keepClosedGamePairs(prev, pairs, cfg, now, closes = null) {
   if (!cfg.snipe && !cfg.snipeWatch) return [];
   const have = new Set(pairs.map((p) => p.id));
@@ -652,6 +662,14 @@ function keepClosedGamePairs(prev, pairs, cfg, now, closes = null) {
     kept.push({ ...p, pmGone: true, pmGoneAt: goneAt });
   }
   return kept;
+}
+// What Polymarket's market record (pm.fetchMarket) says about a finished game: 'closed' (closed or
+// resolved), 'proposed' (its resolver has put the result forward, the challenge window still open), or
+// null (nothing yet, or no record). Either answer is the result being in, not a price reading.
+function pmRecordSays(m) {
+  if (!m) return null;
+  if (m.closed || m.resolved) return 'closed';
+  return m.proposed ? 'proposed' : null;
 }
 // Polymarket's book reads settled: 99c or better bid for the winner with nothing offered under par,
 // or the mirror for NO. A reason to ask whether the market has closed, never proof (see snipeSignal).
@@ -704,4 +722,4 @@ function betPick(label, side) {
   return side === 'yes' ? yes : yes === a ? b : yes === b ? a : `not ${yes}`;
 }
 
-module.exports = { betSignal, betPrices, betPick, fairValue, quoteFault, snipeEdge, snipeSignal, keepClosedGamePairs, pmReadsSettled, convEdge, pairSignals, scan, liveWindow, exitIntent, gainLockIntent, arbUnwind, arbUnwindLive, arbReturn, arbEdgeLive, riskState, biasFor, standingGap, gapUnseen, bookFull, persistFilter, sizePlan, rankSignals, pmRate };
+module.exports = { betSignal, betPrices, betPick, fairValue, quoteFault, snipeEdge, snipeSignal, keepClosedGamePairs, pmReadsSettled, pmRecordSays, convEdge, pairSignals, scan, liveWindow, exitIntent, gainLockIntent, arbUnwind, arbUnwindLive, arbReturn, arbEdgeLive, riskState, biasFor, standingGap, gapUnseen, bookFull, persistFilter, sizePlan, rankSignals, pmRate };
