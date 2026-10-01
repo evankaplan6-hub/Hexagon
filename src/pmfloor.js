@@ -225,7 +225,7 @@ function pmFloor(engine, cfg, now = Date.now()) {
   const pnl = r2((takerEq - s.initial) + makerPnl);
   const initial = r2(s.initial + (Number.isFinite(M.initial) ? M.initial : 0));
   // Trading again in paper since 2026-09-27 (any of ARBS, MAKER_QUOTE, SNIPE on); winding down only with all off
-  const trading = cfg.arbsEnabled !== false || cfg.makerQuoting !== false || !!cfg.snipe;
+  const trading = cfg.arbsEnabled !== false || cfg.makerQuoting !== false || !!cfg.snipe || !!cfg.bets;
   const nextSettle = s.positions.map((p) => p.settlesAt).filter((t) => Number.isFinite(t) && t > now).sort((a, b) => a - b)[0] || null;
   const openTxt = `${groups.length} arb${groups.length === 1 ? '' : 's'}, ${Number(M.inv || 0).toLocaleString()} held`;
   return {

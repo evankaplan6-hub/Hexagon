@@ -532,6 +532,7 @@ class Engine {
     const last = this.resolutionChecks.get(pos.id) || 0;
     if (Date.now() - last < 60000) return null;
     this.resolutionChecks.set(pos.id, Date.now());
+    if (this.resolutionChecks.size > 500) for (const [id, at] of this.resolutionChecks) if (Date.now() - at > 3600000) this.resolutionChecks.delete(id);
     if (pos.venue === 'KS') {
       const m = await ks.fetchMarket(pos.ref);
       const yesPx = ksSettlement(m);
