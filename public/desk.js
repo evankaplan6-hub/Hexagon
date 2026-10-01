@@ -3,7 +3,7 @@
  * A wall of boards, one screen each: the headline (every book against simply holding what it holds),
  * the desk's own state, one card per book with everything the book holds and the markets it trades,
  * the P&L chart, what the bots are doing, and (since 2026-09-29) the prediction-market desk that runs in
- * the same process, its board and its four books drawn the same way, its bots in the same list. Until 2026-09-25 the boards were painted into a pixel
+ * the same process, its board and its five books drawn the same way, its bots in the same list. Until 2026-09-25 the boards were painted into a pixel
  * room with the bots at their desks and sized by the room's zoom, so most of their words were under
  * 12px; the bots and the room went at Evan's asking, and the boards are laid out for reading now.
  * The bots are still the desk's workers: the activity list says which of them did what.
@@ -455,7 +455,7 @@
     if (S) renderBooks();
   });
 
-  // ------------------------------------------------------------ the prediction-market desk: its board and four books
+  // ------------------------------------------------------------ the prediction-market desk: its board and five books
   // The desk Hexagon began as, pricing the same outcomes on Polymarket and Kalshi, trades in paper in the
   // same process. Until 2026-09-29 it was a line on the desk board and a link to its own page at /pm; now
   // its books are cards like the six above (src/pmfloor.js builds what the frame carries as `legacy`),
@@ -640,7 +640,7 @@
       const k = dayKey(r.t), head = k === day ? '' : `<li class="day" data-k="day|${k}">${esc(dayName(r.t, td))}</li>`;
       day = k;
       const amt = r.pnl != null ? `<span class="amt ${tone(r.pnl)}">${signed(r.pnl)}</span>` : '<span class="amt"></span>';
-      return `${head}<li class="lv-${r.level}" data-k="${esc(r.key)}"><time datetime="${new Date(r.t).toISOString()}">${esc(ET_HM.format(new Date(r.t)))}</time><span class="who">${esc(r.who)}</span>` +
+      return `${head}<li class="lv-${r.level}" data-k="${esc(r.key)}"><time${Number.isFinite(r.t) ? ` datetime="${new Date(r.t).toISOString()}"` : ''}>${esc(ET_HM.format(new Date(r.t)))}</time><span class="who">${esc(r.who)}</span>` +
         `<span class="what">${esc(r.text)}${r.sub ? `<small>${esc(r.sub)}</small>` : ''}</span>${amt}</li>`;
     }).join('') + (phone.matches && kept.length > 5 ? `<li class="more" data-k="more"><button type="button" data-more="1">${feedAll ? 'Show the latest five' : `Show ${kept.length - 5} earlier`}</button></li>` : '')
       || `<li class="empty">${rows.length ? 'Nothing of those kinds yet.' : 'Waiting for the first desk round.'}</li>`);

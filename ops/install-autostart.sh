@@ -15,7 +15,8 @@ set -euo pipefail
 HEXDIR="$(cd "$(dirname "$0")/.." && pwd)"
 DEST="$HOME/Library/LaunchAgents/com.hexagon.desk.plist"
 
-mode=$(grep -E '^MODE=' "$HEXDIR/.env" 2>/dev/null | head -1 | cut -d= -f2 || true)
+# read the way src/env.js does: `export MODE=live`, `MODE = live`, `MODE="live"` all count (the last line wins)
+mode=$(sed -nE 's/^[[:space:]]*(export[[:space:]]+)?MODE[[:space:]]*=[[:space:]]*//p' "$HEXDIR/.env" 2>/dev/null | tail -1 | sed -E "s/[[:space:]]+#.*$//; s/^[\"']//; s/[\"'[:space:]]+$//" | tr 'A-Z' 'a-z' || true)
 if [ "${mode:-paper}" = "live" ]; then
   echo "refusing: MODE=live in .env." >&2
   echo "this installs an always-on job and is for paper measurement only." >&2

@@ -13,9 +13,9 @@ One file, kept here on purpose so the dashboard needs no network fetch and no `n
 | Added | 2026-09-19 |
 
 **Attribution.** TradingView's terms ask for a visible credit. Every chart draws their logo, linked to
-tradingview.com (`attributionLogo: true` in `public/app.js`). The page's footer is hidden by CSS, so it
+tradingview.com (`attributionLogo: true` in `public/app.js` and `public/desk.js`). The page's footer is hidden by CSS, so it
 cannot carry the credit instead: keep the logo on.
 
 **Do not edit the file.** To update it, download the new version from the same URL pattern, check its
 hash against `https://data.jsdelivr.com/v1/packages/npm/lightweight-charts@VERSION?structure=flat`, replace
-the file, and update the table above. `public/app.js` (search for `LightweightCharts`) is the only user.
+the file, and update the table above. `public/app.js` and `public/desk.js` (search for `LightweightCharts`) are the users.

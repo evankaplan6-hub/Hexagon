@@ -107,7 +107,7 @@ src/desk/broker.js  paper fills: crypto walks Coinbase's book + 0.40%, SPY at th
 src/desk/clock.js   NYSE sessions, holidays and 1 PM closes through 2027 (TESS warns when the list runs out)
 public/desk.*     the floor at /: a wall of boards (headline vs holding, the desk, one card per book with the markets it
                   trades, the P&L chart, the bots' activity, and since 2026-09-29 the prediction-market desk's board and
-                  four books, fed by src/pmfloor.js; Evan: "Merge the desk to the new screen. It's data, not its look"), laid out for reading, 12px and up; no pixel room or bots drawn since 2026-09-25 (Evan's
+                  five books (arbs, maker, snipe, convergence, the game bets), fed by src/pmfloor.js; Evan: "Merge the desk to the new screen. It's data, not its look"), laid out for reading, 12px and up; no pixel room or bots drawn since 2026-09-25 (Evan's
                   call). desk.css is its own sheet on public/tokens.css, colours named by job; tools/tokens-test.js holds
                   every text colour to 4.5:1. desk.js patches boards in place (morph) so focus survives the 2s stream.
                   Since 2026-09-29 drawn as Apple draws its apps (Evan: "making the website iOS and macOS and Apple beautiful"):

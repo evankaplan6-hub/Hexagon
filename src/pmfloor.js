@@ -1,7 +1,7 @@
 'use strict';
 // The prediction-market desk on the floor at / (2026-09-29, Evan: "Merge the desk to the new screen.
 // It's data, not its look."). Until then the floor gave this desk one line and a link to its own page
-// at /pm. Now its four books are cards on the same wall as the stocks, crypto and options books, drawn
+// at /pm. Now its five books are cards on the same wall as the stocks, crypto and options books, drawn
 // the floor's way, and what its bots do is in the same activity list.
 //
 // This builds what the floor is sent, from the engine's own ledger. Nothing here trades, and nothing is

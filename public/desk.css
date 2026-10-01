@@ -194,7 +194,7 @@ main.gone { opacity: .45; }
   transform: translateY(-2px) rotate(45deg); transition: transform .2s; }
 .bktog[aria-expanded="true"] i { transform: translateY(1px) rotate(-135deg); }
 
-/* ---- the prediction-market desk (2026-09-29): its board, then its four books, drawn as the books
+/* ---- the prediction-market desk (2026-09-29): its board, then its five books, drawn as the books
    above are. The arbs and the maker hold the most, so they are the widest; the snipe and convergence,
    which hold little or nothing, share the last column. ---------------------------------------- */
 .pm { grid-column: 1 / -1; display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
