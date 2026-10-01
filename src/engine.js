@@ -109,7 +109,13 @@ class Engine {
     this.rejected = [];
     this.signals = [];
     this.history = new Map(); // pairId -> [{t, pmMid, ksMid}]
-    this.pmCloses = new Map(); // pairId -> { askedAt, haltedAt, closedAt }: the snipe's watch (agents.watchCloses)
+    // pairId -> { since, readAt, proposedAt, closedAt, label, pmId, ksTicker, ... }: the snipe's watch
+    // (agents.watchCloses). Restored from the ledger, like the cooldowns below: a finished game is followed
+    // for up to half an hour or more until Polymarket closes it, and the box restarts on every deploy.
+    this.pmCloses = new Map(
+      Object.entries((this.state && this.state.pmCloses) || {})
+        .filter(([, w]) => w && Date.now() - agents.watchAge(w) < agents.WATCH_KEEP_MS),
+    );
     this.bias = new Map();
     this.agentStatus = Object.fromEntries(AGENTS.map((a) => [a.key, { lastActive: 0, runs: 0, note: '' }]));
     this.timers = {};
@@ -174,6 +180,12 @@ class Engine {
       // so the ledger cannot grow a bar per pair the desk has ever traded.
       this.state.cooldown = Object.fromEntries(
         [...this.cooldown].filter(([, at]) => Number.isFinite(at) && Date.now() - at < this.cfg.reentryCooldownMs),
+      );
+      // The snipe's open watches, the same way (agents.watchCloses forgets each after six hours). A
+      // lookup in flight when the box stops is simply asked again.
+      this.state.pmCloses = Object.fromEntries(
+        [...(this.pmCloses || [])].filter(([, w]) => w && Date.now() - agents.watchAge(w) < agents.WATCH_KEEP_MS)
+          .map(([id, w]) => [id, { ...w, busy: false }]),
       );
       fs.writeFileSync(tmp, JSON.stringify(this.state));
       fs.renameSync(tmp, this.file);
@@ -1041,8 +1053,8 @@ class Engine {
       // Full order books whenever a gap looks too good. Not awaited (2026-09-24): it never throws,
       // it trades nothing, and waiting on its two book fetches held KETT back on ~2,600 cycles a day.
       this.probe(this).catch(() => {});
-      // Has Polymarket closed the finished games? Not awaited either: it trades nothing, and its
-      // answers reach the tape and HOLT's kept pairs on the next cycle (agents.watchCloses).
+      // Has Polymarket's resolver proposed, or closed, the finished games? Not awaited either: it trades
+      // nothing, and its answers reach the tape and HOLT's kept pairs on the next cycle (agents.watchCloses).
       agents.watchCloses(this).catch(() => {});
       await agents.KETT(this);
       // the maker runs on its own cadence: requoting every cycle costs an API call per market and

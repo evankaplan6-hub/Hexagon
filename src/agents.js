@@ -393,38 +393,101 @@ function BRAM(E) {
 // Has Polymarket really closed this finished game? (2026-09-27) The snipe asks only on the rare cycle
 // it wants to buy, and with SNIPE=0 nothing asked at all, so the tape could not say what Kalshi offered
 // after the close: the one question the snipe was switched off waiting on. This asks Polymarket's
-// market record for each in-play game pair that reads settled (decide.pmReadsSettled) or that the
-// listing has dropped (pmGone), at most every SNIPE_WATCH_ASK_SEC, until the record says closed or
-// resolved. It notes when the record first said "not accepting orders" and when it first said closed:
-// HOLT keeps the pair SNIPE_HOLD_SEC past the close, and the tape stamps both times on its rows. It
-// buys nothing, and the engine does not wait on it: an answer lands on the next cycle's rows.
+// market record about each in-play game pair that reads settled (decide.pmReadsSettled) or that the
+// listing has dropped (pmGone), and the tape stamps what it hears on the pair's rows. It buys nothing,
+// and the engine does not wait on it: an answer lands on the next cycle's rows.
+//
+// What three days of it said (2026-09-30), and so what it does now. No row was ever stamped, because
+// the close it waited for always came after Kalshi's: on 105 finished games (09-27 to 09-29) Kalshi
+// closed its own market a median 4.4 minutes after the 99c reading and paid it out two minutes later,
+// HOLT let the pair go SNIPE_HOLD_SEC after Kalshi's quote stopped (decide.keepClosedGamePairs), and
+// Polymarket's record said closed a median 32 minutes after the reading. "Not accepting orders" comes
+// only with the close. So the watch:
+//   - notes when the record first says the resolver has PROPOSED the result (about 20 seconds after the
+//     final on White Sox v Astros, 09-30, two minutes before Kalshi closed). The tape stamps it on the
+//     rows (pmProposedAt): it is the moment the snipe buys at (KETT, decide.pmRecordSays);
+//   - follows the game after HOLT lets the pair go, every SNIPE_WATCH_LATE_ASK_SEC (every
+//     SNIPE_WATCH_ASK_SEC while HOLT still has it), until the record says closed, for six hours at most;
+//   - then reads Kalshi's record once and journals one SNIPE_WATCH line with both venues' own times
+//     (tools/settle-lag.js reads them), and BRAM says on the floor which venue closed first;
+//   - survives a restart: engine.save keeps the open watches (a deploy cut the 09-29 Phillies game off).
+const WATCH_KEEP_MS = 6 * 3600000;
+const watchAge = (w) => w.seenClosedAt || w.closedAt || w.since || w.askedAt || 0;
+const iso = (ms) => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
+const mins = (ms) => (ms >= 90000 ? `${Math.round(ms / 60000)}m` : `${Math.round(ms / 1000)}s`);
 async function watchCloses(E) {
   if (!E.cfg.snipeWatch) return;
   const now = Date.now();
   const closes = E.pmCloses || (E.pmCloses = new Map());
-  for (const [id, w] of closes) if (now - (w.closedAt || w.askedAt || 0) > 6 * 3600000) closes.delete(id);
-  const ask = E.pairs.filter((p) => {
-    if (p.kind !== 'game' || !p.inPlay || !p.q || !(p.pmGone || decide.pmReadsSettled(p.q, E.cfg))) return false;
-    const w = closes.get(p.id);
-    return !w || (!w.closedAt && !w.busy && now - w.askedAt >= E.cfg.snipeWatchAskSec * 1000);
-  });
-  await Promise.all(ask.map(async (p) => {
-    const w = { ...(closes.get(p.id) || {}), askedAt: now, busy: true };
-    closes.set(p.id, w);
-    const m = await pm.fetchMarket(p.pm.id).catch(() => null);
+  // forgotten six hours after the desk saw the close (Polymarket's own close time can be older), or after the watch began
+  for (const [id, w] of closes) if (now - watchAge(w) > WATCH_KEEP_MS) { closes.delete(id); E.dirty = true; }
+  const onFloor = new Map(E.pairs.map((p) => [p.id, p]));
+  // a finished game starts a watch: the pair's own details go with it, so it can be followed after HOLT lets go
+  for (const p of E.pairs) {
+    if (p.kind !== 'game' || !p.inPlay || !p.q) continue;
+    const reads = decide.pmReadsSettled(p.q, E.cfg);
+    if (!reads && !p.pmGone) continue;
+    let w = closes.get(p.id);
+    if (!w) {
+      w = { since: now, askedAt: 0, label: p.label, pmId: p.pm.id, tokenIndex: p.pm.tokenIndex || 0, ksTicker: p.ks.ticker };
+      closes.set(p.id, w); E.dirty = true;
+    }
+    if (reads && !w.readAt) { w.readAt = now; w.won = reads; E.dirty = true; }
+  }
+  const ask = [];
+  for (const [id, w] of closes) {
+    if (w.closedAt || w.busy) continue;
+    const p = onFloor.get(id);
+    // on the floor, only while it looks finished (a listing that drops a live game for a cycle starts a
+    // watch too); off it, only a game that did read settled or was proposed
+    const finished = p ? !!(p.pmGone || decide.pmReadsSettled(p.q, E.cfg)) : !!(w.readAt || w.proposedAt);
+    const every = (p ? E.cfg.snipeWatchAskSec : E.cfg.snipeWatchLateAskSec) * 1000;
+    if (finished && now - (w.askedAt || 0) >= every) ask.push([id, w, p]);
+  }
+  await Promise.all(ask.map(async ([id, w, p]) => {
+    w.askedAt = now; w.busy = true;
+    const m = await pm.fetchMarket(w.pmId).catch(() => null);
     w.busy = false;
-    if (!m) return;
-    if (m.accepting === false && !w.haltedAt) w.haltedAt = Date.now();
-    if (!(m.closed || m.resolved)) return;
-    w.closedAt = Date.now();
-    const q = p.q;
-    const yesPx = Array.isArray(m.prices) ? m.prices[p.pm.tokenIndex || 0] : null;
-    const won = Number.isFinite(yesPx) ? (yesPx >= 0.5 ? 'yes' : 'no') : decide.pmReadsSettled(q, E.cfg);
+    const says = decide.pmRecordSays(m);
+    if (!says) return;
+    const yesPx = Array.isArray(m.prices) ? m.prices[w.tokenIndex || 0] : null;
+    if (Number.isFinite(yesPx) && yesPx !== 0.5) w.won = yesPx > 0.5 ? 'yes' : 'no';
+    const won = w.won ? w.won.toUpperCase() : null;
     const off = E.cfg.snipe ? '' : ' · watched, not bought (SNIPE=0)';
-    if (!won) { E.log('BRAM', 'RESEARCH', null, `${p.label}: Polymarket has closed the market · Kalshi ${q.ksBid}/${q.ksAsk}${off}`); return; }
-    const px = won === 'yes' ? q.ksAsk : 1 - q.ksBid;
-    const size = won === 'yes' ? q.ksAskSize : q.ksBidSize;
-    E.log('BRAM', 'RESEARCH', null, `${p.label}: Polymarket has closed the market, ${won.toUpperCase()} won · Kalshi offers the winner at ${(px * 100).toFixed(0)}c${Number.isFinite(size) ? ` (${size} at the touch)` : ''} · ${c(decide.snipeEdge(px, p.ks.ticker, E.cfg))} net${off}`);
+    E.dirty = true;
+    if (says === 'proposed') {
+      if (w.proposedAt) return;
+      w.proposedAt = Date.now();
+      // the snipe's moment: what Kalshi offers the winner now, if HOLT still has the pair and Kalshi still quotes it
+      const q = p && p.q, fresh = q && Number.isFinite(q.ksAt) && w.proposedAt - q.ksAt <= E.cfg.snipeMaxKsAgeSec * 1000;
+      const offer = () => {
+        const px = w.won === 'yes' ? q.ksAsk : 1 - q.ksBid, size = w.won === 'yes' ? q.ksAskSize : q.ksBidSize;
+        return `Kalshi offers the winner at ${(px * 100).toFixed(0)}c${Number.isFinite(size) ? ` (${size} at the touch)` : ''} · ${c(decide.snipeEdge(px, w.ksTicker, E.cfg))} net`;
+      };
+      E.log('BRAM', 'RESEARCH', null, `${w.label}: Polymarket has proposed ${won || 'a result'}${w.readAt ? `, ${mins(w.proposedAt - w.readAt)} after its 99c reading` : ''} · ${!fresh ? "Kalshi's quote has stopped" : won ? offer() : `Kalshi ${q.ksBid}/${q.ksAsk}`}${off}`);
+      return;
+    }
+    w.seenClosedAt = Date.now();
+    w.closedAt = Number.isFinite(m.closedTime) ? m.closedTime : w.seenClosedAt;
+    // Kalshi's side of the same moment, from its own record: closed and paid out already, or still trading
+    const k = await ks.fetchMarket(w.ksTicker).catch(() => null);
+    const ksShut = k && k.status && k.status !== 'active';
+    const ksCloseAt = ksShut ? Date.parse(k.closeTime || '') : NaN, ksSettledAt = k ? Date.parse(k.settledAt || '') : NaN;
+    E.journal(E, 'SNIPE_WATCH', {
+      pairId: id, label: w.label, pmId: w.pmId, ksTicker: w.ksTicker, won: w.won || null,
+      readAt: iso(w.readAt), proposedAt: iso(w.proposedAt), pmClosedAt: iso(w.closedAt), seenClosedAt: iso(w.seenClosedAt),
+      ks: k ? { status: k.status, closedAt: iso(ksCloseAt), settledAt: iso(ksSettledAt), result: k.result || null, yesBid: k.yesBid, yesAsk: k.yesAsk, yesBidSize: k.yesBidSize, yesAskSize: k.yesAskSize } : null,
+    });
+    const after = w.readAt && w.closedAt >= w.readAt ? `, ${mins(w.closedAt - w.readAt)} after its 99c reading` : '';
+    let kalshi;
+    if (!k) kalshi = "Kalshi's record could not be read";
+    else if (ksShut && !(ksCloseAt > w.closedAt)) kalshi = `Kalshi had closed its own ${Number.isFinite(ksCloseAt) ? `${mins(w.closedAt - ksCloseAt)} before` : 'before'}${Number.isFinite(ksSettledAt) ? ` and paid it out at ${iso(ksSettledAt).slice(11, 16)}Z` : ''}: nothing left to buy`;
+    else if (ksShut) kalshi = `Kalshi traded on for ${mins(ksCloseAt - w.closedAt)} after it, and has closed since`;
+    else if (w.won && Number.isFinite(k.yesBid) && Number.isFinite(k.yesAsk)) {
+      const px = w.won === 'yes' ? k.yesAsk : 1 - k.yesBid, size = w.won === 'yes' ? k.yesAskSize : k.yesBidSize;
+      kalshi = `Kalshi still trades it, offering the winner at ${(px * 100).toFixed(0)}c${Number.isFinite(size) ? ` (${size} at the touch)` : ''} · ${c(decide.snipeEdge(px, w.ksTicker, E.cfg))} net`;
+    } else kalshi = 'Kalshi still trades it';
+    E.log('BRAM', 'RESEARCH', null, `${w.label}: Polymarket has closed the market${won ? `, ${won} won` : ''}${after} · ${kalshi}${off}`);
   }));
 }
 
@@ -507,17 +570,21 @@ async function KETT(E) {
     // A snipe buys only a game Polymarket has actually finished (2026-09-24). Its 99c/1.00 reading
     // is not a settlement: NC State v Vanderbilt read 0.99/1 for 2m15s on 2026-09-19 with Kalshi at
     // 94/96, then traded back to 4c, and NC State lost -- 100 bought at 96c. Polymarket's own market
-    // record has to say closed or resolved. Not "not accepting orders" alone, which a paused market
-    // also says, and not the listing having dropped the pair (pmGone), which it also does to live
-    // games. A lookup that fails is a pass; the signal stays alive for SNIPE_HOLD_SEC and asks again
-    // next cycle. One Gamma call, only on the rare cycle a snipe signal exists.
+    // record has to say the result is in: its resolver has proposed it, or the market is closed or
+    // resolved (decide.pmRecordSays). Until 2026-09-30 only the close counted, and it never came in
+    // time: Kalshi closes a finished game a median 4.4 minutes after the 99c reading, Polymarket half
+    // an hour later (105 of 105 games, 09-27 to 09-29). The proposal comes about 20 seconds after the
+    // final. Not "not accepting orders" alone, which a paused market also says, and not the listing
+    // having dropped the pair (pmGone), which it also does to live games. A lookup that fails is a
+    // pass; the signal stays alive for SNIPE_HOLD_SEC and asks again next cycle. One Gamma call, only
+    // on the rare cycle a snipe signal exists.
     if (s.type === 'snipe') {
       const m = await pm.fetchMarket(s.pair.pm.id).catch(() => null);
       if (standDown(E)) return;
       const yesPx = m && Array.isArray(m.prices) ? m.prices[s.pair.pm.tokenIndex || 0] : null;
       const against = Number.isFinite(yesPx) && (s.won === 'yes' ? yesPx < 0.5 : yesPx > 0.5);
-      if (!(m && (m.closed || m.resolved)) || against) {
-        if (E.due(`snipe-open-${s.pair.id}`, 60)) E.log('KETT', 'PASS', null, `${s.pair.label}: Polymarket reads ${s.won.toUpperCase()} at 99c but ${!m ? 'its market record could not be read' : against ? 'its market record says the other side' : 'has not closed the market'} · not a settlement yet`);
+      if (!decide.pmRecordSays(m) || against) {
+        if (E.due(`snipe-open-${s.pair.id}`, 60)) E.log('KETT', 'PASS', null, `${s.pair.label}: Polymarket reads ${s.won.toUpperCase()} at 99c but ${!m ? 'its market record could not be read' : against ? 'its market record says the other side' : 'its resolver has not proposed a result'} · not a settlement yet`);
         continue;
       }
     }
@@ -680,4 +747,4 @@ async function KETT(E) {
   E.touch('KETT', E.signals.length ? `${E.signals.length} signal${E.signals.length === 1 ? '' : 's'}` : 'no signals');
 }
 
-module.exports = { HOLT, ILSA, TESS, RIGO, BRAM, KETT, mergeBrainSignals, watchCloses };
+module.exports = { HOLT, ILSA, TESS, RIGO, BRAM, KETT, mergeBrainSignals, watchCloses, WATCH_KEEP_MS, watchAge };

@@ -377,7 +377,9 @@ module.exports = {
   snipeMinKsPrice: num('SNIPE_MIN_KS_PRICE', 0.75),
   // Polymarket bidding this for the winner with nothing offered is a reason to ASK whether it has settled,
   // not a settlement: NC State read 0.99/1 for 2m15s on 2026-09-19, traded back to 4c and lost. KETT
-  // buys only once Polymarket's market record says closed or resolved (agents.js, 2026-09-24).
+  // buys only once Polymarket's market record says the result is in (agents.js, 2026-09-24): since
+  // 2026-09-30 its resolver having proposed it, about 20 seconds after the final, while Kalshi still
+  // trades; the close itself comes half an hour after Kalshi has closed and paid out (decide.snipeEdge).
   snipePmBid: num('SNIPE_PM_BID', 0.99),
   snipeMaxKsAgeSec: num('SNIPE_MAX_KS_AGE_SEC', 30),  // the Kalshi quote must be this fresh (they are repriced every cycle)
   snipeHoldSec: num('SNIPE_HOLD_SEC', 300),           // how long HOLT keeps a game pair after Polymarket's listing drops it
@@ -388,12 +390,21 @@ module.exports = {
   // after Polymarket's market record says closed (asked every SNIPE_WATCH_ASK_SEC), for at most
   // SNIPE_WATCH_SEC after the listing drops it, and let go once Kalshi's side stops repricing (Kalshi
   // has closed it too). The tape stamps pmClosedAt on its rows; tools/settle-lag.js reads them.
-  // An hour, because Polymarket's record says closed only when the market is RESOLVED: on the 09-26
-  // tape, 14 finished games read 99c, left the listing within seconds, and closed 17 to 46 minutes
-  // later (closedTime = umaEndDate, a median of about 32). The snipe's own 300s never reached a close.
+  // Polymarket's record says closed only when the market is RESOLVED: on the 09-26 tape, 14 finished
+  // games read 99c, left the listing within seconds, and closed 17 to 46 minutes later (closedTime =
+  // umaEndDate, a median of about 32). The snipe's own 300s never reached a close.
+  //
+  // Nor did the watch's hour (2026-09-30): over 105 games on 09-27 to 09-29, Kalshi closed its market a
+  // median 4.4 minutes after the 99c reading, so its quote stopped and HOLT let the pair go five minutes
+  // later, every time, half an hour before Polymarket closed (11 to 111 minutes after the reading). That
+  // is the right call, there is nothing left to buy, so the rule stands. SNIPE_WATCH_SEC is two hours
+  // so the rare game Kalshi leaves open would be kept to the latest close seen. The watch itself now
+  // follows each finished game after HOLT lets go, asking every SNIPE_WATCH_LATE_ASK_SEC until
+  // Polymarket's record says closed, and journals both venues' close times (agents.watchCloses).
   snipeWatch: env('SNIPE_WATCH', '1') !== '0',
-  snipeWatchSec: num('SNIPE_WATCH_SEC', 3600),
+  snipeWatchSec: num('SNIPE_WATCH_SEC', 7200),
   snipeWatchAskSec: num('SNIPE_WATCH_ASK_SEC', 30),
+  snipeWatchLateAskSec: num('SNIPE_WATCH_LATE_ASK_SEC', 120),
 
   // ---- every game (decide.betSignal, BRAM finds, KETT buys; 2026-09-30) ----
   // Evan on the MLB Wild Card's second night: "every game should be bet". One bet a game in BET_SERIES,

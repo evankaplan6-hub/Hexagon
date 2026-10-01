@@ -151,11 +151,13 @@ function makeRecorder(cfg, { io = fs, clock = Date.now } = {}) {
       // Polymarket closed this game and HOLT is keeping the pair (SNIPE_HOLD_SEC): the line's PM side is
       // its last quote, the KS side is live. And Kalshi's top-of-book sizes on games, for the same study.
       if (p.pmGone) row.pmGone = true;
-      // The snipe's watch (agents.watchCloses): when Polymarket's market record first said it stopped
-      // taking orders and first said closed. On kept rows qt is the frozen Polymarket side's time, so
-      // Kalshi's own quote time goes on the line too (ksQt).
+      // The snipe's watch (agents.watchCloses): when Polymarket's market record first said its resolver
+      // had proposed the result (the moment the snipe buys at), and when it closed, by its own clock. The
+      // close comes after Kalshi has closed too, so a row rarely lives to carry it. (pmHaltedAt, "not
+      // accepting orders", was dropped 2026-09-30: Polymarket says that only at the close.) On kept rows
+      // qt is the frozen Polymarket side's time, so Kalshi's own quote time goes on the line too (ksQt).
       const w = E.pmCloses && E.pmCloses.get(p.id);
-      if (w && w.haltedAt) row.pmHaltedAt = new Date(w.haltedAt).toISOString();
+      if (w && w.proposedAt) row.pmProposedAt = new Date(w.proposedAt).toISOString();
       if (w && w.closedAt) row.pmClosedAt = new Date(w.closedAt).toISOString();
       if (p.pmGone && Number.isFinite(q.ksAt)) row.ksQt = new Date(q.ksAt).toISOString();
       if (p.kind === 'game') {

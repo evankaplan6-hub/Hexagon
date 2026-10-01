@@ -138,6 +138,11 @@ group('the log in the floor\'s words and levels');
   const sn = L('BRAM', 'RESEARCH', 'MLB Phillies v Braves · Phillies: Polymarket has closed the market, YES won · Kalshi offers the winner at 99c (40 at the touch) · +0.3c net · watched, not bought (SNIPE=0)');
   ok('a game\'s label keeps its own " · " when the snipe\'s watch reports a close', sn.text === 'MLB Phillies v Braves · Phillies: Polymarket has closed the market, YES won' && sn.level === 'info', sn);
   ok('...and what Kalshi offered goes under it, in cents', /^Kalshi offers the winner at 99¢/.test(sn.sub), sn.sub);
+  // 2026-09-30: the watch says the resolver's proposal (the snipe's moment) and which venue closed first
+  const pr = L('BRAM', 'RESEARCH', "MLB White Sox v Astros · White Sox: Polymarket has proposed YES, 24s after its 99c reading · Kalshi offers the winner at 100c (0 at the touch) · -0.0c net");
+  ok("the resolver's proposal is a line of its own, Kalshi's offer under it", pr.text === 'MLB White Sox v Astros · White Sox: Polymarket has proposed YES, 24s after its 99¢ reading' && pr.sub === 'Kalshi offers the winner at 100¢ (0 at the touch) · -0.0¢ net' && pr.level === 'info', pr);
+  const cl = L('BRAM', 'RESEARCH', 'MLB Phillies v Braves · Phillies: Polymarket has closed the market, NO won, 67m after its 99c reading · Kalshi had closed its own 64m before and paid it out at 20:46Z: nothing left to buy');
+  ok('a close with Kalshi long shut says so under it', cl.text === 'MLB Phillies v Braves · Phillies: Polymarket has closed the market, NO won, 67m after its 99¢ reading' && /^Kalshi had closed its own 64m before/.test(cl.sub), cl);
   ok('the widest gap is routine', L('BRAM', 'RESEARCH', 'venue gap 9.5c: Polymarket over Kalshi @ Next Google Gemini Pro Model released - September 30 · PM 0.12/0.14 · KS 0.02/0.05').level === 'quiet');
   const pass1 = L('KETT', 'PASS', '20/20 arbs open, passing on Fed DEC 26 · Cut 25bps');
   ok('a pass is a decision', pass1.level === 'info', pass1);

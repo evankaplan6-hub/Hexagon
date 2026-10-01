@@ -66,8 +66,12 @@ npm run reset                                 # wipe the prediction-market paper
   `ARBS=1`, `MAKER_QUOTE=1`, `SNIPE=1`; `CONVERGE=0` stays off (its own verdict, 2026-09-21). Since 2026-09-30 `BETS=1` too: "every game should be bet" (Evan, Wild Card night), one $100
   paper bet on the favourite of every MLB game (`BET_SERIES`), held to the final; README "Every game". All four
   were off 2026-09-25 to 09-27 after every book lost on paper. Do not switch a book off, or
-  convergence on, unasked. `SNIPE_WATCH` keeps finished games on the tape until Polymarket's close,
-  which comes at resolution, 17-46 minutes after the game (`node tools/settle-lag.js --day 2026-09-27`).
+  convergence on, unasked. Kalshi closes a finished game first, every time (median 4.4 minutes after
+  Polymarket's 99c reading, 105 of 105 games 09-27 to 09-29), and Polymarket's record says closed a median
+  32 minutes after the reading. So since 2026-09-30 the snipe buys once Polymarket's resolver has *proposed*
+  the result (about 20 seconds after the final), and `SNIPE_WATCH` follows each game to Polymarket's close
+  and journals both venues' close times (`SNIPE_WATCH` lines; `node tools/settle-lag.js --day <date>`, and
+  `--venues` for days before that); README "Kalshi closes first, every time".
 - **No TradingView data in Hexagon.** Evan's TradingView account (the official MCP connector, tools
   `mcp-tv-*`/`mcp-watchlist-*`, added 2026-09-25, and his chart in Chrome) is for him to read in chat,
   under the `tradingview-web-master` skill (repo `~/Downloads/stack`). TradingView's Terms §3 allow

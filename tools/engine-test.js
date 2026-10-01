@@ -1005,60 +1005,165 @@ const position = (over = {}) => ({
       ok('a lookup that fails is a pass', failed.E.state.positions.length === 0 && failed.E.state.cash === 10000);
       const other = await run({ closed: true, resolved: true, prices: [0, 1] });
       ok('closed with the other side winning: nothing bought', other.E.state.positions.length === 0, other.E.state.positions);
+      const proposed = await run({ closed: false, resolved: false, proposed: true, accepting: true, prices: [0.9995, 0.0005] });
+      const pp = proposed.E.state.positions[0];
+      ok("Polymarket's resolver has proposed YES (2026-09-30): the snipe buys, 100 at 96c", pp && pp.strategy === 'snipe' && pp.qty === 100 && pp.entry === 0.96, pp);
+      const proposedOther = await run({ closed: false, resolved: false, proposed: true, prices: [0.0005, 0.9995] });
+      ok('a proposal with the record reading the other side: nothing bought', proposedOther.E.state.positions.length === 0, proposedOther.E.state.positions);
       const done = await run({ closed: true, resolved: false, prices: [1, 0] });
       const pos = done.E.state.positions[0];
       ok('closed on Polymarket: the snipe buys, 100 at 96c', pos && pos.strategy === 'snipe' && pos.qty === 100 && pos.entry === 0.96, pos);
     } finally { pmv.fetchMarket = real; }
   }
 
-  group("the snipe's watch asks whether a finished game has closed, and buys nothing (SNIPE=0)");
+  group("the snipe's watch follows a finished game to Polymarket's close, and buys nothing (SNIPE=0)");
   {
-    const pmv = require('../src/venues/polymarket');
-    const real = pmv.fetchMarket;
+    // MLB Phillies v Braves, 2026-09-29: Polymarket read it settled at 20:41:36Z, Kalshi closed its market
+    // at 20:44:38Z and paid it out at 20:46:46Z, and Polymarket's record said closed only at 21:48:21Z.
+    // HOLT let the pair go minutes after Kalshi's quote stopped, so the watch has to follow the game alone.
+    const pmv = require('../src/venues/polymarket'), ksv = require('../src/venues/kalshi');
+    const real = { pm: pmv.fetchMarket, ks: ksv.fetchMarket };
     const now = Date.now();
-    const E = engine({ snipe: false, snipeWatch: true, snipeWatchAskSec: 30 });
+    const E = engine({ snipe: false, snipeWatch: true, snipeWatchAskSec: 30, snipeWatchLateAskSec: 120 });
     E.halt = null;
     const logs = [];
     E.log = (agent, kind, pnl, text) => logs.push({ agent, kind, text });
-    const game = (id, q) => ({ id: `${id}:0|KXNFLGAME-T-MIN`, label: 'NFL test · Vikings', kind: 'game', series: 'KXNFLGAME', inPlay: true, startsAt: now - 3 * 3600000,
+    const game = (id, q, over = {}) => ({ id: `${id}:0|KXNFLGAME-T-MIN`, label: 'NFL test · Vikings', kind: 'game', series: 'KXNFLGAME', inPlay: true, startsAt: now - 3 * 3600000,
       pm: { id, tokenIndex: 0 }, ks: { ticker: 'KXNFLGAME-T-MIN' },
-      q: { pmVol: 1e6, ksVol: 1e6, pmFeeRate: 0.05, t: now, pmAt: now, ksAt: now, ksBidSize: 50, ksAskSize: 120, ...q } });
+      q: { pmVol: 1e6, ksVol: 1e6, pmFeeRate: 0.05, t: now, pmAt: now, ksAt: now, ksBidSize: 50, ksAskSize: 120, ...q }, ...over });
     const done = game('pm7', { pmBid: 0.99, pmAsk: 1, ksBid: 0.9, ksAsk: 0.93 });
     const live = game('pm8', { pmBid: 0.6, pmAsk: 0.62, ksBid: 0.6, ksAsk: 0.62 });
     E.pairs = [done, live];
-    const asked = [];
-    let market = { closed: false, resolved: false, accepting: false };
+    const asked = [], askedKs = [];
+    let market = { closed: false, resolved: false, proposed: false, accepting: true, closedTime: null };
+    let kalshi = { ticker: 'KXNFLGAME-T-MIN', status: 'active', yesBid: 0.9, yesAsk: 0.93, yesBidSize: 50, yesAskSize: 120, closeTime: '2026-10-04T18:00:00Z', settledAt: null, result: '' };
     pmv.fetchMarket = async (id) => { asked.push(id); return { id, tokenIds: ['t0', 't1'], prices: [0.9995, 0.0005], ...market }; };
+    ksv.fetchMarket = async (t) => { askedKs.push(t); return { ...kalshi }; };
+    const age = (w, ms) => { for (const k of ['since', 'readAt', 'proposedAt', 'askedAt']) if (Number.isFinite(w[k])) w[k] -= ms; };
     try {
       await watchCloses(E);
       ok('asks about the game reading 99c, not the one still being played', asked.join() === 'pm7', asked);
       const w = E.pmCloses.get(done.id);
-      ok('not closed yet: no close time, and "not accepting orders" is noted', w && !w.closedAt && Number.isFinite(w.haltedAt), w);
+      ok('the watch carries the game with it: its label, both markets, the 99c reading and the side it reads', w && w.label === done.label && w.pmId === 'pm7' && w.ksTicker === 'KXNFLGAME-T-MIN' && Number.isFinite(w.readAt) && w.won === 'yes', w);
+      ok('nothing proposed or closed yet, and "accepting orders" is no longer noted (it stays true until the close)', w && !w.proposedAt && !w.closedAt && !('haltedAt' in w), w);
+      ok('the ledger is marked for saving', E.dirty === true);
       await watchCloses(E);
       ok('not asked again inside SNIPE_WATCH_ASK_SEC', asked.length === 1, asked);
-      w.askedAt -= 31000;
-      market = { closed: true, resolved: false, accepting: false };
+      age(w, 31000);
+      market = { ...market, proposed: true };
       await watchCloses(E);
-      ok('30 seconds on it asks again, and the close is noted', asked.length === 2 && Number.isFinite(E.pmCloses.get(done.id).closedAt), E.pmCloses.get(done.id));
-      ok('one research line: YES won, Kalshi offers it at 93c with 120 at the touch, watched not bought',
-        logs.filter((l) => l.agent === 'BRAM' && /closed the market, YES won · Kalshi offers the winner at 93c \(120 at the touch\) · [\d.]+c net · watched, not bought \(SNIPE=0\)/.test(l.text)).length === 1, logs);
-      E.pmCloses.get(done.id).askedAt -= 31000;
+      ok("30 seconds on it asks again: the resolver's proposal is noted", asked.length === 2 && Number.isFinite(w.proposedAt) && !w.closedAt, w);
+      ok('one research line: Polymarket has proposed YES, 31s after its 99c reading, and what Kalshi offers the winner then',
+        logs.filter((l) => l.agent === 'BRAM' && /^NFL test · Vikings: Polymarket has proposed YES, 31s after its 99c reading · Kalshi offers the winner at 93c \(120 at the touch\) · [\d.]+c net · watched, not bought \(SNIPE=0\)$/.test(l.text)).length === 1, logs);
+      // Kalshi closes and HOLT lets the pair go: the watch goes on alone, at the slower pace
+      E.pairs = [live];
+      age(w, 31000);
       await watchCloses(E);
-      ok('once closed it is never asked again', asked.length === 2, asked);
+      ok('off the floor it is not asked inside SNIPE_WATCH_LATE_ASK_SEC', asked.length === 2, asked);
+      age(w, 120000);
+      await watchCloses(E);
+      ok('...and is after it, still proposed: no second proposal line', asked.length === 3 && logs.filter((l) => /has proposed/.test(l.text)).length === 1, { asked, logs });
+      ok('nothing journalled before the close', !(E.journalled || []).some((j) => j.type === 'SNIPE_WATCH'));
+      // an hour on, Polymarket closes it; Kalshi closed and paid out long before
+      age(w, 3600000);
+      const pmClose = now - 60000, ksClose = now - 3600000, ksPaid = ksClose + 128000;
+      market = { closed: true, resolved: true, proposed: false, accepting: false, closedTime: pmClose, prices: [1, 0] };
+      kalshi = { ...kalshi, status: 'finalized', yesBid: 0, yesAsk: 1, yesBidSize: 0, yesAskSize: 0, closeTime: new Date(ksClose).toISOString(), settledAt: new Date(ksPaid).toISOString(), result: 'yes' };
+      await watchCloses(E);
+      ok("the close is noted at Polymarket's own time, not when it was seen", w.closedAt === pmClose && Number.isFinite(w.seenClosedAt) && w.seenClosedAt > pmClose, w);
+      ok("Kalshi's record is read once, at the close", askedKs.join() === 'KXNFLGAME-T-MIN', askedKs);
+      const j = (E.journalled || []).filter((x) => x.type === 'SNIPE_WATCH');
+      ok('one SNIPE_WATCH journal line with both venues\' own times', j.length === 1 && j[0].data.pairId === done.id && j[0].data.won === 'yes'
+        && j[0].data.pmClosedAt === new Date(pmClose).toISOString() && j[0].data.proposedAt === new Date(w.proposedAt).toISOString() && j[0].data.readAt === new Date(w.readAt).toISOString()
+        && j[0].data.ks.status === 'finalized' && j[0].data.ks.closedAt === new Date(ksClose).toISOString() && j[0].data.ks.settledAt === new Date(ksPaid).toISOString() && j[0].data.ks.result === 'yes', j);
+      ok('BRAM says which venue closed first: Kalshi, 59 minutes before, nothing left to buy',
+        logs.filter((l) => l.agent === 'BRAM' && /^NFL test · Vikings: Polymarket has closed the market, YES won, \d+m after its 99c reading · Kalshi had closed its own 59m before and paid it out at \d\d:\d\dZ: nothing left to buy · watched, not bought \(SNIPE=0\)$/.test(l.text)).length === 1, logs);
+      age(w, 600000);
+      await watchCloses(E);
+      ok('once closed it is never asked again', asked.length === 4 && askedKs.length === 1, { asked, askedKs });
+      // Polymarket's close time is its own and can be hours old by the time the desk sees it (a restart, a
+      // lookup that kept failing): the watch is kept six hours from when the desk saw it, so a pair still on
+      // the floor is not watched, and journalled, twice
+      w.closedAt = now - 7 * 3600000;
+      E.pairs = [done, live];
+      age(w, 31000);
+      await watchCloses(E);
+      ok('a close Polymarket timed seven hours ago, seen just now, is not forgotten and journalled again', E.pmCloses.get(done.id) === w && (E.journalled || []).filter((x) => x.type === 'SNIPE_WATCH').length === 1 && asked.length === 4, { asked, j: (E.journalled || []).length });
+      E.pairs = [live]; w.closedAt = pmClose;
       ok('nothing was bought', E.state.positions.length === 0 && E.state.cash === 10000, E.state.positions);
       const kept = decide.keepClosedGamePairs(new Map([[done.id, done]]), [], E.cfg, Date.now(), E.pmCloses);
-      ok("HOLT's rule keeps the pair past the listing drop, flagged", kept.length === 1 && kept[0].pmGone === true, kept);
+      ok("HOLT's rule still keeps a pair past the listing drop, flagged, while Kalshi quotes it", kept.length === 1 && kept[0].pmGone === true, kept);
+
+      // the rare game Kalshi still trades at Polymarket's close
+      const E4 = engine({ snipe: true, snipeWatch: true });
+      const logs4 = [];
+      E4.log = (agent, kind, pnl, text) => logs4.push(text);
+      E4.pairs = [game('pm11', { pmBid: 0.99, pmAsk: 1, ksBid: 0.9, ksAsk: 0.93 })];
+      market = { closed: true, resolved: false, proposed: false, closedTime: null, prices: [1, 0] };   // no close time on the record: when it was seen
+      kalshi = { ticker: 'KXNFLGAME-T-MIN', status: 'active', yesBid: 0.94, yesAsk: 0.95, yesBidSize: 10, yesAskSize: 40, closeTime: '2026-10-04T18:00:00Z', settledAt: null, result: '' };
+      await watchCloses(E4);
+      ok('Kalshi still open at the close: BRAM says what it offers the winner then', logs4.some((t) => /Polymarket has closed the market, YES won, 0s after its 99c reading · Kalshi still trades it, offering the winner at 95c \(40 at the touch\) · [\d.]+c net$/.test(t)), logs4);
+      ok('...and the journal line says it was still active', ((E4.journalled || []).find((x) => x.type === 'SNIPE_WATCH') || { data: {} }).data.ks.status === 'active');
+
+      // the listing drops a game still being played for one cycle: asked while it looks gone, not after
+      const E5 = engine({ snipe: false, snipeWatch: true });
+      const flick = game('pm12', { pmBid: 0.6, pmAsk: 0.62, ksBid: 0.6, ksAsk: 0.62 }, { pmGone: true });
+      E5.pairs = [flick];
+      const before = asked.length;
+      market = { closed: false, resolved: false, proposed: false };
+      await watchCloses(E5);
+      ok('a live game the listing dropped for a cycle is asked about once', asked.length === before + 1, asked.slice(before));
+      E5.pairs = [];
+      age(E5.pmCloses.get(flick.id), 600000);
+      await watchCloses(E5);
+      ok('...and, gone from the floor without ever reading settled, not followed', asked.length === before + 1, asked.slice(before));
+
       pmv.fetchMarket = async () => { throw new Error('gamma down'); };
       const E2 = engine({ snipe: false, snipeWatch: true });
       E2.pairs = [game('pm9', { pmBid: 0.99, pmAsk: 1, ksBid: 0.9, ksAsk: 0.93 })];
       await watchCloses(E2);
       const w2 = E2.pmCloses.get(E2.pairs[0].id);
-      ok('a lookup that fails notes nothing and asks again later', w2 && !w2.closedAt && !w2.busy && !w2.haltedAt, w2);
+      ok('a lookup that fails notes nothing and asks again later', w2 && !w2.closedAt && !w2.busy && !w2.proposedAt && w2.askedAt > 0, w2);
       const off = engine({ snipe: false, snipeWatch: false });
       off.pairs = [game('pm10', { pmBid: 0.99, pmAsk: 1, ksBid: 0.9, ksAsk: 0.93 })];
       await watchCloses(off);
       ok('SNIPE_WATCH=0: asks nothing', off.pmCloses.size === 0);
-    } finally { pmv.fetchMarket = real; }
+    } finally { pmv.fetchMarket = real.pm; ksv.fetchMarket = real.ks; }
+  }
+
+  group("the snipe's watch survives a restart: a deploy cut the 09-29 Phillies game off");
+  {
+    const E = engine({ snipeWatch: true });
+    const now = Date.now();
+    E.pmCloses.set('open', { since: now - 600000, readAt: now - 600000, proposedAt: now - 580000, askedAt: now - 10000, busy: true, label: 'MLB test · Phillies', pmId: 'pmP', tokenIndex: 0, ksTicker: 'KXMLBGAME-T-PHI', won: 'no' });
+    E.pmCloses.set('closed', { since: now - 3600000, readAt: now - 3600000, closedAt: now - 60000, seenClosedAt: now - 30000, label: 'MLB test · Braves', pmId: 'pmB', tokenIndex: 0, ksTicker: 'KXMLBGAME-T-ATL' });
+    E.pmCloses.set('lateSeen', { since: now - 9 * 3600000, readAt: now - 9 * 3600000, closedAt: now - 8 * 3600000, seenClosedAt: now - 60000, label: 'MLB test · Cubs', pmId: 'pmC', tokenIndex: 0, ksTicker: 'KXMLBGAME-T-CHC' });
+    E.pmCloses.set('old', { since: now - 7 * 3600000, readAt: now - 7 * 3600000, label: 'MLB test · Mets', pmId: 'pmM', tokenIndex: 0, ksTicker: 'KXMLBGAME-T-NYM' });
+    E.save();
+    const again = new Engine(E.cfg);
+    const w = again.pmCloses.get('open');
+    ok('the open watch comes back with everything it knew', w && w.proposedAt === now - 580000 && w.pmId === 'pmP' && w.won === 'no', w);
+    ok('...and a lookup that was in flight is asked again, not waited on forever', w && w.busy === false, w);
+    ok('a game closed a minute ago is kept (its rows still carry the close); one from seven hours ago is not', again.pmCloses.has('closed') && !again.pmCloses.has('old'), [...again.pmCloses.keys()]);
+    ok('a close Polymarket timed eight hours ago but the desk saw a minute ago is kept, by when it was seen', again.pmCloses.has('lateSeen'), [...again.pmCloses.keys()]);
+  }
+
+  group("Polymarket's record: the resolver's proposal, and its own close time");
+  {
+    const http = require('../src/http');
+    const pmv = require('../src/venues/polymarket');
+    const realGet = http.getJSON;
+    const raw = (o) => ({ id: '5073567', outcomes: '["Philadelphia Phillies", "Atlanta Braves"]', clobTokenIds: '["t0", "t1"]', outcomePrices: '["0", "1"]', acceptingOrders: true, ...o });
+    try {
+      http.getJSON = async () => raw({ umaResolutionStatus: 'proposed', closed: false });
+      const p = await pmv.fetchMarket('5073567');
+      ok('proposed: the result is in, the market not closed', p.proposed === true && p.closed === false && p.resolved === false && p.closedTime === null && decide.pmRecordSays(p) === 'proposed', p);
+      http.getJSON = async () => raw({ umaResolutionStatus: 'resolved', closed: true, acceptingOrders: false, closedTime: '2026-09-29 21:48:21+00', umaEndDate: '2026-09-29T21:48:21Z' });
+      const c = await pmv.fetchMarket('5073567');
+      ok("closed, at Polymarket's own time (its \"2026-09-29 21:48:21+00\")", c.closed && c.resolved && !c.proposed && c.closedTime === Date.parse('2026-09-29T21:48:21Z') && decide.pmRecordSays(c) === 'closed', c);
+      http.getJSON = async () => raw({ umaResolutionStatus: 'disputed', closed: false });
+      ok('a disputed proposal is not a result', decide.pmRecordSays(await pmv.fetchMarket('5073567')) === null);
+    } finally { http.getJSON = realGet; }
   }
 
   group('a held Polymarket leg with no pair is priced from the CLOB, not from Gamma');

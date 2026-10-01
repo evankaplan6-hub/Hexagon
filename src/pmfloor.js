@@ -64,9 +64,9 @@ function pmLine(e) {
       if (/^whale watch could not reach/i.test(t)) { const code = (t.match(/HTTP (\d+)/) || [])[1]; return line("Whale watch could not reach Polymarket's trade feed", code ? `HTTP ${code} · it tries again on its next round` : '', 'warn'); }
       return line(first, rest, 'warn');
     case 'BRAM RESEARCH': {
-      // the snipe's watch: a finished game Polymarket has settled or closed, and what Kalshi offers the winner
-      // (a game's label can carry " · " itself, "MLB Phillies v Braves · Phillies", so it is cut at the colon)
-      if (/: Polymarket has (settled|closed)/.test(t)) {
+      // the snipe's watch: a finished game Polymarket has settled, proposed or closed, and what Kalshi offers the
+      // winner (a game's label can carry " · " itself, "MLB Phillies v Braves · Phillies", so it is cut at the colon)
+      if (/: Polymarket has (settled|proposed|closed)/.test(t)) {
         const i = t.indexOf(': Polymarket has'), [what, ...more] = t.slice(i + 2).replace(/(\d+(?:\.\d+)?)c\b/g, '$1¢').split(' · ');
         return line(`${unellipsis(t.slice(0, i))}: ${what}`, more.join(' · '), 'info');
       }
@@ -164,19 +164,20 @@ function pmFloor(engine, cfg, now = Date.now()) {
     rule: 'Rests bids and offers on Kalshi markets that charge makers no fee, and is paid the spread when both sides fill. A market holding too much quotes only the side that brings it back to flat, election markets are left before election night, and each event has its own loss limit.',
   };
 
-  // The snipe's watch keeps the finished games it asked Polymarket about for six hours (agents.watchCloses)
-  const closes = engine.pmCloses ? [...engine.pmCloses.values()] : [];
+  // The snipe's watch keeps the finished games it asked Polymarket about for six hours (agents.watchCloses);
+  // a live game the listing dropped for a cycle is asked about too, and is not a finished game
+  const closes = engine.pmCloses ? [...engine.pmCloses.values()].filter((w) => w.readAt || w.proposedAt || w.closedAt) : [];
   const snipeOpen = open('snipe');
   const snipe = {
     key: 'snipe', name: 'Snipe', on: !!cfg.snipe, watching: !!cfg.snipeWatch,
     pnl: r2(bankedSnipe + marked(snipeOpen)), realized: bankedSnipe,
     bought: shut('snipe').length + snipeOpen.length, watched: closes.length, closedGames: closes.filter((w) => w.closedAt).length,
     rows: snipeOpen.map(posRow),
-    seen: (s.log || []).filter((e) => e.agent === 'BRAM' && /: Polymarket has (settled|closed)/.test(String(e.text))).slice(0, 3)
+    seen: (s.log || []).filter((e) => e.agent === 'BRAM' && /: Polymarket has (settled|proposed|closed)/.test(String(e.text))).slice(0, 3)
       .map((e) => ({ t: e.t, ...pmLine(e) })),
   };
-  snipe.rule = 'When a game ends, Polymarket closes its market while Kalshi can still be selling the winner under $1. Once Polymarket has closed it, this buys the winner on Kalshi if the price clears the fee, and holds it to settlement.' +
-    (snipe.bought ? '' : ' As built it lets a game go about half an hour before Polymarket usually closes one, so it has never fired; its watch records what Kalshi offered at each close.');
+  snipe.rule = "When a game ends, Polymarket's book goes to 99¢ on the winner while Kalshi can still be selling it under $1. Once Polymarket's own record says the result is in (its resolver proposes it about 20 seconds after the final), this buys the winner on Kalshi if the price clears the fee, and holds it to settlement." +
+    (snipe.bought ? '' : " It has never fired. Until 2026-09-30 it waited for Polymarket to close the market, which comes half an hour after Kalshi has closed and paid out; Kalshi closes a finished game about four minutes after the final, so the window is short.");
 
   const convOpen = open('converge');
   const converge = {
