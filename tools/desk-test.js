@@ -11,6 +11,7 @@ const F = require('../src/desk/feeds');
 const broker = require('../src/desk/broker');
 const B = require('../src/desk/books');
 const { Desk, logLevel, ROUTINE_KEEP } = require('../src/desk/engine');
+const DAYX = '2026-09-23';
 const { upDay, deskConfig, fakeMarket, playScalpMorning, playDipMorning, at: atDay } = require('./desk-fixture');
 
 let pass = 0, fail = 0;
@@ -158,6 +159,7 @@ const r6 = (x) => Math.round(x * 1e6) / 1e6;
   // DOGE is sold in tenths of a coin: a fill in millionths is one no exchange gives
   const dogeBook = { bids: [{ price: 0.0944, size: 1e6 }], asks: [{ price: 0.0945, size: 1e6 }] };
   eq('a coin with a coarser step fills in that step', broker.fill({ kind: 'crypto', side: 'buy', qty: 12345.678, step: 0.1 }, { bid: 0.0944, ask: 0.0945, book: dogeBook }, fees).qty, 12345.6);
+  eq('a quantity that is many steps is floored to the right step (not one low)', broker.fill({ kind: 'crypto', side: 'buy', qty: 9899431.2, step: 0.1 }, { bid: 0.0944, ask: 0.0945, book: { bids: [], asks: [{ price: 0.0945, size: 1e9 }] } }, fees).qty, 9899431.2);
   const dogeCap = broker.fill({ kind: 'crypto', side: 'buy', qty: 1e5, cash: 1000, step: 0.1 }, { bid: 0.0944, ask: 0.0945, book: dogeBook }, fees);
   ok('and a buy capped by its cash still does', -dogeCap.cash <= 1000 && Math.abs(dogeCap.qty * 10 - Math.round(dogeCap.qty * 10)) < 1e-6 && -dogeCap.cash > 999, dogeCap);
   const st = broker.fill({ kind: 'stock', side: 'buy', qty: 3.3336 }, { bid: 700, ask: 700.02 }, fees);
@@ -597,13 +599,14 @@ async function engineTests() {
     const x = ds.state.books.scalps;
     const rounds = [];
     const real = ds.step.bind(ds);
-    ds.step = async () => { await real(); rounds.push({ lots: x.lots.map((l) => [l.strike, l.entry, l.target, l.level, l.barM]), cash: x.cash, realized: x.realized, entries: x.day && x.day.entries }); };
+    ds.step = async () => { await real(); rounds.push({ lots: x.lots.map((l) => [l.strike, l.entry, l.target, l.level, l.barM]), cash: x.cash, realized: x.realized, entries: x.day && x.day.entries, exitBarM: x.day && x.day.exitBarM }); };
     await playScalpMorning(ds, M, (t) => { TS = t; });
     eq('10:06: the opening-range break buys the 701 call, 1.5x target, stop at the range it broke', rounds[0].lots, [[701, 1, 1.5, 700.61, 600]]);
     eq('$100 of premium and a 3-cent fee', rounds[0].cash, 899.97);
     eq('10:11: another break while it is held adds nothing', [rounds[1].lots.length, rounds[1].entries], [1, 1]);
     eq('10:16: the 1.50 target fills, and the new break buys the 702 at 0.91', rounds[2].lots, [[702, 0.91, 1.365, 700.81, 610]]);
     eq('banked $49.94 on the first', rounds[2].realized, 49.94);
+    eq('a new scalp starts its exit scan at its own entry bar, not at the last trade\'s last handled bar', rounds[2].exitBarM, null);
     eq('10:21: SPY closes back under 700.81, and the 702 goes at the bid', rounds[3].lots, []);
     eq('realised: +49.94, then -21.06', x.realized, 28.88);
     eq('cash reconciles to the penny', x.cash, 1028.88);
@@ -626,6 +629,68 @@ async function engineTests() {
     ds.scalpClosed(x.day, { pnl: -5 });
     eq('two losses in a row: done for today', [x.day.status, x.day.why], ['done', '2 losses in a row']);
     fs.rmSync(sdir, { recursive: true, force: true });
+  }
+
+  // The options book with no chain in hand when the VWAP break comes (a restart, then Cboe failing): the
+  // contracts are held and sold when the chain loads, not written off as unbid.
+  {
+    const odir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-test-'));
+    let TO = atDay('12:31');
+    const M = fakeMarket(() => TO), { W } = M;
+    const od = new Desk(deskConfig(odir), { feeds: M.feeds, now: () => TO });
+    od.quiet = true;
+    TO = atDay('12:31'); M.setMinutes(12 * 60 + 30); await od.step();
+    TO = atDay('12:32') + 10000; M.setMinutes(12 * 60 + 31);
+    W.chain = { expiry: DAYX, spot: 703.62, at: atDay('12:31'), calls: [M.call(704, 0.3, 0.31, 0.5), M.call(705, 0.09, 0.1, 0.15), M.call(706, 0.04, 0.05, 0.1)], puts: [] };
+    await od.step();
+    const ox = od.state.books.options, held = ox.lots.length;
+    TO = atDay('12:42') + 12000; M.setMinutes(12 * 60 + 41, { 761: 701.5 });
+    const chain = { ...W.chain, spot: 701.5, at: atDay('12:41'), calls: [M.call(704, 0.1, 0.11, 0.6), M.call(705, 0.05, 0.06, 0.22), M.call(706, 0.01, 0.02, 0.1)] };
+    od.mkt.chain = null; W.chain = null;
+    await od.step();
+    eq('no chain on the minute SPY closes through VWAP: both contracts are still held, none written off', [held, ox.lots.length, ox.realized], [2, 2, 0]);
+    TO += 61000; W.chain = chain;
+    await od.step();
+    eq('the next round, with the chain back, sells them at the bid', [ox.lots.length, ox.trades[0].open], [0, 0]);
+    ok('at a real price, not a write-off', ox.realized > -20, ox.realized);
+    fs.rmSync(odir, { recursive: true, force: true });
+  }
+
+  // An expired option settles against SPY's close on its expiry day, not whatever SPY is when the desk next runs.
+  {
+    const sdir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-test-'));
+    let TX = clock.etToUtc('2026-09-24T11:00:00');
+    const M = fakeMarket(() => TX);
+    const dx = new Desk(deskConfig(sdir2), { feeds: M.feeds, now: () => TX });
+    dx.quiet = true;
+    const ox = dx.state.books.options;
+    const lot = { id: 1, trade: 'T1', qty: 2, cost: 20, strike: 705, right: 'C', osi: 'SPY260923C00705000', expiry: DAYX, entry: 0.1, role: 'first', openedAt: 0 };
+    ox.lots.push(lot);
+    dx.mkt.spy.quote = { last: 712 };
+    dx.settleLot('options', lot);
+    eq('without that day\'s close the lot waits', ox.lots.length, 1);
+    dx.mkt.spy.daily = [{ day: DAYX, c: 700 }];
+    dx.settleLot('options', lot);
+    eq('with it, a 705 call that expired out of the money is worth nothing though SPY is 712 now', [ox.lots.length, ox.realized, ox.cash], [0, -20, 1000]);
+    fs.rmSync(sdir2, { recursive: true, force: true });
+  }
+
+  // A read that brings two new minute bars must not drop a dip trigger on the first.
+  {
+    const ddir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-test-'));
+    let TD = atDay('10:06');
+    const M = fakeMarket(() => TD);
+    const dd = new Desk(deskConfig(ddir), { feeds: M.feeds, now: () => TD });
+    dd.quiet = true;
+    const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+    const calls = [M.call(700, 0.64, 0.66, 1.5), M.call(701, 0.28, 0.3, 1), M.call(702, 0.1, 0.12, 0.6)];
+    // 10:04 alone, then 10:05 and 10:06 in one read: the trigger is on 10:05
+    TD = atDay('10:05') + 5000; M.setMinutes(10 * 60 + 4, { 598: 698, 611: 700.2, 616: 701.5, 621: 701 }); M.W.chain = { expiry: DAYX, spot: 698.12, at: atDay('10:04'), calls, puts: [] };
+    await dd.step();
+    TD = atDay('10:07') + 5000; M.setMinutes(10 * 60 + 6, { 598: 698, 606: 697.9, 611: 700.2, 616: 701.5, 621: 701 }); M.W.chain = { expiry: DAYX, spot: 698.16, at: atDay('10:06'), calls, puts: [] };
+    await dd.step();
+    eq('two bars in one read: the dip bought on the first', dd.state.books.dips.lots.map((l) => l.strike), [701, 701]);
+    fs.rmSync(ddir, { recursive: true, force: true });
   }
 
   // A morning dip (2026-09-29): tools/desk-fixture.js playDipMorning, round by round, on one-minute bars.
@@ -818,6 +883,22 @@ async function engineTests() {
     t += 180000; W.stats['NEAR-USD'].last = 5.605;
     await rd.runnerBook();
     ok('halted, a runner is not bought', !rb.lots.some((l) => l.sym === 'NEAR-USD') && rd.state.log.some((l) => /^runners: NEAR is running.*not buying: down 6% today/.test(l.text)), rb.lots.map((l) => l.sym));
+    // Coinbase's product list failing (only buying needs it) or a held coin dropping out of the figures must
+    // not stop the book from selling what it holds
+    rd.halt = null; rb.lots.length = 0; rb.cool = {};
+    rb.lots.push({ id: 90, trade: 'R90', sym: 'ENA-USD', qty: 1000, cost: 230, entry: 0.23, peak: 0.2305, mark: 0.2305, openedAt: t });
+    rd.mkt.runners.steps = null; rd.mkt.runners.stepsAt = 0; rd.mkt.runners.failAt = 0;
+    const realProducts = feeds.coinProducts;
+    feeds.coinProducts = async () => { throw new Error('503'); };
+    t += 180000; W.stats['ENA-USD'].last = 0.2; setBook('ENA-USD', 0.2);
+    await rd.runnerBook();
+    eq('with the product list down, a coin 10% off its best is still sold', rb.lots.length, 0);
+    feeds.coinProducts = realProducts;
+    rb.lots.push({ id: 91, trade: 'R91', sym: 'ENA-USD', qty: 1000, cost: 230, entry: 0.23, peak: 0.2305, mark: 0.2305, openedAt: t - 49 * 3600000 });
+    delete W.stats['ENA-USD']; setBook('ENA-USD', 0.2);
+    t += 180000;
+    await rd.runnerBook();
+    eq('a coin gone from the 24-hour figures is sold once it has been held 48 hours', rb.lots.length, 0);
     W.stats = saved.stats; W.books = saved.books; delete W.products['ENA-USD'];
     fs.rmSync(rdir, { recursive: true, force: true });
   }

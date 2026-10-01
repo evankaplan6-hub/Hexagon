@@ -97,8 +97,9 @@ function convEdge(v, side, q, fair, cfg, ref) {
 // bigger edge in all but 319 of them -- and in those the convergence trade won by at most 0.43c
 // (median 0.16c), always off a lopsided spread. Half a cent is not worth an unhedged position, so
 // class first, edge second, unconditionally.
-const CLASS = { arb: 0, converge: 1 };
-const rankSignals = (a, b) => (CLASS[a.type] - CLASS[b.type]) || (b.edge - a.edge);
+// A snipe is time-critical and goes first; a game bet has no edge (null) and goes last.
+const CLASS = { snipe: -1, arb: 0, converge: 1, bet: 2 };
+const rankSignals = (a, b) => (CLASS[a.type] - CLASS[b.type]) || ((b.edge || 0) - (a.edge || 0));
 
 // Everything one pair offers this cycle. Returns intents; pushes nothing anywhere.
 //   fair    volume-weighted fair value
