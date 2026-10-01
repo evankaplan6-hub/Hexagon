@@ -971,6 +971,26 @@ const position = (over = {}) => ({
     L.cfg = { ...L.cfg, mode: 'live' };   // a live engine needs a key to build; the rule reads cfg.mode
     L.pairs = [game()]; BRAM(L);
     ok('live mode: BRAM makes no bet', !L.signals.some((x) => x.type === 'bet'));
+    // a bet held on a game does not stop the snipe at the final, nor an arb; and BRAM puts the bet after the arb
+    const pmvB = require('../src/venues/polymarket'), realFM = pmvB.fetchMarket;
+    pmvB.fetchMarket = async (id) => ({ id, closed: true, resolved: true, prices: [1, 0], tokenIds: ['t0', 't1'] });
+    try {
+      const E5 = engine({ snipe: true, snipeMaxQty: 100, bets: true, betSeries: ['KXMLBGAME'] });
+      E5.halt = null;
+      const g = game();
+      const fin = { ...g, inPlay: true, startsAt: now - 3 * 3600000, q: { ...g.q, pmBid: 0.99, pmAsk: 1, ksBid: 0.82, ksAsk: 0.86, pmMid: 0.995, ksMid: 0.84, ksBidSize: 200, ksAskSize: 300 } };
+      E5.pairs = [fin];
+      E5.state.positions.push({ id: 'bet1', pairId: fin.id, label: fin.label, venue: 'KS', side: 'no', qty: 180, entry: 0.55, cost: 99, strategy: 'bet', openedAt: now - 3600000 });
+      E5.signals = [decide.snipeSignal(fin, E5.cfg, now)];
+      E5.book = async () => ({ asks: [{ price: 0.86, size: 500 }], yesBid: 0.82, yesAsk: 0.86 });
+      await KETT(E5);
+      ok('a held game bet does not stop the settlement snipe on that game', E5.state.positions.some((p) => p.strategy === 'snipe'), E5.state.positions.map((p) => p.strategy));
+    } finally { pmvB.fetchMarket = realFM; }
+    const E6 = engine({ bets: true, betSeries: ['KXMLBGAME'], betUsd: 100, betMaxPx: 0.9, arbs: true });
+    E6.halt = null; E6.pairs = [game()];
+    BRAM(E6);
+    const kinds = E6.signals.map((x) => x.type);
+    ok('bets are queued after every other signal', kinds.indexOf('bet') === kinds.length - 1 || !kinds.includes('bet'), kinds);
   }
 
   group('a snipe buys only once Polymarket has closed the market: 99c is a reading, not a settlement');

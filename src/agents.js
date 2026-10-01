@@ -365,7 +365,7 @@ function BRAM(E) {
       bets.push(s);
     }
   }
-  E.signals = [...snipes, ...bets, ...held.kept];
+  E.signals = [...snipes, ...held.kept, ...bets]; // bets last: they have no edge and must not use the cycle's two slots first
   E.touch('BRAM', widest ? `widest ${c(Math.abs(widest.gap))} ${widest.p.label}` : inPlayN ? `${inPlayN} pairs live or closing, none tradeable` : 'no pairs');
   if (staleN && E.due('bram-stale', 300)) E.log('BRAM', 'RESEARCH', null, `${staleN} pair${staleN > 1 ? 's' : ''} skipped on stale quotes (older than ${E.cfg.maxDataAgeSec}s) \u00b7 desk-wide data age is fine, these instruments individually are not`);
   // "Nothing traded" is this desk's normal output, so the useful thing to narrate is which rail
@@ -518,9 +518,10 @@ async function KETT(E) {
   for (const s of E.signals) {
     if (standDown(E)) return;
     if (considered >= 2) break; // pace: at most two new positions per cycle
-    // A game bet sits beside an arb on the same game (each is its own position); only a bet already
-    // placed stops another. Every other book still stands aside from a pair anything holds.
-    if (E.state.positions.some((p) => p.pairId === s.pair.id && (s.type !== 'bet' || p.strategy === 'bet'))) continue;
+    // A game bet and every other trade are two lanes on the same game (each is its own position): a held bet
+    // stops only another bet, and anything else held stops only the other books, so a bet placed before the
+    // game neither starves its arb nor blocks the settlement snipe at the final.
+    if (E.state.positions.some((p) => p.pairId === s.pair.id && ((s.type === 'bet') === (p.strategy === 'bet')))) continue;
     if (s.type === 'bet' && live) continue; // paper only (decide.betSignal makes none in live mode either)
     if (Date.now() - (E.cooldown.get(s.pair.id) || 0) < E.cfg.reentryCooldownMs) continue; // no churn after an exit
     if (live && s.legs.some((l) => l.venue !== 'KS')) continue; // live mode trades Kalshi legs only

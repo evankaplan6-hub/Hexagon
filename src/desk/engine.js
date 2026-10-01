@@ -958,21 +958,30 @@ class Desk {
     const every = this.D.runnerEverySec * 1000;
     if ((b.scan && t - b.scan.at < every) || t - M.failAt < MIN) return;
     let stats = null;
+    // the product list only gates buying: if it will not load, what is held is still marked and sold on the stats
     try {
       if (!M.steps || t - M.stepsAt > 6 * HOUR) { const p = await this.feeds.coinProducts(); if (p) { M.steps = p; M.stepsAt = t; } }
+    } catch (e) {
+      if (this.due('runner-products', 600)) this.log('HOLT', 'OPS', null, `runners: Coinbase's product list did not load: ${String(e && e.message).slice(0, 80)} · no buying until it does, held coins still sold`);
+    }
+    try {
       stats = await this.feeds.coinStats();
     } catch (e) {
       M.failAt = t;
       if (this.due('runner-feed', 600)) this.log('HOLT', 'OPS', null, `runners: Coinbase's 24-hour figures did not load: ${String(e && e.message).slice(0, 80)} · trying again in a minute`);
       return;
     }
-    if (!stats || !M.steps) { M.failAt = t; return; }
+    if (!stats) { M.failAt = t; return; }
     // "still climbing" is against the scan before, and only when that scan was the last one (not before an outage)
     const prev = b.scan && t - b.scan.at <= 2 * every ? b.scan.px : null;
     const rows = books.runnerScan(stats, prev, R);
     for (const lot of [...b.lots]) {
       const s = stats[lot.sym], last = s ? s.last : null;
-      if (!(last > 0)) continue;
+      if (!(last > 0)) {
+        // a coin that left Coinbase's figures (delisted, halted) is not marked, but must not sit on a slot for ever
+        if (t - lot.openedAt >= R.staleHours * HOUR) await this.kettRunner({ side: 'sell', lot, why: `${R.staleHours} hours and no longer in Coinbase's 24-hour figures` });
+        continue;
+      }
       lot.mark = last; lot.peak = Math.max(lot.peak, last);
       const why = books.runnerExit(lot, last, t, R);
       if (why) await this.kettRunner({ side: 'sell', lot, why });
@@ -981,7 +990,7 @@ class Desk {
     for (const [id, at] of Object.entries(b.cool)) if (t - at >= R.coolHours * HOUR) delete b.cool[id];
     const held = () => new Set(b.lots.map((l) => l.sym));
     for (const r of rows) {
-      if (r.why || held().has(r.id) || b.cool[r.id] || !M.steps[r.id]) continue;
+      if (r.why || held().has(r.id) || b.cool[r.id] || !M.steps || !M.steps[r.id]) continue;
       if (b.lots.length >= R.slots) break;
       const spend = r2(Math.min(b.cash, this.bookValue('runners') / R.slots));
       if (spend < 5) break;
@@ -994,7 +1003,7 @@ class Desk {
     const h = held();
     const top = rows.slice(0, 6).map((r) => ({
       id: r.id, move: r4(r.move), offHigh: r4(r.offHigh), volUsd: Math.round(r.volUsd), last: r.last,
-      status: h.has(r.id) ? 'held' : b.cool[r.id] ? 'sold in the last 12 hours' : r.why ? r.why : !M.steps[r.id] ? 'not trading on Coinbase' : this.halt ? 'not buying today' : 'running, no slot free',
+      status: h.has(r.id) ? 'held' : b.cool[r.id] ? 'sold in the last 12 hours' : r.why ? r.why : !M.steps || !M.steps[r.id] ? 'not trading on Coinbase' : this.halt ? 'not buying today' : 'running, no slot free',
     }));
     b.scan = { at: t, n: rows.length, px: Object.fromEntries(rows.map((r) => [r.id, r.last])), top };
     b.scans = (b.scans || 0) + 1;
