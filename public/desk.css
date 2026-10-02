@@ -1,18 +1,23 @@
-/* The stocks, crypto and options floor at /: a wall of cards, one screen each.
+/* The stocks, crypto and options floor at /: four views of the one desk, each a page of cards.
 
    Until 2026-09-25 the boards were painted into a pixel room with the bots at their desks, placed in
    the room's drawing units and sized by its zoom, which is why most of their words were under 12px.
-   The bots and the room went at Evan's asking, and the page is laid out for reading now: a grid of
-   cards, nothing under 12px (--type-label), every colour and size from tokens.css.
+   The bots and the room went at Evan's asking, and the page is laid out for reading now: nothing under
+   12px (--type-label), every colour and size from tokens.css.
 
    Since 2026-09-29 it is drawn the way Apple draws its own apps, on an iPhone, an iPad or a Mac:
    San Francisco, Apple's colours in light or dark as the device is set, cards on a grouped page with
    iOS's corners, a translucent bar across the top that blurs what scrolls under it, a large title on a
-   phone that scrolls away and leaves the desk's light pinned, segmented controls and filter chips drawn
-   as iOS draws them, the large chart as a sheet, and the safe areas around a notch. The grid, and what
-   goes where at each width, is as it was. */
+   phone that scrolls away and leaves the desk's light pinned, segmented controls drawn as iOS draws
+   them, the large chart as a sheet, and the safe areas around a notch.
+
+   Since 2026-10-02 the wall is four views (desk.js says what each holds): a segmented control in the
+   bar picks one, as a Mac app's toolbar does, and on a phone a tab bar along the foot of the screen,
+   as an iPhone app has. Until then it was one wall, 2,800px long on a laptop and 3,300 on a phone. */
 
 * { box-sizing: border-box; }
+/* a view, a tab or a tile that is not showing is not there, whatever display its own rule gives it */
+[hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; scroll-padding-top: 76px; }
 @media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
 html, body { margin: 0; }
@@ -30,12 +35,15 @@ button:active, a:active, summary:active { opacity: .55; }
 .pos { color: var(--gain); } .neg { color: var(--loss); } .zero { color: var(--ink-2); }
 .pos, .neg, .zero { white-space: nowrap; }
 
-/* ---- the bar across the top: the name, the state, the time ----------------------------------- */
+/* ---- the bar across the top: the name, the views, the state, the time --------------------------- */
 /* It stays at the top, and what scrolls under it shows through, blurred, the way a bar does on iOS and
-   macOS; its hairline appears once something is under it (desk.js sets .scrolled). */
+   macOS; its hairline appears once something is under it (desk.js sets .scrolled). The blur is drawn
+   behind the bar rather than on it: a backdrop filter on the bar itself would hold the phone's tab bar,
+   which lives inside it, to the bar's box instead of the screen's foot. */
 .top { position: sticky; top: 0; z-index: 20; padding: 0 max(var(--space-5), env(safe-area-inset-right)) 0 max(var(--space-5), env(safe-area-inset-left));
-  background: var(--material); -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px);
   box-shadow: 0 .5px 0 transparent; transition: box-shadow .2s; }
+.top::before { content: ''; position: absolute; inset: 0; z-index: -1; background: var(--material);
+  -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px); }
 .top.scrolled { box-shadow: 0 .5px 0 var(--line-2); }
 .bar { max-width: 1640px; min-height: 56px; margin: 0 auto; padding-top: env(safe-area-inset-top); display: flex; align-items: center; gap: var(--space-2) var(--space-4); }
 .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
@@ -59,61 +67,89 @@ h1 { margin: 0; font: 600 var(--type-title)/1.2 var(--sans); letter-spacing: -.0
   .pill.good i { animation: breathe 2s ease-in-out infinite; }
   @keyframes breathe { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
 }
-.clock { margin-left: auto; font: 500 var(--type-small)/1 var(--sans); color: var(--ink-2); white-space: nowrap; }
+.top .pill { margin-left: auto; }
+.clock { font: 500 var(--type-small)/1 var(--sans); color: var(--ink-2); white-space: nowrap; }
 .clock .sec { color: var(--ink-3); }
-#pmlink { font: 500 var(--type-small)/1 var(--sans); white-space: nowrap; }
+
+/* the views: a segmented control in the middle of the bar, the one showing raised on its track. Its icons
+   are for the phone's tab bar. */
+.views { display: inline-flex; gap: 2px; margin-left: var(--space-4); padding: 2px; border-radius: var(--radius-pill); background: var(--fill-1); }
+.views a { display: inline-flex; align-items: center; justify-content: center; padding: 6px 14px; border-radius: var(--radius-pill);
+  font: 600 var(--type-small)/1.2 var(--sans); color: var(--ink-2); white-space: nowrap; transition: background-color .2s, box-shadow .2s, color .2s; }
+.views a[aria-current] { background: var(--seg-on); color: var(--ink-1); box-shadow: var(--shadow-seg); }
+.views svg, .views .sh { display: none; }
 
 .wrap { flex: 1 0 auto; display: flex; flex-direction: column; gap: var(--space-4); width: 100%; max-width: 1680px; margin: 0 auto;
   padding: var(--space-2) max(var(--space-5), env(safe-area-inset-right)) max(var(--space-5), env(safe-area-inset-bottom)) max(var(--space-5), env(safe-area-inset-left)); }
 
 .banner { margin: 0; padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); background: var(--bad-wash); color: var(--ink-1); font-weight: 600; }
 .banner::before { content: ''; display: inline-block; width: 8px; height: 8px; margin-right: 10px; border-radius: 50%; background: var(--bad); vertical-align: 1px; }
-.banner[hidden] { display: none; }
 /* past the daily loss limit: the desk is working as it should and not buying, which is amber, not broken */
 .banner.warn { background: var(--warn-wash); } .banner.warn::before { background: var(--warn); }
 
-/* ---- the wall: a twelve-column grid. The headline and the desk, then the books, then the chart and the
-   log sharing a row, then the prediction-market desk; 420px or whatever a tall screen has spare (it used to go to the top boards as
-   empty space at their feet). On a screen under 1,000px tall (a laptop, a 1080p monitor under its
-   browser's bars) the chart and the log come before the books, so what is happening is on the first
-   screen and the books' figures start at its foot; at 1440 x 900 the chart and log were 38% on it. -- */
-main { flex: 1 1 auto; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-template-rows: auto auto minmax(420px, 1fr) auto;
-  gap: var(--space-4); min-height: 0; transition: opacity .4s; }
-/* the prediction-market desk (2026-09-29) is the last row, under the chart and the log, on every screen */
-@media (min-width: 1024px) and (max-height: 999px) {
-  main { grid-template-rows: auto minmax(420px, 1fr) auto auto; }
-  .books { order: 1; }
-  .pm { order: 2; }
-}
+/* ---- the views. Each a twelve-column grid of cards. -------------------------------------------- */
+main { flex: 1 1 auto; min-height: 0; transition: opacity .4s; }
 /* no signal: the last state received, dimmed, under the banner that says so */
 main.gone { opacity: .45; }
+.view { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: var(--space-4); align-items: start; min-width: 0; }
 .card { min-width: 0; min-height: 0; padding: var(--space-4) var(--space-5); background: var(--bg-1); border-radius: var(--radius-lg); box-shadow: var(--shadow-card); }
-/* each card rises into place once, as the page opens (the stream patches them in place after that) */
+/* a view's cards rise into place as it opens (the stream patches them in place after that) */
 @media (prefers-reduced-motion: no-preference) {
-  .card { animation: rise .55s cubic-bezier(.2, .8, .2, 1) both; }
-  @keyframes rise { from { opacity: 0; transform: translateY(8px); } }
+  .card { animation: rise .45s cubic-bezier(.2, .8, .2, 1) both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+  /* a book's card that a line on the overview led to is lit for a moment */
+  .bk.flash { animation: flash 1.8s ease-out; }
+  @keyframes flash { 0%, 35% { box-shadow: 0 0 0 3px var(--focus), var(--shadow-card); } }
 }
-.hero { grid-column: span 7; }
-.desk { grid-column: span 5; }
-/* each card as tall as what it has to say: a book holding nothing used to stretch to the tallest one's
-   height and carry 80-95px of nothing. Five books (2026-09-29): the two that hold markets side by side,
-   the three option books under them */
-.books { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: var(--space-4); min-width: 0; align-items: start; }
-.bk { grid-column: span 2; }
-.bk:is([data-k="crypto"], [data-k="stocks"]) { grid-column: span 3; }
-/* the last row's two cards take the row's height and never set it: the log scrolls inside, and neither
-   the log's length nor the chart's last size can make the row grow */
-.chartcard { grid-column: span 7; display: flex; flex-direction: column; contain: size; }
-.act { grid-column: span 5; display: flex; flex-direction: column; padding-left: 0; padding-right: 0; contain: size; }
 /* a card's title, sentence case, as iOS titles a group */
 .label { display: block; margin: 0; font: 600 var(--type-title)/1.25 var(--sans); letter-spacing: -.02em; color: var(--ink-1); }
 .cardhead { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2) var(--space-3); flex-wrap: wrap; }
+.sub { margin: 6px 0 0; color: var(--ink-3); font-size: var(--type-small); }
+.dot { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: var(--ok); vertical-align: 1px; }
+.dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+/* working as it always does, but not live: SPY's feed, a quarter of an hour late */
+.dot.late { background: var(--ink-3); }
+.sw { width: 10px; height: 10px; flex: none; border-radius: 50%; background: var(--bk); }
 
-/* ---- the headline: every book, and the comparison the desk exists for ----------------------- */
+/* ---- the overview: each desk a tile, its books in lines under its figure; then the chart and the latest */
+.ov { align-items: stretch; }
+.ov .tile { grid-column: span 6; display: flex; flex-direction: column; }
+.ov:has(#ovpm[hidden]) #ovdesk { grid-column: 1 / -1; }
+.ov .chartcard { grid-column: span 7; min-height: 420px; }
+.ov .latest { grid-column: span 5; }
+.tilehead { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2) var(--space-3); flex-wrap: wrap; min-height: 30px; }
+.tilefig { display: flex; align-items: flex-end; flex-wrap: wrap; gap: var(--space-2) var(--space-6); margin-top: var(--space-1); }
+.tile .big { font: 700 44px/1.05 var(--sans); letter-spacing: -.025em; }
+/* today, and against simply holding, beside the figure */
+.mini { display: flex; gap: var(--space-5); margin: 0 0 4px; }
+.mini dt { font-size: var(--type-label); letter-spacing: 0; color: var(--ink-3); }
+.mini dd { margin: 1px 0 0; font: 600 var(--type-title)/1.15 var(--sans); }
+.mkt { margin: 4px 0 0; font-size: var(--type-small); color: var(--ink-2); }
+.mkt .dot ~ .dot { margin-left: var(--space-3); }
+/* every book on a line: its colour, its name and what it holds, what it is doing now, its P&L, a chevron.
+   The whole line is the link to its card, and it lights under a pointer. */
+.booklist { list-style: none; margin: var(--space-3) 0 0; padding: 0; border-top: 1px solid var(--line-1); }
+.booklist li + li { border-top: 1px solid var(--line-1); }
+.booklist a { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto 8px; align-items: center; gap: 0 var(--space-3);
+  margin: 0 calc(-1 * var(--space-3)); padding: 10px var(--space-3); border-radius: var(--radius-md); color: inherit; transition: background-color .15s; }
+.booklist .sw { align-self: start; margin-top: 6px; }
+.bl { min-width: 0; }
+.bln { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px var(--space-2); font: 600 15px/1.3 var(--sans); color: var(--ink-1); }
+.blc { font: 500 var(--type-label)/1.3 var(--sans); letter-spacing: 0; color: var(--ink-3); }
+.blnow { display: block; margin-top: 2px; font-size: var(--type-small); line-height: 1.35; color: var(--ink-3); }
+.blnow b { font-weight: 600; color: var(--ink-2); }
+.blf { font: 600 var(--type-title)/1.2 var(--sans); letter-spacing: -.015em; }
+.chev { width: 7px; height: 7px; border-right: 1.5px solid var(--ink-3); border-bottom: 1.5px solid var(--ink-3); transform: rotate(-45deg); }
+.latest { display: flex; flex-direction: column; }
+.seeall { font-size: var(--type-small); font-weight: 500; white-space: nowrap; }
+.seeall::after { content: ''; display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-1px) rotate(-45deg); }
+
+/* ---- the stocks, crypto and options view: the headline beside the desk's state, then the books ---- */
+.dv .hero { grid-column: span 7; align-self: stretch; }
+.dv .deskcard { grid-column: span 5; align-self: stretch; }
 /* the headline's figure only: the large chart is .pnl.big, and a bare .big gave it 48px type, which pushed
    the licence's logo down onto the first time label */
 .hero .big { margin-top: var(--space-1); font: 700 var(--type-headline)/1.05 var(--sans); letter-spacing: -.025em; white-space: nowrap; }
-.sub { margin-top: 6px; color: var(--ink-3); font-size: var(--type-small); }
 .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: var(--space-4) 0 0; padding-top: var(--space-3); border-top: 1px solid var(--line-1); }
 .kpis div { padding: 0 var(--space-3) 0 0; min-width: 0; }
 .kpis div + div { padding-left: var(--space-3); border-left: 1px solid var(--line-1); }
@@ -122,36 +158,38 @@ main.gone { opacity: .45; }
 .kpis dd small { display: block; margin-top: 3px; font: 400 var(--type-label)/1.2 var(--sans); letter-spacing: 0; color: var(--ink-3); }
 .insight { margin: var(--space-3) 0 0; color: var(--ink-2); font-size: var(--type-small); }
 .insight b { font-weight: 600; }
-
-/* ---- the desk: market, prices, the options day, the loss limit, the old desk ----------------- */
+/* the desk: market, prices, the loss limit */
 .facts { margin: var(--space-2) 0 0; }
 .facts div { display: grid; grid-template-columns: 7.5em minmax(0, 1fr); gap: var(--space-3); padding: 9px 0; border-bottom: 1px solid var(--line-1); }
 .facts div:last-child { border-bottom: 0; }
 .facts dt { font-size: var(--type-small); color: var(--ink-3); }
 .facts dd { margin: 0; font-size: var(--type-small); color: var(--ink-2); }
 .facts dd b { color: var(--ink-1); font-weight: 600; }
-.dot { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: var(--ok); vertical-align: 1px; }
-.dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
-/* working as it always does, but not live: SPY's feed, a quarter of an hour late */
-.dot.late { background: var(--ink-3); }
 /* amber and red are for a limit getting close, not for every loss: plain until half of it is used */
 .meter { display: block; height: 6px; margin-top: 8px; border-radius: var(--radius-pill); background: var(--fill-1); overflow: hidden; }
 .meter i { display: block; height: 100%; border-radius: inherit; background: var(--ink-3); }
 .meter.warn i { background: var(--warn); } .meter.bad i { background: var(--bad); }
 .deskfoot { margin: var(--space-2) 0 0; font-size: var(--type-label); line-height: 1.45; color: var(--ink-3); }
+/* the books in their two groups, three to a row, each card as tall as what it has to say */
+.books { grid-column: 1 / -1; display: flex; flex-direction: column; gap: var(--space-5); min-width: 0; }
+.bkgroup > h2 { margin: var(--space-2) 0 0; font: 700 22px/1.2 var(--sans); letter-spacing: -.02em; }
+.bkgroup > p { margin: 2px 0 var(--space-3); max-width: 80ch; font-size: var(--type-small); color: var(--ink-3); }
+.bkgrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); align-items: start; }
 
-/* ---- a book: its figure against holding, its line, what it holds, what happens next ---------- */
-.bk { display: flex; flex-direction: column; gap: var(--space-2); }
+/* ---- a book: its figure against holding, what it is doing now, what it holds ---------------------- */
+.bk { display: flex; flex-direction: column; gap: var(--space-2); scroll-margin-top: var(--space-3); }
 /* a header that runs out of room puts its chip on a line of its own, never past the card's edge */
 .bk header { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-1) var(--space-2); }
 .bk h3 { margin: 0; font: 600 var(--type-title)/1.25 var(--sans); letter-spacing: -.02em; }
-.sw { width: 10px; height: 10px; flex: none; border-radius: 50%; background: var(--bk); }
 .chip { margin-left: auto; padding: 4px 10px; border: 0; border-radius: var(--radius-pill); background: var(--fill-1);
   font: 500 var(--type-label)/1.3 var(--sans); letter-spacing: 0; color: var(--ink-2); white-space: nowrap; }
 .figline { display: flex; align-items: baseline; gap: var(--space-2) var(--space-3); flex-wrap: wrap; }
 .fig { font: 700 var(--type-figure)/1.1 var(--sans); letter-spacing: -.025em; }
 .vs { font-size: var(--type-small); color: var(--ink-2); }
 .vs b { font-weight: 600; }
+/* what the book is doing now, under its figure, ruled in the book's colour */
+.now { margin: 0; padding: 1px 0 1px 10px; border-left: 3px solid var(--bk); font-size: var(--type-small); line-height: 1.4; color: var(--ink-2); }
+.now b { color: var(--ink-1); font-weight: 600; }
 .bksub { font-size: var(--type-label); color: var(--ink-3); letter-spacing: 0; }
 /* the book's line, and a wash of its colour under it, the way Stocks draws one */
 .spark { display: block; width: 100%; height: 40px; overflow: visible; }
@@ -177,28 +215,20 @@ main.gone { opacity: .45; }
 .bkfacts div { display: flex; justify-content: space-between; gap: var(--space-3); padding: 8px 0; border-top: 1px solid var(--line-1); font-size: var(--type-small); }
 .bkfacts dt { color: var(--ink-3); white-space: nowrap; }
 .bkfacts dd { margin: 0; text-align: right; color: var(--ink-2); }
-.next { margin: 0; padding-top: var(--space-2); border-top: 1px solid var(--line-1); font-size: var(--type-small); color: var(--ink-2); }
-.next b { color: var(--ink-1); font-weight: 600; }
 /* how the book trades: a disclosure, its chevron turning as it opens */
-.rule { font-size: var(--type-small); color: var(--ink-3); }
+.rule { padding-top: var(--space-2); border-top: 1px solid var(--line-1); font-size: var(--type-small); color: var(--ink-3); }
 .rule summary { cursor: pointer; width: max-content; list-style: none; color: var(--accent); font-weight: 500; }
 .rule summary::-webkit-details-marker { display: none; }
 .rule summary::after { content: ''; display: inline-block; width: 6px; height: 6px; margin-left: 7px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
   transform: translateY(-2px) rotate(-45deg); transition: transform .2s; }
 .rule[open] summary::after { transform: translateY(-3px) rotate(45deg); }
 .rule p { margin: 6px 0 0; line-height: 1.5; color: var(--ink-2); }
-.bkmore { display: flex; flex-direction: column; gap: var(--space-2); }
-/* the chip is a button only on a phone, where a book is its figure until it is opened */
-.bktog { display: none; cursor: pointer; }
-.bktog i { width: 6px; height: 6px; margin-left: 7px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
-  transform: translateY(-2px) rotate(45deg); transition: transform .2s; }
-.bktog[aria-expanded="true"] i { transform: translateY(1px) rotate(-135deg); }
 
-/* ---- the prediction-market desk (2026-09-29): its board, then its five books, drawn as the books
-   above are. The arbs and the maker hold the most, so they are the widest; the snipe and convergence,
-   which hold little or nothing, share the last column. ---------------------------------------- */
-.pm { grid-column: 1 / -1; display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
-.pm[hidden] { display: none; }
+/* ---- the prediction-market view (2026-09-29): its board, then its five books, drawn as the books
+   above are. The arbs and the maker hold the most, so they are the widest; the game bets, the snipe and
+   convergence, which hold little or nothing, share the last column. ---------------------------------- */
+.pm { align-items: start; }
+.pm > * { grid-column: 1 / -1; }
 /* its board: the name and the light, the link to its old page beside them, the figure under both */
 .pmhero { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-2) var(--space-4); }
 .pmhero .cardhead { justify-content: flex-start; }
@@ -208,13 +238,11 @@ main.gone { opacity: .45; }
 .pmbooks > [data-k="pm-arbs"] { grid-column: span 5; }
 .pmbooks > [data-k="pm-maker"] { grid-column: span 4; }
 .pmside { grid-column: span 3; display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
-/* the five books' grid gives a card two of its columns (.bk above); these cards take one of theirs */
-.pmside > .bk { grid-column: auto; }
 /* under 1,280px wide that last column is too narrow for "Convergence" and its chip (at 1,024 the chip ran
-   22px past the card's edge): the arbs and the maker side by side, the snipe and convergence under them */
+   22px past the card's edge): the arbs and the maker side by side, the other three under them */
 @media (max-width: 1279px) {
   .pmbooks > [data-k="pm-arbs"], .pmbooks > [data-k="pm-maker"] { grid-column: span 6; }
-  .pmside { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+  .pmside { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; }
 }
 /* a market's name is words, not a ticker, and it wraps */
 .hold-t .nm { font-weight: 600; color: var(--ink-1); overflow-wrap: anywhere; }
@@ -227,6 +255,7 @@ main.gone { opacity: .45; }
 .pmbk .bkfacts dd { text-align: left; min-width: 0; }
 
 /* ---- the P&L chart: every book, and what holding would have made ------------------------------ */
+.chartcard { display: flex; flex-direction: column; }
 .pnl { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; font-family: var(--sans); color: var(--ink-2); user-select: none; -webkit-user-select: none; }
 .pnl button { font: inherit; background: none; border: 0; cursor: pointer; color: inherit; padding: 0; }
 .pnl .ct, .pnl .cb { flex: none; display: flex; align-items: center; gap: var(--space-2); }
@@ -241,22 +270,23 @@ main.gone { opacity: .45; }
 .pnl .cd { margin-left: auto; font: 500 var(--type-label)/1 var(--sans); letter-spacing: 0; color: var(--ink-3); white-space: nowrap; }
 .pnl .cplot { position: relative; flex: 1 1 auto; min-height: 120px; margin: var(--space-2) 0; }
 .pnl .cb { flex-wrap: wrap; row-gap: var(--space-1); }
-/* the range: a segmented control, the picked segment raised on its track */
-.pnl .seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--radius-pill); background: var(--fill-1); }
-.pnl .seg button { min-width: 44px; padding: 6px 12px; border-radius: var(--radius-pill); font: 600 var(--type-label)/1 var(--sans); letter-spacing: 0; color: var(--ink-2); white-space: nowrap;
-  transition: background-color .2s, box-shadow .2s, color .2s; }
-.pnl .seg button.on { background: var(--seg-on); color: var(--ink-1); box-shadow: var(--shadow-seg); }
 .pnl .cr { margin-left: auto; min-width: 0; white-space: nowrap; font: 500 var(--type-label)/1 var(--sans); letter-spacing: 0; color: var(--ink-3); text-align: right; }
 .pnl .cr b { font-weight: 700; }
 /* the dashed line, beside the figure it draws */
 .pnl .cr .dash { display: inline-block; width: 14px; margin-right: 6px; border-top: 2px dashed var(--ink-3); vertical-align: middle; }
 .pnl.big .cv { font-size: var(--type-headline); }
 .pnl.big .cd, .pnl.big .cr { font-size: var(--type-small); }
+/* a segmented control: the chart's range, and the activity's two choices; the picked segment raised on
+   its track */
+.seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--radius-pill); background: var(--fill-1); }
+.seg button { min-width: 44px; padding: 6px 12px; border: 0; border-radius: var(--radius-pill); background: none; cursor: pointer;
+  font: 600 var(--type-label)/1 var(--sans); letter-spacing: 0; color: var(--ink-2); white-space: nowrap; transition: background-color .2s, box-shadow .2s, color .2s; }
+.seg button.on { background: var(--seg-on); color: var(--ink-1); box-shadow: var(--shadow-seg); }
+.seg button span { margin-left: 5px; font-weight: 500; color: var(--ink-3); }
 
 /* the chart opened large: a sheet over the page, which blurs behind it */
 #chartbig { position: fixed; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center; padding: var(--space-6);
   background: var(--scrim); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
-#chartbig[hidden] { display: none; }
 #chartbig .cbbox { display: flex; flex-direction: column; width: min(1100px, 100%); height: min(660px, 100%); padding: var(--space-4) var(--space-6) var(--space-3);
   border-radius: var(--radius-xl); background: var(--bg-1); box-shadow: var(--shadow-dialog), 0 0 0 .5px var(--rule-2); color: var(--ink-2); }
 #chartbig .cbh { flex: none; display: flex; justify-content: space-between; align-items: center; gap: var(--space-3);
@@ -271,110 +301,118 @@ main.gone { opacity: .45; }
   @keyframes sheetin { from { opacity: 0; transform: scale(.96); } }
 }
 
-/* ---- what's happening: the bots' log, routine rounds hidden unless asked for ---------------- */
-.act .cardhead { padding: 0 var(--space-5) var(--space-3); border-bottom: 1px solid var(--line-1); }
-/* the kinds of line: filter chips, filled in the ink when showing, as iOS draws them */
-.chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.chips button { padding: 6px 12px; border: 0; border-radius: var(--radius-pill); background: var(--fill-1); cursor: pointer;
-  font: 500 var(--type-label)/1.2 var(--sans); letter-spacing: 0; color: var(--ink-2); white-space: nowrap; transition: background-color .2s, color .2s; }
-.chips button span { margin-left: 5px; opacity: .8; }
-.chips button.on { background: var(--ink-1); color: var(--bg-1); }
-#feedlist { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; list-style: none; margin: 0; padding: 0 var(--space-5);
-  scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
-/* the time column holds the widest time with its AM or PM, "12:59 PM" */
-#feedlist li { display: grid; grid-template-columns: 4.9em 3.6em minmax(0, 1fr) auto; gap: var(--space-3); align-items: baseline;
-  padding: 10px 0; border-bottom: 1px solid var(--line-1); font-size: var(--type-small); }
-#feedlist li:last-child { border-bottom: 0; }
-/* the day above the entries from before today, held at the top of the list while its entries pass under it */
-#feedlist li.day { display: block; position: sticky; top: 0; z-index: 1; padding: var(--space-3) 0 6px; background: var(--bg-1);
-  font: 600 var(--type-small)/1.2 var(--sans); color: var(--ink-2); }
-#feedlist time { font-size: var(--type-label); letter-spacing: 0; color: var(--ink-3); white-space: nowrap; }
-#feedlist .who { font: 600 var(--type-label)/1.2 var(--sans); letter-spacing: .02em; color: var(--ink-3); }
-#feedlist .what { min-width: 0; color: var(--ink-2); overflow-wrap: anywhere; }
-#feedlist .what small { display: block; margin-top: 2px; font-size: var(--type-label); letter-spacing: 0; color: var(--ink-3); }
-#feedlist .amt { font-size: var(--type-small); font-weight: 600; white-space: nowrap; }
-#feedlist .lv-trade .what { color: var(--ink-1); font-weight: 600; }
-#feedlist .lv-trade .what small { font-weight: 400; }
-#feedlist .lv-warn .what { color: var(--bad); font-weight: 600; }
-#feedlist .lv-quiet .what { color: var(--ink-3); }
-#feedlist li.empty { display: block; padding: var(--space-4) 0; color: var(--ink-3); }
-#feedlist li.more { display: block; padding: var(--space-2) 0 0; border-bottom: 0; }
-#feedlist li.more button { padding: 8px 0; border: 0; background: none; cursor: pointer; font-size: var(--type-small); font-weight: 500; color: var(--accent); }
+/* ---- the activity: a list of lines, each tagged with the book it is about -------------------------- */
+.av .act { grid-column: 2 / span 10; }
+.filters { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-3); margin: var(--space-3) 0 var(--space-1); }
+.feed { list-style: none; margin: 0; padding: 0; }
+/* a wide list: the time, the book, what happened, the money; the time column holds "12:59 PM" */
+.feed li { display: grid; grid-template-columns: 4.9em 8.5em minmax(0, 1fr) auto; grid-template-areas: "time tag what amt";
+  gap: 2px var(--space-3); align-items: baseline; padding: 10px 0; border-bottom: 1px solid var(--line-1); font-size: var(--type-small); }
+.feed li:last-child { border-bottom: 0; }
+.feed time { grid-area: time; font-size: var(--type-label); letter-spacing: 0; color: var(--ink-3); white-space: nowrap; }
+.feed .tag { grid-area: tag; display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden;
+  font: 600 var(--type-label)/1.2 var(--sans); letter-spacing: 0; color: var(--ink-2); white-space: nowrap; text-overflow: ellipsis; }
+.feed .tag .sw { width: 8px; height: 8px; }
+.feed .what { grid-area: what; min-width: 0; color: var(--ink-2); overflow-wrap: anywhere; }
+.feed .what small { display: block; margin-top: 2px; font-size: var(--type-label); letter-spacing: 0; color: var(--ink-3); }
+.feed .amt { grid-area: amt; font-size: var(--type-small); font-weight: 600; white-space: nowrap; }
+.feed .lv-trade .what { color: var(--ink-1); font-weight: 600; }
+.feed .lv-trade .what small { font-weight: 400; }
+.feed .lv-warn .what { color: var(--bad); font-weight: 600; }
+.feed .lv-quiet .what { color: var(--ink-3); }
+/* the day above the entries from before today */
+.feed li.day { display: block; padding: var(--space-3) 0 6px; font: 600 var(--type-small)/1.2 var(--sans); color: var(--ink-2); }
+.feed li.empty { display: block; padding: var(--space-4) 0; color: var(--ink-3); border-bottom: 0; }
+/* a narrow list (the overview's latest, and every list on a phone): the book and the time over what happened */
+.latest .feed li { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "tag time amt" "what what what"; }
+.latest .feed time { padding-left: var(--space-1); }
+.latest .feed { margin-top: var(--space-2); }
 
 footer { max-width: 96ch; font-size: var(--type-label); line-height: 1.5; letter-spacing: 0; color: var(--ink-3); }
 
 /* ---- a pointer that hovers (a Mac, an iPad with a trackpad); a finger gets none of this --------- */
 @media (hover: hover) {
   a:hover { text-decoration: underline; }
-  .chips button:not(.on):hover, .pnl .seg button:not(.on):hover, .pnl .cx:hover { background: var(--fill-2); }
-  .rowsmore:hover, #feedlist li.more button:hover, #chartbig .cbback:hover, .rule summary:hover { text-decoration: underline; }
+  .booklist a:hover, .views a:hover { text-decoration: none; }
+  .booklist a:hover { background: var(--fill-1); }
+  .views a:not([aria-current]):hover, .seg button:not(.on):hover, .pnl .cx:hover { background: var(--fill-2); }
+  .rowsmore:hover, #chartbig .cbback:hover, .rule summary:hover { text-decoration: underline; }
 }
 /* a finger: controls at least 32px tall, text buttons 44 */
 @media (pointer: coarse) {
-  .chips button, .pnl .seg button { min-height: 32px; }
+  .seg button { min-height: 32px; }
   .pnl .cx { width: 36px; height: 36px; }
-  .rowsmore, #feedlist li.more button { min-height: 44px; }
+  .rowsmore { min-height: 44px; }
 }
 
 /* ---- narrower windows ------------------------------------------------------------------------- */
 @media (max-width: 1279px) {
-  main, .books, .pm, .pmbooks, .pmside { gap: var(--space-3); }
+  .view, .books, .bkgrid, .pmbooks, .pmside { gap: var(--space-3); }
+  .av .act { grid-column: 1 / -1; }
 }
-/* a tablet: the headline beside the desk, the books in pairs (crypto and stocks, then the option books),
-   then the chart and the log; it was the phone's single column, 2,712px long at 820 */
+/* a tablet or a small laptop: the views on a row of their own under the name, the light and the time;
+   the overview's tiles one above the other; the books in pairs */
 @media (max-width: 1023px) {
-  main { grid-template-rows: none; }
-  .hero, .desk { grid-column: span 6; }
-  .books { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .bk, .bk:is([data-k="crypto"], [data-k="stocks"]) { grid-column: auto; }
+  .bar { flex-wrap: wrap; }
+  .views { order: 5; flex: 1 1 100%; margin: 0 0 10px; }
+  .views a { flex: 1 1 0; }
+  .ov .tile, .ov .chartcard, .ov .latest { grid-column: 1 / -1; }
+  .ov .chartcard { min-height: 0; height: 340px; }
+  .dv .hero, .dv .deskcard { grid-column: span 6; }
+  .bkgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .kpis div:nth-child(3) { padding-left: 0; border-left: 0; }
   .kpis div:nth-child(n+3) { margin-top: var(--space-3); }
-  .chartcard, .act { grid-column: 1 / -1; contain: none; }
-  .chartcard { height: 340px; }
-  .act { max-height: 560px; }
+  .pmside { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 767px) {
-  .hero, .desk { grid-column: 1 / -1; }
+  .dv .hero, .dv .deskcard { grid-column: 1 / -1; }
+  .pmbooks > [data-k="pm-arbs"], .pmbooks > [data-k="pm-maker"] { grid-column: 1 / -1; }
 }
-/* a phone: the headline, the books as their figures (the chip opens one), the latest five of what is
-   happening, the chart, and the desk last; it read the desk and the markets first, and what was
-   happening 2,300px down. The bar is two rows: a large title that scrolls away, as an iOS title does,
-   and under it the desk's light and the time, which stay. */
+/* a phone: a large title that scrolls away, as an iOS title does, and under it the desk's light and the
+   time, which stay; the views in a tab bar along the foot of the screen, over the home indicator, and
+   everything in one column */
 @media (max-width: 640px) {
+  html { scroll-padding-top: 60px; }
   .top { top: -52px; padding-left: max(var(--space-4), env(safe-area-inset-left)); padding-right: max(var(--space-4), env(safe-area-inset-right)); }
-  .bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "brand link" "pill clock"; align-items: center;
+  .bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "brand brand" "pill clock"; align-items: center;
     min-height: 0; gap: 0 var(--space-3); padding-bottom: 10px; }
   .brand { grid-area: brand; height: 52px; }
-  #pmlink { grid-area: link; }
-  .pill { grid-area: pill; justify-self: start; }
+  .top .pill { grid-area: pill; justify-self: start; margin-left: 0; }
   .clock { grid-area: clock; }
   .appicon { width: 32px; height: 32px; border-radius: 7.5px; }
   .appicon svg { width: 23px; height: 23px; }
   h1 { font-size: 26px; font-weight: 700; letter-spacing: -.025em; }
-  .wrap { padding: var(--space-1) max(var(--space-4), env(safe-area-inset-right)) max(var(--space-4), env(safe-area-inset-bottom)) max(var(--space-4), env(safe-area-inset-left)); gap: var(--space-3); }
-  main { gap: var(--space-3); }
+  /* the tab bar: an icon over its name, the one showing in the accent */
+  .views { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; display: flex; gap: 0; margin: 0; border-radius: 0;
+    padding: 6px max(var(--space-2), env(safe-area-inset-right)) max(6px, env(safe-area-inset-bottom)) max(var(--space-2), env(safe-area-inset-left));
+    background: var(--material); -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px); box-shadow: 0 -.5px 0 var(--line-2); }
+  .views a { flex: 1 1 0; flex-direction: column; gap: 3px; min-width: 0; padding: 2px 0; border-radius: 0; font: 500 var(--type-label)/1.1 var(--sans); letter-spacing: 0; color: var(--ink-3); }
+  .views a span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+  /* "Stocks & crypto" is wider than a quarter of a 375px screen: the tab says Markets */
+  .views .lg { display: none; } .views .sh { display: inline; }
+  .views a[aria-current] { background: none; box-shadow: none; color: var(--accent); }
+  .views svg { display: block; width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .views a[aria-current] svg { stroke-width: 2.1; }
+  .wrap { padding: var(--space-1) max(var(--space-4), env(safe-area-inset-right)) calc(76px + env(safe-area-inset-bottom)) max(var(--space-4), env(safe-area-inset-left)); gap: var(--space-3); }
+  .view, .books { gap: var(--space-3); }
   .card { padding: var(--space-4); border-radius: 20px; }
-  .books { order: 1; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }
-  /* the list shows five and a button for the rest, so it is as long as they are: at a tablet's 560px it cut
-     the fifth one off, and the button under it */
-  .act { order: 2; padding-left: 0; padding-right: 0; max-height: none; }
-  .pnl .ctitle .csub { display: none; }
-  .chartcard { order: 3; height: 300px; }
-  .desk { order: 4; }
-  .pm { order: 5; gap: var(--space-3); }
-  .pmbooks { grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }
+  .tile .big { font-size: 40px; }
+  .ov .chartcard { height: 300px; }
+  .ov .latest { order: 3; }
+  .ov .chartcard { order: 4; }
+  .bkgrid, .pmbooks { grid-template-columns: minmax(0, 1fr); }
   .pmbooks > [data-k], .pmside { grid-column: auto; }
-  .pmside { grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }
+  .pmside { display: flex; }
   .pmhero { grid-template-columns: minmax(0, 1fr); }
   .pmold { order: 3; }
-  .bk .chip:not(.bktog) { display: none; }
-  .bktog { display: inline-flex; align-items: center; min-height: 32px; }
-  .bk:not(.open) :is(.bkmore, .next) { display: none; }
-  .act .cardhead { padding: 0 var(--space-4) var(--space-3); }
-  #feedlist { padding: 0 var(--space-4); }
-  #feedlist li { grid-template-columns: 4.9em minmax(0, 1fr) auto; }
-  #feedlist .who { display: none; }
+  .bkgroup > h2 { font-size: 20px; }
+  .feed li { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "tag time amt" "what what what"; }
+  .feed time { padding-left: var(--space-1); }
+  .filters .seg { display: flex; width: 100%; }
+  .filters .seg button { flex: 1 1 auto; min-width: 0; padding-left: 8px; padding-right: 8px; }
+  .filters .seg button span { display: none; }
+  .pnl .ctitle .csub { display: none; }
   .hero .big { font-size: 44px; }
   /* the large chart comes up from the foot of the screen, as an iOS sheet does, its grabber on top */
   #chartbig { align-items: flex-end; padding: 0; }

@@ -1,12 +1,18 @@
 /* The Hexagon — the stocks, crypto and options desk's floor at /. Consumes /api/desk/stream.
  *
- * A wall of boards, one screen each: the headline (every book against simply holding what it holds),
- * the desk's own state, one card per book with everything the book holds and the markets it trades,
- * the P&L chart, what the bots are doing, and (since 2026-09-29) the prediction-market desk that runs in
- * the same process, its board and its five books drawn the same way, its bots in the same list. Until 2026-09-25 the boards were painted into a pixel
- * room with the bots at their desks and sized by the room's zoom, so most of their words were under
- * 12px; the bots and the room went at Evan's asking, and the boards are laid out for reading now.
- * The bots are still the desk's workers: the activity list says which of them did what.
+ * Four views of the one floor (2026-10-02; until then a single wall of boards, 2,800px long on a laptop,
+ * the prediction-market desk's figure at its foot and its six books under the fold):
+ *   Overview         each desk's figure with every one of its books on a line (what it holds or is
+ *                    doing now, and its P&L), the P&L chart, and the latest trades and warnings
+ *   Stocks & crypto  the six books in full: the headline against simply holding, the desk's state, and
+ *                    a card per book, in two groups (crypto and SPY, then SPY's same-day options)
+ *   Predictions      the prediction-market desk that runs in the same process (since 2026-09-29): its
+ *                    board and its five books, drawn the same way
+ *   Activity         everything both desks did, newest first, each line tagged with the book it is about
+ * Each view is a link (#overview, #desk, #pm, #activity, and #desk/crypto or #pm/arbs for one book), so
+ * the back button, a bookmark and a reload all land where they were. Until 2026-09-25 the boards were
+ * painted into a pixel room with the bots at their desks; the bots are still the desk's workers, and an
+ * activity line's tag names the one that wrote it when pointed at.
  *
  * Read-only: nothing on this page can place, change or cancel anything.
  */
@@ -137,8 +143,9 @@
     // a background tab says how the desk is doing, not just its name
     const title = Number.isFinite(S.pnl) ? `${plain(signed(S.pnl))} · ${state} · The Hexagon` : 'The Hexagon';
     if (document.title !== title) document.title = title;
-    // the prediction-market desk is on this page now (renderPm): the link goes down to it
-    $('pmlink').hidden = !S.legacy;
+    // the prediction-market desk's view, while there is one to show
+    $('pmtab').hidden = !S.legacy;
+    if (!S.legacy && view === 'pm') setView('overview', false);
     $('floor').classList.toggle('gone', gone || stuck);
     const msg = gone ? 'No signal from the desk: this page is showing the last state it received.'
       : stuck ? `The desk has finished no round since ${ET_HM.format(new Date(S.beat))} ET: every price and figure here stopped then.`
@@ -155,7 +162,8 @@
   }
 
   // ------------------------------------------------------------ the headline: every book against simply holding
-  function heroHtml() {
+  // what the headline and the overview's tile both say: the books against simply holding, the fees, the cash
+  function deskTotals() {
     const books = S.books || [];
     const bench = books.filter((b) => b.bench != null);
     const benchPnl = bench.length ? r2(bench.reduce((a, b) => a + b.benchPnl, 0)) : null;
@@ -164,7 +172,11 @@
     const benchFees = r2(bench.reduce((a, b) => a + (b.fees || 0), 0));   // the fees inside that comparison
     const holdFee = r2(bench.reduce((a, b) => a + (b.benchFee || 0), 0));  // what holding paid to buy in
     const atWork = r2(books.reduce((a, b) => a + b.rows.reduce((x, r) => x + (r.value || 0), 0), 0));
-    const cash = r2((S.equity || 0) - atWork);
+    return { benchPnl, vs, fees, benchFees, holdFee, atWork, cash: r2((S.equity || 0) - atWork) };
+  }
+  const VS_HOLD = 'The books against simply holding what they hold, bought at each book’s first trade with the same fee the book pays to buy';
+  function heroHtml() {
+    const { benchPnl, vs, fees, benchFees, holdFee, atWork, cash } = deskTotals();
     const kpi = (label, html, title) => `<div${title ? ` title="${esc(title)}"` : ''}><dt>${label}</dt><dd>${html}</dd></div>`;
     // the one sentence that says why the books and holding differ
     let insight = '';
@@ -189,9 +201,43 @@
       `<div class="big ${tone(S.pnl)}">${signed(S.pnl)}</div>` +
       `<div class="sub">on ${money(S.initial, 0)} of paper · marked ${esc(ET_HM.format(new Date(S.now)))} ET</div>` +
       `<dl class="kpis">${kpi('Today', S.today != null ? figure(S.today) : '—')}` +
-      `${kpi('vs holding', vs != null ? figure(vs) : '—', 'The books against simply holding what they hold, bought at each book’s first trade with the same fee the book pays to buy')}` +
-      `${kpi('Fees paid', money(fees))}${kpi('At work', `${money(atWork, 0)}<small>${money(cash, 0)} in cash</small>`)}</dl>` +
+      `${kpi('vs. just holding', vs != null ? figure(vs) : '—', VS_HOLD)}` +
+      `${kpi('Fees paid', money(fees))}${kpi('Invested', `${money(atWork, 0)}<small>${money(cash, 0)} in cash</small>`)}</dl>` +
       (insight ? `<p class="insight">${insight}</p>` : '');
+  }
+
+  // ------------------------------------------------------------ the overview: each desk, and every book on a line
+  // The question a glance asks of the floor is how each desk is doing and what each book is up to, and until
+  // 2026-10-02 the answer was spread down the whole wall: the prediction-market desk's figure at its foot,
+  // the books under the fold, what each was doing on the last line of its card. Each desk is a tile now, its
+  // books listed under its figure, each line a link to the book's card.
+  function bookLine(x) {
+    return `<li data-k="${esc(x.k)}"><a href="${x.href}" style="--bk:${x.color}"><i class="sw"></i>` +
+      `<span class="bl"><span class="bln">${esc(x.name)}<span class="blc">${esc(x.chip)}</span></span><span class="blnow">${x.now}</span></span>` +
+      `<span class="blf ${tone(x.pnl)}">${signed(x.pnl)}</span><i class="chev" aria-hidden="true"></i></a></li>`;
+  }
+  function ovDeskHtml() {
+    const { vs } = deskTotals(), M = marketBits();
+    const mini = (S.today != null ? `<div><dt>Today</dt><dd>${figure(S.today)}</dd></div>` : '') +
+      (vs != null ? `<div title="${esc(VS_HOLD)}"><dt>vs. just holding</dt><dd>${figure(vs)}</dd></div>` : '');
+    return `<div class="tilehead"><h2 class="label">Stocks, crypto and options</h2></div>` +
+      `<div class="tilefig"><span class="big ${tone(S.pnl)}">${signed(S.pnl)}</span>${mini ? `<dl class="mini">${mini}</dl>` : ''}</div>` +
+      `<p class="sub">on ${money(S.initial, 0)} of paper · stock market ${esc(M.says || (M.open ? 'open' : 'closed'))}</p>` +
+      `<p class="mkt"><span class="dot${M.cryptoOk ? '' : ' warn'}"></span>Crypto ${M.cryptoOk ? 'live' : 'stale'} <span class="dot ${M.spyOk ? 'late' : 'warn'}"></span>${esc(M.spy)}</p>` +
+      `<ul class="booklist">${(S.books || []).map((b) => bookLine({ k: b.key, href: `#desk/${b.key}`, color: BOOK_COLOR[b.key], name: b.name, chip: bookChip(b), pnl: b.pnl, now: nextLine(b) })).join('')}</ul>`;
+  }
+  function renderOvPm() {
+    const L = S.legacy, el = $('ovpm');
+    el.hidden = !L;
+    if (!L) return;
+    const [state, cls] = pmState(L);
+    morph(el, `<div class="tilehead"><h2 class="label">Prediction markets</h2><span class="pill ${cls}"><i></i>${esc(state)}<span class="mode">Paper</span></span></div>` +
+      `<div class="tilefig"><span class="big ${tone(L.pnl)}">${signed(L.pnl)}</span></div>` +
+      `<p class="sub">on ${money(L.initial, 0)} of its own paper · the same outcomes on Polymarket and Kalshi${L.halt ? ` · ${esc(L.halt)}` : ''}</p>` +
+      `<ul class="booklist">${PM_ORDER.map((k) => (L.books || []).find((b) => b.key === k)).filter(Boolean).map((b) => {
+        const x = pmBits(b);
+        return bookLine({ k: `pm-${b.key}`, href: `#pm/${b.key}`, color: 'var(--ink-3)', name: b.name, chip: x.chip, pnl: b.pnl, now: x.next });
+      }).join('')}</ul>`);
   }
 
   // ------------------------------------------------------------ the desk: market, prices, the options day, the limits
@@ -272,17 +318,22 @@
     }
   }
   // The options day used to have a row here too, word for word the Options card's last line.
-  function deskHtml() {
-    const mk = S.market || {}, C = S.cfg || {};
+  // the market and how fresh its prices are: the desk card's first two rows and the overview tile's last line
+  function marketBits() {
+    const mk = S.market || {};
     const cryptoOk = !(mk.stale && mk.stale.crypto), spyOk = !(mk.stale && mk.stale.stocks);
     // Amber means look. A quarter of an hour late is how SPY's free feed always is, so its dot is the plain
     // one, and it turns amber only when TESS finds the feed has stopped. Out of hours nothing is late (it
     // said "15 min late" all weekend), and in the first minutes of a session the late tape has no trade
     // from today yet, so the delay is the feed's usual one rather than the hours since yesterday's close.
     const spy = !spyOk ? 'SPY stale' : !mk.open ? 'SPY closed' : mk.delayMin != null && mk.delayMin <= 30 ? `SPY ${mk.delayMin} min late` : 'SPY about 15 min late';
+    return { open: !!mk.open, says: mk.says || '', cryptoOk, spyOk, spy };
+  }
+  function deskHtml() {
+    const C = S.cfg || {}, M = marketBits();
     const rows = [
-      ['Stock market', `<b>${mk.open ? 'Open' : 'Closed'}</b> · ${esc(mk.says || '')}`],
-      ['Prices', `<span class="dot${cryptoOk ? '' : ' warn'}"></span>Crypto ${cryptoOk ? 'live' : 'stale'} · <span class="dot ${spyOk ? 'late' : 'warn'}"></span>${esc(spy)}`],
+      ['Stock market', `<b>${M.open ? 'Open' : 'Closed'}</b> · ${esc(M.says)}`],
+      ['Prices', `<span class="dot${M.cryptoOk ? '' : ' warn'}"></span>Crypto ${M.cryptoOk ? 'live' : 'stale'} · <span class="dot ${M.spyOk ? 'late' : 'warn'}"></span>${esc(M.spy)}`],
     ];
     // how much of the day's loss limit is used: TESS stops all new buying when it is. The meter stays plain
     // until half of it is gone, is amber to 80% and red past that.
@@ -420,40 +471,45 @@
     return esc(cap(b.key === 'scalps' ? scalpsLine() : b.key === 'dips' ? dipsLine() : optionsLine()));
   }
   // A book that has never traded is its figure, its markets and its next check: no line that has never
-  // moved. On a phone every book is its figure until it is opened (the chip is the button), so the page
-  // reaches what is happening sooner; which ones are open is remembered.
-  let openBooks = new Set();
-  try { const v = JSON.parse(localStorage.getItem('desk-books-open') || 'null'); if (Array.isArray(v)) openBooks = new Set(v); } catch { /* defaults */ }
+  // moved. What it is doing now sits under its figure, in the book's colour: until 2026-10-02 it was the
+  // card's last line, under the tables and the rule, and on a phone a card was its figure until its chip
+  // (a button there and nowhere else) was tapped. The overview lists every book in a line now, so a card
+  // here is always whole.
+  const bookChip = (b) => {
+    const held = b.rows.filter((r) => r.qty > 0).length;
+    return lotBook(b.key) ? (b.rows.length ? `${b.rows.length} open` : 'no position') : held ? `${held} held` : 'not holding yet';
+  };
   function bookCard(b) {
     const held = b.rows.filter((r) => r.qty > 0).length;
-    const chip = lotBook(b.key) ? (b.rows.length ? `${b.rows.length} open` : 'no position') : held ? `${held} held` : 'not holding yet';
     const traded = held || b.fees || !isZero(b.realized || 0) || (lotBook(b.key) && ((S[b.key] || {}).trades || []).length);
     const vs = b.bench != null ? `<span class="vs" title="Simply holding what this book trades, from its first trade${b.benchFee ? `, after its ${plain(money(b.benchFee))} fee to buy in` : ''}">` +
-      `holding <b class="${tone(b.benchPnl)}">${signed(b.benchPnl)}</b></span>` : '';
+      `just holding <b class="${tone(b.benchPnl)}">${signed(b.benchPnl)}</b></span>` : '';
     // the two figures on each row are named once, over them, when the book holds something
     const head = lotBook(b.key) || held ? '<thead><tr><th></th><th>Worth</th><th>P&amp;L</th></tr></thead>' : '';
     const body = b.key === 'runners' ? (b.rows.length ? `<table class="hold-t">${head}<tbody>${b.rows.map((r) => holdRow(b, r)).join('')}</tbody></table>` : '') + runnerFacts()
       : b.rows.length ? `<table class="hold-t">${head}<tbody>${b.rows.map((r) => holdRow(b, r)).join('')}</tbody></table>`
       : b.key === 'options' ? optionsFacts() : b.key === 'scalps' ? scalpFacts() : b.key === 'dips' ? dipFacts() : '<p class="bksub">Nothing held yet.</p>';
-    const open = openBooks.has(b.key);
-    return `<article class="card bk${open ? ' open' : ''}" data-k="${b.key}" style="--bk:${BOOK_COLOR[b.key]}" aria-label="${esc(b.name)} book">` +
-      `<header><i class="sw"></i><h3>${esc(b.name)}</h3><span class="chip">${esc(chip)}</span>` +
-      `<button type="button" class="chip bktog" data-book="${b.key}" aria-expanded="${open}" aria-controls="bkmore-${b.key}">${esc(chip)}<i aria-hidden="true"></i></button></header>` +
+    return `<article class="card bk" data-k="${b.key}" style="--bk:${BOOK_COLOR[b.key]}" aria-label="${esc(b.name)} book">` +
+      `<header><i class="sw"></i><h3>${esc(b.name)}</h3><span class="chip">${esc(bookChip(b))}</span></header>` +
       `<div class="figline"><span class="fig ${tone(b.pnl)}">${signed(b.pnl)}</span>${vs}</div>` +
-      `<div class="bkmore" id="bkmore-${b.key}">` +
+      `<p class="now">${nextLine(b)}</p>` +
       `<div class="bksub">worth ${money(b.equity)} of ${money(b.initial, 0)}${b.fees ? ` · fees ${money(b.fees)}` : ''}${b.realized && !isZero(b.realized) ? ` · banked ${signed(b.realized)}` : ''}</div>` +
       (traded ? sparkSvg(b.key) : '') + body +
-      `<details class="rule"><summary>How this book trades</summary><p>${esc(b.rule)}</p></details></div>` +
-      `<p class="next">${nextLine(b)}</p></article>`;
+      `<details class="rule"><summary>How this book trades</summary><p>${esc(b.rule)}</p></details></article>`;
   }
-  const renderBooks = () => morph($('books'), (S.books || []).map(bookCard).join(''));
-  $('books').addEventListener('click', (ev) => {
-    const t = ev.target.closest('.bktog');
-    if (!t) return;
-    if (openBooks.has(t.dataset.book)) openBooks.delete(t.dataset.book); else openBooks.add(t.dataset.book);
-    try { localStorage.setItem('desk-books-open', JSON.stringify([...openBooks])); } catch { /* private window */ }
-    if (S) renderBooks();
-  });
+  // Two kinds of book, which a reader new to the floor could not tell apart from six cards in a row: the ones
+  // that hold crypto and SPY across days, and the ones that trade SPY's options within the day. A book the
+  // page does not know yet goes with the first.
+  const GROUPS = [
+    ['Crypto and SPY', 'Held across days, sized to how hard each one swings. Runners buy a coin that is popping and ride it until it turns.', ['crypto', 'stocks', 'runners']],
+    ['SPY same-day options', 'Calls and puts bought and sold within the session, at Cboe’s prices about 15 minutes late.', ['options', 'scalps', 'dips']],
+  ];
+  function renderBooks() {
+    const known = new Set(GROUPS.flatMap((g) => g[2]));
+    const groups = GROUPS.map(([title, text, keys], i) => [title, text, [...keys.map(bookOf).filter(Boolean), ...(i ? [] : (S.books || []).filter((b) => !known.has(b.key)))]]);
+    morph($('books'), groups.filter((g) => g[2].length).map(([title, text, bs], i) => `<section class="bkgroup" data-k="g${i}" aria-label="${esc(title)}">` +
+      `<h2>${esc(title)}</h2><p>${esc(text)}</p><div class="bkgrid">${bs.map(bookCard).join('')}</div></section>`).join(''));
+  }
 
   // ------------------------------------------------------------ the prediction-market desk: its board and five books
   // The desk Hexagon began as, pricing the same outcomes on Polymarket and Kalshi, trades in paper in the
@@ -486,8 +542,11 @@
   // a taker position the snipe or convergence book holds: one leg on one venue
   const legRow = (r) => `<tr data-k="${esc(r.id)}"><th><span class="nm">${esc(r.label)}</span><small>${esc(`${cap(r.side)} on ${r.venue} · ${nOf(r.qty, 'contract')} at ${cents(r.entry)}, ${cents(r.mark)} now`)}</small></th>` +
     `<td class="v">${money(r.worth)}</td><td>${figure(r.pnl)}</td></tr>`;
-  function pmCard(b) {
-    const k = `pm-${b.key}`, open = openBooks.has(k), L = S.legacy;
+  // the overview's line and a book's card say the same things: its chip and what it does next (the card has
+  // its figure's comparison, its rows and its rule as well)
+  const PM_ORDER = ['arbs', 'maker', 'bets', 'snipe', 'converge'];
+  function pmBits(b) {
+    const k = `pm-${b.key}`, L = S.legacy;
     let chip = '', vs = '', sub = '', body = '', next = '';
     if (b.key === 'arbs') {
       chip = b.on ? `${b.rows.length} of ${b.max} open` : b.rows.length ? `${b.rows.length} open · off` : 'switched off';
@@ -528,48 +587,57 @@
       body = b.rows.length ? `<table class="hold-t">${HEAD('Worth', 'P&amp;L')}<tbody>${b.rows.map(legRow).join('')}</tbody></table>` : '';
       next = b.on ? `Looks every ${(L.every && L.every.taker) || 15} seconds` : 'Switched off: nothing new opens';
     }
-    return `<article class="card bk pmbk${open ? ' open' : ''}" data-k="${k}" style="--bk:var(--ink-3)" aria-label="${esc(b.name)}, prediction markets">` +
-      `<header><i class="sw"></i><h3>${esc(b.name)}</h3><span class="chip">${esc(chip)}</span>` +
-      `<button type="button" class="chip bktog" data-book="${k}" aria-expanded="${open}" aria-controls="bkmore-${k}">${esc(chip)}<i aria-hidden="true"></i></button></header>` +
+    return { chip, vs, sub, body, next };
+  }
+  function pmCard(b) {
+    const k = `pm-${b.key}`, { chip, vs, sub, body, next } = pmBits(b);
+    return `<article class="card bk pmbk" data-k="${k}" style="--bk:var(--ink-3)" aria-label="${esc(b.name)}, prediction markets">` +
+      `<header><i class="sw"></i><h3>${esc(b.name)}</h3><span class="chip">${esc(chip)}</span></header>` +
       `<div class="figline"><span class="fig ${tone(b.pnl)}">${signed(b.pnl)}</span>${vs}</div>` +
-      `<div class="bkmore" id="bkmore-${k}">${sub ? `<div class="bksub">${sub}</div>` : ''}${body}` +
-      `<details class="rule"><summary>How this book trades</summary><p>${esc(b.rule || '')}</p></details></div>` +
-      `<p class="next">${next}</p></article>`;
+      `<p class="now">${next}</p>${sub ? `<div class="bksub">${sub}</div>` : ''}${body}` +
+      `<details class="rule"><summary>How this book trades</summary><p>${esc(b.rule || '')}</p></details></article>`;
   }
   function renderPm() {
-    const L = S.legacy, el = $('pm');
-    el.hidden = !L;
+    const L = S.legacy, el = $('v-pm');
     if (!L) return;
     const [state, cls] = pmState(L), book = (k) => { const b = (L.books || []).find((x) => x.key === k); return b ? pmCard(b) : ''; };
     morph(el, `<div class="card pmhero"><div class="cardhead"><h2 class="label">Prediction markets</h2>` +
       `<span class="pill ${cls}"><i></i>${esc(state)}<span class="mode">Paper</span></span></div><a class="pmold" href="/pm">Every market, on its old page ›</a>` +
       `<div class="figline"><span class="fig ${tone(L.pnl)}">${signed(L.pnl)}</span><span class="vs">on ${money(L.initial, 0)} of its own paper · the same outcomes on Polymarket and Kalshi` +
       `${L.halt ? ` · ${esc(L.halt)}` : ''}</span></div></div>` +
-      `<div class="pmbooks">${book('arbs')}${book('maker')}<div class="pmside">${book('bets')}${book('snipe')}${book('converge')}</div></div>`);
+      `<div class="pmbooks">${PM_ORDER.slice(0, 2).map(book).join('')}<div class="pmside">${PM_ORDER.slice(2).map(book).join('')}</div></div>`);
   }
-  $('pm').addEventListener('click', (ev) => {
-    const t = ev.target.closest('.bktog, [data-all]');
+  $('v-pm').addEventListener('click', (ev) => {
+    const t = ev.target.closest('[data-all]');
     if (!t) return;
-    if (t.dataset.all) { if (allRows.has(t.dataset.all)) allRows.delete(t.dataset.all); else allRows.add(t.dataset.all); }
-    else {
-      if (openBooks.has(t.dataset.book)) openBooks.delete(t.dataset.book); else openBooks.add(t.dataset.book);
-      try { localStorage.setItem('desk-books-open', JSON.stringify([...openBooks])); } catch { /* private window */ }
-    }
+    if (allRows.has(t.dataset.all)) allRows.delete(t.dataset.all); else allRows.add(t.dataset.all);
     if (S) renderPm();
   });
 
   // ------------------------------------------------------------ what's happening: the desk's trades and the bots' log
   const logKey = (e) => `${e.t}|${e.agent}|${e.text}`;
   const shape = (s) => String(s).replace(/[−+-]?\$?\d[\d,.]*%?/g, '#');
-  // One row of the list: { t, who, text, sub, level, pnl, key }. Its level is the engine's word for the line
-  // (src/desk/engine.js logLevel), the same one that decides which lines its ring keeps:
+  // One row of the list: { t, who, tag, text, sub, level, pnl, key }. Its level is the engine's word for the
+  // line (src/desk/engine.js logLevel), the same one that decides which lines its ring keeps:
   //   trade  money moved          warn  needs a look
   //   info   a decision           quiet the desk doing its rounds
   // The desk writes its log in plain sentences already; the part before the first " · " is what happened,
   // the rest is the detail underneath.
+  // Its tag says which book a line is about, in the book's colour: until 2026-10-02 the column named the bot
+  // that wrote it (BRAM, KETT), which a reader had to know the cast to follow. The bot is still named when the
+  // tag is pointed at. A line about one book starts with its name ("scalps: SPY broke above ..."), which the
+  // tag then says instead; a coin's or SPY's line is the crypto or stocks book's; the rest is the desk's.
+  const ROLE = { HOLT: 'prices', ILSA: 'volatility', TESS: 'risk', RIGO: 'marks and option exits', BRAM: 'signals', KETT: 'fills', PRED: 'the prediction-market desk', MAKR: 'the maker' };
+  const DESK_TAG = { name: 'Desk', color: 'var(--ink-3)' };
+  const tagOf = (k) => ({ name: (bookOf(k) || {}).name || cap(k), color: BOOK_COLOR[k] || 'var(--ink-3)' });
   function logRow(e) {
-    const parts = grouped(String(e.text || '')).split(' · ');
-    return { t: e.t, who: e.agent, text: cap(parts[0]), sub: parts.slice(1).join(' · '), level: e.level || 'info', pnl: null, key: logKey(e), halt: e.kind === 'HALT' };
+    let text = grouped(String(e.text || '')), tag = DESK_TAG;
+    const m = text.match(/^(options|scalps|dips|runners):\s*/i);
+    if (m) { tag = tagOf(m[1].toLowerCase()); text = text.slice(m[0].length); }
+    else if (/^(BTC|ETH|SOL|XRP|DOGE):/.test(text)) tag = tagOf('crypto');
+    else if (/^SPY:/.test(text)) tag = tagOf('stocks');
+    const parts = text.split(' · ');
+    return { t: e.t, who: e.agent, tag, text: cap(parts[0]), sub: parts.slice(1).join(' · '), level: e.level || 'info', pnl: null, key: logKey(e), halt: e.kind === 'HALT' };
   }
   // A trade is a row from the ledger's own fills, not from the log. On 26 September the routine rounds had
   // pushed the log lines of the desk's three buys out of the frame in eight hours, and this list said
@@ -578,7 +646,7 @@
   function fillRow(f) {
     const opt = optBook(f.book), coinish = f.book === 'crypto' || f.book === 'runners', name = opt ? f.label : coinish ? coin(f.sym) : f.sym;
     const why = String(f.why || ''), expired = /^expired/.test(why);
-    const row = { t: f.at, who: expired ? 'RIGO' : 'KETT', level: 'trade', pnl: f.side === 'sell' ? f.pnl : null, key: `fill|${f.id}` };
+    const row = { t: f.at, who: expired ? 'RIGO' : 'KETT', tag: tagOf(f.book), level: 'trade', pnl: f.side === 'sell' ? f.pnl : null, key: `fill|${f.id}` };
     if (expired) return { ...row, text: `${name} expired worth ${px(f.px)}`, sub: '' };
     if (f.side === 'sell' && !(f.px > 0)) return { ...row, text: `${name} written off: no bid`, sub: cap(why.replace(/,? no bid$/, '')) };
     const qty = opt ? String(f.qty) : f.book === 'runners' ? runQty(f.qty) : qtyTxt(f.qty, f.book, f.sym);
@@ -587,13 +655,15 @@
   }
   // The prediction-market desk's lines and fills (src/pmfloor.js has already put its log in plain words and
   // given each line its level). Its bots have the same names as these, so its lines go under PRED, the
-  // name this floor gives that desk, and the maker's under its own, MAKR.
+  // name this floor gives that desk, and the maker's under its own, MAKR; a fill is tagged with its book.
   const pmWho = (agent) => (agent === 'MAKR' ? 'MAKR' : 'PRED');
-  const pmLogRow = (e) => ({ t: e.t, who: pmWho(e.agent), text: grouped(String(e.text || '')), sub: grouped(String(e.sub || '')), level: e.level || 'info',
+  const PM_TAG = { arb: 'Arbs', snipe: 'Snipe', converge: 'Convergence', maker: 'Maker', bet: 'Every game' };
+  const pmTag = (name) => ({ name, color: 'var(--ink-3)' });
+  const pmLogRow = (e) => ({ t: e.t, who: pmWho(e.agent), tag: pmTag(e.agent === 'MAKR' ? 'Maker' : 'Predictions'), text: grouped(String(e.text || '')), sub: grouped(String(e.sub || '')), level: e.level || 'info',
     pnl: e.level === 'trade' && Number.isFinite(e.pnl) ? e.pnl : null, key: `pm|${e.t}|${e.agent}|${e.text}`, src: 'pm', halt: e.kind === 'HALT' });
   function pmFillRow(f) {
     const verb = f.action === 'settled' ? 'Settled' : f.action === 'sold' ? 'Sold' : 'Bought';
-    return { t: f.at, who: f.book === 'maker' ? 'MAKR' : 'PRED', level: 'trade', src: 'pm', key: `pm|${f.id}`, pnl: Number.isFinite(f.pnl) ? f.pnl : null,
+    return { t: f.at, who: f.book === 'maker' ? 'MAKR' : 'PRED', tag: pmTag(PM_TAG[f.book] || cap(f.book)), level: 'trade', src: 'pm', key: `pm|${f.id}`, pnl: Number.isFinite(f.pnl) ? f.pnl : null,
       text: `${verb} ${Number(f.qty).toLocaleString('en-US')} ${cap(f.side)} on ${f.label}`, sub: `${f.venue} at ${cents(f.px)} · ${BOOK_NAME[f.book] || f.book}` };
   }
   // newest first; the same round said again by the same bot is shown once
@@ -612,55 +682,51 @@
     }
     return rows.sort((a, b) => b.t - a.t);
   }
-  // The routine rounds ("3/3 coins live", "all clear") come every few minutes and used to push the day's
-  // few trades out of sight, so they are counted and hidden until asked for.
-  const LEVELS = [['trade', 'Trades'], ['info', 'Signals'], ['warn', 'Warnings'], ['quiet', 'Routine']];
-  let showing = new Set(['trade', 'info', 'warn']);
-  try { const v = JSON.parse(localStorage.getItem('desk-activity') || 'null'); if (Array.isArray(v)) showing = new Set(v); } catch { /* defaults */ }
-  // the prediction-market desk's lines, in or out of the list with one chip of their own
-  let showPm = true;
-  try { showPm = localStorage.getItem('desk-activity-pm') !== '0'; } catch { /* defaults */ }
-  // A phone shows the latest five of those, and the rest when asked: the list comes second there, under
-  // the books, and eighty entries would bury the chart and the desk beneath it.
-  const phone = matchMedia('(max-width: 640px)');
-  let feedAll = false;
-  function renderActivity(all = activityRows()) {
-    const rows = showPm ? all : all.filter((r) => r.src !== 'pm');
-    const count = {};
-    for (const r of rows) count[r.level] = (count[r.level] || 0) + 1;
-    const pmN = all.filter((r) => r.src === 'pm' && showing.has(r.level)).length;
-    morph($('chips'), LEVELS.map(([lv, name]) => `<button type="button" data-lv="${lv}" class="${showing.has(lv) ? 'on' : ''}" aria-pressed="${showing.has(lv)}">${name}<span>${count[lv] || 0}</span></button>`).join('') +
-      (S.legacy ? `<button type="button" data-src="pm" class="src${showPm ? ' on' : ''}" aria-pressed="${showPm}">Prediction mkts<span>${pmN}</span></button>` : ''));
-    const kept = rows.filter((r) => showing.has(r.level)).slice(0, 80);
-    const shown = phone.matches && !feedAll ? kept.slice(0, 5) : kept;
+  // newest first: the day's name goes above the first entry from each earlier day
+  function feedHtml(rows) {
     const td = today();
     let day = td;
-    morph($('feedlist'), shown.map((r) => {
-      // newest first: the day's name goes above the first entry from each earlier day
+    return rows.map((r) => {
       const k = dayKey(r.t), head = k === day ? '' : `<li class="day" data-k="day|${k}">${esc(dayName(r.t, td))}</li>`;
       day = k;
       const amt = r.pnl != null ? `<span class="amt ${tone(r.pnl)}">${signed(r.pnl)}</span>` : '<span class="amt"></span>';
-      return `${head}<li class="lv-${r.level}" data-k="${esc(r.key)}"><time${Number.isFinite(r.t) ? ` datetime="${new Date(r.t).toISOString()}"` : ''}>${esc(ET_HM.format(new Date(r.t)))}</time><span class="who">${esc(r.who)}</span>` +
+      return `${head}<li class="lv-${r.level}" data-k="${esc(r.key)}"><time${Number.isFinite(r.t) ? ` datetime="${new Date(r.t).toISOString()}"` : ''}>${esc(ET_HM.format(new Date(r.t)))}</time>` +
+        `<span class="tag" style="--bk:${r.tag.color}" title="${esc(`Written by ${r.who}${ROLE[r.who] ? `, ${ROLE[r.who]}` : ''}`)}"><i class="sw"></i>${esc(r.tag.name)}</span>` +
         `<span class="what">${esc(r.text)}${r.sub ? `<small>${esc(r.sub)}</small>` : ''}</span>${amt}</li>`;
-    }).join('') + (phone.matches && kept.length > 5 ? `<li class="more" data-k="more"><button type="button" data-more="1">${feedAll ? 'Show the latest five' : `Show ${kept.length - 5} earlier`}</button></li>` : '')
-      || `<li class="empty">${rows.length ? 'Nothing of those kinds yet.' : 'Waiting for the first desk round.'}</li>`);
+    }).join('');
   }
-  $('feedlist').addEventListener('click', (ev) => {
-    if (!ev.target.closest('button[data-more]')) return;
-    feedAll = !feedAll;
-    if (S) renderActivity();
-  });
-  phone.addEventListener('change', () => { if (S) renderActivity(); });
-  $('chips').addEventListener('click', (ev) => {
-    const b = ev.target.closest('button[data-lv], button[data-src]');
+  // The routine rounds ("3/3 coins live", "all clear") come every few minutes and used to push the day's
+  // few trades out of sight, so they are shown only when asked for. Until 2026-10-02 four chips turned each
+  // level on and off, and a fifth the prediction-market desk, filled in the ink when on: they read as labels,
+  // and no one could tell which were showing. Two segmented controls now, each one choice: how much (each
+  // takes in the one before it, and a warning is always shown), and which desk.
+  const SHOWS = [['trades', 'Trades', ['trade', 'warn']], ['decisions', 'Trades & signals', ['trade', 'info', 'warn']], ['all', 'Everything', ['trade', 'info', 'warn', 'quiet']]];
+  const DESKS = [['both', 'Both desks'], ['desk', 'Stocks & crypto'], ['pm', 'Predictions']];
+  const feed = { show: 'decisions', desk: 'both' };
+  try { const v = JSON.parse(localStorage.getItem('desk-feed') || '{}'); if (SHOWS.some(([k]) => k === v.show)) feed.show = v.show; if (DESKS.some(([k]) => k === v.desk)) feed.desk = v.desk; } catch { /* defaults */ }
+  const phone = matchMedia('(max-width: 640px)');
+  const segHtml = (attr, opts, on) => opts.map(([k, name, n]) => `<button type="button" data-${attr}="${k}" class="${k === on ? 'on' : ''}" aria-pressed="${k === on}">${esc(name)}${n != null ? `<span>${n}</span>` : ''}</button>`).join('');
+  function renderActivity(all = activityRows()) {
+    const desk = S.legacy ? feed.desk : 'both';
+    const rows = all.filter((r) => desk === 'both' || (desk === 'pm') === (r.src === 'pm'));
+    const levels = (k) => SHOWS.find((s) => s[0] === k)[2];
+    morph($('fshow'), segHtml('show', SHOWS.map(([k, name]) => [k, name, rows.filter((r) => levels(k).includes(r.level)).length]), feed.show));
+    $('fdesk').hidden = !S.legacy;
+    morph($('fdesk'), segHtml('desk', DESKS, desk));
+    const shown = rows.filter((r) => levels(feed.show).includes(r.level)).slice(0, 200);
+    morph($('feedlist'), feedHtml(shown) || `<li class="empty">${rows.length ? 'Nothing of that kind yet.' : 'Waiting for the first desk round.'}</li>`);
+  }
+  // The overview's few: the latest trades and warnings of both desks. The maker fills every few minutes and
+  // would be all of them, so its fills are left to the Activity view and its own line on the overview.
+  function renderLatest(all) {
+    const rows = all.filter((r) => (r.level === 'trade' || r.level === 'warn') && !(r.who === 'MAKR' && r.level === 'trade')).slice(0, 6);
+    morph($('latestlist'), feedHtml(rows) || `<li class="empty">${all.length ? 'No trade yet.' : 'Waiting for the first desk round.'}</li>`);
+  }
+  $('v-activity').addEventListener('click', (ev) => {
+    const b = ev.target.closest('button[data-show], button[data-desk]');
     if (!b) return;
-    if (b.dataset.src) {
-      showPm = !showPm;
-      try { localStorage.setItem('desk-activity-pm', showPm ? '1' : '0'); } catch { /* private window */ }
-    } else {
-      if (showing.has(b.dataset.lv)) showing.delete(b.dataset.lv); else showing.add(b.dataset.lv);
-      try { localStorage.setItem('desk-activity', JSON.stringify([...showing])); } catch { /* private window */ }
-    }
+    if (b.dataset.show) feed.show = b.dataset.show; else feed.desk = b.dataset.desk;
+    try { localStorage.setItem('desk-feed', JSON.stringify(feed)); } catch { /* private window */ }
     if (S) renderActivity();
   });
   // a trade or a halt is read out once, by a screen reader, as it lands; nothing else is. The prediction-
@@ -669,7 +735,7 @@
   function announce(rows) {
     const r = rows.find((x) => (x.level === 'trade' && x.src !== 'pm') || x.halt);
     if (!r) return;
-    if (announced !== null && r.key !== announced) $('announce').textContent = `${r.who}: ${r.text}`;
+    if (announced !== null && r.key !== announced) $('announce').textContent = `${r.tag.name}: ${r.text}`;
     announced = r.key;
   }
 
@@ -765,8 +831,9 @@
   }
   function drawChart(el) {
     const p = plots.get(el);
-    // the large chart is built when it opens, at the size it opens at, not while it is hidden at none
-    if (!p || (p.big && bigChart.hidden)) return;
+    // the large chart is built when it opens, at the size it opens at, not while it is hidden at none; the
+    // overview's waits the same way while another view is showing, and is drawn as its view opens
+    if (!p || (p.big && bigChart.hidden) || (!p.big && el.closest('[hidden]'))) return;
     const pts = chartSeries();
     const last = pts.length ? pts[pts.length - 1][1] : (S ? S.pnl : 0);
     const first = pts.length ? pts[0][1] : last;
@@ -780,7 +847,7 @@
     // desk's move over the last hour
     const firstHold = pts.find((x) => x[2] != null), lastHold = [...pts].reverse().find((x) => x[2] != null);
     const held = lastHold ? r2(lastHold[2] - firstHold[2]) : null;
-    morph(el.querySelector('.cr'), held != null ? `<span title="The dashed line: every book simply holding what it trades, over the same stretch"><i class="dash" aria-hidden="true"></i>holding: <b class="${tone(held)}">${signed(held)}</b></span>` : '');
+    morph(el.querySelector('.cr'), held != null ? `<span title="The dashed line: every book simply holding what it trades, over the same stretch"><i class="dash" aria-hidden="true"></i>just holding: <b class="${tone(held)}">${signed(held)}</b></span>` : '');
     if (!p.plot) p.plot = makePlot(el, p.big);
     if (!p.plot) return;
     // The licence's logo sits in the plot's bottom-left corner, about 30px tall, just above the time
@@ -871,20 +938,55 @@
     }
   });
 
+  // ------------------------------------------------------------ the views: one showing at a time, each a link
+  // #overview, #desk, #pm and #activity, and #desk/<book> or #pm/<book> for one book's card, which is scrolled
+  // to and lit for a moment. No element has those ids, so the browser does not jump to one by itself.
+  const VIEWS = ['overview', 'desk', 'pm', 'activity'];
+  let view = null, pendingBook = null;
+  // `draw` is false from inside a render, which goes on to draw the view itself
+  function setView(v, draw = true) {
+    if (v === view) return;
+    view = v;
+    for (const el of document.querySelectorAll('main > .view')) el.hidden = el.dataset.view !== v;
+    for (const a of $('views').querySelectorAll('a')) { if (a.dataset.view === v) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); }
+    if (S && draw) render();
+  }
+  function route() {
+    const [v, k] = decodeURIComponent(location.hash.slice(1)).split('/');
+    const before = view;
+    setView(VIEWS.includes(v) && !(v === 'pm' && S && !S.legacy) ? v : 'overview');
+    pendingBook = k && (view === 'desk' || view === 'pm') ? (view === 'pm' ? `pm-${k}` : k) : null;
+    if (pendingBook) showBook(); else if (before !== null && before !== view) window.scrollTo({ top: 0, behavior: 'instant' });
+  }
+  function showBook() {
+    const el = pendingBook && document.querySelector(`.view:not([hidden]) .bk[data-k="${CSS.escape(pendingBook)}"]`);
+    if (!el) return;
+    pendingBook = null;
+    el.scrollIntoView({ block: 'start' });
+    el.classList.remove('flash');
+    void el.offsetWidth;
+    el.classList.add('flash');
+  }
+  window.addEventListener('hashchange', route);
+
   // ------------------------------------------------------------ wiring: a frame every two seconds, a clock every second
   function render() {
     renderHeader();
     renderClock();
+    morph($('ovdesk'), ovDeskHtml());
+    renderOvPm();
     morph($('hero'), heroHtml());
-    morph($('desk'), deskHtml());
+    morph($('deskcard'), deskHtml());
     renderBooks();
     renderPm();
     const rows = activityRows();
     renderActivity(rows);
+    renderLatest(rows);
     announce(rows);
     drawChart($('chart'));
     if (!bigChart.hidden) drawChart($('chartbig-pnl'));
     $('floor').removeAttribute('aria-busy');
+    if (pendingBook) showBook();
   }
   function connect() {
     const es = new EventSource('/api/desk/stream');
@@ -898,7 +1000,8 @@
   onScroll();
   // Nothing redraws at rest: the clock ticks, and the page notices when the stream has gone quiet.
   setInterval(() => { if (!S) return; renderClock(); if (!!stale() !== shownGone) renderHeader(); }, 1000);
-  morph($('hero'), '<span class="label">All paper books</span><p class="sub">Connecting to the desk…</p>');
+  route();
+  morph($('ovdesk'), '<span class="label">Stocks, crypto and options</span><p class="sub">Connecting to the desk…</p>');
   wireChart($('chart'), false);
   wireChart($('chartbig-pnl'), true);
   connect();

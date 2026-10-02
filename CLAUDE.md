@@ -105,9 +105,13 @@ src/desk/feeds.js   Coinbase (live; /products/stats is every coin's 24h in one c
                   bars (scalps), VWAP, ATR14
 src/desk/broker.js  paper fills: crypto walks Coinbase's book + 0.40%, SPY at the touch, options at the touch + $0.03
 src/desk/clock.js   NYSE sessions, holidays and 1 PM closes through 2027 (TESS warns when the list runs out)
-public/desk.*     the floor at /: a wall of boards (headline vs holding, the desk, one card per book with the markets it
-                  trades, the P&L chart, the bots' activity, and since 2026-09-29 the prediction-market desk's board and
-                  five books (arbs, maker, snipe, convergence, the game bets), fed by src/pmfloor.js; Evan: "Merge the desk to the new screen. It's data, not its look"), laid out for reading, 12px and up; no pixel room or bots drawn since 2026-09-25 (Evan's
+public/desk.*     the floor at /: since 2026-10-02 four views, each a link (#overview, #desk, #pm, #activity; #desk/crypto
+                  for one book's card): the overview (each desk's figure with every book on a line saying what it is doing,
+                  the P&L chart, the latest trades), Stocks & crypto (headline vs holding, the desk, one card per book with
+                  the markets it trades, in two groups), Predictions (since 2026-09-29 the prediction-market desk's board and
+                  five books (arbs, maker, snipe, convergence, the game bets), fed by src/pmfloor.js; Evan: "Merge the desk to the new screen. It's data, not its look")
+                  and Activity (both desks' lines, each tagged with its book); a tab bar on a phone; tools/floor-test.js holds
+                  the views to the page. Laid out for reading, 12px and up; no pixel room or bots drawn since 2026-09-25 (Evan's
                   call). desk.css is its own sheet on public/tokens.css, colours named by job; tools/tokens-test.js holds
                   every text colour to 4.5:1. desk.js patches boards in place (morph) so focus survives the 2s stream.
                   Since 2026-09-29 drawn as Apple draws its apps (Evan: "making the website iOS and macOS and Apple beautiful"):
