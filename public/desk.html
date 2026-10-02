@@ -37,31 +37,58 @@
       </span>
       <h1>The Hexagon</h1>
     </div>
+    <!-- Four views of the one desk (2026-10-02, "more intuitive"): the overview answers how it is doing at a
+         glance, and each of the others is one thing in full. A segmented control in the bar on a wide screen;
+         on a phone, a tab bar along the foot of the screen, as an iPhone app has. Each is a link (#desk, #pm,
+         #activity), so the back button, a bookmark and a reload all land where they were. -->
+    <nav class="views" id="views" aria-label="Views">
+      <a href="#overview" data-view="overview"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/></svg><span>Overview</span></a>
+      <a href="#desk" data-view="desk"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 17.5l5-5.5 4 3.5 7.5-8.5"/><path d="M15 7h5v5"/></svg><span class="lg">Stocks &amp; crypto</span><span class="sh">Markets</span></a>
+      <a href="#pm" data-view="pm" id="pmtab"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5V12l6 6"/></svg><span>Predictions</span></a>
+      <a href="#activity" data-view="activity"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6.5h11M9 12h11M9 17.5h11"/><circle cx="4.75" cy="6.5" r="1.1"/><circle cx="4.75" cy="12" r="1.1"/><circle cx="4.75" cy="17.5" r="1.1"/></svg><span>Activity</span></a>
+    </nav>
     <!-- the one thing a glance is asking: is the desk working, and with whose money -->
     <div class="pill" id="deskstate"></div>
     <span class="clock" id="clock"></span>
-    <!-- the prediction-market desk, arbs, maker and snipe in paper: its board is at the foot of this page -->
-    <a id="pmlink" href="#pm" title="The prediction-market desk: arbs, maker and snipe, in paper">Prediction markets ↓</a>
   </div>
 </header>
 
 <div class="wrap">
   <p class="banner" id="banner" role="status" hidden></p>
 
-  <!-- A wall of boards, one screen each. Until 2026-09-25 they were painted into a pixel room with the
-       bots at their desks; the bots and the room went, and the boards are laid out for reading. Each book's
-       card carries the markets it trades (a Markets board repeated them until 2026-09-26). -->
   <main id="floor" aria-busy="true">
-    <section class="card hero" id="hero" aria-label="Stocks, crypto and options"></section>
-    <section class="card desk" id="desk" aria-label="The desk"></section>
-    <section class="books" id="books" aria-label="The six books"></section>
-    <section class="card chartcard" aria-label="Profit and loss"><div id="chart" class="pnl"></div></section>
-    <section class="card act" aria-label="What's happening">
-      <div class="cardhead"><h2 class="label">What's happening</h2><div class="chips" id="chips" role="group" aria-label="Show"></div></div>
-      <ol id="feedlist"></ol>
+    <!-- the overview: each desk's figure with every one of its books in a line, then the chart and the latest -->
+    <section class="view ov" id="v-overview" data-view="overview" aria-label="Overview">
+      <section class="card tile" id="ovdesk" aria-label="Stocks, crypto and options"></section>
+      <section class="card tile" id="ovpm" aria-label="Prediction markets" hidden></section>
+      <section class="card chartcard" aria-label="Profit and loss"><div id="chart" class="pnl"></div></section>
+      <section class="card latest" aria-label="Latest">
+        <div class="cardhead"><h2 class="label">Latest</h2><a class="seeall" href="#activity">All activity</a></div>
+        <ol class="feed" id="latestlist"><li class="empty">Waiting for the first desk round.</li></ol>
+      </section>
     </section>
+
+    <!-- the stocks, crypto and options desk in full: its headline, its state, and its six books in two groups -->
+    <section class="view dv" id="v-desk" data-view="desk" aria-label="Stocks, crypto and options" hidden>
+      <section class="card hero" id="hero" aria-label="Stocks, crypto and options"></section>
+      <section class="card deskcard" id="deskcard" aria-label="The desk"></section>
+      <section class="books" id="books" aria-label="The six books"></section>
+    </section>
+
     <!-- the prediction-market desk (2026-09-29): its board and its five books, from its own ledger -->
-    <section class="pm" id="pm" aria-label="Prediction markets" hidden></section>
+    <section class="view pm" id="v-pm" data-view="pm" aria-label="Prediction markets" hidden></section>
+
+    <!-- everything the desks did, newest first, filtered by how much of it to show and which desk -->
+    <section class="view av" id="v-activity" data-view="activity" aria-label="Activity" hidden>
+      <section class="card act">
+        <div class="cardhead"><h2 class="label">Activity</h2></div>
+        <div class="filters">
+          <div class="seg" id="fshow" role="group" aria-label="Show"></div>
+          <div class="seg" id="fdesk" role="group" aria-label="Desk"></div>
+        </div>
+        <ol class="feed" id="feedlist"><li class="empty">Waiting for the first desk round.</li></ol>
+      </section>
+    </section>
   </main>
 
   <footer>Paper only: no broker is connected to this desk, and it has no way to place a real order. Crypto prices are live from Coinbase; stock and option prices come from Cboe about 15 minutes late, and the desk trades at those same late prices. The prediction-market desk prices Polymarket and Kalshi live and fills on paper against their books.</footer>
@@ -71,7 +98,7 @@
 <div id="chartbig" hidden role="dialog" aria-modal="true" aria-label="Profit and loss chart">
   <div class="cbbox">
     <!-- the chart's one title in here (the chart leaves its own out); a phone keeps the first half -->
-    <div class="cbh"><span>Profit and loss<span class="more"> · stocks, crypto and options, and what holding would have made</span></span><button type="button" class="cbback" data-close="1">Done</button></div>
+    <div class="cbh"><span>Profit and loss<span class="more"> · stocks, crypto and options, and what just holding would have made</span></span><button type="button" class="cbback" data-close="1">Done</button></div>
     <div id="chartbig-pnl" class="pnl big"></div>
   </div>
 </div>
