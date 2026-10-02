@@ -1,18 +1,14 @@
 /* The Hexagon — the stocks, crypto and options desk's floor at /. Consumes /api/desk/stream.
  *
- * Four views of the one floor (2026-10-02; until then a single wall of boards, 2,800px long on a laptop,
- * the prediction-market desk's figure at its foot and its six books under the fold):
- *   Overview         each desk's figure with every one of its books on a line (what it holds or is
- *                    doing now, and its P&L), the P&L chart, and the latest trades and warnings
- *   Stocks & crypto  the six books in full: the headline against simply holding, the desk's state, and
- *                    a card per book, in two groups (crypto and SPY, then SPY's same-day options)
- *   Predictions      the prediction-market desk that runs in the same process (since 2026-09-29): its
- *                    board and its five books, drawn the same way
- *   Activity         everything both desks did, newest first, each line tagged with the book it is about
- * Each view is a link (#overview, #desk, #pm, #activity, and #desk/crypto or #pm/arbs for one book), so
- * the back button, a bookmark and a reload all land where they were. Until 2026-09-25 the boards were
- * painted into a pixel room with the bots at their desks; the bots are still the desk's workers, and an
- * activity line's tag names the one that wrote it when pointed at.
+ * One screen with nothing to scroll (2026-10-02, Evan: "It should all be able to fit on one page, not having
+ * to scroll down or up"): each desk's figure with every one of its books as a tile (its P&L, what it holds,
+ * what it is doing now), the P&L chart, and the latest trades and warnings of both desks. What is behind a
+ * tile opens over the page in a sheet: a book's card (#book/crypto, #book/pm-arbs), a desk's numbers (#desk,
+ * #pm), or every line of the activity (#activity), each line tagged with the book it is about. The sheets are
+ * links, so the back button closes one. Until that morning the floor was four views behind tabs, and before
+ * that one wall of boards 2,800px long. Until 2026-09-25 the boards were painted into a pixel room with the
+ * bots at their desks; the bots are still the desk's workers, and an activity line's tag names the one that
+ * wrote it when pointed at.
  *
  * Read-only: nothing on this page can place, change or cancel anything.
  */
@@ -143,9 +139,7 @@
     // a background tab says how the desk is doing, not just its name
     const title = Number.isFinite(S.pnl) ? `${plain(signed(S.pnl))} · ${state} · The Hexagon` : 'The Hexagon';
     if (document.title !== title) document.title = title;
-    // the prediction-market desk's view, while there is one to show
-    $('pmtab').hidden = !S.legacy;
-    if (!S.legacy && view === 'pm') setView('overview', false);
+    morph($('mkt'), marketHtml());
     $('floor').classList.toggle('gone', gone || stuck);
     const msg = gone ? 'No signal from the desk: this page is showing the last state it received.'
       : stuck ? `The desk has finished no round since ${ET_HM.format(new Date(S.beat))} ET: every price and figure here stopped then.`
@@ -206,37 +200,51 @@
       (insight ? `<p class="insight">${insight}</p>` : '');
   }
 
-  // ------------------------------------------------------------ the overview: each desk, and every book on a line
-  // The question a glance asks of the floor is how each desk is doing and what each book is up to, and until
-  // 2026-10-02 the answer was spread down the whole wall: the prediction-market desk's figure at its foot,
-  // the books under the fold, what each was doing on the last line of its card. Each desk is a tile now, its
-  // books listed under its figure, each line a link to the book's card.
-  function bookLine(x) {
-    return `<li data-k="${esc(x.k)}"><a href="${x.href}" style="--bk:${x.color}"><i class="sw"></i>` +
-      `<span class="bl"><span class="bln">${esc(x.name)}<span class="blc">${esc(x.chip)}</span></span><span class="blnow">${x.now}</span></span>` +
-      `<span class="blf ${tone(x.pnl)}">${signed(x.pnl)}</span><i class="chev" aria-hidden="true"></i></a></li>`;
+  // ------------------------------------------------------------ the page: each desk, and every book as a tile
+  // The question a glance asks of the floor is how each desk is doing and what each book is up to, and the answer
+  // fits one screen: each desk is a tile, its figure over its books, each book a tile of its own (its P&L, what
+  // it holds, what it is doing now) and a link to its card, which opens over the page.
+  const plainText = (html) => String(html).replace(/<[^>]+>/g, '').replace(/&amp;/g, '&');
+  // a prediction-market book's comparison beside its figure, without the card's own wrapper and its tooltip
+  const plainVs = (html) => String(html).replace(/^<span class="vs"[^>]*>|<\/span>$/g, '');
+  function bookTile(x) {
+    return `<li data-k="${esc(x.k)}"><a href="${x.href}" style="--bk:${x.color}" title="${esc(plainText(`${x.name}: ${x.now}`))}">` +
+      `<span class="bth"><i class="sw"></i><span class="btn">${esc(x.name)}</span><span class="btc">${esc(x.chip)}</span></span>` +
+      `<span class="btf"><span class="${tone(x.pnl)}">${signed(x.pnl)}</span>${x.vs ? `<span class="btv">${x.vs}</span>` : ''}</span>` +
+      `<span class="bts">${x.now}</span></a></li>`;
+  }
+  // the six books in their two groups, each group's name over its row
+  const GROUPS = [
+    ['Crypto and SPY', 'Held across days, sized to how hard each one swings. Runners buy a coin that is popping and ride it until it turns.', ['crypto', 'stocks', 'runners']],
+    ['SPY same-day options', 'Calls and puts bought and sold within the session, at Cboe’s prices about 15 minutes late.', ['options', 'scalps', 'dips']],
+  ];
+  function deskTiles() {
+    const known = new Set(GROUPS.flatMap((g) => g[2]));
+    const groups = GROUPS.map(([title, text, keys], i) => [title, text, [...keys.map(bookOf).filter(Boolean), ...(i ? [] : (S.books || []).filter((b) => !known.has(b.key)))]]);
+    return groups.filter((g) => g[2].length).map(([title, text, bs], i) => `<li class="grp" data-k="g${i}" title="${esc(text)}">${esc(title)}</li>` +
+      bs.map((b) => bookTile({ k: b.key, href: `#book/${b.key}`, color: BOOK_COLOR[b.key], name: b.name, chip: bookChip(b), pnl: b.pnl,
+        vs: b.bench != null ? `just holding ${figure(b.benchPnl)}` : '', now: nextLine(b) })).join('')).join('');
   }
   function ovDeskHtml() {
-    const { vs } = deskTotals(), M = marketBits();
+    const { vs, atWork } = deskTotals();
     const mini = (S.today != null ? `<div><dt>Today</dt><dd>${figure(S.today)}</dd></div>` : '') +
-      (vs != null ? `<div title="${esc(VS_HOLD)}"><dt>vs. just holding</dt><dd>${figure(vs)}</dd></div>` : '');
-    return `<div class="tilehead"><h2 class="label">Stocks, crypto and options</h2></div>` +
-      `<div class="tilefig"><span class="big ${tone(S.pnl)}">${signed(S.pnl)}</span>${mini ? `<dl class="mini">${mini}</dl>` : ''}</div>` +
-      `<p class="sub">on ${money(S.initial, 0)} of paper · stock market ${esc(M.says || (M.open ? 'open' : 'closed'))}</p>` +
-      `<p class="mkt"><span class="dot${M.cryptoOk ? '' : ' warn'}"></span>Crypto ${M.cryptoOk ? 'live' : 'stale'} <span class="dot ${M.spyOk ? 'late' : 'warn'}"></span>${esc(M.spy)}</p>` +
-      `<ul class="booklist">${(S.books || []).map((b) => bookLine({ k: b.key, href: `#desk/${b.key}`, color: BOOK_COLOR[b.key], name: b.name, chip: bookChip(b), pnl: b.pnl, now: nextLine(b) })).join('')}</ul>`;
+      (vs != null ? `<div title="${esc(VS_HOLD)}"><dt>vs. just holding</dt><dd>${figure(vs)}</dd></div>` : '') +
+      `<div><dt>Invested</dt><dd>${money(atWork, 0)}</dd></div>`;
+    return `<a class="tilehead" href="#desk"><h2 class="label">Stocks, crypto and options</h2><span class="more">Details</span></a>` +
+      `<div class="tilefig"><span class="big ${tone(S.pnl)}">${signed(S.pnl)}</span><span class="of">on ${money(S.initial, 0)} of paper</span><dl class="mini">${mini}</dl></div>` +
+      `<p class="tilemkt">${marketHtml()}</p>` +
+      `<ul class="tiles">${deskTiles()}</ul>`;
   }
   function renderOvPm() {
     const L = S.legacy, el = $('ovpm');
     el.hidden = !L;
     if (!L) return;
     const [state, cls] = pmState(L);
-    morph(el, `<div class="tilehead"><h2 class="label">Prediction markets</h2><span class="pill ${cls}"><i></i>${esc(state)}<span class="mode">Paper</span></span></div>` +
-      `<div class="tilefig"><span class="big ${tone(L.pnl)}">${signed(L.pnl)}</span></div>` +
-      `<p class="sub">on ${money(L.initial, 0)} of its own paper · the same outcomes on Polymarket and Kalshi${L.halt ? ` · ${esc(L.halt)}` : ''}</p>` +
-      `<ul class="booklist">${PM_ORDER.map((k) => (L.books || []).find((b) => b.key === k)).filter(Boolean).map((b) => {
+    morph(el, `<a class="tilehead" href="#pm"><h2 class="label">Prediction markets</h2><span class="pill ${cls}"><i></i>${esc(state)}<span class="mode">Paper</span></span><span class="more">Details</span></a>` +
+      `<div class="tilefig"><span class="big ${tone(L.pnl)}">${signed(L.pnl)}</span><span class="of">on ${money(L.initial, 0)} of its own paper · Polymarket and Kalshi${L.halt ? ` · ${esc(L.halt)}` : ''}</span></div>` +
+      `<ul class="tiles pmtiles">${PM_ORDER.map((k) => (L.books || []).find((b) => b.key === k)).filter(Boolean).map((b) => {
         const x = pmBits(b);
-        return bookLine({ k: `pm-${b.key}`, href: `#pm/${b.key}`, color: 'var(--ink-3)', name: b.name, chip: x.chip, pnl: b.pnl, now: x.next });
+        return bookTile({ k: `pm-${b.key}`, href: `#book/pm-${b.key}`, color: 'var(--ink-3)', name: b.name, chip: x.chip, pnl: b.pnl, vs: plainVs(x.vs), now: x.next });
       }).join('')}</ul>`);
   }
 
@@ -328,6 +336,13 @@
     // from today yet, so the delay is the feed's usual one rather than the hours since yesterday's close.
     const spy = !spyOk ? 'SPY stale' : !mk.open ? 'SPY closed' : mk.delayMin != null && mk.delayMin <= 30 ? `SPY ${mk.delayMin} min late` : 'SPY about 15 min late';
     return { open: !!mk.open, says: mk.says || '', cryptoOk, spyOk, spy };
+  }
+  // the bar's line (and, on a phone, the desk tile's): the market's hours, then how fresh each price is
+  function marketHtml() {
+    const M = marketBits();
+    return `<span><i class="dot${M.open ? '' : ' late'}"></i>Market ${esc(M.says || (M.open ? 'open' : 'closed'))}</span>` +
+      `<span><i class="dot${M.cryptoOk ? '' : ' warn'}"></i>Crypto ${M.cryptoOk ? 'live' : 'stale'}</span>` +
+      `<span><i class="dot ${M.spyOk ? 'late' : 'warn'}"></i>${esc(M.spy)}</span>`;
   }
   function deskHtml() {
     const C = S.cfg || {}, M = marketBits();
@@ -472,9 +487,7 @@
   }
   // A book that has never traded is its figure, its markets and its next check: no line that has never
   // moved. What it is doing now sits under its figure, in the book's colour: until 2026-10-02 it was the
-  // card's last line, under the tables and the rule, and on a phone a card was its figure until its chip
-  // (a button there and nowhere else) was tapped. The overview lists every book in a line now, so a card
-  // here is always whole.
+  // card's last line, under the tables and the rule. A card opens in the sheet, from its tile, and is always whole.
   const bookChip = (b) => {
     const held = b.rows.filter((r) => r.qty > 0).length;
     return lotBook(b.key) ? (b.rows.length ? `${b.rows.length} open` : 'no position') : held ? `${held} held` : 'not holding yet';
@@ -496,19 +509,6 @@
       `<div class="bksub">worth ${money(b.equity)} of ${money(b.initial, 0)}${b.fees ? ` · fees ${money(b.fees)}` : ''}${b.realized && !isZero(b.realized) ? ` · banked ${signed(b.realized)}` : ''}</div>` +
       (traded ? sparkSvg(b.key) : '') + body +
       `<details class="rule"><summary>How this book trades</summary><p>${esc(b.rule)}</p></details></article>`;
-  }
-  // Two kinds of book, which a reader new to the floor could not tell apart from six cards in a row: the ones
-  // that hold crypto and SPY across days, and the ones that trade SPY's options within the day. A book the
-  // page does not know yet goes with the first.
-  const GROUPS = [
-    ['Crypto and SPY', 'Held across days, sized to how hard each one swings. Runners buy a coin that is popping and ride it until it turns.', ['crypto', 'stocks', 'runners']],
-    ['SPY same-day options', 'Calls and puts bought and sold within the session, at Cboe’s prices about 15 minutes late.', ['options', 'scalps', 'dips']],
-  ];
-  function renderBooks() {
-    const known = new Set(GROUPS.flatMap((g) => g[2]));
-    const groups = GROUPS.map(([title, text, keys], i) => [title, text, [...keys.map(bookOf).filter(Boolean), ...(i ? [] : (S.books || []).filter((b) => !known.has(b.key)))]]);
-    morph($('books'), groups.filter((g) => g[2].length).map(([title, text, bs], i) => `<section class="bkgroup" data-k="g${i}" aria-label="${esc(title)}">` +
-      `<h2>${esc(title)}</h2><p>${esc(text)}</p><div class="bkgrid">${bs.map(bookCard).join('')}</div></section>`).join(''));
   }
 
   // ------------------------------------------------------------ the prediction-market desk: its board and five books
@@ -597,22 +597,17 @@
       `<p class="now">${next}</p>${sub ? `<div class="bksub">${sub}</div>` : ''}${body}` +
       `<details class="rule"><summary>How this book trades</summary><p>${esc(b.rule || '')}</p></details></article>`;
   }
-  function renderPm() {
-    const L = S.legacy, el = $('v-pm');
-    if (!L) return;
-    const [state, cls] = pmState(L), book = (k) => { const b = (L.books || []).find((x) => x.key === k); return b ? pmCard(b) : ''; };
-    morph(el, `<div class="card pmhero"><div class="cardhead"><h2 class="label">Prediction markets</h2>` +
-      `<span class="pill ${cls}"><i></i>${esc(state)}<span class="mode">Paper</span></span></div><a class="pmold" href="/pm">Every market, on its old page ›</a>` +
+  // its sheet: the desk's board, and each of its books' figure and what it does next, each a link to its card
+  function pmSheetHtml() {
+    const L = S.legacy;
+    if (!L) return '<p class="sub">The prediction-market desk is not on the floor right now.</p>';
+    const [state, cls] = pmState(L);
+    return `<div class="pmhero"><span class="pill ${cls}"><i></i>${esc(state)}<span class="mode">Paper</span></span><a class="pmold" href="/pm">Every market, on its old page ›</a>` +
       `<div class="figline"><span class="fig ${tone(L.pnl)}">${signed(L.pnl)}</span><span class="vs">on ${money(L.initial, 0)} of its own paper · the same outcomes on Polymarket and Kalshi` +
       `${L.halt ? ` · ${esc(L.halt)}` : ''}</span></div></div>` +
-      `<div class="pmbooks">${PM_ORDER.slice(0, 2).map(book).join('')}<div class="pmside">${PM_ORDER.slice(2).map(book).join('')}</div></div>`);
+      `<dl class="facts">${PM_ORDER.map((k) => (L.books || []).find((b) => b.key === k)).filter(Boolean).map((b) => `<div><dt><a href="#book/pm-${b.key}">${esc(b.name)}</a></dt>` +
+        `<dd>${figure(b.pnl)} · ${pmBits(b).next}</dd></div>`).join('')}</dl>`;
   }
-  $('v-pm').addEventListener('click', (ev) => {
-    const t = ev.target.closest('[data-all]');
-    if (!t) return;
-    if (allRows.has(t.dataset.all)) allRows.delete(t.dataset.all); else allRows.add(t.dataset.all);
-    if (S) renderPm();
-  });
 
   // ------------------------------------------------------------ what's happening: the desk's trades and the bots' log
   const logKey = (e) => `${e.t}|${e.agent}|${e.text}`;
@@ -704,7 +699,6 @@
   const DESKS = [['both', 'Both desks'], ['desk', 'Stocks & crypto'], ['pm', 'Predictions']];
   const feed = { show: 'decisions', desk: 'both' };
   try { const v = JSON.parse(localStorage.getItem('desk-feed') || '{}'); if (SHOWS.some(([k]) => k === v.show)) feed.show = v.show; if (DESKS.some(([k]) => k === v.desk)) feed.desk = v.desk; } catch { /* defaults */ }
-  const phone = matchMedia('(max-width: 640px)');
   const segHtml = (attr, opts, on) => opts.map(([k, name, n]) => `<button type="button" data-${attr}="${k}" class="${k === on ? 'on' : ''}" aria-pressed="${k === on}">${esc(name)}${n != null ? `<span>${n}</span>` : ''}</button>`).join('');
   function renderActivity(all = activityRows()) {
     const desk = S.legacy ? feed.desk : 'both';
@@ -718,11 +712,24 @@
   }
   // The overview's few: the latest trades and warnings of both desks. The maker fills every few minutes and
   // would be all of them, so its fills are left to the Activity view and its own line on the overview.
+  // As many as fit its card: the page does not scroll, so the rest are hidden rather than pushed off the foot,
+  // and every one of them is in the Activity sheet.
   function renderLatest(all) {
-    const rows = all.filter((r) => (r.level === 'trade' || r.level === 'warn') && !(r.who === 'MAKR' && r.level === 'trade')).slice(0, 6);
+    const rows = all.filter((r) => (r.level === 'trade' || r.level === 'warn') && !(r.who === 'MAKR' && r.level === 'trade')).slice(0, 20);
     morph($('latestlist'), feedHtml(rows) || `<li class="empty">${all.length ? 'No trade yet.' : 'Waiting for the first desk round.'}</li>`);
+    fitList($('latestlist'));
   }
-  $('v-activity').addEventListener('click', (ev) => {
+  function fitList(ol) {
+    const items = [...ol.children], room = ol.clientHeight;
+    for (const li of items) li.hidden = false;
+    if (!room) return;
+    let full = false;
+    for (const li of items) if (full || li.offsetTop + li.offsetHeight > room + 1) { li.hidden = true; full = true; }
+    // a day's name with nothing under it goes too
+    const shown = items.filter((li) => !li.hidden);
+    if (shown.length > 1 && shown[shown.length - 1].classList.contains('day')) shown[shown.length - 1].hidden = true;
+  }
+  $('sheetactivity').addEventListener('click', (ev) => {
     const b = ev.target.closest('button[data-show], button[data-desk]');
     if (!b) return;
     if (b.dataset.show) feed.show = b.dataset.show; else feed.desk = b.dataset.desk;
@@ -751,7 +758,7 @@
       const h = await r.json();
       hist = { points: h.points || [], initial: h.initial || 0, books: h.books || {}, step: h.step || 60, recentFrom: h.recentFrom || null, loaded: true };
       for (const el of plots.keys()) drawChart(el);
-      if (S) renderBooks();
+      if (S && sheet) renderSheet();
     } catch { /* the chart waits for the next try */ }
   }
   const plots = new Map();
@@ -927,7 +934,6 @@
     if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus(); }
     else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus(); }
   });
-  window.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') closeBigChart(); });
   // The device went from light to dark or back (on a schedule, at sunset): the page's colours follow by
   // themselves, and the charts are built again in the new ones.
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
@@ -938,36 +944,94 @@
     }
   });
 
-  // ------------------------------------------------------------ the views: one showing at a time, each a link
-  // #overview, #desk, #pm and #activity, and #desk/<book> or #pm/<book> for one book's card, which is scrolled
-  // to and lit for a moment. No element has those ids, so the browser does not jump to one by itself.
-  const VIEWS = ['overview', 'desk', 'pm', 'activity'];
-  let view = null, pendingBook = null;
-  // `draw` is false from inside a render, which goes on to draw the view itself
-  function setView(v, draw = true) {
-    if (v === view) return;
-    view = v;
-    for (const el of document.querySelectorAll('main > .view')) el.hidden = el.dataset.view !== v;
-    for (const a of $('views').querySelectorAll('a')) { if (a.dataset.view === v) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); }
-    if (S && draw) render();
+  // ------------------------------------------------------------ the sheet: what is behind a tile, over the page
+  // #book/<key> (a prediction-market book's key starts pm-), #desk, #pm or #activity. A tile's link pushes its
+  // own entry onto the history, so the back button closes the sheet; Done goes back the same way. A link that
+  // arrives from outside (a bookmark, a reload) opens the sheet, and Done then clears it in place.
+  // The four views' links of the morning of 2026-10-02 (#desk/crypto, #pm/arbs, #overview) still land.
+  const sheetEl = $('sheet');
+  let sheet = null, sheetOpener = null;
+  function wanted() {
+    const [a, b] = decodeURIComponent(location.hash.slice(1)).split('/');
+    if (a === 'book' && b) return { kind: 'book', k: b };
+    if ((a === 'desk' || a === 'pm') && b) return { kind: 'book', k: a === 'pm' ? `pm-${b}` : b };
+    if (a === 'desk' || a === 'pm' || a === 'activity') return { kind: a };
+    return null;
   }
   function route() {
-    const [v, k] = decodeURIComponent(location.hash.slice(1)).split('/');
-    const before = view;
-    setView(VIEWS.includes(v) && !(v === 'pm' && S && !S.legacy) ? v : 'overview');
-    pendingBook = k && (view === 'desk' || view === 'pm') ? (view === 'pm' ? `pm-${k}` : k) : null;
-    if (pendingBook) showBook(); else if (before !== null && before !== view) window.scrollTo({ top: 0, behavior: 'instant' });
+    const w = wanted(), was = sheet;
+    sheet = w;
+    sheetEl.hidden = !w;
+    $('sheetactivity').hidden = !w || w.kind !== 'activity';
+    $('sheetdetail').hidden = !w || w.kind === 'activity';
+    if (w && !was) { sheetOpener = document.activeElement; }
+    if (S && w) renderSheet();
+    if (w && (!was || was.kind !== w.kind || was.k !== w.k)) { sheetEl.querySelector('.sbody').scrollTop = 0; sheetEl.querySelector('.sdone').focus(); }
+    if (!w && was && sheetOpener && document.contains(sheetOpener)) sheetOpener.focus();
+    if (!w) sheetOpener = null;
   }
-  function showBook() {
-    const el = pendingBook && document.querySelector(`.view:not([hidden]) .bk[data-k="${CSS.escape(pendingBook)}"]`);
-    if (!el) return;
-    pendingBook = null;
-    el.scrollIntoView({ block: 'start' });
-    el.classList.remove('flash');
-    void el.offsetWidth;
-    el.classList.add('flash');
+  function closeSheet() {
+    if (!sheet) return;
+    if (history.state && history.state.sheet) history.back();
+    else { history.replaceState(null, '', location.pathname + location.search); route(); }
   }
+  // a link to a sheet, anywhere on the page or in a sheet, opens it as an entry of its own
+  document.addEventListener('click', (ev) => {
+    const a = ev.target.closest('a[href^="#"]');
+    if (!a || ev.defaultPrevented || ev.metaKey || ev.ctrlKey || ev.shiftKey) return;
+    const href = a.getAttribute('href');
+    if (href.length < 2) return;
+    ev.preventDefault();
+    if (href === location.hash) return;
+    if (sheet && history.state && history.state.sheet) history.replaceState({ sheet: 1 }, '', href);
+    else history.pushState({ sheet: 1 }, '', href);
+    route();
+  });
+  window.addEventListener('popstate', route);
   window.addEventListener('hashchange', route);
+  function sheetTitle() {
+    if (!sheet) return '';
+    if (sheet.kind === 'activity') return 'Activity';
+    if (sheet.kind === 'desk') return 'Stocks, crypto and options';
+    if (sheet.kind === 'pm') return 'Prediction markets';
+    const pm = sheet.k.startsWith('pm-'), b = pm ? ((S.legacy && S.legacy.books) || []).find((x) => `pm-${x.key}` === sheet.k) : bookOf(sheet.k);
+    return b ? `<i class="sw" style="--bk:${pm ? 'var(--ink-3)' : BOOK_COLOR[b.key]}"></i>${esc(b.name)}<span class="chip">${esc(pm ? pmBits(b).chip : bookChip(b))}</span>` : 'Not on the floor';
+  }
+  function sheetHtml() {
+    if (sheet.kind === 'desk') return `<div class="hero">${heroHtml()}</div><div class="deskcard">${deskHtml()}</div>` +
+      '<p class="fine">Paper only: no broker is connected to this desk, and it has no way to place a real order. Crypto prices are live from Coinbase; stock and option prices come from Cboe about 15 minutes late, and the desk trades at those same late prices. The prediction-market desk prices Polymarket and Kalshi live and fills on paper against their books.</p>';
+    if (sheet.kind === 'pm') return pmSheetHtml();
+    const pm = sheet.k.startsWith('pm-');
+    const b = pm ? ((S.legacy && S.legacy.books) || []).find((x) => `pm-${x.key}` === sheet.k) : bookOf(sheet.k);
+    if (!b) return '<p class="sub">This book is not on the floor right now.</p>';
+    const group = pm ? null : GROUPS.find((g) => g[2].includes(b.key));
+    return (group ? `<p class="grpnote">${esc(group[0])}: ${esc(group[1])}</p>` : '') + (pm ? pmCard(b) : bookCard(b));
+  }
+  function renderSheet() {
+    if (!sheet) return;
+    morph($('sheettitle'), sheetTitle());
+    if (sheet.kind === 'activity') renderActivity();
+    else morph($('sheetdetail'), sheetHtml());
+  }
+  sheetEl.addEventListener('click', (ev) => {
+    if (ev.target === sheetEl || ev.target.closest('[data-close]')) { closeSheet(); return; }
+    // a prediction-market book's rows past the first few
+    const t = ev.target.closest('[data-all]');
+    if (!t) return;
+    if (allRows.has(t.dataset.all)) allRows.delete(t.dataset.all); else allRows.add(t.dataset.all);
+    if (S) renderSheet();
+  });
+  // the keyboard stays in the sheet while it is open, as it does in the large chart
+  sheetEl.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Tab') return;
+    const f = [...sheetEl.querySelectorAll('a[href], button, summary')].filter((x) => x.offsetParent !== null);
+    if (!f.length) return;
+    const first = f[0], last = f[f.length - 1];
+    if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus(); }
+    else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus(); }
+  });
+  // Escape closes what is on top: the large chart, else the sheet
+  window.addEventListener('keydown', (ev) => { if (ev.key !== 'Escape') return; if (!bigChart.hidden) closeBigChart(); else closeSheet(); });
 
   // ------------------------------------------------------------ wiring: a frame every two seconds, a clock every second
   function render() {
@@ -975,33 +1039,27 @@
     renderClock();
     morph($('ovdesk'), ovDeskHtml());
     renderOvPm();
-    morph($('hero'), heroHtml());
-    morph($('deskcard'), deskHtml());
-    renderBooks();
-    renderPm();
     const rows = activityRows();
-    renderActivity(rows);
     renderLatest(rows);
+    renderSheet();
     announce(rows);
     drawChart($('chart'));
     if (!bigChart.hidden) drawChart($('chartbig-pnl'));
     $('floor').removeAttribute('aria-busy');
-    if (pendingBook) showBook();
   }
   function connect() {
     const es = new EventSource('/api/desk/stream');
     es.onmessage = (ev) => { try { S = JSON.parse(ev.data); S._rxPerf = performance.now(); lastFrameAt = Date.now(); render(); } catch (e) { console.error(e); } };
     es.onerror = () => { es.close(); setTimeout(connect, 3000); };
   }
-  // The bar's hairline shows once the page has scrolled under it; on a phone, once the large title has gone.
-  const bar = $('top');
-  const onScroll = () => bar.classList.toggle('scrolled', window.scrollY > (phone.matches ? 50 : 2));
-  window.addEventListener('scroll', onScroll, { passive: true });
-  onScroll();
+  // the latest list is as long as its card has room for, which changes with the window and as the cards
+  // around it settle (the chart sizes itself after the first frame)
+  if (window.ResizeObserver) new ResizeObserver(() => { if (S) fitList($('latestlist')); }).observe($('latestlist'));
+  else window.addEventListener('resize', () => { if (S) fitList($('latestlist')); });
   // Nothing redraws at rest: the clock ticks, and the page notices when the stream has gone quiet.
   setInterval(() => { if (!S) return; renderClock(); if (!!stale() !== shownGone) renderHeader(); }, 1000);
   route();
-  morph($('ovdesk'), '<span class="label">Stocks, crypto and options</span><p class="sub">Connecting to the desk…</p>');
+  morph($('ovdesk'), '<span class="label">Stocks, crypto and options</span><p class="of">Connecting to the desk…</p>');
   wireChart($('chart'), false);
   wireChart($('chartbig-pnl'), true);
   connect();

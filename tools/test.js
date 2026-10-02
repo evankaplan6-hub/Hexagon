@@ -54,7 +54,7 @@ const SUITES = [
   ['headline-lab', 'the headline lab: Eastern post times, one position at a time, no buying before the bot has the post, the fee both ways, a baseline from the same kind of day'],
   ['desk-check', "the desk's daily check: a real day replays to the penny, every drift named, alive and today's checks at any hour of the week"],
   ['pmfloor', "the prediction-market desk on the floor at /: its books add up to its own P&L to the cent, the log in the floor's words and levels, trades from the ledger, a box-sized desk in one frame"],
-  ['floor', "the floor at / as four views: a link and a panel each, no id a view's link could scroll to, every element desk.js reads in desk.html, each book in one group, read-only, and a tab bar on a phone"],
+  ['floor', "the floor at / as one screen: the window's height shared out by its grid, the chart and the latest list never setting it, every book a tile linking to its sheet, the back button closing a sheet, every element desk.js reads in desk.html, read-only"],
   ['tokens', "the desk's design tokens: every text colour at 4.5:1 or better on every surface in light and in dark, no colour of desk.css's own, no token that is not there, the system font, the app icons, and only they served before the login"],
 ];
 
