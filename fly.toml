@@ -85,7 +85,9 @@ primary_region = "iad"          # Ashburn, Virginia — close to the exchange, a
   # book (MAX_ARB_GROUPS) was one slot from doing the same at 11/12. Paper capital, not real money
   # tied up -- widened to give the book more room before the next one binds.
   MAX_LONG_ARB_GROUPS = "6"
-  MAX_ARB_GROUPS = "20"
+  # 40 since 2026-10-07: 19 of the 20 slots were held on the box (the arb book restarted 2026-09-27),
+  # so the next real arb would have been turned away. Paper capital, as on 09-17.
+  MAX_ARB_GROUPS = "40"
   # The convergence book is off on the box since 2026-09-21. The verdict from the journals,
   # 2026-09-10 to 09-21: 72 convergence bets closed, 3 winners, -$637 (-$293 of it fees), and the
   # gates added on the 18th and 19th only slowed the bleeding (-$10, -$61, -$10 a day). Open
