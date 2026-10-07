@@ -952,7 +952,11 @@
     if (S && draw) render();
   }
   function route() {
-    const [v, k] = decodeURIComponent(location.hash.slice(1)).split('/');
+    // a link cut short inside an escape (#%E0%A4%A) throws in decodeURIComponent, and this runs before the first
+    // frame is asked for: the floor stayed blank for good. Read it as written; it names no view, so it is the overview.
+    let raw = location.hash.slice(1);
+    try { raw = decodeURIComponent(raw); } catch { /* malformed escape */ }
+    const [v, k] = raw.split('/');
     const before = view;
     setView(VIEWS.includes(v) && !(v === 'pm' && S && !S.legacy) ? v : 'overview');
     pendingBook = k && (view === 'desk' || view === 'pm') ? (view === 'pm' ? `pm-${k}` : k) : null;
@@ -988,18 +992,31 @@
     $('floor').removeAttribute('aria-busy');
     if (pendingBook) showBook();
   }
+  // The stream, kept alive. A phone suspends a page it is not showing and drops its sockets without a word: no
+  // `error` comes, so the page sat on "No signal" and the last figures for good, and a Home Screen app has no
+  // reload button. A frame is due every two seconds; when none has come in STALE_MS the page opens a new stream
+  // itself, and tries at once when it is shown again.
+  let es = null, retry = null, lastTry = 0;
   function connect() {
-    const es = new EventSource('/api/desk/stream');
-    es.onmessage = (ev) => { try { S = JSON.parse(ev.data); S._rxPerf = performance.now(); lastFrameAt = Date.now(); render(); } catch (e) { console.error(e); } };
-    es.onerror = () => { es.close(); setTimeout(connect, 3000); };
+    clearTimeout(retry); retry = null;
+    if (es) es.close();
+    lastTry = Date.now();
+    const mine = es = new EventSource('/api/desk/stream');
+    mine.onmessage = (ev) => { try { S = JSON.parse(ev.data); S._rxPerf = performance.now(); lastFrameAt = Date.now(); render(); } catch (e) { console.error(e); } };
+    mine.onerror = () => { if (es !== mine) return; mine.close(); es = null; retry = setTimeout(connect, 3000); };
   }
+  // no frame since the last one, or since the last try when none has come at all
+  const quiet = () => Date.now() - Math.max(lastFrameAt, lastTry) > STALE_MS;
+  const wake = () => { if (document.visibilityState === 'visible' && quiet() && !retry) connect(); };
+  document.addEventListener('visibilitychange', wake);
+  window.addEventListener('pageshow', wake);
   // The bar's hairline shows once the page has scrolled under it; on a phone, once the large title has gone.
   const bar = $('top');
   const onScroll = () => bar.classList.toggle('scrolled', window.scrollY > (phone.matches ? 50 : 2));
   window.addEventListener('scroll', onScroll, { passive: true });
   onScroll();
   // Nothing redraws at rest: the clock ticks, and the page notices when the stream has gone quiet.
-  setInterval(() => { if (!S) return; renderClock(); if (!!stale() !== shownGone) renderHeader(); }, 1000);
+  setInterval(() => { if (quiet() && !retry) connect(); if (!S) return; renderClock(); if (!!stale() !== shownGone) renderHeader(); }, 1000);
   route();
   morph($('ovdesk'), '<span class="label">Stocks, crypto and options</span><p class="sub">Connecting to the desk…</p>');
   wireChart($('chart'), false);

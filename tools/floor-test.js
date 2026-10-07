@@ -26,8 +26,15 @@ ok('no element is named for a view, so a view\'s link never scrolls the page to 
 ok('ids are unique', new Set(ids).size === ids.length, ids.filter((i, k) => ids.indexOf(i) !== k));
 const read$ = [...new Set([...js.matchAll(/\$\('([\w-]+)'\)/g)].map((m) => m[1]))];
 ok('every element desk.js reads is in desk.html', read$.every((i) => ids.includes(i)), read$.filter((i) => !ids.includes(i)));
-ok('a book\'s own link (#desk/crypto, #pm/arbs) opens its view and its card', /location\.hash\.slice\(1\)\)\.split\('\/'\)/.test(js) && /href: `#desk\/\$\{b\.key\}`/.test(js) && /href: `#pm\/\$\{b\.key\}`/.test(js));
+ok('a book\'s own link (#desk/crypto, #pm/arbs) opens its view and its card', /let raw = location\.hash\.slice\(1\)/.test(js) && /\[v, k\] = raw\.split\('\/'\)/.test(js) && /href: `#desk\/\$\{b\.key\}`/.test(js) && /href: `#pm\/\$\{b\.key\}`/.test(js));
 ok('the views follow the back button', /addEventListener\('hashchange', route\)/.test(js));
+// A hash cut short inside an escape (#%E0%A4%A) makes decodeURIComponent throw, and route() runs at load before
+// the stream is opened: the floor stayed blank for good (found 2026-10-07, in the browser).
+ok('a malformed hash cannot stop the floor: decodeURIComponent is only ever called inside a try', /try \{ raw = decodeURIComponent\(raw\); \} catch/.test(js) && [...js.matchAll(/decodeURIComponent\(/g)].length === 1);
+// The Home Screen app: iOS suspends the page and drops the stream's socket without an `error`, and there is no
+// reload button, so the page watches its own stream (a frame is due every two seconds) and opens a new one.
+ok('the page reopens a stream that has gone quiet, on a timer and the moment it is shown again', /const quiet = \(\) => Date\.now\(\) - Math\.max\(lastFrameAt, lastTry\) > STALE_MS/.test(js) && /setInterval\(\(\) => \{ if \(quiet\(\) && !retry\) connect\(\);/.test(js) && /document\.addEventListener\('visibilitychange', wake\)/.test(js) && /window\.addEventListener\('pageshow', wake\)/.test(js));
+ok('one stream at a time: a new one closes the old, and a closed one cannot schedule another', /if \(es\) es\.close\(\)/.test(js) && /if \(es !== mine\) return/.test(js) && /clearTimeout\(retry\)/.test(js));
 
 // ---- the six books, each in one group
 const groups = ((js.match(/const GROUPS = \[([\s\S]*?)\n  \];/) || [])[1] || '');
