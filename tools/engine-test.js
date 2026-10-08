@@ -1333,6 +1333,29 @@ const position = (over = {}) => ({
     ok('a signal that failed its live check is not re-fetched every cycle: a minute\'s back-off', fetched === first, { first, after: fetched });
   }
 
+  group('pinning held legs off the listing has a time budget, so a silent venue cannot outlast the watchdog (audit 2026-10-07)');
+  {
+    // 50 unlisted legs fetched one at a time, each up to a 15 s timeout, is 750 s against WATCHDOG_SEC 300. Here each fetch takes 20 ms and
+    // the budget is 50 ms: the round stops partway, and the next one carries on with the legs it had not reached.
+    const ksv = require('../src/venues/kalshi');
+    const orig = ksv.fetchMarket;
+    const asked = [];
+    ksv.fetchMarket = async (ref) => { asked.push(ref); await sleep(20); return { ticker: ref, yesBid: 0.4, yesAsk: 0.42, status: 'open' }; };
+    try {
+      const E = engine({ pinBudgetMs: 50 });
+      E.state.positions = Array.from({ length: 10 }, (_, i) => ({ id: `p${i}`, venue: 'KS', ref: `KXPIN-${i}`, side: 'yes', qty: 10 }));
+      const t0 = Date.now();
+      await E.pinPositions();
+      const first = asked.length;
+      ok('the first round stops partway: some legs fetched, not all ten', first >= 1 && first < 10, first);
+      ok('...in about the budget, not ten fetches\' worth', Date.now() - t0 < 160, Date.now() - t0);
+      await E.pinPositions();
+      ok('the next round goes on with the legs it had not reached, and does not refetch the ones it had', asked.length > first && new Set(asked).size === asked.length, asked);
+      for (let i = 0; i < 6; i++) await E.pinPositions();
+      ok('a few rounds on, every leg has been fetched once', new Set(asked).size === 10, asked.length);
+    } finally { ksv.fetchMarket = orig; }
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();
