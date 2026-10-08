@@ -164,5 +164,16 @@ async function main() {
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// ---- entries the chain's timing refused
+{
+  const now = Date.parse('2026-10-02T01:00:00Z');
+  const ev = (kind, hoursAgo) => ({ t: new Date(now - hoursAgo * 3600000).toISOString(), kind });
+  ok('two skips in a day are the files drifting: no problem', C.skips([ev('SCALP_SKIP', 3), ev('DIP_SKIP', 5)], now) === null);
+  const p = C.skips([ev('SCALP_SKIP', 3), ev('SCALP_SKIP', 4), ev('DIP_SKIP', 5), ev('DIP_SKIP', 5), ev('DIP_SKIP', 6), ev('OPTIONS_SKIP', 7)], now);
+  ok('three or more are a feed out of step: a problem that counts each book', /6 entries skipped/.test(p || '') && /scalp 2/.test(p) && /dip 3/.test(p) && /options 1/.test(p), p);
+  ok('skips older than a day do not count', C.skips([ev('SCALP_SKIP', 30), ev('SCALP_SKIP', 31), ev('DIP_SKIP', 40)], now) === null);
+  ok('other journal lines do not count', C.skips([ev('FILL', 1), ev('REBALANCE', 2), ev('SCALP_SKIP', 3)], now) === null && C.skips(null, now) === null);
+}
+
 main().then(() => { console.log(`${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0); })
   .catch((e) => { console.log(`  FAIL  threw: ${e.stack}`); console.log(`${pass} passed, ${fail + 1} failed`); process.exit(1); });

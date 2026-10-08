@@ -1076,6 +1076,85 @@ async function auditTests() {
     ok('...and the saved state already carries that entry bar: a hard kill must not lose which bar the exits start after', onDisk.day && onDisk.day.entryBarM === 12 * 60 + 31, onDisk.day);
     fs.rmSync(dir, { recursive: true, force: true });
   }
+
+  // ---- audit 2026-10-07, the rules pass
+  // the daily-loss halt holds for the rest of the Eastern day
+  {
+    const dir = mkDir();
+    let T = atT('11:00');
+    const M = fakeMarket(() => T);
+    const desk = new Desk(deskConfig(dir), { feeds: M.feeds, now: () => T }); desk.quiet = true;
+    await desk.step();
+    const eq0 = desk.equity();
+    desk.state.books.options.cash -= eq0 * 0.055; desk.tess();
+    ok('down 5.5% today: no new buying', /past the 5% limit/.test(desk.halt || ''), desk.halt);
+    desk.state.books.options.cash += eq0 * 0.01; desk.tess();
+    ok('back to -4.5% the same day: still halted, as "until tomorrow" says', !!desk.halt && /until tomorrow/.test(desk.halt), desk.halt);
+    ok('...and the latch is in the saved state, so a restart keeps it', desk.state.haltDay === clock.et(T).day && !!desk.state.haltWhy);
+    T += 86400000; desk.tess();
+    ok('the next Eastern day it lifts, with its line', desk.halt === null && desk.state.log.some((l) => l.text === 'new day: buying allowed again'), [desk.halt, desk.state.log.slice(0, 2).map((l) => l.text)]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  // a scalp's time exit with no bid on the contract must not throw
+  {
+    const dir = mkDir();
+    let T = atT('10:06');
+    const M = fakeMarket(() => T);
+    const desk = new Desk(deskConfig(dir), { feeds: M.feeds, now: () => T }); desk.quiet = true;
+    M.setMinutes(10 * 60 + 5);
+    M.W.chain = { expiry: D0, spot: 700.7, at: atT('10:05'), calls: [M.call(700, 1.5, 1.51, 1.6, 0.58), M.call(701, 0.99, 1, 1.2, 0.45), M.call(702, 0.6, 0.61, 0.7, 0.33)], puts: [] };
+    await desk.step();
+    ok('a scalp is held', desk.state.books.scalps.lots.length === 1);
+    T = atT('10:21'); M.setMinutes(10 * 60 + 20);
+    M.W.chain = { expiry: D0, spot: 700.8, at: atT('10:20'), calls: [M.call(700, 1.4, 1.41, 1.6, 0.55), M.call(701, null, 1.06, 1.2, 0.44), M.call(702, 0.7, 0.71, 0.95, 0.35)], puts: [] };
+    await desk.step();
+    ok('fifteen minutes in, the contract has no bid: the round does not fail', !desk.state.log.some((l) => /desk round failed/.test(l.text)), desk.state.log.slice(0, 3).map((l) => l.text));
+    ok('...and the time exit sells it, saying why', desk.state.books.scalps.lots.length === 0 && desk.state.fills.some((f) => f.book === 'scalps' && f.side === 'sell' && /no bid/.test(f.why || '')), desk.state.fills.slice(0, 2));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  // the dip runner is not faded on a bar before the reclaim
+  {
+    const lot = { role: 'runner', stop: 697.5, spy: 698.14, entry: 0.3, reclaimM: 611 };     // handed over by the sibling that sold on the 10:11 reclaim
+    const bar = (m, c) => ({ m, c, vw: 699 });
+    const fresh = [bar(610, 698.0), bar(611, 700.2)];
+    const r = B.dipExit(lot, fresh, fresh[1], null);
+    ok('a close under its buy price at 10:10, before the 10:11 reclaim, is not a fade', r.exit === null, r.exit);
+    const after = B.dipExit(lot, [bar(612, 698.0)], bar(612, 698.0), null);
+    ok('the same close after the reclaim is', after.exit && after.exit.kind === 'fade' && after.exit.bar.m === 612, after.exit);
+  }
+
+  // the options book takes a trigger one bar late, when a single read brought two bars
+  {
+    const dir = mkDir();
+    let T = atT('12:31');
+    const M = fakeMarket(() => T); M.setMinutes(12 * 60 + 30);
+    const desk = new Desk(deskConfig(dir), { feeds: M.feeds, now: () => T }); desk.quiet = true;
+    await desk.step();
+    T = atT('12:33') + 10000; M.setMinutes(12 * 60 + 32);                 // the 12:32 round never ran: this read has the 12:31 trigger AND the 12:32 bar
+    M.W.chain = { expiry: D0, spot: 703.62, at: atT('12:31'), calls: [M.call(704, 0.3, 0.31, 0.5), M.call(705, 0.09, 0.1, 0.15), M.call(706, 0.04, 0.05, 0.1)], puts: [] };
+    await desk.step();
+    const o = desk.state.books.options;
+    ok('the 12:31 trigger is bought although the 12:32 bar is already in', o.lots.length > 0 && o.day.entryBarM === 12 * 60 + 31, { lots: o.lots.length, entry: o.day.entryBarM, log: desk.state.log.slice(0, 2).map((l) => l.text) });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  // the two hand-kept lists say when they have run out
+  {
+    ok('the runner list no longer holds coins Coinbase has no USD market for', !['CASHCAT', 'CC', 'GRAM', 'MEW', 'MNT', 'LIT'].some((c) => B.RUNNER_COINS.has(c)) && B.RUNNER_COINS.has('BONK'));
+    ok('...and says when Robinhood\'s list was read', /^\d{4}-\d{2}-\d{2}$/.test(B.RUNNER_COINS_AS_OF) && B.RUNNER_COINS_STALE_DAYS > 0 && B.FED_LAST === '2026-12-09');
+    const dir = mkDir();
+    let T = atT('12:31');
+    const M = fakeMarket(() => T); M.setMinutes(12 * 60 + 30);
+    const desk = new Desk(deskConfig(dir), { feeds: M.feeds, now: () => T }); desk.quiet = true;
+    await desk.step();
+    ok('the runner scan names the list entries with no Coinbase figures', desk.state.log.some((l) => /have no Coinbase USD figures and cannot run/.test(l.text)));
+    T = clock.etToUtc('2026-12-01T12:00:00'); desk.tess();
+    const said = desk.state.log.map((l) => l.text);
+    ok('on 2026-12-01 TESS says the Fed days run out on 12-09 and the runner list is over 60 days old', said.some((t) => /Fed days.*end 2026-12-09/.test(t)) && said.some((t) => /runner coin list.*2026-09-30/.test(t)), said.slice(0, 4));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 engineTests().then(auditTests).then(() => {

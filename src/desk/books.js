@@ -220,6 +220,7 @@ const SCALP = {
 };
 // The Fed's 2 PM decisions left in 2026, from the stack's §1 list. Add 2027's when the stack has them.
 const FED = { '2026-10-28': 14 * 60, '2026-12-09': 14 * 60 };
+const FED_LAST = Object.keys(FED).sort().pop();     // TESS says when the list is about to run out
 const hm = (m) => `${((Math.floor(m / 60) + 11) % 12) + 1}:${String(m % 60).padStart(2, '0')}`;
 
 // Does the bar at index `i` trigger? `bars` are five-minute bars labelled by their start, `vwap` the
@@ -355,7 +356,7 @@ function dipExit(lot, fresh, last, row, R = DIP) {
     if (b.c < lot.stop) return { exit: { kind: 'stop', bar: b }, reclaimM };
     if (reclaimM == null) {
       if (b.c > b.vw) { reclaimM = b.m; if (lot.role !== 'runner') return { exit: { kind: 'reclaim', bar: b }, reclaimM }; }
-    } else if (lot.role === 'runner' && b.c < lot.spy) return { exit: { kind: 'fade', bar: b }, reclaimM };
+    } else if (lot.role === 'runner' && b.m > reclaimM && b.c < lot.spy) return { exit: { kind: 'fade', bar: b }, reclaimM };   // after the reclaim bar: a read that brings two bars hands a sibling's reclaim over, and the bar before it is not a fade
   }
   if (last.m >= R.clock) return { exit: { kind: 'clock', bar: last }, reclaimM };
   if (reclaimM == null && last.m >= R.reclaimBy) return { exit: { kind: 'late', bar: last }, reclaimM };
@@ -399,10 +400,14 @@ const RUNNER = {
 };
 // The coins Robinhood sells to an individual account, as its crypto list gave them on 2026-09-30 (the
 // ones halted only in New York included; stablecoins and gold left out). Add a coin when Robinhood lists
-// one: a runner Evan cannot buy is not one this book should either.
+// one: a runner Evan cannot buy is not one this book should either. Six entries Coinbase has no live USD market for
+// (CASHCAT, CC, GRAM, MEW, MNT; LIT delisted) were taken out on 2026-10-07 (the list is still the 09-30 reading): the scan can never see them. TESS
+// says when this list is over RUNNER_COINS_STALE_DAYS old, and the runner scan says which entries have no figures.
+const RUNNER_COINS_AS_OF = '2026-09-30';          // when Robinhood's list was last read, not when this file last changed
+const RUNNER_COINS_STALE_DAYS = 60;
 const RUNNER_COINS = new Set(['AAVE', 'ADA', 'AERO', 'ALGO', 'ARB', 'ASTER', 'ATOM', 'AVAX', 'AVNT', 'AXS', 'BAT', 'BCH', 'BILL',
-  'BIO', 'BNB', 'BONK', 'BTC', 'CASHCAT', 'CC', 'CHIP', 'COMP', 'CRV', 'DOGE', 'DOT', 'EIGEN', 'ENA', 'ETC', 'ETH', 'FET', 'FLOKI',
-  'FLR', 'GRAM', 'GRT', 'HBAR', 'HYPE', 'IMX', 'INJ', 'JTO', 'LDO', 'LINK', 'LIT', 'LTC', 'MEGA', 'MEW', 'MNT', 'MOODENG', 'MORPHO',
+  'BIO', 'BNB', 'BONK', 'BTC', 'CHIP', 'COMP', 'CRV', 'DOGE', 'DOT', 'EIGEN', 'ENA', 'ETC', 'ETH', 'FET', 'FLOKI',
+  'FLR', 'GRT', 'HBAR', 'HYPE', 'IMX', 'INJ', 'JTO', 'LDO', 'LINK', 'LTC', 'MEGA', 'MOODENG', 'MORPHO',
   'NEAR', 'ONDO', 'OP', 'ORCA', 'PENGU', 'PEPE', 'PNUT', 'POPCAT', 'PYTH', 'QNT', 'RAY', 'RE', 'RENDER', 'SEI', 'SENT', 'SHIB', 'SKR',
   'SKY', 'SNX', 'SOL', 'STRK', 'SUI', 'SYRUP', 'TRUMP', 'UNI', 'VIRTUAL', 'VVV', 'W', 'WIF', 'WLD', 'WLFI', 'XCN', 'XLM', 'XPL', 'XRP',
   'XTZ', 'ZEC', 'ZORA', 'ZRO', 'ZRX']);
@@ -441,5 +446,5 @@ module.exports = {
   volTargetWeight, needsRebalance, trendTest, scanEntry, vwapBreak, pickContract, targetHit, chainSync, ZERO,
   scalpTrigger, scalpGate, pickScalp, scalpExit, SCALP, FED,
   dipTrigger, pickDip, dipExit, DIP,
-  runnerScan, runnerExit, RUNNER, RUNNER_COINS,
+  runnerScan, runnerExit, RUNNER, RUNNER_COINS, RUNNER_COINS_AS_OF, RUNNER_COINS_STALE_DAYS, FED_LAST,
 };

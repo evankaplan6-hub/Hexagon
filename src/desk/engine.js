@@ -442,12 +442,20 @@ class Desk {
     const eq = this.equity();
     if (this.state.dayKey !== e.day) { this.state.dayKey = e.day; this.state.dayStart = eq; }
     const dd = this.state.dayStart > 0 ? eq / this.state.dayStart - 1 : 0;
-    const why = dd <= -this.D.maxDailyDdPct ? `down ${(Math.abs(dd) * 100).toFixed(1)}% today, past the ${(this.D.maxDailyDdPct * 100).toFixed(0)}% limit: no new buying until tomorrow` : null;
+    const live = dd <= -this.D.maxDailyDdPct ? `down ${(Math.abs(dd) * 100).toFixed(1)}% today, past the ${(this.D.maxDailyDdPct * 100).toFixed(0)}% limit: no new buying until tomorrow` : null;
+    // "no new buying until tomorrow" means it: once the limit is crossed the halt holds for the rest of the Eastern day, saved
+    // with the state. It used to lift the moment the day's figure came back inside the limit, and the desk bought again
+    // at -4.5% on a day it had told itself to stop at -5.6% (audit 2026-10-07).
+    if (live && this.state.haltDay !== e.day) { this.state.haltDay = e.day; this.state.haltWhy = live; this.dirty = true; }
+    const why = live || (this.state.haltDay === e.day ? this.state.haltWhy : null);
     // said once, when it starts: the text carries the live percentage, so comparing it logged a line for every 0.1%
     if (why && !this.halt) this.log('TESS', 'HALT', null, why);
     if (!why && this.halt) this.log('TESS', 'OPS', null, 'new day: buying allowed again');
     this.halt = why;
     if (!clock.calendarCovers(e.day) && this.due('tess-cal', 86400)) this.log('TESS', 'OPS', null, `the market calendar in src/desk/clock.js ends ${clock.LAST_YEAR}: add next year's NYSE holidays`);
+    // two more lists that run out without a word: the Fed's 2 PM days (the scalp book sits out the hour around one) and Robinhood's coins
+    if (this.D.scalps && this.due('tess-fed', 86400) && Date.parse(`${books.FED_LAST}T12:00:00Z`) - t < 21 * 86400000) this.log('TESS', 'OPS', null, `the Fed days in src/desk/books.js (FED) end ${books.FED_LAST}: add the next ones before the scalp book trades through a 2 PM decision`);
+    if (this.D.runners && this.due('tess-runlist', 86400) && (t - Date.parse(`${books.RUNNER_COINS_AS_OF}T12:00:00Z`)) / 86400000 > books.RUNNER_COINS_STALE_DAYS) this.log('TESS', 'OPS', null, `the runner coin list (RUNNER_COINS in src/desk/books.js) is from ${books.RUNNER_COINS_AS_OF}: check Robinhood's crypto list for coins added or dropped`);
     if (this.due('tess-say', 900)) {
       const bits = [this.stale.crypto ? 'crypto prices stale' : 'crypto prices fresh', q ? (this.stale.stocks && inSession ? 'SPY feed stalled' : 'SPY feed ok') : 'no SPY quote yet'];
       this.log('TESS', 'OPS', null, `${this.halt ? 'HALTED' : 'all clear'} · ${bits.join(', ')} · desk ${dd > 0 ? '+' : dd < 0 ? MINUS : ''}${Math.abs(dd * 100).toFixed(2)}% today`);
@@ -602,7 +610,7 @@ class Desk {
       stop: () => `SPY closed back ${lot.dir === 'up' ? 'under' : 'over'} ${lot.level.toFixed(2)} at ${at} (${ex.bar.c.toFixed(2)})`,
       clock: () => '3:15 clock',
       hold: () => `${R.hold} minutes up`,
-      time: () => `${R.timeStop} minutes in and bid ${prem(row.bid)}, not above its ${prem(lot.entry)}`,
+      time: () => `${R.timeStop} minutes in and ${Number.isFinite(row.bid) ? `bid ${prem(row.bid)}` : 'no bid'}, not above its ${prem(lot.entry)}`,   // a null bid is why this rule fires, and prem(null) threw: the round failed and the bar was marked handled
     }[ex.kind]();
     const sync = this.chainSync(ch, today, ex.kind === 'stop' ? ex.bar.m : last.m);
     if (!sync.ok) this.log('RIGO', 'OPS', null, `scalps: selling anyway · ${sync.why}`);
@@ -812,9 +820,11 @@ class Desk {
     // Whatever happens to this trigger, the next one has to beat this bar's own extreme.
     const hb = bars[s.hit.idx];
     d.ext = d.dir === 'up' ? Math.max(d.ext, hb.h) : Math.min(d.ext, hb.l);
-    // A trigger is only worth acting on while it is the newest minute: after a restart the scan can land
-    // on one from half an hour ago, and buying it at the current price is not the rule.
-    if (s.hit.idx < bars.length - 1) { this.log('BRAM', 'PASS', null, `options: new ${d.dir === 'up' ? 'high' : 'low'} at ${hm(s.hit.m)} was missed (the desk was not running) · waiting for the next one`); return; }
+    // A trigger is only worth acting on while it is the newest minute, or the one before it when a single read
+    // brought two (the scalp and dip books were given the same leeway on 2026-09-30): after a restart the scan can
+    // land on one from half an hour ago, and buying it at the current price is not the rule. The chain-skew check
+    // below still has the last word on whether the chain is from the trigger's moment.
+    if (s.hit.idx < bars.length - 2) { this.log('BRAM', 'PASS', null, `options: new ${d.dir === 'up' ? 'high' : 'low'} at ${hm(s.hit.m)} was missed (the desk was not running) · waiting for the next one`); return; }
     if (this.halt) { this.log('KETT', 'PASS', null, `options: trigger at ${hm(s.hit.m)} not taken · ${this.halt}`); return; }
     // a fresh chain, never the four-minute cache: the fill has to be from the trigger's moment
     const ch = await this.optionChain(today, true);
@@ -981,6 +991,9 @@ class Desk {
     // "still climbing" is against the scan before, and only when that scan was the last one (not before an outage)
     const prev = b.scan && t - b.scan.at <= 2 * every ? b.scan.px : null;
     const rows = books.runnerScan(stats, prev, R);
+    // an entry with no Coinbase USD figures can never be a runner: a delisting, or a list that has drifted
+    const blind = [...books.RUNNER_COINS].filter((c) => !stats[`${c}-USD`]).sort();
+    if (blind.length && this.due('runner-blind', 86400)) this.log('HOLT', 'OPS', null, `runners: ${blind.length} coin(s) on the list have no Coinbase USD figures and cannot run: ${blind.join(', ')}`);
     for (const lot of [...b.lots]) {
       const s = stats[lot.sym], last = s ? s.last : null;
       if (!(last > 0)) {
