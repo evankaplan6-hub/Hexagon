@@ -91,7 +91,7 @@ src/desk/books.js   the rules, pure: volatility targeting (crypto 40%/30 days, S
                   and the SPY same-day options rules ported from the stack's trend_day_check.py, on ONE-MINUTE bars since
                   2026-09-29 (the stack's move; five-minute before), plus chainSync:
                   an option is bought only off a chain within DESK_CHAIN_SKEW_SEC of the trigger bar's close;
-                  OPTIONS and SCALP books OFF since 2026-10-08 (tools/spy-lab.js: no edge over two years; DESK_OPTIONS/DESK_SCALPS=1 to restore);
+                  DIP book OFF since 2026-10-08 too (no change to it held up out of sample); OPTIONS and SCALP books OFF since 2026-10-08 (tools/spy-lab.js: no edge over two years; DESK_OPTIONS/DESK_SCALPS=1 to restore);
                   SCALP (2026-09-29): the stack's 0DTE scalp method (options §5) on a 30-minute breakout, one
                   contract near 0.40 delta, out at 1.5x / SPY back in the range / 15 min flat / 30 min / 3:15;
                   its FED list of 2 PM decisions ends 2026 (add 2027's when the stack has them);

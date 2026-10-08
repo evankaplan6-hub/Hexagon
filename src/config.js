@@ -680,7 +680,10 @@ module.exports = {
     // leaves by its own exits (same-day contracts, all out by 3:15).
     options: env('DESK_OPTIONS', '0') !== '0',
     scalps: env('DESK_SCALPS', '0') !== '0',
-    dips: env('DESK_DIPS', '1') !== '0',
+    // off since 2026-10-08 too (Evan: "fix that"): tools/spy-lab.js found +$2 a trade on 150 trades, and the one change
+    // chosen on 2024-25 (a 0.15 ATR dip) fell from +$7 to +$2 a trade on 2026, while the worst two on 2024-25 were the
+    // best two on 2026: noise, not a pattern to tune
+    dips: env('DESK_DIPS', '0') !== '0',
     // off since 2026-10-08 (Evan: "off", after tools/runner-lab.js: the rule lost over four years, 3 of 20 quarters
     // up, and lost even with no fee). Off, the book sells what it holds at its next scan and then buys nothing.
     runners: env('DESK_RUNNERS', '0') !== '0',
