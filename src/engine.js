@@ -814,10 +814,15 @@ class Engine {
   // 24h volume, so a pre-game market drifting below rank 300 during a normal 4-hour hold hits
   // exactly this. refreshQuotes replaces the whole map each cycle, so re-pin every cycle.
   async pinPositions() {
+    // One position at a time, each up to a request timeout: with a venue not answering and twenty-odd legs off the listing this
+    // round alone outlasted the stall watchdog (WATCHDOG_SEC 300) and the box restarted (audit 2026-10-07). Past the budget it stops and
+    // the rest wait for the next cycle -- a position it has not reached has not used its one-a-minute slot, so they go first then.
+    const t0 = Date.now(), budget = this.cfg.pinBudgetMs ?? 20000;
     for (const pos of this.state.positions) {
       const map = pos.venue === 'KS' ? this.quotes.ks : this.quotes.pm;
       const key = pos.venue === 'KS' ? pos.ref : pos.pmId;
       if (map.has(key)) continue;
+      if (Date.now() - t0 > budget) break;
       if (!this.due(`pin-${pos.id}`, 60)) {          // at most one refetch a minute per position
         const cached = this.pinned.get(pos.id);
         if (cached) map.set(key, cached);            // stale, but honestly timestamped via cached.at
