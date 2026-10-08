@@ -1,7 +1,7 @@
 'use strict';
 // The SPY lab: minutes labelled as Cboe labels them, the option model, and both books' days run through
 // the books' own code.
-const { sessions, bs, quote, chain, dayVol, impliedVol, scalpDay, dipDay, run } = require('./spy-lab');
+const { sessions, bs, quote, chain, dayVol, impliedVol, scalpDay, dipDay, optionsDay, run } = require('./spy-lab');
 const books = require('../src/desk/books');
 const clock = require('../src/desk/clock');
 
@@ -89,6 +89,23 @@ const flatTo = (px, until) => Array(until - (9 * 60 + 31) + 1).fill(px);   // fl
   eq('nor when every call 2-3 points out asks over $0.45', dipDay(DAY, bars, atr, 0.15), []);
   // a day that never dips enough
   eq('a dip under 0.25 ATR is not one', dipDay(DAY, bars, 20, 0.09), []);
+}
+
+// ---- options: a trend day up, a new high after 12:30, then a run past both targets
+{
+  // 500 at the open, a steady climb to 503 by 12:30 (0.75 ATR at ATR 4), a new high at 12:31, then on up
+  const n1230 = 12 * 60 + 30 - (9 * 60 + 31) + 1;
+  const climb = Array.from({ length: n1230 }, (_, i) => 500 + 3 * (i + 1) / n1230);
+  const path = climb.concat([503.05]).concat(Array.from({ length: 160 }, (_, i) => 503.05 + 0.03 * (i + 1)));
+  const o = optionsDay(DAY, minutes(path), 4, 0.08);
+  ok('the 12:30 test passes up', o.verdict === 'pass up', o.verdict);
+  ok('one trade, bought on the 12:31 new high', o.trades.length >= 1 && o.trades[0].m === 12 * 60 + 31, o.trades[0]);
+  const want = books.pickContract(chain(503.05, 12 * 60 + 31, 0.08, 'C'), 503.05, 'up');
+  ok('the strike and size books.pickContract gives', o.trades[0] && want.row && o.trades[0].strike === want.row.strike && o.trades[0].qty === want.qty, [o.trades[0], want]);
+  ok('a run this long fills a target', o.trades[0] && o.trades[0].exits.some((x) => /^target/.test(x)), o.trades[0] && o.trades[0].exits);
+  // the same morning, flat into 12:30: not a trend day, no trade
+  const flat = optionsDay(DAY, minutes(flatTo(500, 12 * 60 + 30).concat(Array(160).fill(500))), 4, 0.06);
+  eq('a flat morning fails the test and trades nothing', [flat.verdict, flat.trades.length], ['fail', 0]);
 }
 
 // ---- run(): a 1 PM close is skipped, and so is a day without 20 sessions behind it

@@ -123,7 +123,7 @@ tools/crypto-lab.js the evidence for the crypto book (Coinbase daily candles →
                   return to Coinbase, DOGE from 2021-06-03)
 tools/runner-lab.js the runner book's rule over years of Coinbase hourly candles (→ data/crypto/hours/), RUNNER_COINS only,
                   through books.runnerScan/runnerExit; out of sample before 2026-08-25, the month it was checked on
-tools/spy-lab.js    the scalp and dip books' rules on two years of SPY one-minute bars (Massive, MASSIVE_API_KEY in .env, free
+tools/spy-lab.js    the scalp, dip and options books' rules on two years of SPY one-minute bars (Massive, MASSIVE_API_KEY in .env, free
                   plan → data/stocks/minutes/SPY.json), options modelled and fitted to the box's real buys
 tools/headline-lab.js would the investment stack's X feed trade a coin? (Coinbase one-minute candles → data/crypto/minutes/;
                   reads the feed's log on the Mac in place, copies no post, calls no X server). 2026-09-30, three days: no, so the
