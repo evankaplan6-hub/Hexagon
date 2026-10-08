@@ -88,7 +88,7 @@ function fill(order, market, fees) {
   const notional = r2(p.notional);
   const fee = feeFor(kind, qty, notional, fees);
   return {
-    qty, avg: r6(p.notional / p.filled / mult), notional, fee,
+    qty, avg: +(p.notional / p.filled / mult).toPrecision(8), notional, fee,
     cash: buy ? r2(-(notional + fee)) : r2(notional - fee),
   };
 }

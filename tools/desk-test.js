@@ -968,7 +968,117 @@ async function engineTests() {
   fs.rmSync(fresh, { recursive: true, force: true });
 }
 
-engineTests().then(() => {
+// ------------------------------------------------------------------ audit 2026-10-07
+async function auditTests() {
+  const { DAY: D0, at: atT } = require('./desk-fixture');
+  const mkDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'hexagon-audit-desk-'));
+  const settles = (dir) => { try { return fs.readFileSync(path.join(dir, 'desk', `journal-${D0}.jsonl`), 'utf8').split('\n').filter((l) => /"SETTLE"/.test(l)).map((l) => JSON.parse(l)); } catch { return []; } };
+
+  // a sub-cent coin's average price was rounded to 6 decimals: BONK at 3.70e-6 came back as 4e-6
+  {
+    const f = broker.fill({ kind: 'crypto', side: 'buy', qty: 1e9, step: 1 }, { bid: 3.69e-6, ask: 3.70e-6 }, { cryptoBps: 40 });
+    ok('a sub-cent coin keeps its price to 8 significant digits, not 6 decimals', f.avg > 0 && Math.abs(f.avg - 3.70e-6) < 1e-12, f);
+    const g = broker.fill({ kind: 'crypto', side: 'buy', qty: 100 }, { bid: 99.6, ask: 99.666667 }, { cryptoBps: 40 });
+    ok('...and an ordinary price is unchanged', g.avg === 99.666667, g);
+  }
+
+  // an option that expired today settled on whatever quote the desk held, however old
+  {
+    const dir = mkDir();
+    let T = atT('10:06');
+    const M = fakeMarket(() => T);
+    const desk = new Desk(deskConfig(dir), { feeds: M.feeds, now: () => T }); desk.quiet = true;
+    M.setMinutes(10 * 60 + 5);
+    M.W.chain = { expiry: D0, spot: 700.7, at: atT('10:05'), calls: [M.call(700, 1.5, 1.51, 1.6, 0.58), M.call(701, 0.99, 1, 1.2, 0.45), M.call(702, 0.6, 0.61, 0.7, 0.33)], puts: [] };
+    await desk.step();
+    const lot = desk.state.books.scalps.lots[0];
+    ok('a scalp lot is held to settle', !!lot);
+    lot.strike = 700.5;                                    // 0.60 in the money on the after-hours quote, worthless on the close
+    const dead = async () => { throw new Error('Cboe down'); };
+    const alive = { ...M.feeds };
+    Object.assign(M.feeds, { quote: dead, intraday: dead, expiry: dead, daily: dead });
+    T = atT('16:21'); await desk.step();
+    ok('Cboe down since 10:05: the lot waits for the close, not settles on a six-hour-old quote', desk.state.books.scalps.lots.length === 1 && !settles(dir).length, settles(dir));
+    // Cboe is back: the day's bars run to the 16:00 bar (700.20) while the quote has moved on after hours (701.10)
+    Object.assign(M.feeds, alive);
+    const bars = M.W.intra.bars.slice();
+    bars.push({ day: D0, m: 960, t: atT('16:00'), o: 700.2, h: 700.3, l: 700.1, c: 700.2, v: 1 });
+    M.W.intra = { day: D0, bars };
+    M.W.quote = { ...M.W.quote, last: 701.1, bid: 701.09, ask: 701.11, at: T - 60000 };
+    T += 60000; await desk.step();
+    const sl = settles(dir);
+    ok('with the 16:00 bar in hand it settles on the close (700.20), not the after-hours quote', sl.length === 1 && sl[0].spy === 700.2 && sl[0].value === 0, sl);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  // one coin's dead ticker used to freeze the whole crypto book
+  {
+    const dir = mkDir();
+    let T = atT('12:31');
+    const M = fakeMarket(() => T); M.setMinutes(12 * 60 + 30);
+    const orig = M.feeds.ticker;
+    M.feeds.ticker = async (id) => { if (id === 'SOL-USD') throw new Error('HTTP 404 from api.exchange.coinbase.com'); return orig(id); };
+    const desk = new Desk(deskConfig(dir), { feeds: M.feeds, now: () => T }); desk.quiet = true;
+    for (let i = 0; i < 3; i++) { await desk.step(); T += 10000; }
+    const sl = desk.state.books.crypto.sleeves;
+    ok('SOL\'s ticker is down: BTC and ETH still rebalance', sl['BTC-USD'].qty > 0 && sl['ETH-USD'].qty > 0, [sl['BTC-USD'].qty, sl['ETH-USD'].qty]);
+    ok('...and SOL, with no price, stays out', sl['SOL-USD'].qty === 0 && sl['SOL-USD'].checkDay == null);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  // holding's start price must not be set by a first check TESS blocked; and a halt is said once
+  {
+    const dir = mkDir();
+    let T = atT('12:31');
+    const M = fakeMarket(() => T); M.setMinutes(12 * 60 + 30);
+    const desk = new Desk(deskConfig(dir), { feeds: M.feeds, now: () => T }); desk.quiet = true;
+    desk.state.dayKey = clock.et(T).day; desk.state.dayStart = desk.equity() / 0.9;     // 10% down on the day at the first look
+    await desk.step();
+    const btc = desk.state.books.crypto.sleeves['BTC-USD'];
+    ok('halted at the first check: nothing bought', !!desk.halt && btc.qty === 0, [desk.halt, btc.qty]);
+    ok('...so holding\'s start price is not set from a price the book never paid', !(btc.benchPx > 0), btc.benchPx);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  // a halt that goes on is one log line: the text carries the live percentage, so it used to log at every move
+  {
+    const dir = mkDir();
+    let T = atT('12:31');
+    const M = fakeMarket(() => T); M.setMinutes(12 * 60 + 30);
+    const desk = new Desk(deskConfig(dir), { feeds: M.feeds, now: () => T }); desk.quiet = true;
+    await desk.step();                                    // crypto and SPY bought
+    desk.state.dayStart = desk.equity() / 0.9;            // 10% down on the day from here
+    for (let i = 0; i < 20; i++) {
+      T += 10000;
+      const wob = 1 + 0.05 * Math.sin(i * 1.3);           // BTC wobbles, and the figure in the text with it
+      M.W.ticks['BTC-USD'] = { bid: 84000 * wob, ask: 84000 * wob + 0.01, last: 84000 * wob, at: T };
+      for (const id of ['ETH-USD', 'SOL-USD']) M.W.ticks[id].at = T;
+      await desk.step();
+    }
+    const lines = desk.state.log.filter((l) => l.kind === 'HALT').length;
+    ok('twenty rounds of one halt, the price moving: one HALT line', !!desk.halt && lines === 1, lines);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  // a fill's bookmarks reach the disk with it: the entry bar the exit scan starts after
+  {
+    const dir = mkDir();
+    let T = atT('12:31');
+    const M = fakeMarket(() => T); M.setMinutes(12 * 60 + 30);
+    const desk = new Desk(deskConfig(dir), { feeds: M.feeds, now: () => T }); desk.quiet = true;
+    await desk.step();
+    T = atT('12:32') + 10000; M.setMinutes(12 * 60 + 31);
+    M.W.chain = { expiry: D0, spot: 703.62, at: atT('12:31'), calls: [M.call(704, 0.3, 0.31, 0.5), M.call(705, 0.09, 0.1, 0.15), M.call(706, 0.04, 0.05, 0.1)], puts: [] };
+    await desk.step();
+    const mem = desk.state.books.options.day;
+    const onDisk = JSON.parse(fs.readFileSync(path.join(dir, 'desk', 'state.json'), 'utf8')).books.options;
+    ok('the options book bought on the 12:31 bar', onDisk.lots.length > 0 && mem.entryBarM === 12 * 60 + 31, [onDisk.lots.length, mem.entryBarM]);
+    ok('...and the saved state already carries that entry bar: a hard kill must not lose which bar the exits start after', onDisk.day && onDisk.day.entryBarM === 12 * 60 + 31, onDisk.day);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+engineTests().then(auditTests).then(() => {
   console.log(`${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 }).catch((e) => { console.log(`  FAIL  engine tests threw: ${e.stack}`); console.log(`${pass} passed, ${fail + 1} failed`); process.exit(1); });
