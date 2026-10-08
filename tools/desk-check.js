@@ -235,7 +235,7 @@ function health(S, now) {
     const key = String(l.text).replace(/[\d.,$%]+/g, '#');
     if (seen.has(key)) continue;
     seen.add(key);
-    if (/desk round failed|journal write failed/.test(l.text)) problems.push(`${l.agent}: ${l.text}`);
+    if (/desk round failed|journal write failed|state save failed/.test(l.text)) problems.push(`${l.agent}: ${l.text}`);
     else notes.push(`${new Date(l.t).toISOString().slice(5, 16).replace('T', ' ')}Z ${l.agent}: ${l.text}`);
   }
   return { problems, lines, notes };

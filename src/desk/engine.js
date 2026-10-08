@@ -192,7 +192,11 @@ class Desk {
       fs.writeFileSync(tmp, JSON.stringify(this.state));
       fs.renameSync(tmp, this.file);
       this.dirty = false;
-    } catch (e) { console.error('desk save failed', e.message); }
+    } catch (e) {
+      console.error('desk save failed', e.message);
+      // said where the floor and the daily check can see it (disk full, volume gone): the desk keeps running on memory
+      if (this.due('save-failed', 600)) this.log('TESS', 'OPS', null, `state save failed: ${String(e.message).slice(0, 90)} · a restart now would lose the last minutes`);
+    }
   }
   journal(kind, payload) {
     const t = this.now();
@@ -371,9 +375,19 @@ class Desk {
       }
     }
     const S = this.mkt.spy;
-    if (t - S.quoteAt > (onTape ? 30000 : 10 * MIN)) jobs.push(this.feeds.quote(this.D.stockSym).then((x) => { if (x) { S.quote = x; S.quoteAt = t; } }).catch(fail('SPY quote')));
-    if (t - S.intraAt > (onTape ? 60000 : 30 * MIN)) jobs.push(this.feeds.intraday(this.D.stockSym).then((x) => { if (x && x.bars.length) { S.intra = x; S.intraAt = t; } }).catch(fail('SPY minute bars')));
-    if (!S.daily || t - S.dailyAt > 3 * HOUR || clock.et(S.dailyAt).day !== e.day) jobs.push(this.feeds.daily(this.D.stockSym).then((x) => { if (x && x.length) { S.daily = x; S.dailyAt = t; } }).catch(fail('SPY daily bars')));
+    // Cboe's files are a courtesy of a free delayed feed whose terms forbid automated download and which blocks by address: a failed
+    // fetch was retried every round (10 seconds, three feeds), which is how a block gets worse. Each feed now waits twice as long
+    // after each failure in a row (10 s, 20 s, 40 s ... at most two minutes) and starts over after one that works.
+    const waiting = (key) => { const f = S.fail && S.fail[key]; return !!f && t - f.at < Math.min(2 * MIN, 10000 * 2 ** (f.n - 1)); };
+    const cboe = (key, what, run, take) => {
+      jobs.push(run().then((x) => { if (take(x) && S.fail) delete S.fail[key]; }).catch((err) => {
+        S.fail = S.fail || {}; S.fail[key] = { at: t, n: ((S.fail[key] && S.fail[key].n) || 0) + 1 };
+        fail(what)(err);
+      }));
+    };
+    if (t - S.quoteAt > (onTape ? 30000 : 10 * MIN) && !waiting('quote')) cboe('quote', 'SPY quote', () => this.feeds.quote(this.D.stockSym), (x) => { if (!x) return false; S.quote = x; S.quoteAt = t; return true; });
+    if (t - S.intraAt > (onTape ? 60000 : 30 * MIN) && !waiting('intra')) cboe('intra', 'SPY minute bars', () => this.feeds.intraday(this.D.stockSym), (x) => { if (!(x && x.bars.length)) return false; S.intra = x; S.intraAt = t; return true; });
+    if ((!S.daily || t - S.dailyAt > 3 * HOUR || clock.et(S.dailyAt).day !== e.day) && !waiting('daily')) cboe('daily', 'SPY daily bars', () => this.feeds.daily(this.D.stockSym), (x) => { if (!(x && x.length)) return false; S.daily = x; S.dailyAt = t; return true; });
     await Promise.all(jobs);
     if (S.intra) {
       // the scalp book reads five-minute bars
@@ -758,7 +772,13 @@ class Desk {
     // fee to buy in. Set only once the buy is allowed: a halted first check used to start it at a price the book
     // never paid (BTC 84,000 benchmarked, bought at 80,000 the next day).
     if (!(sl.benchPx > 0)) { sl.benchPx = px; sl.benchAt = this.now(); sl.benchFeeBps = this.feeBps(bookKey); }
-    if (minTrade) await this.kett({ book: bookKey, sym, sl, kind, side: delta > 0 ? 'buy' : 'sell', qty: Math.abs(delta), quote, why: `to ${Math.round(w * 100)}% of the ${name} slot` });
+    if (minTrade) {
+      const f = await this.kett({ book: bookKey, sym, sl, kind, side: delta > 0 ? 'buy' : 'sell', qty: Math.abs(delta), quote, why: `to ${Math.round(w * 100)}% of the ${name} slot` });
+      // `target` is what the book was last traded TO. Recording it for an order that did not fill (no depth, not enough cash) made
+      // the next check compare tomorrow's weight with a position that was never taken, and sit in cash while the two were within the
+      // band (audit 2026-10-07). The check still counts as done for today: the next one starts from what the book really holds.
+      if (!f) { this.dirty = true; return; }
+    }
     sl.target = w;
     this.dirty = true;
   }
