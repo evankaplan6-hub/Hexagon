@@ -675,8 +675,11 @@ module.exports = {
     cryptoFeeBps: num('DESK_CRYPTO_FEE_BPS', 40),
     stockFeeBps: num('DESK_STOCK_FEE_BPS', 0),
     optionFee: num('DESK_OPTION_FEE', 0.03),
-    options: env('DESK_OPTIONS', '1') !== '0',
-    scalps: env('DESK_SCALPS', '1') !== '0',
+    // the options and scalp books are off since 2026-10-08 (Evan: "go"), on tools/spy-lab.js: over two years SPY moved
+    // -0.02 and 0.00 points the trades' way after their triggers. Off, a book buys nothing; what it holds still
+    // leaves by its own exits (same-day contracts, all out by 3:15).
+    options: env('DESK_OPTIONS', '0') !== '0',
+    scalps: env('DESK_SCALPS', '0') !== '0',
     dips: env('DESK_DIPS', '1') !== '0',
     // off since 2026-10-08 (Evan: "off", after tools/runner-lab.js: the rule lost over four years, 3 of 20 quarters
     // up, and lost even with no fee). Off, the book sells what it holds at its next scan and then buys nothing.

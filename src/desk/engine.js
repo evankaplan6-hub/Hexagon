@@ -717,6 +717,8 @@ class Desk {
   async bram() {
     await this.cryptoBook();
     await this.stockBook();
+    // a book switched off says so in the state, for the daily check and the floor
+    for (const [k, on] of [['options', this.D.options], ['scalps', this.D.scalps], ['dips', this.D.dips]]) if (this.state.books[k]) this.state.books[k].off = !on;
     if (this.D.options) await this.optionsBook();
     if (this.D.scalps) await this.scalpBook();
     if (this.D.dips) await this.dipBook();
