@@ -1,6 +1,6 @@
 'use strict';
-// The SPY lab: do the scalp and dip books' rules (src/desk/books.js, SCALP and DIP) make money over two
-// years of SPY's minutes, not the handful of days each has traded on the box?
+// The SPY lab: do the scalp, dip and options books' rules (src/desk/books.js, SCALP, DIP and ZERO) make money over
+// two years of SPY's minutes, not the handful of days each has traded on the box?
 //
 //   node tools/spy-lab.js --fetch          SPY one-minute bars from Massive (formerly Polygon.io), two years
 //                                          -> data/stocks/minutes/SPY.json (needs MASSIVE_API_KEY in .env;
@@ -33,6 +33,8 @@
 // 10-06, 10-07). Scalps: 1,380 trades, -$2 a trade, SPY 0.00 points the trade's way: no edge; the option P&L's sign
 // follows the option model (+$1 a trade at --iv 0.48, -$2 at 0.8). Dips: 150 trades, +$2 a trade, median -$15, SPY
 // -0.16 points its way, +$6 to -$6 a trade across the model: not proven either way. README, "Scalps and dips".
+// Options (trend days, added the same day): the 12:30 test passed 102 of 475 days; 69 trades, -$5 a trade, median -$16,
+// SPY -0.02 points its way; +$2 to -$6 across the model. No edge. It takes the box's one trade (10-05 12:36). README, "Options".
 const fs = require('fs');
 const path = require('path');
 const books = require('../src/desk/books');
@@ -216,12 +218,76 @@ function dipDay(day, bars, atr, vol, R = books.DIP) {
   }
   return trades;
 }
+// ------------------------------------------------------------------ the options book (trend days), one day
+// The engine's optionsBook and optionExits: the 12:30 test, then the first new high (low) on the trend side of
+// VWAP to 2:45, books.pickContract's strike and size, 2x / 3x resting targets, out on a close back through VWAP
+// or at 3:15, and one re-entry (one contract) only after the first trade's first exit hit its target.
+function optionsDay(day, bars, atr, vol, R = books.ZERO) {
+  const out = { verdict: null, trades: [] };
+  const vw = feeds.vwapSeries(bars);
+  const r = books.trendTest(bars, vw, atr, R);
+  out.verdict = r.status === 'pass' ? `pass ${r.dir}` : r.status;
+  if (r.status !== 'pass') return out;
+  const dir = r.dir, right = dir === 'up' ? 'C' : 'P', sgn = dir === 'up' ? 1 : -1;
+  const d = { entries: 0, firstTrade: null, firstExitHit: null, scanIdx: r.idx, ext: r.ext, flatAtIdx: null, done: false };
+  let lots = [], trade = null;
+  for (let i = r.idx + 1; i < bars.length; i++) {
+    const bar = bars[i];
+    if (lots.length) {
+      const ext = dir === 'up' ? bar.h : bar.l;
+      const sell = (lot, px, why) => {
+        trade.pnl += (px - lot.entry) * 100 - 2 * FEE; trade.exits.push(`${why} ${clockTxt(bar.m)} ${px.toFixed(2)}`);
+        if (d.firstExitHit == null && lot.trade === d.firstTrade) d.firstExitHit = why === 'target';
+        lots = lots.filter((l) => l !== lot);
+      };
+      for (const lot of [...lots]) {
+        const row = quote(bar.c, lot.strike, bar.m, vol, right);
+        row.high = quote(ext, lot.strike, bar.m, vol, right).bid;
+        if (books.targetHit(lot, row)) sell(lot, lot.target, 'target');
+      }
+      if (lots.length && (books.vwapBreak(bar, vw[i], dir) || bar.m >= R.clock)) {
+        const row = quote(bar.c, lots[0].strike, bar.m, vol, right), why = bar.m >= R.clock && !books.vwapBreak(bar, vw[i], dir) ? 'clock' : 'vwap';
+        for (const lot of [...lots]) sell(lot, row.bid, why);
+      }
+      if (!lots.length) { trade.spy = sgn * (bar.c - trade.spyIn); out.trades.push(trade); trade = null; d.flatAtIdx = i; }
+      continue;
+    }
+    if (d.done) continue;
+    const canEnter = d.entries === 0 || (d.entries === 1 && d.firstExitHit === true);
+    if (!canEnter) { d.done = true; continue; }
+    if (d.entries === 1 && d.flatAtIdx != null && d.scanIdx < d.flatAtIdx) {
+      const upto = bars.slice(0, d.flatAtIdx + 1);
+      d.ext = dir === 'up' ? Math.max(...upto.map((b) => b.h)) : Math.min(...upto.map((b) => b.l));
+      d.scanIdx = d.flatAtIdx;
+    }
+    if (bar.m > R.lastEntry) { d.done = true; continue; }
+    const sc = books.scanEntry(bars.slice(0, i + 1), vw, dir, d.scanIdx, d.ext, R);
+    d.scanIdx = sc.scanned; d.ext = sc.ext;
+    if (!sc.hit) continue;
+    const hb = bars[sc.hit.idx];
+    d.ext = dir === 'up' ? Math.max(d.ext, hb.h) : Math.min(d.ext, hb.l);
+    const pick = books.pickContract(chain(bar.c, bar.m, vol, right), bar.c, dir, R);
+    if (!pick.row) continue;
+    const qty = d.entries === 1 ? 1 : pick.qty, id = `${day}-${d.entries + 1}`;
+    const plan = qty >= 2 ? [['first', R.firstTarget], ['runner', R.runnerTarget]] : [['runner', R.runnerTarget]];
+    lots = plan.map(([role, mult]) => ({ role, trade: id, strike: pick.row.strike, entry: pick.row.ask, target: Math.round(pick.row.ask * mult * 1e4) / 1e4, high0: 0 }));
+    if (!d.firstTrade) d.firstTrade = id;
+    d.entries++;
+    trade = { day, book: 'options', m: bar.m, dir, strike: pick.row.strike, entry: pick.row.ask, qty, pnl: 0, exits: [], spyIn: bar.c };
+  }
+  if (lots.length) {
+    const last = bars[bars.length - 1], val = Math.max(0, sgn * (last.c - lots[0].strike));
+    for (const lot of lots) trade.pnl += (val - lot.entry) * 100 - FEE;
+    trade.exits.push('settle'); trade.spy = sgn * (last.c - trade.spyIn); out.trades.push(trade);
+  }
+  return out;
+}
 const clockTxt = (m) => `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`;
 
 // ------------------------------------------------------------------ every day
 function run(sess, { from = '', to = '9999', ivMult = 1.2 } = {}) {
   const dailies = sess.map((s) => s.daily);
-  const scalps = [], dips = [];
+  const scalps = [], dips = [], options = [], verdicts = {};
   let days = 0;
   sess.forEach((s, idx) => {
     if (s.day < from || s.day >= to) return;
@@ -232,8 +298,11 @@ function run(sess, { from = '', to = '9999', ivMult = 1.2 } = {}) {
     days++;
     scalps.push(...scalpDay(s.day, s.bars, vol));
     dips.push(...dipDay(s.day, s.bars, atr.atr, vol));
+    const od = optionsDay(s.day, s.bars, atr.atr, vol);
+    verdicts[od.verdict] = (verdicts[od.verdict] || 0) + 1;
+    options.push(...od.trades);
   });
-  return { days, scalps, dips };
+  return { days, scalps, dips, options, verdicts };
 }
 
 // ------------------------------------------------------------------ the box's own fills, to check against
@@ -243,7 +312,7 @@ function journalFills() {
     if (!fs.existsSync(dir)) continue;
     for (const f of fs.readdirSync(dir).filter((x) => /^journal-.*\.jsonl$/.test(x)).sort()) {
       for (const line of fs.readFileSync(path.join(dir, f), 'utf8').split('\n')) {
-        if (!line.includes('"FILL"') || !/"book":"(scalps|dips)"/.test(line)) continue;
+        if (!line.includes('"FILL"') || !/"book":"(scalps|dips|options)"/.test(line)) continue;
         let j; try { j = JSON.parse(line); } catch { continue; }
         const key = `${j.t}|${j.sym}|${j.side}`;
         if (seen.has(key)) continue;
@@ -319,17 +388,21 @@ function table({ from, ivMult: asked }) {
       // barAt is the close of the bar the rule acted on, for both books: the lab prints the same
       const box = fills.filter((f) => f.side === 'buy' && clock.et(Date.parse(f.t)).day === day).map((f) => `${f.book} ${clockTxt(clock.et(Date.parse(f.barAt)).min)} ${+f.sym.slice(-8) / 1000}${/C\d{8}$/.test(f.sym) ? 'C' : 'P'}`);
       const lab = run(sess, { from: day, to: day + 'z', ivMult });
-      const labs = [...lab.scalps.map((x) => `scalps ${clockTxt(x.m)} ${x.strike}${x.dir === 'up' ? 'C' : 'P'}`), ...lab.dips.map((x) => `dips ${clockTxt(x.m)} ${x.strike}C`)];
+      const labs = [...lab.scalps.map((x) => `scalps ${clockTxt(x.m)} ${x.strike}${x.dir === 'up' ? 'C' : 'P'}`), ...lab.dips.map((x) => `dips ${clockTxt(x.m)} ${x.strike}C`),
+        ...lab.options.map((x) => `options ${clockTxt(x.m)} ${x.strike}${x.dir === 'up' ? 'C' : 'P'} x${x.qty}`)];
       console.log(`  ${day}  box: ${box.join(', ') || '-'}\n              lab: ${labs.join(', ') || '-'}`);
     }
   }
   console.log('\nTHE RULES AS SHIPPED');
   console.log(summary('scalps', r.scalps));
   console.log(summary('dips (both calls, one trade)', r.dips));
+  console.log(summary('options (trend days)', r.options));
+  console.log(`  the 12:30 test: ${Object.entries(r.verdicts).sort().map(([k, n]) => `${n} ${k}`).join(' · ')}`);
   console.log('\nEACH YEAR');
   for (const y of [...new Set([...r.scalps, ...r.dips].map((x) => x.day.slice(0, 4)))].sort()) {
     console.log(summary(`scalps ${y}`, r.scalps.filter((x) => x.day.startsWith(y))));
     console.log(summary(`dips ${y}`, r.dips.filter((x) => x.day.startsWith(y))));
+    console.log(summary(`options ${y}`, r.options.filter((x) => x.day.startsWith(y))));
   }
   const kinds = {};
   for (const x of r.scalps) kinds[x.kind] = (kinds[x.kind] || 0) + 1;
@@ -339,6 +412,7 @@ function table({ from, ivMult: asked }) {
     const x = run(sess, { from, ivMult: iv });
     console.log(summary(`scalps at --iv ${iv}`, x.scalps));
     console.log(summary(`dips at --iv ${iv}`, x.dips));
+    console.log(summary(`options at --iv ${iv}`, x.options));
   }
   return 0;
 }
@@ -357,4 +431,4 @@ async function main(argv) {
 
 if (require.main === module) main(process.argv.slice(2)).then((code) => process.exit(code || 0)).catch((e) => { console.error(e.message); process.exit(1); });
 
-module.exports = { sessions, bs, quote, chain, dayVol, impliedVol, calibrate, scalpDay, dipDay, run };
+module.exports = { sessions, bs, quote, chain, dayVol, impliedVol, calibrate, scalpDay, dipDay, optionsDay, run };
