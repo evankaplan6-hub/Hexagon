@@ -408,6 +408,12 @@ function makeMakerDesk(cfg, deps = {}) {
       if (done) { settled++; settledQty += done.qty; settledPnl = r2(settledPnl + done.pnl); continue; }
       const bk = bookRes.books.get(t);
       if (!bk) continue;
+      // a halt is not a reason to carry an election-night position: cross it out as the round would
+      const evDays = maker.eventDateDays(m.series || t.split('-')[0], cfg.makerEventDates, clock());
+      if (m.inv && evDays != null && evDays < cfg.makerEventCrossDays) {
+        const lvl = m.inv > 0 ? bk.yesBids[0] : bk.yesAsks[0];
+        if (lvl && Number.isFinite(lvl.price)) { const out = closeAt(E, S, t, m, lvl.price, `event ${evDays < 0 ? 'past' : `${(evDays * 24).toFixed(0)}h away`}`); E.log('MAKR', 'OPS', out.pnl, `${t}: its event is ${evDays < 0 ? 'past' : 'a day away'} and the desk is halted · crossed out ${out.qty} at ${c(lvl.price)}`); }
+      }
       const q = maker.desiredQuotes(bk, m.inv, cfg);
       m.mid = q.mid ?? m.mid;
       m.spread = q.spread ?? null;

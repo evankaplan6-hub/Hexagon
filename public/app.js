@@ -1374,7 +1374,7 @@
     const arbs = new Set(arbLegs.map((p) => p.group || p.id)).size;
     const longMs = (cfg.longDays || 30) * 86400000;
     const longArbs = new Set(arbLegs.filter((p) => Number.isFinite(p.settlesAt) && p.settlesAt - S.now > longMs).map((p) => p.group || p.id)).size;
-    const bets = pos.filter((p) => p.strategy !== 'arb').length;
+    const bets = pos.filter((p) => p.strategy !== 'arb' && p.strategy !== 'bet').length;   // what decide.bookFull counts against the cap: the game bets have their own lane
     const used = (n, cap, label) => cap ? `<span class="${n >= cap ? 'full' : ''}"><b>${n}</b>/${cap} ${label}</span>` : '';
     const roomBars = [used(arbs, cfg.maxArbGroups, 'arbs'), used(longArbs, cfg.maxLongArbGroups, `over ${cfg.longDays || 30}d`), used(bets, cfg.maxOpenPositions, 'bets')].filter(Boolean).join('');
     // What resolves soonest, and what it pays when it does

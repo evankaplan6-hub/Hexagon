@@ -125,6 +125,8 @@ function ILSA(E) {
     const move = Math.abs(bias.pmDrift) + Math.abs(bias.ksDrift);
     if (!top || move > top.move) top = { p, bias, move };
   }
+  // a pair that left the board never comes back to be overwritten: 1,200 entries after 30 days (audit 2026-10-07)
+  if (E.bias.size > E.pairs.length + 50) { const live = new Set(E.pairs.map((p) => p.id)); for (const id of E.bias.keys()) if (!live.has(id)) E.bias.delete(id); }
 
   if (E.brain && E.brain.enabled('ILSA')) {
     // No cadence check here on purpose. Whether a turn is worth buying is a question about the
@@ -192,7 +194,7 @@ function TESS(E) {
   const budget = E.budget();
   E.touch('TESS', halt ? `HALT ${halt}` : `budget ${money(budget)}`);
   if (!halt && E.due('tess-log', 180)) {
-    E.log('TESS', 'OPS', null, `data age ${Math.round(age)}s, window is clean · ${E.state.positions.filter((p) => p.strategy !== 'arb').length}/${E.cfg.maxOpenPositions} bets${E.cfg.convergeEnabled === false ? ' (book off)' : ''}, ${new Set(E.state.positions.filter((p) => p.strategy === 'arb').map((p) => p.group)).size}/${E.cfg.maxArbGroups} arbs open${E.cfg.arbsEnabled === false ? ' (book off)' : ''} · per-trade budget ${money(budget)} · day ${dd >= 0 ? '−' : '+'}${(Math.abs(dd) * 100).toFixed(2)}% · ${errs} api errs/5m`);
+    E.log('TESS', 'OPS', null, `data age ${Math.round(age)}s, window is clean · ${E.state.positions.filter((p) => p.strategy !== 'arb' && p.strategy !== 'bet').length}/${E.cfg.maxOpenPositions} bets${E.cfg.convergeEnabled === false ? ' (book off)' : ''}, ${new Set(E.state.positions.filter((p) => p.strategy === 'arb').map((p) => p.group)).size}/${E.cfg.maxArbGroups} arbs open${E.cfg.arbsEnabled === false ? ' (book off)' : ''} · per-trade budget ${money(budget)} · day ${dd >= 0 ? '−' : '+'}${(Math.abs(dd) * 100).toFixed(2)}% · ${errs} api errs/5m`);
   }
 }
 
@@ -514,21 +516,26 @@ function mergeBrainSignals(E) {
 async function KETT(E) {
   if (standDown(E)) return;
   const live = E.cfg.mode === 'live';
-  let considered = 0;
+  let considered = 0, looked = 0;
   for (const s of E.signals) {
     if (standDown(E)) return;
     if (considered >= 2) break; // pace: at most two new positions per cycle
+    // ...and at most six signals per cycle may go to the live books. `considered` used to count every signal that got
+    // this far, so two thin arbs that could never fill (the 5-lot floor, a stale listing) took both slots every 15
+    // seconds and no game bet below them was ever tried (audit 2026-10-07: all six bets opened at minute 18 not 0).
+    if (looked >= 6) break;
     // A game bet and every other trade are two lanes on the same game (each is its own position): a held bet
     // stops only another bet, and anything else held stops only the other books, so a bet placed before the
     // game neither starves its arb nor blocks the settlement snipe at the final.
     if (E.state.positions.some((p) => p.pairId === s.pair.id && ((s.type === 'bet') === (p.strategy === 'bet')))) continue;
     if (s.type === 'bet' && live) continue; // paper only (decide.betSignal makes none in live mode either)
     if (Date.now() - (E.cooldown.get(s.pair.id) || 0) < E.cfg.reentryCooldownMs) continue; // no churn after an exit
+    if (s.type !== 'snipe' && E.passUntil && (E.passUntil.get(`${s.type}|${s.pair.id}`) || 0) > Date.now()) continue;   // a signal that just failed its live check is looked at again in a minute, not every cycle
+    const passFor = () => (E.passUntil || (E.passUntil = new Map())).set(`${s.type}|${s.pair.id}`, Date.now() + 60000);
     if (live && s.legs.some((l) => l.venue !== 'KS')) continue; // live mode trades Kalshi legs only
     const full = decide.bookFull(E.state.positions, s, E.cfg, Date.now());
     // an arb book that is full does not stop a convergence trade further down the list, or the reverse
     if (full) { if (E.due(`kett-full-${s.type}`, 300)) E.log('KETT', 'PASS', null, `${full}, passing on ${s.pair.label}`); continue; }
-    considered++;
     const budget = E.budget();
     if (budget < 5) { if (E.due('kett-cash', 300)) E.log('KETT', 'PASS', null, `budget ${money(budget)} below floor, standing down`); break; }
 
@@ -592,8 +599,9 @@ async function KETT(E) {
 
     // real books at size — and for directional trades, re-verify the gap from live books on BOTH venues
     let books;
+    looked++;
     try { books = await Promise.all(s.legs.map((l) => E.book(l.venue, s.pair, l.side))); }
-    catch (e) { E.log('KETT', 'PASS', null, `${s.pair.label}: book fetch failed (${e.message.slice(0, 60)})`); continue; }
+    catch (e) { E.log('KETT', 'PASS', null, `${s.pair.label}: book fetch failed (${e.message.slice(0, 60)})`); passFor(); continue; }
     if (standDown(E)) return;
     // A locked arb is re-priced from the books just fetched, as a convergence trade already was. The
     // signal came from listing quotes, and a "locked" edge that only exists in a lagging listing
@@ -602,7 +610,7 @@ async function KETT(E) {
       const live = decide.arbEdgeLive(s, books, E.cfg);
       if (live == null || live < E.cfg.minArbEdge) {
         if (E.due(`kett-stale-${s.pair.id}`, 300)) E.log('KETT', 'PASS', null, `${s.pair.label}: listing showed a ${c(s.edge)} arb but live books show ${live == null ? 'an empty side' : c(live)}`);
-        continue;
+        passFor(); continue;
       }
       s.edge = live;
     }
@@ -622,7 +630,7 @@ async function KETT(E) {
       const top = books[0] && books[0].asks && books[0].asks[0];
       if (!top || top.price > E.cfg.betMaxPx) {
         if (E.due(`bet-book-${s.pair.id}`, 300)) E.log('KETT', 'PASS', null, `${s.pair.label}: game bet on ${s.pick}, but ${VEN[s.legs[0].venue]}'s live book ${top ? `asks ${top.price.toFixed(2)}, over the ${(E.cfg.betMaxPx * 100).toFixed(0)}c limit` : 'has nothing offered'}`);
-        continue;
+        passFor(); continue;
       }
       s.legs[0].px = top.price;
     }
@@ -630,10 +638,10 @@ async function KETT(E) {
       const leg = s.legs[0];
       let far;
       try { far = await E.book(other(leg.venue), s.pair, 'yes'); }
-      catch (e) { E.log('KETT', 'PASS', null, `${s.pair.label}: ${VEN[other(leg.venue)]} book fetch failed (${e.message.slice(0, 60)})`); continue; }
+      catch (e) { E.log('KETT', 'PASS', null, `${s.pair.label}: ${VEN[other(leg.venue)]} book fetch failed (${e.message.slice(0, 60)})`); passFor(); continue; }
       if (standDown(E)) return;
       const near = books[0];
-      if ([near.yesBid, near.yesAsk, far.yesBid, far.yesAsk].some((x) => x == null)) { E.log('KETT', 'PASS', null, `${s.pair.label}: one-sided book, no fill`); continue; }
+      if ([near.yesBid, near.yesAsk, far.yesBid, far.yesAsk].some((x) => x == null)) { E.log('KETT', 'PASS', null, `${s.pair.label}: one-sided book, no fill`); passFor(); continue; }
       const q = s.pair.q;
       const nearMid = (near.yesBid + near.yesAsk) / 2, farMid = (far.yesBid + far.yesAsk) / 2;
       const isPM = leg.venue === 'PM';
@@ -653,17 +661,19 @@ async function KETT(E) {
       const bar = s.origin ? E.cfg.llmMinEdge : E.cfg.minEdge;
       if (edgeLive < bar) {
         if (E.due(`kett-stale-${s.pair.id}`, 300)) E.log('KETT', 'PASS', null, `${s.pair.label}: ${s.origin ? `${s.origin} proposed on ${c(s.edge)}` : `listing showed ${c(s.edge)} edge`} but live books show ${c(edgeLive)}${s.origin ? ', under break-even' : ', listing was stale'}`);
-        continue;
+        passFor(); continue;
       }
       s.edge = edgeLive; s.fair = fairLive; s.gap = liveQ.ksMid - liveQ.pmMid; leg.px = pxLive;
     }
     let { qty, capped } = decide.sizePlan(s, { budget: s.type === 'bet' ? Math.min(E.cfg.betUsd, budget) : budget, sizeMult, books, cfg: E.cfg });
     if (s.type === 'snipe') qty = Math.min(qty, E.cfg.snipeMaxQty);   // a settlement is a one-shot, sized like one
+    if (s.type === 'arb' && qty >= 5) qty = decide.arbQtyForEdge(s, books, qty, E.cfg);   // walked, not just the touch
     // Say so when the risk limit -- not depth, not cash -- is what set the size. Silently clipping
     // a position back to the cap is how a rail stops being visible enough to argue with.
     if (capped && E.due(`kett-cap-${s.pair.id}`, 300)) E.log('KETT', 'OPS', null, `${s.pair.label}: sized to the ${(E.cfg.maxPositionPct * 100).toFixed(1)}% position cap, not to available depth`);
-    if (qty < 5) { if (E.due(`kett-depth-${s.pair.id}`, 300)) E.log('KETT', 'PASS', null, `${s.pair.label}: only ${qty} contracts inside limit, below 5-lot floor`); continue; }
+    if (qty < 5) { if (E.due(`kett-depth-${s.pair.id}`, 300)) E.log('KETT', 'PASS', null, `${s.pair.label}: only ${qty} contracts inside limit, below 5-lot floor`); passFor(); continue; }
 
+    considered++;   // only an attempt that reaches the broker uses one of the cycle's two slots
     // Resolve every leg's exchange reference up front. A Polymarket NO leg needs the OTHER
     // token, and if it cannot be resolved the whole signal must abort here -- not halfway
     // through, with one leg already filled against the wrong instrument.

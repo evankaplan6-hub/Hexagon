@@ -148,6 +148,23 @@ group('the settlement snipe has its own line and column');
   ok('a snipe is not counted as convergence', s.conv.n === 0);
 }
 
+group('the game bets have their own line and column (audit 2026-10-07)');
+{
+  // Left out of the report until then: its taker total read $171.11 under the ledger's, exactly the bets.
+  const ev = [
+    { t: T(27), kind: 'OPEN', id: 'b1-KSy', group: 'b1', strategy: 'bet', venue: 'KS', side: 'yes', qty: 160, entry: 0.62, fee: 1.5, cost: 100.7 },
+    { t: T(27), kind: 'SETTLE', id: 'b1-KSy', group: 'b1', strategy: 'bet', qty: 160, exit: 1, fee: 0, pnl: 59.3 },
+    { t: T(28), kind: 'OPEN', id: 'b2-PMy', group: 'b2', strategy: 'bet', venue: 'PM', side: 'yes', qty: 150, entry: 0.66, fee: 1, cost: 100 },
+    { t: T(28), kind: 'SETTLE', id: 'b2-PMy', group: 'b2', strategy: 'bet', qty: 150, exit: 0, fee: 0, pnl: -100 },
+  ];
+  const s = summarize(ev);
+  ok('two settled, one winner, the sum, both entry fees', s.bets.n === 2 && s.bets.w === 1 && Math.abs(s.bets.pnl - -40.70) < 0.005 && Math.abs(s.bets.fees - 2.5) < 0.005, s.bets);
+  ok('by day', Math.abs(s.days.get('2026-09-27').bets - 59.3) < 0.005 && Math.abs(s.days.get('2026-09-28').bets - -100) < 0.005, [...s.days]);
+  const out = render(s, null);
+  ok('the report prints it, in the total and the day table', /GAME BETS/.test(out) && /2 settled or closed · 1 winners · realized -\$40\.70/.test(out) && /ALL-IN REALIZED -\$40\.70/.test(out) && /snipe     bets    maker/.test(out), out);
+  ok('a bet is neither a snipe nor convergence', s.snipe.n === 0 && s.conv.n === 0);
+}
+
 group('load: the archive first, box-now only for the days the archive lacks');
 {
   const fs = require('fs'), os = require('os'), path = require('path');

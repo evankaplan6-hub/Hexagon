@@ -172,7 +172,9 @@ function openPositions(E, _in, now) {
     asOf: et(now),
     note: 'taker book only; maker inventory is in maker_status. Prices are per contract; a contract pays $1 if its side wins.',
     count: s.positions.length,
-    positions: s.positions.slice(0, 40).map((p) => {
+    // 40 arb groups are 80 legs; the list used to stop at 40 positions and 20 groups with no word of it (audit 2026-10-07)
+    ...(s.positions.length > 100 ? { shown: `the first 100 of ${s.positions.length} positions` } : {}),
+    positions: s.positions.slice(0, 100).map((p) => {
       const mark = p.mark ?? p.entry;
       return {
         id: p.id, group: p.group, market: clip(p.label, 80), venue: VEN[p.venue] || p.venue, side: String(p.side || '').toUpperCase(),
@@ -183,7 +185,7 @@ function openPositions(E, _in, now) {
         exitStuck: !!p.orphan, exitAwaitingReconciliation: !!p.pendingExit,
       };
     }),
-    lockedArbs: E.arbScorecard().slice(0, 20).map((g) => ({
+    lockedArbs: E.arbScorecard().slice(0, 50).map((g) => ({
       group: g.id, market: clip(g.label, 80), contracts: g.qty, legs: g.legs, check: INTEGRITY[g.integrity] || g.integrity,
       cost: money(g.entryCost), worthIfSoldNow: money(g.liquidationValue), pnlIfSoldNow: signed(g.liquidationPnl),
       pnlAtSettlement: g.lockedPnl == null ? 'unknown (the pair failed its check)' : signed(g.lockedPnl), venueGap: cents(g.venueGap),
