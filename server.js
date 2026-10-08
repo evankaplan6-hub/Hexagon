@@ -14,6 +14,8 @@ const { actionRefusal, rebindRefusal, routeAsk } = require('./src/ask');
 const chaintape = require('./src/chaintape');
 const { crashRecord } = require('./src/journal');
 const sse = require('./src/sse');
+const session = require('./src/session');
+const guard = require('./src/loginguard').loginGuard();
 
 if (cfg.mode === 'live') {
   const problems = [];
@@ -90,29 +92,31 @@ lifecycle('START', { sha: cfg.buildSha || null, pid: process.pid });
 // with no way to enter anything: "authentication required" on a white page and no prompt. A form
 // and a cookie work everywhere.
 //
-// The cookie is an HMAC of a fixed string under the password, so there is no session store to keep
-// and changing DASH_PASS invalidates every cookie already issued. Basic auth still works alongside
-// it, because curl and the tools in tools/ use it.
+// The cookie is "<expiry>.<HMAC of the expiry>" under DASH_PASS (src/session.js): there is no session store
+// to keep, it dies by itself after 30 days, and changing DASH_PASS or SESSION_EPOCH invalidates every cookie
+// already issued. /logout clears this browser's. Basic auth still works alongside it, because curl and the
+// tools in tools/ use it, and it is counted against the same throttle as the form.
 const COOKIE = 'hexsession';
-const sessionToken = () => crypto.createHmac('sha256', cfg.dashPass).update('hexagon-session-v1').digest('hex');
+const sessionToken = () => session.issue(cfg.dashPass, cfg.sessionEpoch);
 // A one-click link, so the dashboard can be opened without transcribing a password on a phone.
 // Derived from DASH_PASS but NOT equal to it: the password itself never travels in a URL, where it
 // would end up in browser history and every proxy log between here and the machine. Changing
 // DASH_PASS invalidates the link along with every session.
 const linkToken = () => crypto.createHmac('sha256', cfg.dashPass).update('hexagon-link-v1').digest('hex').slice(0, 32);
 
-function timingEq(a, b) {
-  const x = Buffer.from(String(a)), y = Buffer.from(String(b));
-  return x.length === y.length && crypto.timingSafeEqual(x, y);
-}
-function authed(req) {
+const timingEq = session.timingEq;
+// `who` is the address the request is counted against (session.clientKey). A wrong Basic password counts as
+// a wrong login, and an address the throttle has turned away is not let in with a right one either.
+function authed(req, who) {
   if (!cfg.dashPass) return true;
   const cookies = String(req.headers.cookie || '');
   const m = cookies.match(new RegExp(`(?:^|;\\s*)${COOKIE}=([^;]+)`));
-  if (m && timingEq(m[1], sessionToken())) return true;
+  if (m && session.valid(cfg.dashPass, cfg.sessionEpoch, m[1])) return true;
   const h = String(req.headers.authorization || '');
   if (h.startsWith('Basic ')) {
-    return timingEq(Buffer.from(h.slice(6), 'base64').toString('utf8'), `${cfg.dashUser}:${cfg.dashPass}`);
+    if (guard.blocked(who)) return false;
+    if (timingEq(Buffer.from(h.slice(6), 'base64').toString('utf8'), `${cfg.dashUser}:${cfg.dashPass}`)) { guard.ok(who); return true; }
+    guard.fail(who);
   }
   return false;
 }
@@ -178,26 +182,33 @@ function readBody(req) {
 // arrives BEFORE the login check. One malformed request from anywhere on the internet was enough
 // to stop the desk and lose whatever the ledger had not saved. A throw is now a 500 (or a 400 for
 // the URL) with the stack in the log, and a rejected branch is caught the same way.
-const guard = require('./src/loginguard').loginGuard();
 function handle(req, res) {
   let url;
   try { url = new URL(req.url, 'http://localhost'); }
   catch { res.writeHead(400); return res.end('bad request'); }
   const p = url.pathname;
+  // Nothing here is meant to be framed (the /pm page has paper Sell buttons), and no file is a script
+  // unless it says so.
+  res.setHeader('content-security-policy', "frame-ancestors 'self'");
+  res.setHeader('x-content-type-options', 'nosniff');
+  const who = session.clientKey(req);
+  const tooMany = () => {
+    res.writeHead(429, { 'content-type': 'text/plain; charset=utf-8', 'retry-after': String(guard.retryAfterSec(who)) });
+    return res.end('too many wrong passwords from this address; try again later');
+  };
+  const secure = (req.headers['x-forwarded-proto'] || '').includes('https');
+  if (cfg.dashPass && p === '/logout') {
+    res.writeHead(302, { location: '/login', 'set-cookie': session.setCookie(COOKIE, '', secure) });
+    return res.end();
+  }
   if (cfg.dashPass && p === '/login') {
-    // Fly puts the real address in Fly-Client-IP; elsewhere it is the socket's
-    const who = String(req.headers['fly-client-ip'] || req.socket.remoteAddress || '');
     if (req.method === 'POST') {
-      if (guard.blocked(who)) {
-        res.writeHead(429, { 'content-type': 'text/plain; charset=utf-8', 'retry-after': String(guard.retryAfterSec(who)) });
-        return res.end('too many wrong passwords from this address; try again later');
-      }
+      if (guard.blocked(who)) return tooMany();
       return readBody(req).then((body) => {
         const f = new URLSearchParams(body);
         if (timingEq(f.get('u') || '', cfg.dashUser) && timingEq(f.get('p') || '', cfg.dashPass)) {
           guard.ok(who);
-          const secure = (req.headers['x-forwarded-proto'] || '').includes('https') ? '; Secure' : '';
-          res.writeHead(302, { location: '/', 'set-cookie': `${COOKIE}=${sessionToken()}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000${secure}` });
+          res.writeHead(302, { location: '/', 'set-cookie': session.setCookie(COOKIE, sessionToken(), secure) });
           return res.end();
         }
         guard.fail(who);
@@ -205,12 +216,17 @@ function handle(req, res) {
         res.end(LOGIN_PAGE(true));
       });
     }
-    // ?k=<link token> logs in and drops the token from the address bar on the redirect
+    // ?k=<link token> logs in and drops the token from the address bar on the redirect. A wrong one counts
+    // like a wrong password: the link is as good as the password, and was open to unlimited guessing.
     const k = url.searchParams.get('k');
-    if (k && timingEq(k, linkToken())) {
-      const secure = (req.headers['x-forwarded-proto'] || '').includes('https') ? '; Secure' : '';
-      res.writeHead(302, { location: '/', 'set-cookie': `${COOKIE}=${sessionToken()}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000${secure}` });
-      return res.end();
+    if (k) {
+      if (guard.blocked(who)) return tooMany();
+      if (timingEq(k, linkToken())) {
+        guard.ok(who);
+        res.writeHead(302, { location: '/', 'set-cookie': session.setCookie(COOKIE, sessionToken(), secure) });
+        return res.end();
+      }
+      guard.fail(who);
     }
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     return res.end(LOGIN_PAGE(false));
@@ -219,7 +235,8 @@ function handle(req, res) {
     res.writeHead(200, { 'content-type': MIME[path.extname(p)], 'cache-control': 'max-age=3600' });
     return fs.createReadStream(path.join(PUBLIC, p)).on('error', () => res.end()).pipe(res);
   }
-  if (!authed(req)) {
+  if (!authed(req, who)) {
+    if (/^Basic /.test(String(req.headers.authorization || '')) && guard.blocked(who)) return tooMany();
     // an API caller gets a 401 it can act on; a browser gets somewhere to type
     if (p.startsWith('/api/')) {
       res.writeHead(401, { 'www-authenticate': 'Basic realm="The Hexagon", charset="UTF-8"' });

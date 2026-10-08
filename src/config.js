@@ -273,6 +273,9 @@ module.exports = {
   // with live-trading code in it is not something to leave open on a public address.
   dashUser: env('DASH_USER', 'hexagon'),
   dashPass: env('DASH_PASS', ''),
+  // Any string. Mixed into the login cookie, so changing it signs every browser out without changing the
+  // password (`fly secrets set SESSION_EPOCH=$(date +%s)`; ops/DEPLOY.md).
+  sessionEpoch: env('SESSION_EPOCH', ''),
   // Shared secret for POST /api/flatten, the manual kill switch. Empty disables the endpoint
   // entirely -- there is no default token, because a guessable one is worse than no switch.
   flattenToken: env('FLATTEN_TOKEN', ''),

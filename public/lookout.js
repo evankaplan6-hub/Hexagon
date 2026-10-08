@@ -92,10 +92,26 @@
     if (!on) a.classList.add('focus');
   }));
 
+  // A stream that errors after the session ended (DASH_PASS or SESSION_EPOCH changed, or the 30 days ran out)
+  // retried for good behind "No signal". The front page redirects to /login when signed out, and fetch can be told
+  // not to follow it: a redirect that comes back means the viewer is signed out, so reload into the form.
+  const signedOut = () => { fetch('/', { cache: 'no-store', redirect: 'manual' }).then((r) => { if (r.type === 'opaqueredirect') location.reload(); }).catch(() => {}); };
+  // The stream, kept alive: a phone drops its sockets without a word when a page is not shown and no `error`
+  // comes (the floor's stream does the same since 2026-10-07, #176). When no frame has come in STALE_MS the
+  // page opens a new stream itself, and tries at once when it is shown again.
+  let es = null, retry = null, lastTry = 0;
   function connect() {
-    const es = new EventSource('/api/stream');
-    es.onmessage = (ev) => { try { S = JSON.parse(ev.data); lastFrameAt = Date.now(); render(); } catch (e) { console.error(e); } };
-    es.onerror = () => { es.close(); setTimeout(connect, 3000); };
+    clearTimeout(retry); retry = null;
+    if (es) es.close();
+    lastTry = Date.now();
+    const mine = es = new EventSource('/api/stream');
+    mine.onmessage = (ev) => { try { S = JSON.parse(ev.data); lastFrameAt = Date.now(); render(); } catch (e) { console.error(e); } };
+    mine.onerror = () => { if (es !== mine) return; mine.close(); es = null; retry = setTimeout(connect, 3000); signedOut(); };
   }
+  const quiet = () => Date.now() - Math.max(lastFrameAt, lastTry) > STALE_MS;
+  const wake = () => { if (document.visibilityState === 'visible' && quiet() && !retry) connect(); };
+  document.addEventListener('visibilitychange', wake);
+  window.addEventListener('pageshow', wake);
+  setInterval(() => { if (quiet() && !retry) connect(); }, 1000);
   connect();
 })();
