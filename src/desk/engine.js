@@ -443,7 +443,8 @@ class Desk {
     if (this.state.dayKey !== e.day) { this.state.dayKey = e.day; this.state.dayStart = eq; }
     const dd = this.state.dayStart > 0 ? eq / this.state.dayStart - 1 : 0;
     const why = dd <= -this.D.maxDailyDdPct ? `down ${(Math.abs(dd) * 100).toFixed(1)}% today, past the ${(this.D.maxDailyDdPct * 100).toFixed(0)}% limit: no new buying until tomorrow` : null;
-    if (why && why !== this.halt) this.log('TESS', 'HALT', null, why);
+    // said once, when it starts: the text carries the live percentage, so comparing it logged a line for every 0.1%
+    if (why && !this.halt) this.log('TESS', 'HALT', null, why);
     if (!why && this.halt) this.log('TESS', 'OPS', null, 'new day: buying allowed again');
     this.halt = why;
     if (!clock.calendarCovers(e.day) && this.due('tess-cal', 86400)) this.log('TESS', 'OPS', null, `the market calendar in src/desk/clock.js ends ${clock.LAST_YEAR}: add next year's NYSE holidays`);
@@ -527,15 +528,18 @@ class Desk {
   // Worth its intrinsic value against SPY's last price: what an expiring option pays.
   settleLot(key, lot) {
     const o = this.state.books[key], S = this.mkt.spy, today = clock.et(this.now()).day;
-    // against SPY's close on the day it expired: a desk that was down at the close must not settle the lot on
-    // a later day's price. Today's last price is the close once the tape is over; a past expiry waits for its
-    // daily bar (and is settled on the last price only after a week without one).
-    const bar = lot.expiry < today && S.daily ? S.daily.find((b) => b.day === lot.expiry) : null;
-    if (lot.expiry < today && !bar && this.now() - clock.etToUtc(`${lot.expiry}T16:00:00`) < 7 * 86400000) {
+    // against SPY's close on the day it expired: the daily bar once there is one, or today's 16:00 minute bar
+    // (the quote runs on into after-hours and may be hours old). No close in hand: wait, and after a week
+    // settle on the last quote.
+    const sess = clock.session(lot.expiry), closeM = sess ? sess.close : clock.CLOSE_MIN;
+    const dbar = lot.expiry < today && S.daily ? S.daily.find((b) => b.day === lot.expiry) : null;
+    const mbar = !dbar && S.intra && S.intra.day === lot.expiry ? S.intra.bars.find((b) => b.m === closeM) : null;
+    const closePx = dbar ? dbar.c : mbar ? mbar.c : null;
+    if (closePx == null && this.now() - clock.etToUtc(`${lot.expiry}T16:00:00`) < 7 * 86400000) {
       if (this.due(`settle-wait-${lot.osi}`, 1800)) this.log('RIGO', 'OPS', null, `${lotName(lot)}: expired ${lot.expiry}, waiting for SPY's close that day to settle it`);
       return;
     }
-    const spy = bar ? bar.c : S.quote ? S.quote.last : null;
+    const spy = closePx != null ? closePx : S.quote ? S.quote.last : null;
     const val = spy > 0 ? Math.max(0, lot.right === 'C' ? spy - lot.strike : lot.strike - spy) : 0;
     const cash = r2(val * 100 * lot.qty);
     const pnl = r2(cash - lot.cost);
@@ -701,9 +705,10 @@ class Desk {
   // and traded at the next open, and crypto's next open is the same minute.
   async cryptoBook() {
     const t = this.now(), day = utcDay(t), yday = utcDay(t - 86400000);
-    if (this.stale.crypto) return;
+    // a sleeve is held back by its OWN coin's tick: one delisted or halted coin used to stop all five (audit 2026-10-07)
     for (const [id, sl] of Object.entries(this.state.books.crypto.sleeves)) {
       const c = this.mkt.coins[id];
+      if (!c || !c.tick || t - c.tickAt > 60000) continue;
       if (sl.checkDay === day || !c.daily || !c.daily.length || c.daily[c.daily.length - 1].day !== yday || !Number.isFinite(c.w)) continue;
       sl.checkDay = day; this.dirty = true;
       await this.rebalance('crypto', id, sl, c.w, c.vol, c.tick);
@@ -735,15 +740,16 @@ class Desk {
     const worth = this.sleeveValue(sl, quote.bid || px);
     const wantQty = (w * worth) / px, delta = wantQty - sl.qty;
     const from = sl.target;
-    // The benchmark starts where the book does: holding the same thing from its first trade, not from
-    // whatever price happened to be on the screen when the desk booted on a Saturday, and paying the same
-    // fee to buy in.
-    if (!(sl.benchPx > 0)) { sl.benchPx = px; sl.benchAt = this.now(); sl.benchFeeBps = this.feeBps(bookKey); }
     this.log('BRAM', 'SIGNAL', null, `${name}: ${from == null ? 'start at' : 'move from ' + Math.round(from * 100) + '% to'} ${Math.round(w * 100)}% (${volTxt}, target ${Math.round((bookKey === 'crypto' ? this.D.cryptoVolTarget : this.D.stockVolTarget) * 100)}%)`);
     this.journal('REBALANCE', { book: bookKey, sym, from, to: r4(w), vol: r4(vol), px, worth });
     const kind = bookKey === 'crypto' ? 'crypto' : 'stock';
     const minTrade = Math.abs(delta * px) >= 1;
     if (minTrade && delta > 0 && this.halt) { this.log('KETT', 'PASS', null, `${name}: not buying · ${this.halt}`); return; }
+    // The benchmark starts where the book does: holding the same thing from its first trade, not from
+    // whatever price happened to be on the screen when the desk booted on a Saturday, and paying the same
+    // fee to buy in. Set only once the buy is allowed: a halted first check used to start it at a price the book
+    // never paid (BTC 84,000 benchmarked, bought at 80,000 the next day).
+    if (!(sl.benchPx > 0)) { sl.benchPx = px; sl.benchAt = this.now(); sl.benchFeeBps = this.feeBps(bookKey); }
     if (minTrade) await this.kett({ book: bookKey, sym, sl, kind, side: delta > 0 ? 'buy' : 'sell', qty: Math.abs(delta), quote, why: `to ${Math.round(w * 100)}% of the ${name} slot` });
     sl.target = w;
     this.dirty = true;
@@ -827,7 +833,7 @@ class Desk {
     this.log('BRAM', 'SIGNAL', null, `options: new ${d.dir === 'up' ? 'high' : 'low'} at ${hm(s.hit.m)}, SPY ${s.hit.c.toFixed(2)} · buy ${qty} ${pick.row.strike} ${d.dir === 'up' ? 'call' : 'put'} at ${prem(pick.row.ask)}${d.entries === 1 ? ' (the one re-entry)' : ''}`);
     const f = await this.kett({ book: 'options', side: 'buy', row: pick.row, qty, sync: sync.rec, why: d.entries === 1 ? 're-entry on a fresh extreme' : `trend-day trigger at ${hm(s.hit.m)}` });
     // exits are judged on the minutes after the one it was bought on
-    if (f) { d.entryBarM = s.hit.m; d.exitBarM = null; }
+    if (f) { d.entryBarM = s.hit.m; d.exitBarM = null; this.save(); }   // saved with the lot: a hard kill in the next ten seconds would lose the bookmark
   }
 
   // The scalp book (books.scalpTrigger and the rules above it), on each new five-minute bar from 10:05 to
@@ -887,7 +893,7 @@ class Desk {
       detail: { dir: hit.dir, spy: r4(hit.c), level: r4(hit.level), vwap: r4(hit.vwap), delta: row.delta, bid: row.bid, ask: row.ask, bidSz: row.bidSz, askSz: row.askSz },
     });
     // exits are judged on the bars after the one it was bought on, not from the last trade's last handled bar
-    if (f) d.exitBarM = null;
+    if (f) { d.exitBarM = null; this.save(); }
   }
 
   // The dip book (books.dipTrigger and the rules above it), on each new one-minute bar from 10:05 to noon on
@@ -944,7 +950,7 @@ class Desk {
       lot: { dir: 'up', stop, spy: r4(hit.c), barM: hit.m, reclaimM: null },
       detail: { dir: 'up', spy: r4(hit.c), open: r4(hit.open), low: r4(hit.low), dipAtr: r4(hit.dip), vwap: r4(hit.vwap), stop, delta: row.delta, bid: row.bid, ask: row.ask, bidSz: row.bidSz, askSz: row.askSz },
     });
-    if (f) { d.exitM = null; d.chainM = hit.m; }
+    if (f) { d.exitM = null; d.chainM = hit.m; this.save(); }
   }
 
   // ---------------------------------------------------------------- the runner book: coins popping right now
