@@ -5,6 +5,8 @@
 //   node tools/crypto-lab.js --fetch                 once: Coinbase daily candles -> data/crypto/bars/
 //   node tools/crypto-lab.js                         the table, 2022-01-01 to the last bar, 0.40% a side
 //   node tools/crypto-lab.js --bps 80 --from 2024-01-01
+//   node tools/crypto-lab.js --coins                 the book's rule against holding on every coin in data/crypto/hours/
+//                                                    (tools/runner-lab.js --fetch: Robinhood's 81, hourly, made daily here)
 //
 // RESEARCH ONLY. It reads Coinbase's public candles and nothing else: no key, no account, no order.
 //
@@ -26,6 +28,10 @@
 // 2026-09-30, bars to 2026-09-29, with XRP and DOGE (asked for in the book): the rule beat holding DOGE
 // (14.9% vs -11.8% a year from 2022) and trailed holding XRP in its run (37.4% vs 46.6% from 2024-01-30,
 // its first decision after Coinbase's halt), smaller drawdowns on both; so both joined the book.
+// 2026-10-08, --coins, Robinhood's 81 coins from tools/runner-lab.js's hourly candles (61 with a year of decisions, from
+// mid-2022 at the oldest): on the 55 fresh coins the rule beat holding on 49 and cut the worst drop on all 55, but the
+// median coin lost ~1% a year under it (holding -27%) and it ended up on only 27 of 55. A steadier way to hold, not
+// a source of returns; the book's coins were left as they are.
 // README, "Why these rules", has the table.
 const fs = require('fs');
 const path = require('path');
@@ -101,6 +107,52 @@ async function fetchCoin(id, from) {
   return [...out.values()].sort((a, b) => a.t - b.t);
 }
 
+// ------------------------------------------------------------------ every coin
+// Hourly candles [[tMs, o, h, l, c, v], ...] -> UTC days, the way Coinbase's daily candles are cut. A day with
+// fewer than 20 hours traded is left out (a halt, a listing day), so a gap is never scored as one day's move.
+function dailyFromHours(rows) {
+  const by = new Map();
+  for (const r of rows) { const d = Math.floor(r[0] / 86400000); let g = by.get(d); if (!g) by.set(d, (g = [])); g.push(r); }
+  const out = [];
+  for (const [d, g] of [...by.entries()].sort((a, b) => a[0] - b[0])) {
+    if (g.length < 20) continue;
+    g.sort((a, b) => a[0] - b[0]);
+    out.push({ t: d * 86400000, o: g[0][1], h: Math.max(...g.map((x) => x[2])), l: Math.min(...g.map((x) => x[3])), c: g[g.length - 1][4], v: g.reduce((a, x) => a + x[5], 0) });
+  }
+  return out;
+}
+// The crypto book's rule (volatility targeting at 40%, 30 days, the 10-point band) against holding, coin by coin.
+// A coin needs WARM days before its first decision and a year of decisions after, or it is listed as too young.
+function coinsTable({ from, bps }) {
+  const dir = path.join(__dirname, '..', 'data', 'crypto', 'hours');
+  if (!fs.existsSync(dir)) { console.log('no hourly candles: run node tools/runner-lab.js --fetch'); return 1; }
+  const tried = new Set(COINS.map(([id]) => id));
+  const hold = RULES[0], vol = RULES.find((r) => r.name === 'volTarget 40%');
+  const rows = [], young = [];
+  for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.json')).sort()) {
+    const id = f.slice(0, -5), bars = dailyFromHours(JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')));
+    const h = simulate(bars, hold, { from, bps }), v = simulate(bars, vol, { from, bps });
+    if (h.days < 365) { young.push(id.slice(0, -4)); continue; }
+    rows.push({ id, fresh: !tried.has(id), years: h.days / 365, h, v });
+  }
+  const med = (a) => { const x = [...a].sort((p, q) => p - q); return x.length ? (x.length % 2 ? x[(x.length - 1) / 2] : (x[x.length / 2 - 1] + x[x.length / 2]) / 2) : NaN; };
+  const line = (r) => `${r.id.slice(0, -4).padEnd(8)}${r.fresh ? ' ' : '*'} ${r.years.toFixed(1).padStart(4)}y  hold ${pct(r.h.cagr)} a year, worst ${pct(r.h.maxDD)}  rule ${pct(r.v.cagr)} a year, worst ${pct(r.v.maxDD)}  $1 -> hold ${r.h.growth.toFixed(2).padStart(5)}, rule ${r.v.growth.toFixed(2).padStart(5)}`;
+  console.log(`crypto lab, every coin · the book's rule (volTarget 40%, 30 days, 10-point band) against holding · from ${new Date(from).toISOString().slice(0, 10)} or the coin's ${WARM}th day · ${bps / 100}% a side`);
+  console.log('* = one of the six the rule was chosen on; the rest are fresh\n');
+  for (const r of rows.sort((a, b) => b.v.cagr - b.h.cagr - (a.v.cagr - a.h.cagr))) console.log(line(r));
+  const say = (name, set) => {
+    if (!set.length) return;
+    const beat = set.filter((r) => r.v.cagr > r.h.cagr).length, shallower = set.filter((r) => r.v.maxDD > r.h.maxDD).length;
+    console.log(`\n${name}: ${set.length} coins · the rule beat holding on ${beat} · a smaller worst drop on ${shallower}`);
+    console.log(`  made money (more than $1 back): holding on ${set.filter((r) => r.h.growth > 1).length}, the rule on ${set.filter((r) => r.v.growth > 1).length}`);
+    console.log(`  median a year: holding ${pct(med(set.map((r) => r.h.cagr)))}, the rule ${pct(med(set.map((r) => r.v.cagr)))} · median worst drop: holding ${pct(med(set.map((r) => r.h.maxDD)))}, the rule ${pct(med(set.map((r) => r.v.maxDD)))}`);
+  };
+  say('FRESH COINS', rows.filter((r) => r.fresh));
+  say('THE SIX IT WAS CHOSEN ON', rows.filter((r) => !r.fresh));
+  if (young.length) console.log(`\nunder a year of decisions, left out: ${young.join(', ')}`);
+  return 0;
+}
+
 // ------------------------------------------------------------------ the table
 const pct = (x) => `${(x * 100).toFixed(1)}%`.padStart(7);
 function table({ from, bps }) {
@@ -128,9 +180,10 @@ async function main(argv) {
     }
     return 0;
   }
+  if (argv.includes('--coins')) return coinsTable({ from: Date.parse(`${arg('--from', '2022-01-01')}T00:00:00Z`), bps: +arg('--bps', 40) });
   return table({ from: Date.parse(`${arg('--from', '2022-01-01')}T00:00:00Z`), bps: +arg('--bps', 40) });
 }
 
 if (require.main === module) main(process.argv.slice(2)).then((code) => process.exit(code || 0)).catch((e) => { console.error(e.message); process.exit(1); });
 
-module.exports = { simulate, RULES, WARM };
+module.exports = { simulate, RULES, WARM, dailyFromHours };

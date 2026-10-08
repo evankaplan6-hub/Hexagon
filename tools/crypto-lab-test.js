@@ -1,6 +1,6 @@
 'use strict';
 // The crypto lab: next-open fills, the cost of a trade, the rebalance band, and the desk's own rule.
-const { simulate, RULES, WARM } = require('./crypto-lab');
+const { simulate, RULES, WARM, dailyFromHours } = require('./crypto-lab');
 const books = require('../src/desk/books');
 
 let pass = 0, fail = 0;
@@ -54,6 +54,17 @@ ok('and trades once', h.trades === 1, h.trades);
   for (let j = 1; j < 60; j++) closes.push(closes[j - 1] * Math.exp(j % 2 ? 0.03 : -0.03));
   const want = books.volTargetWeight(closes, { target: 0.4, lookback: 30, perYear: 365 }).w;
   near('volTarget 40% asks the desk\'s books.volTargetWeight', RULES.find((x) => x.name === 'volTarget 40%').w(closes, closes.length - 1), want);
+}
+
+// hourly candles make UTC days: first open, highest high, lowest low, last close, volume summed; a day under 20 hours is left out
+{
+  const H = 3600000, d0 = Date.UTC(2025, 0, 1);
+  const rows = Array.from({ length: 24 }, (_, i) => [d0 + i * H, 100 + i, 101 + i, 99 + i, 100.5 + i, 2]);
+  rows.push(...Array.from({ length: 5 }, (_, i) => [d0 + 86400000 + i * H, 50, 51, 49, 50, 1]));
+  const days = dailyFromHours(rows.reverse());
+  ok('one whole day; the five-hour one is left out', days.length === 1, days);
+  ok('cut on UTC midnight, the way Coinbase cuts its daily candles', days[0] && days[0].t === d0, days[0]);
+  ok('first open, highest high, lowest low, last close, volume summed', days[0] && days[0].o === 100 && days[0].h === 124 && days[0].l === 99 && days[0].c === 123.5 && days[0].v === 48, days[0]);
 }
 
 console.log(`${pass} passed, ${fail} failed`);
