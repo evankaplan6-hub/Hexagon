@@ -899,7 +899,28 @@ async function engineTests() {
     t += 180000;
     await rd.runnerBook();
     eq('a coin gone from the 24-hour figures is sold once it has been held 48 hours', rb.lots.length, 0);
-    W.stats = saved.stats; W.books = saved.books; delete W.products['ENA-USD'];
+    // Switched off (DESK_RUNNERS=0, the default since 2026-10-08): the next scan sells what it holds, at once and
+    // whatever its trail says, and buys nothing; flat, the round stops calling it and the daily check says it is off
+    W.stats['ENA-USD'] = run('ENA-USD', 0.2, 0.23, 0.231, 1e8)['ENA-USD']; setBook('ENA-USD', 0.23);
+    rb.lots.push({ id: 92, trade: 'R92', sym: 'ENA-USD', qty: 1000, cost: 230, entry: 0.23, peak: 0.23, mark: 0.23, openedAt: t });
+    rb.trades.unshift({ id: 'R92', sym: 'ENA-USD', qty: 1000, entry: 0.23, cost: 230, openedAt: t, open: true, pnl: 0 });
+    W.stats['NEAR-USD'] = run('NEAR-USD', 5, 5.6, 5.61, 1e7)['NEAR-USD']; setBook('NEAR-USD', 5.6); W.products['NEAR-USD'] = 0.1;
+    rd.D = { ...rd.D, runners: false };
+    t += 180000; W.stats['NEAR-USD'].last = 5.605;
+    await rd.bram();
+    eq('off, a coin still well inside its trail is sold at the next scan', [rb.lots.length, rb.trades[0].why], [0, 'the book is switched off']);
+    ok('and nothing is bought, however hard a coin runs', !rb.trades.some((x) => x.sym === 'NEAR-USD'), rb.trades.map((x) => x.sym));
+    eq('the book is marked off in the state', rb.off, true);
+    const scans = rb.scans;
+    t += 180000;
+    await rd.bram();
+    eq('flat and off, it scans no more', rb.scans, scans);
+    eq('the daily check says it is off, not stopped', [dc.health(rd.state, t + 3600000).problems.filter((x) => /runners/.test(x)), dc.health(rd.state, t + 3600000).lines.filter((x) => /runners/.test(x))],
+      [[], ['runners: switched off, holding nothing']]);
+    eq('the journal still rebuilds the book to the penny', dc.compare(dc.rebuild(dc.readDesk(path.join(rdir, 'desk')).events, rd.state), rd.state), []);
+    eq('the floor says switched off', rd.snapshot().runners.enabled, false);
+    rd.D = { ...rd.D, runners: true };
+    W.stats = saved.stats; W.books = saved.books; delete W.products['ENA-USD']; delete W.products['NEAR-USD'];
     fs.rmSync(rdir, { recursive: true, force: true });
   }
 
