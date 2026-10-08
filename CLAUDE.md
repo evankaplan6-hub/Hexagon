@@ -123,12 +123,14 @@ tools/crypto-lab.js the evidence for the crypto book (Coinbase daily candles →
                   return to Coinbase, DOGE from 2021-06-03)
 tools/runner-lab.js the runner book's rule over years of Coinbase hourly candles (→ data/crypto/hours/), RUNNER_COINS only,
                   through books.runnerScan/runnerExit; out of sample before 2026-08-25, the month it was checked on
+tools/spy-lab.js    the scalp and dip books' rules on two years of SPY one-minute bars (Massive, MASSIVE_API_KEY in .env, free
+                  plan → data/stocks/minutes/SPY.json), options modelled and fitted to the box's real buys
 tools/headline-lab.js would the investment stack's X feed trade a coin? (Coinbase one-minute candles → data/crypto/minutes/;
                   reads the feed's log on the Mac in place, copies no post, calls no X server). 2026-09-30, three days: no, so the
                   feed is not wired in; README, "Headlines: tested, not wired in"
 tools/desk-check.js step 8 of the daily check: the desk's loop alive, each book's check done today, its journal
                   rebuilding state.json to the penny, each book against holding (--box copies /data/desk first);
-                  tests: tools/desk-test.js, tools/crypto-lab-test.js, tools/runner-lab-test.js, tools/headline-lab-test.js, tools/desk-check-test.js (tools/desk-fixture.js
+                  tests: tools/desk-test.js, tools/crypto-lab-test.js, tools/runner-lab-test.js, tools/spy-lab-test.js, tools/headline-lab-test.js, tools/desk-check-test.js (tools/desk-fixture.js
                   is their shared fake market, not a suite)
                   THE PREDICTION-MARKET DESK (paper, not the main focus: arbs, maker and snipe on since 2026-09-27; its books on / since 2026-09-29, old page /pm)
 server.js         HTTP + SSE server for both desks, .env loader, live-mode gate; journals START/STOP/CRASH
@@ -216,6 +218,7 @@ data/lab/         gitignored: series-busy.json + universe.json (cached listings)
                   for tools/lab.js; markets-volume-picked.jsonl is the biased first sample, kept as the counterexample
 data/lab/whales/  gitignored: pool, fills, conditions, markets for tools/whale-lab.js
 data/stocks/bars/ gitignored: one Yahoo daily-bar file per ETF/index (tools/stock-fetch.js) for tools/stock-lab.js
+data/stocks/minutes/ gitignored: SPY one-minute bars from Massive for tools/spy-lab.js; re-fetchable with the key
 data/chains/      gitignored: the option-chain tape, chains-YYYY-MM-DD.jsonl + .seen.json (tools/chain-record.js).
                   IRREPLACEABLE for free: a lost day can only be bought back, never re-fetched (backed up hourly with the pull).
                   09-23 has no session quotes; the 09-24 09:45 ET lines are copies of 09-22 after-hours prices: filter on qt.
