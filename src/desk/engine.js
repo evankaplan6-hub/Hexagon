@@ -720,7 +720,10 @@ class Desk {
     if (this.D.options) await this.optionsBook();
     if (this.D.scalps) await this.scalpBook();
     if (this.D.dips) await this.dipBook();
-    if (this.D.runners) await this.runnerBook();
+    // switched off, the runner book still scans until it has sold what it holds, then stops
+    const rnb = this.state.books.runners;
+    if (rnb) rnb.off = !this.D.runners;
+    if (this.D.runners || (rnb && rnb.lots.length)) await this.runnerBook();
     this.touch('BRAM');
   }
   // Once a UTC day, as soon as yesterday's daily candle is final -- the lab decided on the close
@@ -1022,13 +1025,14 @@ class Desk {
         continue;
       }
       lot.mark = last; lot.peak = Math.max(lot.peak, last);
-      const why = books.runnerExit(lot, last, t, R);
+      const why = this.D.runners ? books.runnerExit(lot, last, t, R) : 'the book is switched off';
       if (why) await this.kettRunner({ side: 'sell', lot, why });
     }
     b.cool = b.cool || {};
     for (const [id, at] of Object.entries(b.cool)) if (t - at >= R.coolHours * HOUR) delete b.cool[id];
     const held = () => new Set(b.lots.map((l) => l.sym));
     for (const r of rows) {
+      if (!this.D.runners) break;
       if (r.why || held().has(r.id) || b.cool[r.id] || !M.steps || !M.steps[r.id]) continue;
       if (b.lots.length >= R.slots) break;
       const spend = r2(Math.min(b.cash, this.bookValue('runners') / R.slots));
@@ -1042,7 +1046,7 @@ class Desk {
     const h = held();
     const top = rows.slice(0, 6).map((r) => ({
       id: r.id, move: r4(r.move), offHigh: r4(r.offHigh), volUsd: Math.round(r.volUsd), last: r.last,
-      status: h.has(r.id) ? 'held' : b.cool[r.id] ? 'sold in the last 12 hours' : r.why ? r.why : !M.steps || !M.steps[r.id] ? 'not trading on Coinbase' : this.halt ? 'not buying today' : 'running, no slot free',
+      status: h.has(r.id) ? 'held' : !this.D.runners ? 'the book is switched off' : b.cool[r.id] ? 'sold in the last 12 hours' : r.why ? r.why : !M.steps || !M.steps[r.id] ? 'not trading on Coinbase' : this.halt ? 'not buying today' : 'running, no slot free',
     }));
     b.scan = { at: t, n: rows.length, px: Object.fromEntries(rows.map((r) => [r.id, r.last])), top };
     b.scans = (b.scans || 0) + 1;

@@ -98,7 +98,7 @@ src/desk/books.js   the rules, pure: volatility targeting (crypto 40%/30 days, S
                   minute): Evan's own hand-traded pattern as rules: a turn up off a morning low
                   0.25 ATR under the open, under VWAP, 10:05-noon; two calls 2-3 pts out; one sells on the VWAP
                   reclaim, the runner on a fade to its SPY price / half its gain back once doubled / 3:15;
-                  RUNNER (2026-09-30, Evan's QNT): every 3 min, a coin Robinhood sells (RUNNER_COINS, a dated list)
+                  RUNNER (2026-09-30, Evan's QNT; OFF since 2026-10-08, tools/runner-lab.js: it lost over four years): every 3 min, a coin Robinhood sells (RUNNER_COINS, a dated list)
                   up 8%+ in 24h, $2M+ traded, within 3% of its high and still climbing; 4 at once, a quarter each;
                   out 10% off its best or 48h not above cost; a coin sold waits 12h
 src/desk/feeds.js   Coinbase (live; /products/stats is every coin's 24h in one call) and Cboe (15 min late) parsers + fetches; Cboe's one-minute bars (options, dips), five-minute

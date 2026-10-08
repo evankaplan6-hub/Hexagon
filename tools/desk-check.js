@@ -218,7 +218,8 @@ function health(S, now) {
     const hold = (R.lots || []).map((l) => short(l.sym));
     const scanAge = R.scan ? Math.round((now - R.scan.at) / MIN) : null;
     const joined = S.added && S.added.runners ? S.added.runners.at : R.startedAt || 0;
-    if (scanAge != null && scanAge > 15) problems.push(`runners: no scan for ${scanAge} minutes (Coinbase's 24-hour figures not loading, or the book switched off)`);
+    if (R.off && !hold.length) lines.push('runners: switched off, holding nothing');
+    else if (scanAge != null && scanAge > 15) problems.push(`runners: no scan for ${scanAge} minutes (Coinbase's 24-hour figures not loading, or the book switched off)`);
     else if (scanAge == null && now - joined > 15 * MIN) problems.push('runners: has never scanned (Coinbase\'s 24-hour figures not loading, or the book switched off)');
     else lines.push(scanAge == null ? 'runners: first scan due' : `runners: scanned ${scanAge < 1 ? 'under a minute' : `${scanAge} min`} ago, ${R.scan.n} coins · holding ${hold.length ? hold.join(', ') : 'nothing'}`);
   }

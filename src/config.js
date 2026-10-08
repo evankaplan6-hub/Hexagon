@@ -678,7 +678,9 @@ module.exports = {
     options: env('DESK_OPTIONS', '1') !== '0',
     scalps: env('DESK_SCALPS', '1') !== '0',
     dips: env('DESK_DIPS', '1') !== '0',
-    runners: env('DESK_RUNNERS', '1') !== '0',
+    // off since 2026-10-08 (Evan: "off", after tools/runner-lab.js: the rule lost over four years, 3 of 20 quarters
+    // up, and lost even with no fee). Off, the book sells what it holds at its next scan and then buys nothing.
+    runners: env('DESK_RUNNERS', '0') !== '0',
     // no new buying for the rest of the Eastern day past this loss on the whole desk; selling is never blocked
     maxDailyDdPct: num('DESK_MAX_DAILY_DD', 0.05),
     // an option is bought only off a chain whose own time is within this many seconds of the trigger
