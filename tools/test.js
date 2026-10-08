@@ -9,6 +9,7 @@ const path = require('path');
 
 const SUITES = [
   ['loginguard', 'the login throttle: ten wrong passwords in ten minutes, per address, forgiven by time and a right password'],
+  ['session', 'the login cookie (30-day expiry, epoch, no forged expiry), the throttle key, and a stream client that stops reading'],
   ['decide', 'the taker decision core: ranking, vetoes, sizing rails, exits'],
   ['probe', 'the thin-market probe: threshold, in-play exclusion, cooldown, darkness'],
   ['maker', 'the maker core: quoting, queue and fills, and the realised-P&L invariant'],

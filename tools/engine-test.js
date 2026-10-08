@@ -1308,6 +1308,31 @@ const position = (over = {}) => ({
     ok('a desk with no maker history yet answers empty, not undefined', Array.isArray(hb.makerHist) && hb.makerHist.length === 0 && hb.historyValidFrom === 0 && Array.isArray(hb.balanceHistory), hb);
   }
 
+  group('two arbs too thin to fill do not starve the game bets below them (audit 2026-10-07)');
+  {
+    // KETT tries at most two new positions a cycle, and used to count every signal that got as far as the
+    // gates: two arbs showing a wide listing edge but only 2 lots in the real book took both slots every cycle,
+    // so no game bet below them was ever tried (in a six-game simulation every bet opened at minute 18, not 0).
+    const now = Date.now();
+    const mkPair = (n, over = {}) => ({ id: `pm${n}:0|KXMLBGAME-26OCT07${n}`, label: `MLB T${n}A v T${n}B · T${n}A`, kind: 'game', series: 'KXMLBGAME', inPlay: false, startsAt: now + 3600000, settlesAt: now + 5 * 3600000,
+      pm: { id: `pm${n}`, tokenIndex: 0, tokenId: `t${n}` }, ks: { ticker: `KXMLBGAME-26OCT07${n}` },
+      q: { pmBid: 0.40, pmAsk: 0.41, ksBid: 0.50, ksAsk: 0.51, pmMid: 0.405, ksMid: 0.505, pmVol: 1e6, ksVol: 1e6, pmFeeRate: 0, t: now, pmAt: now, ksAt: now, ...over } });
+    const E = engine({ bets: true, betSeries: ['KXMLBGAME'], arbsEnabled: true, maxArbGroups: 40, convergeEnabled: false, snipe: false });
+    E.halt = null;
+    E.pairs = [mkPair(1), mkPair(2), mkPair(3, { pmBid: 0.55, pmAsk: 0.56, ksBid: 0.55, ksAsk: 0.56, pmMid: 0.555, ksMid: 0.555 })];
+    for (const p of E.pairs) E.quotes.pm.set(p.pm.id, { tokenIds: [p.pm.tokenId, `${p.pm.tokenId}n`] });
+    BRAM(E);
+    ok('the board offers two thin arbs and a game bet', E.signals.filter((x) => x.type === 'arb').length === 2 && E.signals.some((x) => x.type === 'bet'), E.signals.map((x) => x.type));
+    let fetched = 0;
+    E.book = async (venue, pair, side) => { fetched++; return pair.id.startsWith('pm3') ? { asks: [{ price: 0.56, size: 5000 }], yesBid: 0.55, yesAsk: 0.56 } : { asks: [{ price: side === 'yes' ? 0.41 : 0.50, size: 2 }], yesBid: 0.40, yesAsk: 0.41 }; };
+    await KETT(E);
+    ok('the first cycle still places the game bet', E.state.positions.some((p) => p.strategy === 'bet' && p.pairId.startsWith('pm3')), E.state.positions.map((p) => `${p.strategy}:${p.pairId}`));
+    ok('...and no arb, which cannot fill 5 lots', !E.state.positions.some((p) => p.strategy === 'arb'));
+    const first = fetched;
+    for (let i = 0; i < 4; i++) await KETT(E);
+    ok('a signal that failed its live check is not re-fetched every cycle: a minute\'s back-off', fetched === first, { first, after: fetched });
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

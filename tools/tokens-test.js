@@ -132,7 +132,7 @@ const openList = open ? [...open.matchAll(/'([^']+)'/g)].map((m) => m[1]) : [];
 ok('the server serves the icons and the manifest without the login, since a Home Screen asks for them before one',
   ['/favicon.svg', '/apple-touch-icon.png', '/icon-192.png', '/icon-512.png', '/manifest.webmanifest'].every((f) => openList.includes(f)), openList);
 ok('...and nothing else: no page, no script, no sheet, no API', openList.every((f) => /^\/[\w-]+\.(png|svg|webmanifest)$/.test(f)), openList);
-ok('...and it does that before the login check, not in place of it', server.indexOf('if (OPEN_FILES.has(p))') > 0 && server.indexOf('if (OPEN_FILES.has(p))') < server.indexOf('if (!authed(req))'));
+ok('...and it does that before the login check, not in place of it', server.indexOf('if (OPEN_FILES.has(p))') > 0 && server.indexOf('if (OPEN_FILES.has(p))') < server.indexOf('if (!authed(req, who))'));
 ok('the server names the manifest\'s type', /'\.webmanifest': 'application\/manifest\+json'/.test(server));
 ok('the login page is the floor\'s own: the system font, light or dark, and the app\'s icon',
   /const LOGIN_PAGE[\s\S]*?color-scheme: light dark[\s\S]*?-apple-system[\s\S]*?apple-touch-icon\.png/.test(server));

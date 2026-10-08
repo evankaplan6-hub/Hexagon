@@ -442,6 +442,26 @@ const scans = (E) => E.logs.filter((l) => l.kind === 'SCAN' && /^(quoting|no mar
     ok('flat, the market leaves the loop and nothing more is written', r.E.journalled.length === n && !r.tape.asked[r.tape.asked.length - 1].includes('KXEVA-26-L'), r.tape.asked[r.tape.asked.length - 1]);
   }
 
+  group('a halted maker still crosses out an event-dated market the day before it (audit 2026-10-07)');
+  {
+    // step() sends a halt to hold(), which settled and re-marked but never crossed the event rail, so the
+    // midterm positions would ride election night exactly when the desk was too unwell to work them off.
+    for (const [how, setup] of [['the taker desk\'s halt', (r) => { r.E.halt = 'stale data'; }], ['the maker\'s own drawdown halt', (r) => { r.S.halted = 'drawdown 10.5% off the peak'; }]]) {
+      const r = rig({ over: { makerEventDates: [['KXEVH*', '2026-09-22']], makerEventCrossDays: 1 }, markets: { 'KXEVH-26-L': held({ series: 'KXEVH', inv: 40, cost: 16 }) }, state: { cash: 10000 - 16 } });
+      const L = r.S.markets['KXEVH-26-L'];
+      r.tape.bk.set('KXEVH-26-L', book(0.44, 50, 0.46, 50));
+      setup(r);
+      await r.round();
+      ok(`${how}, 33 hours out: held, nothing crossed`, L.inv === 40 && !r.E.journalled.some((j) => j.kind === 'MAKER_FLATTEN'), L);
+      await r.round(10 * 3600000);
+      const flats = r.E.journalled.filter((j) => j.kind === 'MAKER_FLATTEN');
+      ok(`${how}, inside a day of the event: crossed out at the bid, journalled with why`, L.inv === 0 && flats.length === 1 && flats[0].px === 0.44 && /^event \d+h away$/.test(flats[0].reason), { inv: L.inv, flats });
+      const n = r.E.journalled.length;
+      await r.round();
+      ok('...once: flat, nothing more is written', r.E.journalled.length === n);
+    }
+  }
+
   group('one event, one bet: the event rail through the loop');
   {
     // SENATETX-26 on the box, 2026-09-24: long 100 D, and short R on the same side of the race

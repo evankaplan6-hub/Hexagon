@@ -1374,7 +1374,7 @@
     const arbs = new Set(arbLegs.map((p) => p.group || p.id)).size;
     const longMs = (cfg.longDays || 30) * 86400000;
     const longArbs = new Set(arbLegs.filter((p) => Number.isFinite(p.settlesAt) && p.settlesAt - S.now > longMs).map((p) => p.group || p.id)).size;
-    const bets = pos.filter((p) => p.strategy !== 'arb').length;
+    const bets = pos.filter((p) => p.strategy !== 'arb' && p.strategy !== 'bet').length;   // what decide.bookFull counts against the cap: the game bets have their own lane
     const used = (n, cap, label) => cap ? `<span class="${n >= cap ? 'full' : ''}"><b>${n}</b>/${cap} ${label}</span>` : '';
     const roomBars = [used(arbs, cfg.maxArbGroups, 'arbs'), used(longArbs, cfg.maxLongArbGroups, `over ${cfg.longDays || 30}d`), used(bets, cfg.maxOpenPositions, 'bets')].filter(Boolean).join('');
     // What resolves soonest, and what it pays when it does
@@ -3290,11 +3290,27 @@
     // must not freeze that number the moment it is drawn.
     if (view !== 'floor') { loadChains(); renderAsset(); }
   }
+  // A stream that errors after the session ended (DASH_PASS or SESSION_EPOCH changed, or the 30 days ran out)
+  // retried for good behind "No signal". The front page redirects to /login when signed out, and fetch can be told
+  // not to follow it: a redirect that comes back means the viewer is signed out, so reload into the form.
+  const signedOut = () => { fetch('/', { cache: 'no-store', redirect: 'manual' }).then((r) => { if (r.type === 'opaqueredirect') location.reload(); }).catch(() => {}); };
+  // The stream, kept alive: a phone drops its sockets without a word when a page is not shown and no `error`
+  // comes (the floor's stream does the same since 2026-10-07, #176). When no frame has come in STALE_MS the
+  // page opens a new stream itself, and tries at once when it is shown again.
+  let es = null, retry = null, lastTry = 0;
   function connect() {
-    const es = new EventSource('/api/stream');
-    es.onmessage = (ev) => { try { S = JSON.parse(ev.data); S._rx = S.now; S._rxPerf = performance.now(); lastFrameAt = Date.now(); render(); } catch (e) { console.error(e); } };
-    es.onerror = () => { es.close(); setTimeout(connect, 3000); };
+    clearTimeout(retry); retry = null;
+    if (es) es.close();
+    lastTry = Date.now();
+    const mine = es = new EventSource('/api/stream');
+    mine.onmessage = (ev) => { try { S = JSON.parse(ev.data); S._rx = S.now; S._rxPerf = performance.now(); lastFrameAt = Date.now(); render(); } catch (e) { console.error(e); } };
+    mine.onerror = () => { if (es !== mine) return; mine.close(); es = null; retry = setTimeout(connect, 3000); signedOut(); };
   }
+  const quiet = () => Date.now() - Math.max(lastFrameAt, lastTry) > STALE_MS;
+  const wake = () => { if (document.visibilityState === 'visible' && quiet() && !retry) connect(); };
+  document.addEventListener('visibilitychange', wake);
+  window.addEventListener('pageshow', wake);
+  setInterval(() => { if (quiet() && !retry) connect(); }, 1000);
   wireFloor();
   connect();
   renderAsk();

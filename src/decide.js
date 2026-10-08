@@ -586,6 +586,29 @@ function arbEdgeLive(signal, books, cfg) {
   return 1 - cost;
 }
 
+// What a locked arb of `qty` pairs really costs when each leg walks its ladder: the average fill per leg
+// plus the marginal fee at that average, against the $1 it pays. arbEdgeLive prices only the touch.
+function arbEdgeAtQty(signal, books, qty, cfg) {
+  const ref = signal.pair && signal.pair.ks && signal.pair.ks.ticker;
+  const rate = pmRate(signal.pair && signal.pair.q, cfg);
+  let cost = 0;
+  for (let i = 0; i < signal.legs.length; i++) {
+    const l = signal.legs[i], limit = l.px + cfg.slipLimit;
+    let left = qty, paid = 0;
+    for (const lv of (books[i] && books[i].asks) || []) { if (lv.price > limit + 1e-9 || left <= 0) break; const take = Math.min(left, lv.size); paid += take * lv.price; left -= take; }
+    if (left > 1e-9) return -Infinity;
+    const avg = paid / qty;
+    cost += avg + (l.venue === 'KS' ? ks.feePerContract(avg, cfg.ksFeeRate, ref) : pm.feePerShare(avg, rate));
+  }
+  return 1 - cost;
+}
+// The largest qty (<= want) whose walked edge still clears minArbEdge; 0 when even the touch does not.
+function arbQtyForEdge(signal, books, want, cfg) {
+  let lo = 0, hi = want;
+  while (lo < hi) { const mid = Math.ceil((lo + hi + 1) / 2); if (arbEdgeAtQty(signal, books, mid, cfg) >= cfg.minArbEdge - 1e-9) lo = mid; else hi = mid - 1; }
+  return lo;
+}
+
 // ---------------------------------------------------------------- the settlement snipe
 // Polymarket settles a game the moment it ends: its book goes to 99/100 on the winner (bids at 99c,
 // nothing offered) and the market closes seconds later. On the 2026-09-19 → 09-22 tape Kalshi's book
@@ -614,7 +637,7 @@ function arbEdgeLive(signal, books, cfg) {
 // White Sox v Astros (09-30) about 20 seconds after the 99c reading, two minutes before Kalshi closed.
 function snipeEdge(px, ref, cfg) { return 1 - px - ks.feePerContract(px, cfg.ksFeeRate, ref); }
 function snipeSignal(pair, cfg, now) {
-  if (!cfg.snipe || !pair || pair.kind !== 'game' || !pair.inPlay || !pair.q) return null;
+  if (!cfg.snipe || !pair || pair.kind !== 'game' || !pair.inPlay || !pair.q || pair.watchOnly) return null;
   const q = pair.q;
   const yesWon = q.pmBid >= cfg.snipePmBid - 1e-9 && q.pmAsk >= 0.999;
   const noWon = q.pmBid <= 0.001 && q.pmAsk <= 1 - cfg.snipePmBid + 1e-9;
@@ -699,13 +722,14 @@ function betPrices(pair, side, cfg) {
   };
 }
 function betSignal(pair, cfg, now, done) {
-  if (!cfg.bets || cfg.mode === 'live' || !pair || pair.kind !== 'game' || !pair.q || pair.pmGone) return null;
+  if (!cfg.bets || cfg.mode === 'live' || !pair || pair.kind !== 'game' || !pair.q || pair.pmGone || pair.watchOnly) return null;
   if (!(cfg.betSeries || []).includes(pair.series)) return null;
   if (done && done.has(pair.id)) return null;
   const q = pair.q;
   if (pmReadsSettled(q, cfg)) return null;
   if (!Number.isFinite(q.t) || now - q.t > cfg.maxDataAgeSec * 1000) return { veto: 'quote stale' };
   if (![q.pmMid, q.ksMid].every(Number.isFinite)) return { veto: 'one venue has no price' };
+  if (Math.max(q.ksBid - q.pmAsk, q.pmBid - q.ksAsk) > MAX_VENUE_DISAGREE + 1e-9) return { veto: 'venues disagree 30c+: likely different games' };
   const side = (q.pmMid + q.ksMid) / 2 >= 0.5 ? 'yes' : 'no';
   const at = betPrices(pair, side, cfg);
   const venue = at.KS && (!at.PM || at.KS.cost <= at.PM.cost) ? 'KS' : at.PM ? 'PM' : null;
@@ -723,4 +747,4 @@ function betPick(label, side) {
   return side === 'yes' ? yes : yes === a ? b : yes === b ? a : `not ${yes}`;
 }
 
-module.exports = { betSignal, betPrices, betPick, fairValue, quoteFault, snipeEdge, snipeSignal, keepClosedGamePairs, pmReadsSettled, pmRecordSays, convEdge, pairSignals, scan, liveWindow, exitIntent, gainLockIntent, arbUnwind, arbUnwindLive, arbReturn, arbEdgeLive, riskState, biasFor, standingGap, gapUnseen, bookFull, persistFilter, sizePlan, rankSignals, pmRate };
+module.exports = { betSignal, betPrices, betPick, fairValue, quoteFault, snipeEdge, snipeSignal, keepClosedGamePairs, pmReadsSettled, pmRecordSays, convEdge, pairSignals, scan, liveWindow, exitIntent, gainLockIntent, arbUnwind, arbUnwindLive, arbReturn, arbEdgeLive, riskState, biasFor, standingGap, gapUnseen, bookFull, persistFilter, sizePlan, rankSignals, pmRate, arbEdgeAtQty, arbQtyForEdge };

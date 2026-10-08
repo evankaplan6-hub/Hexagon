@@ -563,6 +563,24 @@ group('a locked arb is re-priced from the books fetched for it');
   ok('an empty side is null, not a price', d.arbEdgeLive(sig, [{ asks: [] }, { asks: [{ price: 0.50, size: 1 }] }], cfg) === null);
 }
 
+group('a locked arb is sized to the edge it has when each leg walks its ladder (audit 2026-10-07)');
+{
+  // The signal said 1.25c at the touch; sizePlan then walks both legs up through the +1c slip, so 202 pairs
+  // paid 45.98c and 52.98c and locked in -0.7c a pair against a 1c floor. arbQtyForEdge takes the largest
+  // size whose WALKED edge still clears minArbEdge.
+  const p = mk(0.44, 0.45, 0.48, 0.49); p.q.pmFeeRate = 0;
+  const sig = { type: 'arb', pair: p, legs: [{ venue: 'PM', side: 'yes', px: 0.45 }, { venue: 'KS', side: 'no', px: 0.52 }] };
+  const books = [{ asks: [{ price: 0.45, size: 5 }, { price: 0.46, size: 5000 }] }, { asks: [{ price: 0.52, size: 5 }, { price: 0.53, size: 5000 }] }];
+  const c = { ...cfg, minArbEdge: 0.01 };
+  const at5 = d.arbEdgeAtQty(sig, books, 5, c), at50 = d.arbEdgeAtQty(sig, books, 50, c);
+  ok('at the 5 lots resting at the touch the edge is the touch\'s', Math.abs(at5 - d.arbEdgeLive(sig, books, c)) < 1e-9, [at5, d.arbEdgeLive(sig, books, c)]);
+  ok('walking 50 pairs through the next tick on both legs costs about 2c more per pair', at50 < at5 - 0.017, [at5, at50]);
+  const q = d.arbQtyForEdge(sig, books, 200, c);
+  ok('so the size is cut back to where the walked edge still clears the floor', q >= 5 && q < 200 && d.arbEdgeAtQty(sig, books, q, c) >= c.minArbEdge - 1e-9 && d.arbEdgeAtQty(sig, books, q + 1, c) < c.minArbEdge, q);
+  ok('a book that cannot fill the size at all is not an edge', d.arbEdgeAtQty(sig, [{ asks: [{ price: 0.45, size: 3 }] }, books[1]], 10, c) === -Infinity);
+  ok('and when even the touch is under the floor the size is zero', d.arbQtyForEdge(sig, books, 200, { ...c, minArbEdge: 0.05 }) === 0);
+}
+
 group('property: the arb is the better signal wherever both are available');
 {
   let both = 0, convWon = 0, worst = 0;
@@ -619,6 +637,7 @@ group('the settlement snipe: Polymarket has settled, Kalshi still offers the win
   ok('not a game: nothing', d.snipeSignal(pair({ pmBid: 0.99, pmAsk: 1, ksBid: 0.82, ksAsk: 0.86 }, { kind: 'event' }), cfg, now) === null);
   ok('not in play: nothing', d.snipeSignal(pair({ pmBid: 0.99, pmAsk: 1, ksBid: 0.82, ksAsk: 0.86 }, { inPlay: false }), cfg, now) === null);
   ok('switched off: nothing', d.snipeSignal(pair({ pmBid: 0.99, pmAsk: 1, ksBid: 0.82, ksAsk: 0.86 }), { ...cfg, snipe: false }, now) === null);
+  ok('a pair the desk only watches is never sniped', d.snipeSignal(pair({ pmBid: 0.99, pmAsk: 1, ksBid: 0.82, ksAsk: 0.86 }, { watchOnly: 'differ on a walkover' }), cfg, now) === null);
   ok('the edge is one minus the price minus Kalshi\'s fee', Math.abs(d.snipeEdge(0.86, 'KXNFLGAME-T-MIN', cfg) - (0.14 - 0.07 * 0.86 * 0.14)) < 0.002, d.snipeEdge(0.86, 'KXNFLGAME-T-MIN', cfg));
 
   // HOLT keeps a game pair Polymarket's listing just dropped, for a while, flagged
@@ -690,6 +709,9 @@ group('every game: one bet a game, on the favourite, at the cheaper venue');
   ok('BETS off: nothing', d.betSignal(pair(q), { ...cfg, bets: false }, now, new Set()) === null);
   ok('live mode: nothing, ever', d.betSignal(pair(q), { ...cfg, mode: 'live' }, now, new Set()) === null);
   ok('a game pair Polymarket has dropped: nothing', d.betSignal(pair(q, { pmGone: true }), cfg, now, new Set()) === null);
+  ok('a pair the desk only watches (a tennis walkover, rules that differ) is not bet', d.betSignal(pair(q, { watchOnly: 'differ on a walkover' }), cfg, now, new Set()) === null);
+  const apart = d.betSignal(pair({ pmBid: 0.10, pmAsk: 0.11, ksBid: 0.90, ksAsk: 0.91 }), cfg, now, new Set());
+  ok('venues 80c apart are likely two different games (the 09-22 doubleheader): vetoed, not bet at 11c', apart && apart.veto && !apart.legs && /disagree/.test(apart.veto), apart);
   ok('Polymarket reading it settled: nothing', d.betSignal(pair({ pmBid: 0.99, pmAsk: 1, ksBid: 0.97, ksAsk: 0.98 }), cfg, now, new Set()) === null);
   const late = d.betSignal(pair({ pmBid: 0.93, pmAsk: 0.94, ksBid: 0.93, ksAsk: 0.94 }), cfg, now, new Set());
   ok('a favourite at 94c is a game all but decided: vetoed, and says why', late && late.veto && /all but decided/.test(late.veto), late);
