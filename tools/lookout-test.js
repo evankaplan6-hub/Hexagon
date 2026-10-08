@@ -10,7 +10,9 @@ ok('the floor links to the lookout and the lookout links back', /href="lookout\.
 ok('the room is the painted scene asset', /assets\/lookout-concept-a\.png/.test(html) && fs.existsSync(path.join(root, 'public/assets/lookout-concept-a.png')));
 ok('all seven named desks exist', ['BRAM', 'KETT', 'RIGO', 'TESS', 'HOLT', 'ILSA', 'MAKR'].every((k) => html.includes(`data-agent="${k}"`)));
 ok('it reads the same stream as the floor', /new EventSource\('\/api\/stream'\)/.test(js));
-ok('it only reads: no POST, fetch, socket or trading control', !/(fetch\s*\(|XMLHttpRequest|WebSocket|method:|POST)/.test(js) && !/(sell|flatten|resume)/i.test(html + js));
+// its one request: GET / without following the redirect to /login, to reload into the form when signed out
+const reads = js.replace("fetch('/', { cache: 'no-store', redirect: 'manual' })", '');
+ok('it only reads: no POST, fetch, socket or trading control', !/(fetch\s*\(|XMLHttpRequest|WebSocket|method:|POST)/.test(reads) && !/(sell|flatten|resume)/i.test(html + js));
 ok('no made-up numbers are left in the page', !/\$9,915|−\$84\.12|−\$11\.04/.test(html + js));
 ok('a stopped stream is shown, not frozen', /STALE_MS/.test(js) && /THE FLOOR WENT QUIET/.test(js));
 ok('live mode is labelled as real money', /Real money/.test(js) && /\.mode\.real/.test(css));

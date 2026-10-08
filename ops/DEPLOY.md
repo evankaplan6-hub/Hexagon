@@ -2,7 +2,7 @@
 
 The desk runs on a Fly.io box (app `hexagon-desk`): since 2026-09-25 that is two desks in one process,
 the stocks, crypto and options desk (`src/desk/`, its floor at `/`, its ledger in `/data/desk/`) and
-the prediction-market desk winding down to settlement (its floor at `/pm`). The Mac's launchd autostart
+the prediction-market desk (paper again since 2026-09-27; its books are on the floor at `/` too, its old page at `/pm`). The Mac's launchd autostart
 (`ops/install-autostart.sh`) exists but is not installed: a desk on the Mac stops when the machine
 sleeps, and the one thing this strategy needs is **days of uninterrupted tape**.
 
@@ -39,14 +39,20 @@ fly launch --no-deploy --copy-config --name hexagon-desk   # reads fly.toml
 fly volumes create hexagon_data --region iad --size 1      # the journals live here
 fly ips allocate-egress -a hexagon-desk -r iad             # its own outgoing IP (below)
 
-fly secrets set DASH_PASS="$(openssl rand -base64 18)"     # prints nothing; read it back below
+fly secrets set DASH_PASS="$(openssl rand -base64 18)"     # prints nothing, and Fly cannot show it again
 fly secrets list                                            # confirms it is set, not its value
 fly deploy
-fly open                                                    # browser prompts: user "hexagon"
+fly open                                                    # the sign-in page: user "hexagon"
 ```
 
 You need the password you generated, so either pick your own instead of `openssl rand`, or run
 the `openssl` line on its own first and copy the output.
+
+**Signing in and out.** The sign-in page sets a cookie that lasts 30 days (`src/session.js`); `/logout` clears this browser's.
+To sign every browser out at once without changing the password, set a new epoch (any string); Fly restarts the box with it:
+`fly secrets set SESSION_EPOCH="$(date +%s)"`. Changing `DASH_PASS` does the same and also changes the password. Wrong
+passwords are counted per address, from the form, the `?k=` link and Basic auth alike: ten in ten minutes turns that
+address away (429) for the rest of the window, a right password included.
 
 **The box has its own outgoing IP** (209.71.108.223, allocated 2026-09-15). Kalshi rate-limits by
 address, and on Fly's shared outgoing IP the desk was refused 10-27 Kalshi calls every 5 minutes
@@ -141,7 +147,7 @@ The deploy stamps the commit into the image (`Dockerfile` ARG `GIT_SHA`, passed 
 and the desk reports it:
 
 ```bash
-curl -s https://hexagon-desk.fly.dev/api/state | python3 -c 'import json,sys; print(json.load(sys.stdin)["build"])'
+curl -s -u "hexagon:$DASH_PASS" https://hexagon-desk.fly.dev/api/state | python3 -c 'import json,sys; print(json.load(sys.stdin)["build"])'
 ```
 
 The dashboard shows the same thing under the status panel: `build 3ebaa5d · restarted 12m ago`,
@@ -246,8 +252,8 @@ exist rather than make a local folder that only looks like a backup. A failed co
 `PROBLEM backup` line to `pull.log` (which does not mean the box went unpulled) and to `backup.log`,
 and is tried again the next hour; a good one writes an `ok` line to `backup.log`. The job's exit
 code is the pull's. `bash ops/run-pull.sh --backup-only` runs only the copy. `.env` and
-`kalshi-private-key.pem` are deliberately not in it: back them up separately (Time Machine on an
-external disk covers them). If macOS ever refuses the LaunchAgent write access to iCloud Drive, the
+`kalshi-private-key.pem` are deliberately not in it: `ops/backup-secrets.sh` seals them in an encrypted image in iCloud
+Drive, run by hand under a passphrase only you type (`ops/daily-check.sh` step 7 says when it is missing or out of date). If macOS ever refuses the LaunchAgent write access to iCloud Drive, the
 only sign is an hourly `PROBLEM backup` line.
 
 It refused a read once (2026-09-27). With "Optimize Mac Storage" on, iCloud turns backup files nobody
