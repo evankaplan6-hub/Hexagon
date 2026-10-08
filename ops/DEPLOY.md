@@ -131,6 +131,11 @@ docker run -d --restart=always -p 8787:8787 \
 
 Works on a $5 VPS, a Raspberry Pi, or anything that runs Docker. Keep the region in the US.
 
+The desk runs as the image's ordinary `node` user, not root (since 2026-10-07). `ops/entrypoint.sh`
+starts as root for one step, handing `/data` (and anything in it `node` does not own) to `node`, then
+runs `node server.js` as `node`. So a file you leave in `/data` from a root `fly ssh console` is
+`node`'s again at the next restart; until then the desk can read it but not change it.
+
 ## Checking on it
 
 ```bash
