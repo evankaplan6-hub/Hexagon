@@ -197,7 +197,8 @@ function health(S, now) {
     const why = x.why || (x.test && x.test.why) || '';
     return `options today: ${said[x.status] || x.status}${x.test ? ` (${x.test.dir}, ${x.test.moveAtr.toFixed(2)} ATR from the open)` : ''}${why ? `: ${why}` : ''}`;
   };
-  if (sess && !sess.early && e.min >= 13 * 60 && !young) {
+  if (o.off && !(o.lots || []).length) lines.push('options: switched off');
+  else if (sess && !sess.early && e.min >= 13 * 60 && !young) {
     if (!d || d.date !== e.day || d.status === 'waiting') problems.push(`options: no 12:30 verdict today (${e.day}): SPY's minute bars or daily bars did not load`);
     else lines.push(optTxt(d));
   } else if (d && d.date === e.day) lines.push(optTxt(d));
@@ -205,6 +206,7 @@ function health(S, now) {
   for (const [key, none] of Object.entries(MORNING)) {
     const x = B[key], xd = x && x.day;
     if (!x) continue;
+    if (x.off && !(x.lots || []).length) { lines.push(`${key}: switched off`); continue; }
     // the book's day starts with the first bar it reads, so by 10:30 on the late tape a book that has run
     // before has today's (one that never has, switched off or new, has none to miss)
     const count = xd ? `${xd.entries} trade${xd.entries === 1 ? '' : 's'}${xd.status === 'done' && xd.why ? `, done: ${xd.why}` : ''}` : '';
