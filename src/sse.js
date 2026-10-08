@@ -10,6 +10,14 @@
 // takes the plain stream as before.
 const zlib = require('zlib');
 
+// A client that stops reading without closing (a phone that lost signal, a tab frozen by the OS) left every
+// frame to pile up in the box's memory: a 200 KB frame every 100 ms grew 3.6 MB to 24 MB in ten seconds
+// (audit 2026-10-07). Each frame is the whole current state, so one that cannot be sent costs nothing the
+// next does not carry: it is dropped while more than this is waiting to go out, and the client is cut off
+// after DROP_LIMIT frames in a row (a minute at two a second) so it reconnects fresh.
+const MAX_BUFFERED = 1 << 20;
+const DROP_LIMIT = 30;
+
 // Does this request take gzip? `gzip` or `*` in accept-encoding, unless its q is zero.
 function takesGzip(req) {
   const accept = String((req && req.headers && req.headers['accept-encoding']) || '');
@@ -35,14 +43,20 @@ function openStream(req, res) {
     gz.on('error', () => res.destroy());
     gz.pipe(res);
   }
+  let dropped = 0;
+  const waiting = () => (res.writableLength || 0) + (gz ? gz.writableLength + gz.readableLength : 0);
   return {
     gzip,
+    waiting,
     send(text) {
-      if (!gz) { res.write(text); return; }
+      if (waiting() > MAX_BUFFERED) { if (++dropped >= DROP_LIMIT) res.destroy(); return false; }
+      dropped = 0;
+      if (!gz) { res.write(text); return true; }
       gz.write(text);
       // a sync flush ends the frame on a byte boundary the browser can decode, and keeps the
       // compressor's window, so the next frame still compresses against this one
       gz.flush(zlib.constants.Z_SYNC_FLUSH);
+      return true;
     },
     close() { if (gz) { gz.unpipe(res); gz.destroy(); } },
   };
@@ -51,4 +65,4 @@ function openStream(req, res) {
 // One server-sent event carrying `obj`.
 const frame = (obj) => `data: ${JSON.stringify(obj)}\n\n`;
 
-module.exports = { openStream, takesGzip, frame };
+module.exports = { openStream, takesGzip, frame, MAX_BUFFERED, DROP_LIMIT };

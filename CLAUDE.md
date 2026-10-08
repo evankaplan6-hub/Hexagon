@@ -115,7 +115,7 @@ public/desk.*     the floor at /: since 2026-10-02 four views, each a link (#ove
                   call). desk.css is its own sheet on public/tokens.css, colours named by job; tools/tokens-test.js holds
                   every text colour to 4.5:1. desk.js patches boards in place (morph) so focus survives the 2s stream.
                   Since 2026-09-29 drawn as Apple draws its apps (Evan: "making the website iOS and macOS and Apple beautiful"):
-                  the system font (no web fonts), Apple's colours as light-dark() pairs, light or dark as the device is set,
+                  the system font (no web fonts on the floor; the old /pm and lookout pages still load Google Fonts), Apple's colours as light-dark() pairs, light or dark as the device is set,
                   a translucent bar, a phone's large title, the large chart as a sheet; addable to an iPhone's Home Screen
                   or a Mac's Dock (manifest.webmanifest; tools/icons.js draws the icons; server.js OPEN_FILES serves those
                   five files, and only those, before the login). Checked in the iOS Simulator (Xcode 27, iPhone 18 Pro Max)
@@ -196,7 +196,7 @@ data/fly/desk-now/ gitignored: the box's /data/desk (the new desk's state.json +
 ops/              Fly deploy, launchd desk autostart (not installed), the tape pull (ops/install-pull.sh: hourly at :30 since 2026-09-24,
                   skipped once the day's pull and backup are ok; the same job backs up data/chains, data/options and data/fly/archive
                   to iCloud Drive/Hexagon-backup, no --delete, no secrets). .env and the .pem: ops/backup-secrets.sh, by hand (encrypted image, Evan's passphrase).
-                  The option-history job (ops/install-history.sh) was removed 2026-09-24 with ops/uninstall-history.sh: the key had expired.
+                  The option-history job was removed from launchd 2026-09-24 (ops/uninstall-history.sh): the key had expired. Its scripts (ops/install-history.sh, run-history.sh, the plist) stay for a paid key; README says how to put it back.
                   ops/daily-check.sh is the daily trust routine (read-only on the box): pull alive, ledger-check --box --venues, pnl-report
                   + fillcheck, restarts (tools/restarts.js), CPU steal/pressure + disk + probe files, the chain tape (chain-record --check),
                   whether the encrypted secrets image is older than .env or the key, and (step 8) the stocks, crypto and

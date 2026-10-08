@@ -45,7 +45,8 @@ ok('each book has its colour from the tokens', BOOKS.every((b) => new RegExp(`${
 
 // ---- read-only: the stream, the history, nothing else
 const fetches = [...js.matchAll(/fetch\('([^']+)'/g)].map((m) => m[1]);
-ok('it fetches only the P&L history', JSON.stringify(fetches) === JSON.stringify(['/api/desk/history']), fetches);
+// ...and one probe, when the stream errors: GET / and do not follow its redirect to /login, so a signed-out page reloads into the form
+ok('it fetches only the P&L history, and the front page to see whether it is still signed in', JSON.stringify(fetches) === JSON.stringify(['/api/desk/history', '/']) && /fetch\('\/', \{ cache: 'no-store', redirect: 'manual' \}\)/.test(js), fetches);
 ok('it reads only the desk\'s stream', [...js.matchAll(/new EventSource\('([^']+)'\)/g)].map((m) => m[1]).join() === '/api/desk/stream');
 ok('it sends nothing: no POST, no form, no socket', !/(method:|POST|XMLHttpRequest|WebSocket|sendBeacon)/.test(js) && !/<form\b/.test(html));
 

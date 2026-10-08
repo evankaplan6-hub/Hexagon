@@ -958,6 +958,7 @@
     try { raw = decodeURIComponent(raw); } catch { /* malformed escape */ }
     const [v, k] = raw.split('/');
     const before = view;
+    if (!bigChart.hidden) closeBigChart();       // the sheet is not part of the address: it stayed over the new view
     setView(VIEWS.includes(v) && !(v === 'pm' && S && !S.legacy) ? v : 'overview');
     pendingBook = k && (view === 'desk' || view === 'pm') ? (view === 'pm' ? `pm-${k}` : k) : null;
     if (pendingBook) showBook(); else if (before !== null && before !== view) window.scrollTo({ top: 0, behavior: 'instant' });
@@ -996,6 +997,10 @@
   // `error` comes, so the page sat on "No signal" and the last figures for good, and a Home Screen app has no
   // reload button. A frame is due every two seconds; when none has come in STALE_MS the page opens a new stream
   // itself, and tries at once when it is shown again.
+  // A stream that errors after the session ended (DASH_PASS or SESSION_EPOCH changed, or the 30 days ran out)
+  // retried for good behind "No signal". The front page redirects to /login when signed out, and fetch can be told
+  // not to follow it: a redirect that comes back means the viewer is signed out, so reload into the form.
+  const signedOut = () => { fetch('/', { cache: 'no-store', redirect: 'manual' }).then((r) => { if (r.type === 'opaqueredirect') location.reload(); }).catch(() => {}); };
   let es = null, retry = null, lastTry = 0;
   function connect() {
     clearTimeout(retry); retry = null;
@@ -1003,7 +1008,7 @@
     lastTry = Date.now();
     const mine = es = new EventSource('/api/desk/stream');
     mine.onmessage = (ev) => { try { S = JSON.parse(ev.data); S._rxPerf = performance.now(); lastFrameAt = Date.now(); render(); } catch (e) { console.error(e); } };
-    mine.onerror = () => { if (es !== mine) return; mine.close(); es = null; retry = setTimeout(connect, 3000); };
+    mine.onerror = () => { if (es !== mine) return; mine.close(); es = null; retry = setTimeout(connect, 3000); signedOut(); };
   }
   // no frame since the last one, or since the last try when none has come at all
   const quiet = () => Date.now() - Math.max(lastFrameAt, lastTry) > STALE_MS;

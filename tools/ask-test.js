@@ -649,7 +649,7 @@ const deferred = () => { let release; const p = new Promise((res) => { release =
 
     // server.js cannot be required without starting a desk, so pin its wiring from the source
     const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-    const authAt = src.indexOf('if (!authed(req))'), askAt = src.indexOf('routeAsk(engine.ask');
+    const authAt = src.indexOf('if (!authed(req, who))'), askAt = src.indexOf('routeAsk(engine.ask');
     ok('server.js routes /api/ask behind the dashboard login', authAt > 0 && askAt > authAt, [authAt, askAt]);
     ok('the alert actions use the same lock function', (src.match(/actionRefusal\(req\)/g) || []).length === 1 && /require\('\.\/src\/ask'\)/.test(src));
     ok('the old inline lock is gone, so the two cannot drift', !/x-hexagon-action'\] !== '1'/.test(src));

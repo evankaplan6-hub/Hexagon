@@ -8,6 +8,11 @@ on:
   # the same deploy rails. `gh workflow run test.yml --ref main` (ops/DEPLOY.md, Auto-deploy).
   workflow_dispatch:
 
+# Nothing in this workflow needs to write to the repository except the deploy job's tag move, which asks for
+# that itself; the test job and anything added later start with read-only.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -105,7 +110,8 @@ jobs:
           grep -qE '^\s*MODE\s*=\s*"paper"' fly.toml || { echo 'fly.toml is not MODE = "paper"; refusing to auto-deploy'; exit 1; }
           if grep -qE '^\s*(LIVE_CONFIRM|DEMO)\s*=' fly.toml; then echo 'fly.toml sets LIVE_CONFIRM or DEMO; refusing to auto-deploy'; exit 1; fi
           echo "ok  paper desk"
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      # pinned to a release (v1.5), not a branch: whatever lands on the action's master would run here with the deploy token
+      - uses: superfly/flyctl-actions/setup-flyctl@fc53c09e1bc3be6f54706524e3b82c4f462f77be
         if: steps.changed.outputs.ship == 'true'
       - name: Deploy to Fly
         if: steps.changed.outputs.ship == 'true'
