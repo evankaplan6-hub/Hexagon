@@ -921,16 +921,16 @@ async function engineTests() {
     eq('the floor says switched off', rd.snapshot().runners.enabled, false);
     // the options and scalp books off (the default since 2026-10-08): marked off in the state, and on a trading
     // afternoon the daily check says so instead of calling a missing 12:30 verdict or a book not watching a problem
-    rd.D = { ...rd.D, options: false, scalps: false };
+    rd.D = { ...rd.D, options: false, scalps: false, dips: false };
     t += 60000;
     await rd.bram();
-    eq('off books are marked off, the dip book is not', [rd.state.books.options.off, rd.state.books.scalps.off, rd.state.books.dips.off], [true, true, false]);
+    eq('off books are marked off', [rd.state.books.options.off, rd.state.books.scalps.off, rd.state.books.dips.off], [true, true, true]);
     const thu = clock.atMin('2026-10-08', 13 * 60 + 30), st = { ...rd.state, startedAt: 0 };
     const hh = dc.health(st, thu);
-    eq('the daily check: switched off, not a problem', [hh.problems.filter((x) => /^(options|scalps)/.test(x)), hh.lines.filter((x) => /^(options|scalps)/.test(x))],
-      [[], ['options: switched off', 'scalps: switched off']]);
+    eq('the daily check: switched off, not a problem', [hh.problems.filter((x) => /^(options|scalps|dips)/.test(x)), hh.lines.filter((x) => /^(options|scalps|dips)/.test(x))],
+      [[], ['options: switched off', 'scalps: switched off', 'dips: switched off']]);
     eq('the floor says switched off', [rd.snapshot().options.enabled, rd.snapshot().scalps.enabled], [false, false]);
-    rd.D = { ...rd.D, runners: true, options: true, scalps: true };
+    rd.D = { ...rd.D, runners: true, options: true, scalps: true, dips: true };
     W.stats = saved.stats; W.books = saved.books; delete W.products['ENA-USD']; delete W.products['NEAR-USD'];
     fs.rmSync(rdir, { recursive: true, force: true });
   }
