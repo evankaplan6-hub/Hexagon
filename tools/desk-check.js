@@ -241,6 +241,22 @@ function health(S, now) {
   return { problems, lines, notes };
 }
 
+// ---------------------------------------------------------------- pure: entries the chain's timing refused
+// A book skips an entry whose option chain is not from the trigger bar's moment (OPTIONS_SKIP, SCALP_SKIP, DIP_SKIP), and
+// should: a fill at a price from another minute is not the rule. A few a week is the Cboe files drifting; three or more in
+// a day is a feed that is out of step, and on 2026-10-01 it cost 8 skips against 3 fills while the check only said "out of
+// step" under NOTES. Returns the problem text, or null.
+function skips(events, now) {
+  const since = now - 24 * 3600000, n = {};
+  for (const ev of events || []) {
+    if (!/^(OPTIONS|SCALP|DIP)_SKIP$/.test(ev.kind || '') || !(Date.parse(ev.t) >= since)) continue;
+    const book = ev.kind.split('_')[0].toLowerCase();
+    n[book] = (n[book] || 0) + 1;
+  }
+  const total = Object.values(n).reduce((a, b) => a + b, 0);
+  return total >= 3 ? `${total} entries skipped in the last 24h because the option chain was out of step with the bars (${Object.entries(n).map(([k, v]) => `${k} ${v}`).join(', ')}): the Cboe files are lagging, and trades are being lost to it` : null;
+}
+
 // ---------------------------------------------------------------- pure: what each book made
 // From the newest minute the desk recorded: each book's value, and holding's (the engine records a
 // book that has not traded yet at its own value, so its "holding" is flat until it does). Holding paid
@@ -311,6 +327,8 @@ function run(argv, { log = console.log, now = Date.now() } = {}) {
   const built = rebuild(events, S, { until });
   const ledger = compare(built, S);
   const hl = health(S, now);
+  const skipped = skips(events, now);
+  if (skipped) hl.problems.push(skipped);
   log(`desk    state as of ${new Date(until).toISOString().slice(0, 19)}Z · journals ${days[0] || '?'} → ${days[days.length - 1] || '?'} · ${built.fills} fill(s) replayed${torn ? ` · ${torn} torn line(s) skipped` : ''}`);
   for (const l of hl.lines) log(`TODAY   ${l}`);
   if (ledger.length) { log(`LEDGER  ${ledger.length} PROBLEM(S): the state does not match the journal`); for (const p of ledger) log(`  ${p}`); }
@@ -323,6 +341,6 @@ function run(argv, { log = console.log, now = Date.now() } = {}) {
   return ledger.length || hl.problems.length ? 1 : 0;
 }
 
-module.exports = { readDesk, stateTime, rebuild, compare, health, bookLines, run };
+module.exports = { readDesk, stateTime, rebuild, compare, health, bookLines, skips, run };
 
 if (require.main === module) process.exitCode = run(process.argv.slice(2));
