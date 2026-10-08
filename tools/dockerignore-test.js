@@ -145,6 +145,17 @@ group('nothing gets through that no COPY takes');
   ok(`none of the ${tops.length} other top-level entries in this checkout gets through`, leaked.length === 0, leaked);
 }
 
+group('the desk runs as node, not root');
+{
+  const dockerfile = fs.readFileSync(path.join(ROOT, 'Dockerfile'), 'utf8');
+  const entry = (dockerfile.match(/^ENTRYPOINT\s+\["\/bin\/sh",\s*"\/app\/([^"]+)"\]/m) || [])[1];
+  ok('the ENTRYPOINT runs a script through sh', !!entry, dockerfile.match(/^ENTRYPOINT.*$/m));
+  ok('...that the image copies', !!entry && sources.includes(entry), entry);
+  const script = entry ? fs.readFileSync(path.join(ROOT, entry), 'utf8') : '';
+  ok('the script gives the data folder to node, then runs the command as node', /chown -h node:node/.test(script) && /exec su node /.test(script), entry);
+  ok('no USER line puts the image back to root', !/^USER\s+(root|0)\b/m.test(dockerfile));
+}
+
 group('no key, env file or data ever gets through');
 {
   const never = [

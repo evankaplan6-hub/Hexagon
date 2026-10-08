@@ -14,6 +14,8 @@ COPY server.js ./
 # from the live tools alone.
 COPY README.md ./
 COPY ops/DEPLOY.md ./ops/
+# Hands /data to the `node` user and runs the desk as it, not as root (see the file).
+COPY ops/entrypoint.sh ./ops/
 
 # The journals, tick tape and ledger live here. Mount a volume on it or a restart loses the
 # evidence the desk exists to collect.
@@ -39,4 +41,7 @@ ENV PORT=8787
 EXPOSE 8787
 
 # No credentials are baked in and none are needed: the Kalshi key is only ever read in live mode.
+# The entrypoint starts as root only to give /data to `node`, then runs the CMD as `node` (since
+# 2026-10-07; before that the desk ran as root). Run through sh so the file needs no exec bit.
+ENTRYPOINT ["/bin/sh", "/app/ops/entrypoint.sh"]
 CMD ["node", "server.js"]

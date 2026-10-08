@@ -17,6 +17,7 @@
 !server.js
 !README.md
 !ops/DEPLOY.md
+!ops/entrypoint.sh
 
 # ...and never a key or an env file, even one that turns up inside a folder let through above.
 **/.env
