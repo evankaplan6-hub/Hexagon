@@ -46,12 +46,13 @@ function load(dir, since) {
 function summarize(events) {
   const day = (e) => e.t.slice(0, 10);
   const days = new Map();
-  const D = (k) => days.get(k) || days.set(k, { conv: { n: 0, w: 0, pnl: 0 }, arb: 0, snipe: 0, maker: 0, makerFills: 0, makerQty: 0, runQty: 0 }).get(k);
+  const D = (k) => days.get(k) || days.set(k, { conv: { n: 0, w: 0, pnl: 0 }, arb: 0, snipe: 0, bets: 0, maker: 0, makerFills: 0, makerQty: 0, runQty: 0 }).get(k);
   const opens = new Map();
   const conv = { n: 0, w: 0, pnl: 0, fees: 0, mind: { n: 0, pnl: 0 }, rules: { n: 0, pnl: 0 }, byReason: new Map() };
   const arb = { n: 0, pnl: 0 };
   const arbGroups = new Set();
   const snipe = { n: 0, w: 0, pnl: 0, fees: 0 };   // the settlement snipe (README): bought on Kalshi after Polymarket settled, held to settlement
+  const bets = { n: 0, w: 0, pnl: 0, fees: 0 };    // the game bets (README, "Every game"): $100 on each MLB game's favourite, held to the final
   const mk = { fills: 0, qty: 0, runQty: 0, realized: 0, settles: 0, settlePnl: 0, flattens: 0 };
   const pos = {};
 
@@ -92,6 +93,12 @@ function summarize(events) {
       snipe.n++; snipe.pnl += pnl; if (pnl > 0) snipe.w++;
       snipe.fees += (e.fee || 0) + ((opens.get(e.id) || {}).fee || 0);
       D(day(e)).snipe += pnl;
+    } else if ((e.kind === 'CLOSE' || e.kind === 'SETTLE') && e.strategy === 'bet') {
+      // left out until 2026-10-07: the report's taker total read $171 under the ledger's, which is exactly these
+      const pnl = e.pnl || 0;
+      bets.n++; bets.pnl += pnl; if (pnl > 0) bets.w++;
+      bets.fees += (e.fee || 0) + ((opens.get(e.id) || {}).fee || 0);
+      D(day(e)).bets += pnl;
     } else if (e.kind === 'MAKER_FILL') {
       const p = pos[e.ticker] || (pos[e.ticker] = { inv: 0, cost: 0, realized: 0 });
       const r = maker.applyFill(p, { side: e.side, qty: e.qty, px: e.px, tradePx: e.tradePx });
@@ -109,7 +116,7 @@ function summarize(events) {
     }
   }
   const held = Object.entries(pos).filter(([, p]) => p.inv).map(([ticker, p]) => ({ ticker, inv: p.inv, cost: p.cost }));
-  return { days, conv, arb, snipe, mk, held, lastT };
+  return { days, conv, arb, snipe, bets, mk, held, lastT };
 }
 
 // Public, unauthenticated, read-only. Returns ticker -> yes price to mark at.
@@ -131,6 +138,7 @@ function render(s, unreal) {
   const L = [];
   const { conv, arb, mk } = s;
   const snipe = s.snipe || { n: 0, w: 0, pnl: 0, fees: 0 };
+  const bets = s.bets || { n: 0, w: 0, pnl: 0, fees: 0 };
   L.push('CONVERGENCE  (any-market pairs, taker)');
   L.push(`  ${conv.n} closed · ${conv.w} winners · realized ${usd(r2(conv.pnl))} · fees paid ${usd(-r2(conv.fees))} of that`);
   for (const [why, r] of [...conv.byReason.entries()].sort((a, b) => a[1].pnl - b[1].pnl)) L.push(`    ${why.padEnd(36)} ${String(r.n).padStart(3)}  ${usd(r2(r.pnl)).padStart(10)}`);
@@ -142,22 +150,25 @@ function render(s, unreal) {
   L.push('SETTLEMENT SNIPE  (bought on Kalshi after Polymarket settled)');
   L.push(`  ${snipe.n} settled or closed · ${snipe.w} winners · realized ${usd(r2(snipe.pnl))} · fees paid ${usd(-r2(snipe.fees))} of that`);
   L.push('');
+  L.push('GAME BETS  (one favourite per MLB game, held to the final)');
+  L.push(`  ${bets.n} settled or closed · ${bets.w} winners · realized ${usd(r2(bets.pnl))} · fees paid ${usd(-r2(bets.fees))} of that`);
+  L.push('');
   L.push('MAKER');
   const runPct = mk.qty ? Math.round((mk.runQty / mk.qty) * 100) : 0;
   L.push(`  ${mk.fills} fills · ${Math.round(mk.qty)} contracts · ${runPct}% run over · realized ${usd(r2(mk.realized + mk.settlePnl))} (of which ${mk.settles} settlements ${usd(r2(mk.settlePnl))})${mk.flattens ? ` · ${mk.flattens} positions crossed out` : ''}`);
   const heldQty = s.held.reduce((a, h) => a + Math.abs(h.inv), 0);
   L.push(`  still holding ${Math.round(heldQty)} contracts in ${s.held.length} markets${unreal == null ? ' · run with --marks to price them' : ` · marked ${usd(r2(unreal))} (a MARK, not money)`}`);
-  const total = conv.pnl + arb.pnl + snipe.pnl + mk.realized + mk.settlePnl;
+  const total = conv.pnl + arb.pnl + snipe.pnl + bets.pnl + mk.realized + mk.settlePnl;
   L.push('');
   L.push(`ALL-IN REALIZED ${usd(r2(total))}${unreal == null ? '' : ` · with marks ${usd(r2(total + unreal))}`}`);
   L.push('');
-  L.push('BY DAY            converge      arb    snipe    maker   maker run-over');
+  L.push('BY DAY            converge      arb    snipe     bets    maker   maker run-over');
   const rows = [...s.days.entries()].sort();
   rows.forEach(([k, d], i) => {
     const ro = d.makerQty ? `${Math.round((d.runQty / d.makerQty) * 100)}%` : '-';
     // the newest day is whatever the journals hold so far, not a whole day: say up to when
     const upTo = i === rows.length - 1 && s.lastT && s.lastT.slice(0, 10) === k ? `   so far, through ${s.lastT.slice(11, 16)}Z` : '';
-    L.push(`  ${k}  ${`${d.conv.n} · ${usd(r2(d.conv.pnl))}`.padStart(14)} ${usd(r2(d.arb)).padStart(8)} ${usd(r2(d.snipe || 0)).padStart(8)} ${usd(r2(d.maker)).padStart(8)}   ${ro.padStart(6)}${upTo}`);
+    L.push(`  ${k}  ${`${d.conv.n} · ${usd(r2(d.conv.pnl))}`.padStart(14)} ${usd(r2(d.arb)).padStart(8)} ${usd(r2(d.snipe || 0)).padStart(8)} ${usd(r2(d.bets || 0)).padStart(8)} ${usd(r2(d.maker)).padStart(8)}   ${ro.padStart(6)}${upTo}`);
   });
   return L.join('\n');
 }
