@@ -35,6 +35,10 @@
 // the fee on average on all five coins at every hold; following the first minute earned nothing before fees
 // (BTC 15m -0.02%) and -0.82% after. The 24 crypto-or-Fed posts moved BTC up to twice as much, too few to
 // judge. Not wired in. README, "Headlines: tested, not wired in". Three days is a first look: rerun it.
+// RERUN 2026-10-08, 894 posts, 2026-09-28 03:48 to 10-07 22:43 ET (ten days, three times the first look): the same
+// answer. x 0.9 to 1.0 on every coin and hold; the ceiling lost to the fee on average everywhere (best: DOGE 60m
+// -0.30%); following the first minute grossed -0.10% to +0.06% and netted -0.74% to -0.89%. The 76 crypto-or-Fed
+// posts: x 1.0 to 1.3, follow still -0.67% or worse after fees. Still not wired in.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');

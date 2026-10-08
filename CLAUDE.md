@@ -121,12 +121,14 @@ public/desk.*     the floor at /: since 2026-10-02 four views, each a link (#ove
                   five files, and only those, before the login). Checked in the iOS Simulator (Xcode 27, iPhone 18 Pro Max)
 tools/crypto-lab.js the evidence for the crypto book (Coinbase daily candles → data/crypto/bars/; XRP from its 2023-07-13
                   return to Coinbase, DOGE from 2021-06-03)
+tools/runner-lab.js the runner book's rule over years of Coinbase hourly candles (→ data/crypto/hours/), RUNNER_COINS only,
+                  through books.runnerScan/runnerExit; out of sample before 2026-08-25, the month it was checked on
 tools/headline-lab.js would the investment stack's X feed trade a coin? (Coinbase one-minute candles → data/crypto/minutes/;
                   reads the feed's log on the Mac in place, copies no post, calls no X server). 2026-09-30, three days: no, so the
                   feed is not wired in; README, "Headlines: tested, not wired in"
 tools/desk-check.js step 8 of the daily check: the desk's loop alive, each book's check done today, its journal
                   rebuilding state.json to the penny, each book against holding (--box copies /data/desk first);
-                  tests: tools/desk-test.js, tools/crypto-lab-test.js, tools/headline-lab-test.js, tools/desk-check-test.js (tools/desk-fixture.js
+                  tests: tools/desk-test.js, tools/crypto-lab-test.js, tools/runner-lab-test.js, tools/headline-lab-test.js, tools/desk-check-test.js (tools/desk-fixture.js
                   is their shared fake market, not a suite)
                   THE PREDICTION-MARKET DESK (paper, not the main focus: arbs, maker and snipe on since 2026-09-27; its books on / since 2026-09-29, old page /pm)
 server.js         HTTP + SSE server for both desks, .env loader, live-mode gate; journals START/STOP/CRASH
@@ -209,6 +211,7 @@ data/desk/        gitignored: the stocks, crypto and options desk's state.json a
                   state.json reaches the Mac only in data/fly/desk-now/, desk-check --box's copy, replaced each run
 data/crypto/bars/ gitignored: Coinbase daily candles for tools/crypto-lab.js; re-fetchable
 data/crypto/minutes/ gitignored: Coinbase one-minute candles for tools/headline-lab.js; re-fetchable
+data/crypto/hours/ gitignored: Coinbase hourly candles for tools/runner-lab.js; re-fetchable (about two hours)
 data/lab/         gitignored: series-busy.json + universe.json (cached listings) and markets.jsonl (hourly bars)
                   for tools/lab.js; markets-volume-picked.jsonl is the biased first sample, kept as the counterexample
 data/lab/whales/  gitignored: pool, fills, conditions, markets for tools/whale-lab.js
