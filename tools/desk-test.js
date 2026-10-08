@@ -1155,6 +1155,53 @@ async function auditTests() {
     ok('on 2026-12-01 TESS says the Fed days run out on 12-09 and the runner list is over 60 days old', said.some((t) => /Fed days.*end 2026-12-09/.test(t)) && said.some((t) => /runner coin list.*2026-09-30/.test(t)), said.slice(0, 4));
     fs.rmSync(dir, { recursive: true, force: true });
   }
+
+  // ---- audit 2026-10-07, follow-ups
+  // a failed Cboe fetch is not retried every round
+  {
+    const dir = mkDir();
+    let T = atT('12:31');
+    const M = fakeMarket(() => T); M.setMinutes(12 * 60 + 30);
+    const desk = new Desk(deskConfig(dir), { feeds: M.feeds, now: () => T }); desk.quiet = true;
+    await desk.step();
+    let calls = 0;
+    M.feeds.quote = async () => { calls++; throw new Error('HTTP 403 from cdn.cboe.com'); };
+    desk.mkt.spy.quoteAt = 0;                                    // due now
+    for (let i = 0; i < 12; i++) { T += 10000; await desk.step(); }
+    ok('two minutes of a failing quote feed: a handful of tries (10 s, 20 s, 40 s apart), not one a round', calls >= 3 && calls <= 5, calls);
+    // it is back: the next try goes through, and the count of failures starts over
+    M.feeds.quote = async () => M.W.quote;
+    T += 130000; await desk.step();
+    ok('...and a try that works clears the wait', !desk.mkt.spy.fail.quote && desk.mkt.spy.quoteAt === T, desk.mkt.spy.fail);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  // a target is what the book was traded to: an order that did not fill does not move it
+  {
+    const dir = mkDir();
+    let T = atT('12:31');
+    const M = fakeMarket(() => T); M.setMinutes(12 * 60 + 30);
+    const desk = new Desk(deskConfig(dir), { feeds: M.feeds, now: () => T }); desk.quiet = true;
+    desk.kett = async () => null;                                // every order is refused (no depth, not enough cash)
+    await desk.step();
+    const btc = desk.state.books.crypto.sleeves['BTC-USD'], spy = desk.state.books.stocks.sleeves.SPY;
+    ok('the buys did not fill: the sleeves still hold nothing and claim no target', btc.qty === 0 && btc.target == null && spy.target == null, [btc.qty, btc.target, spy.target]);
+    ok('...but today\'s check is done, so it is not retried every round', btc.checkDay != null && spy.checkDay != null);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  // a failed save reaches the log, where the floor and the daily check see it
+  {
+    const dir = mkDir();
+    const desk = new Desk(deskConfig(dir), { feeds: fakeMarket(() => atT('12:31')).feeds, now: () => atT('12:31') }); desk.quiet = true;
+    const file = path.join(dir, 'a-file'); fs.writeFileSync(file, 'x');
+    desk.dir = path.join(file, 'desk');                          // a directory under a file: mkdir fails
+    const err = console.error; console.error = () => {};
+    try { desk.save(); desk.save(); } finally { console.error = err; }
+    const lines = desk.state.log.filter((l) => /state save failed/.test(l.text));
+    ok('a save that fails says so once, not on every try', lines.length === 1, lines.map((l) => l.text));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 engineTests().then(auditTests).then(() => {
