@@ -547,5 +547,43 @@ group('HOLT: the renamed-team alarm leaves tennis out');
   ok('an NFL slate that pairs nothing still raises it', run([nflPm], nflKs).length === 1, run([nflPm], nflKs));
 }
 
+group('matchPairs: a label keeps a college name whole, and shortens a pro one');
+{
+  // Real labels from the 2026-10-03 and 10-04 slates: "NCAAF Forest v NC State · Forest", "Carolina
+  // State v Charleston Southern", "Jose State v Hawai'i", "(FL) v Clemson", "Dame v Carolina". The
+  // label took a name's last word, which is the team for "New York Yankees" and nothing for "Wake
+  // Forest". Since 2026-10-10 the Every game book bets these games, so the labels are on the floor.
+  const game = (code, a, b) => [
+    ks({ ticker: `KXNCAAFGAME-26OCT04${code}-A`, eventTicker: `KXNCAAFGAME-26OCT04${code}`, subTitle: a, title: `${a} wins` }),
+    ks({ ticker: `KXNCAAFGAME-26OCT04${code}-B`, eventTicker: `KXNCAAFGAME-26OCT04${code}`, subTitle: b, title: `${b} wins` }),
+  ];
+  const ml = (id, slug, outcomes) => pm({ id, slug, question: `${outcomes[0]} vs. ${outcomes[1]}`, sport: 'moneyline', outcomes, gameStart: '2026-10-04 16:00:00+00' });
+  // Kalshi abbreviates ("San Jose St."); the matcher reads the full names, the label shows Polymarket's
+  const ksList = [...game('WAKENCST', 'Wake Forest', 'NC State'), ...game('SCSTCHSO', 'S Carolina St.', 'Charleston Southern'),
+    ...game('SJSUHAW', 'San Jose St.', "Hawai'i"), ...game('MIAFCLEM', 'Miami (FL)', 'Clemson')];
+  const r = matchPairs([
+    ml('wf', 'cfb-wake-ncst-2026-10-04', ['Wake Forest', 'NC State']),
+    ml('scs', 'cfb-scst-chso-2026-10-04', ['South Carolina State', 'Charleston Southern']),
+    ml('sjs', 'cfb-sjsu-haw-2026-10-04', ['San Jose State', "Hawai'i"]),
+    ml('mia', 'cfb-mia-clem-2026-10-04', ['Miami (FL)', 'Clemson']),
+  ], ksList);
+  const labels = r.pairs.map((p) => p.label);
+  ok('all four college games pair', r.pairs.length === 4, labels);
+  ok('"Wake Forest" is not "Forest"', labels.includes('NCAAF Wake Forest v NC State · Wake Forest'), labels);
+  ok('"South Carolina State" is not "Carolina State"', labels.includes('NCAAF South Carolina State v Charleston Southern · South Carolina State'), labels);
+  ok('"San Jose State" is not "Jose State"', labels.includes("NCAAF San Jose State v Hawai'i · San Jose State"), labels);
+  ok('"Miami (FL)" is not "(FL)"', labels.includes('NCAAF Miami (FL) v Clemson · Miami (FL)'), labels);
+  // a pro team is still its nickname, two words when the nickname is two
+  const sox = matchPairs([pm({ question: 'Red Sox vs. Yankees', sport: 'moneyline', outcomes: ['Boston Red Sox', 'New York Yankees'], gameStart: '2026-09-08T23:05:00Z' })], mlbEvent('26SEP08', 'Boston Red Sox', 'New York Y'));
+  ok('an MLB label still shortens to the nickname', sox.pairs.length === 1 && sox.pairs[0].label === 'MLB Red Sox v Yankees · Red Sox', sox.pairs.map((p) => p.label));
+  // a club is its whole name too, less the suffix
+  const mlsKs = [
+    ks({ ticker: 'KXMLSGAME-26SEP08SEAPOR-SEA', eventTicker: 'KXMLSGAME-26SEP08SEAPOR', subTitle: 'Seattle Sounders', title: 'Seattle Sounders wins' }),
+    ks({ ticker: 'KXMLSGAME-26SEP08SEAPOR-POR', eventTicker: 'KXMLSGAME-26SEP08SEAPOR', subTitle: 'Portland Timbers', title: 'Portland Timbers wins' }),
+  ];
+  const mls = matchPairs([pm({ slug: 'mls-sea-por-2026-09-08', question: 'Sounders vs. Timbers', sport: 'moneyline', outcomes: ['Seattle Sounders FC', 'Portland Timbers'], gameStart: '2026-09-09T02:30:00Z' })], mlsKs);
+  ok('a club keeps its whole name, less "FC"', mls.pairs.length === 1 && mls.pairs[0].label === 'MLS Seattle Sounders v Portland Timbers · Seattle Sounders', mls.pairs.map((p) => p.label));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
