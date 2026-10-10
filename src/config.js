@@ -412,9 +412,10 @@ module.exports = {
   // ---- every game (decide.betSignal, BRAM finds, KETT buys; 2026-09-30) ----
   // Evan on the MLB Wild Card's second night: "every game should be bet". One bet a game in BET_SERIES,
   // BET_USD on the favourite at whichever venue sells it cheaper after fees, held to the final. Paper
-  // only: betSignal returns nothing in live mode. Off unless BETS=1 (fly.toml sets it).
+  // only: betSignal returns nothing in live mode. Off unless BETS=1 (fly.toml sets it). MLB until
+  // 2026-10-10; NBA, NFL and college football since (Evan: "baseball is over switch it to NBA NFL CFB").
   bets: env('BETS', '0') !== '0',
-  betSeries: env('BET_SERIES', 'KXMLBGAME').split(',').map((s) => s.trim()).filter(Boolean),
+  betSeries: env('BET_SERIES', 'KXNBAGAME,KXNFLGAME,KXNCAAFGAME').split(',').map((s) => s.trim()).filter(Boolean),
   betUsd: num('BET_USD', 100),
   betMaxPx: num('BET_MAX_PX', 0.9),     // a favourite dearer than this is a game all but decided: left alone
   exitGap: num('EXIT_GAP', 0.01),
