@@ -150,8 +150,11 @@ const LOGIN_PAGE = (err) => `<!doctype html><html lang="en"><meta charset="utf-8
   label { display: flex; align-items: center; gap: 12px; min-height: 50px; margin-left: 16px; padding-right: 16px; font-size: 17px; }
   label + label { border-top: 1px solid var(--sep); }
   label span { flex: none; width: 88px; }
-  input { flex: 1; min-width: 0; padding: 12px 0; border: 0; outline: 0; background: none; color: inherit; font: inherit; }
-  .fields:focus-within { box-shadow: 0 0 0 3px var(--focus); }
+  /* the field's box is a little wider than its text, so the ring round it (below) clears the letters */
+  input { flex: 1; min-width: 0; margin: 0 -8px; padding: 8px; border: 0; border-radius: 8px; outline: 0; background: none; color: inherit; font: inherit; }
+  /* The ring is on the field that has the keyboard, as macOS draws one, in the floor's focus colour. Until
+     2026-10-10 it was round the whole group of fields, so it never said which of the two was focused. */
+  input:focus-visible { outline: 2px solid var(--focus); outline-offset: 0; }
   button { width: 100%; min-height: 50px; margin-top: 20px; border: 0; border-radius: 14px; cursor: pointer;
     background: #0071e3; color: #ffffff; font: 600 17px/1 -apple-system, BlinkMacSystemFont, system-ui, sans-serif; letter-spacing: -.01em; }
   button:active { opacity: .7; }
