@@ -63,6 +63,10 @@ ok('the prediction-market tile is the quiet one', /<section class="card tile qui
 ok('the main desk takes 7 of the 12 columns and the quiet tile 5, lining up with the chart and the latest under them',
   /\.ov \.tile \{ grid-column: span 7;/.test(css) && /\.ov \.tile\.quiet \{ grid-column: span 5; \}/.test(css) && /\.ov \.chartcard \{ grid-column: span 7;/.test(css) && /\.ov \.latest \{ grid-column: span 5; \}/.test(css));
 ok('the quiet tile\'s figure is a card figure, not the desk\'s headline', /\.tile\.quiet \.big \{ font-size: var\(--type-figure\); \}/.test(css));
+// ---- motion (2026-10-10): a view opens at once, as an app's tab does; what moves answers an action
+ok('no card animates in when a view opens', !/animation: rise/.test(css) && !/@keyframes rise/.test(css));
+ok('the chart sheet still opens as a sheet, and a book\'s card still lights when a line led to it', /\.bk\.flash \{ animation: flash/.test(css) && /@keyframes sheetin/.test(css) && /@keyframes sheetup/.test(css));
+ok('...and both only when the device allows motion', (css.match(/@media \(prefers-reduced-motion: no-preference\)/g) || []).length >= 3);
 ok('on a tablet or a phone both tiles go full width, the quiet one too', /\.ov \.tile, \.ov \.tile\.quiet, \.ov \.chartcard, \.ov \.latest \{ grid-column: 1 \/ -1; \}/.test(css));
 
 // ---- the floor's words (2026-10-10 audit): a bet named by its pick, an overdue arb, arbs over their cap, the
