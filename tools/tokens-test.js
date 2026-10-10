@@ -137,5 +137,6 @@ ok('the server names the manifest\'s type', /'\.webmanifest': 'application\/mani
 ok('the login page is the floor\'s own: the system font, light or dark, and the app\'s icon',
   /const LOGIN_PAGE[\s\S]*?color-scheme: light dark[\s\S]*?-apple-system[\s\S]*?apple-touch-icon\.png/.test(server));
 ok('the login\'s fields are 17px, so Safari on an iPhone does not zoom to them', /const LOGIN_PAGE[\s\S]*?label \{[^}]*font-size: 17px/.test(server) && /input \{[^}]*font: inherit/.test(server));
+ok('the login rings the field that has the keyboard, not the whole group', /const LOGIN_PAGE[\s\S]*?input:focus-visible \{ outline: 2px solid var\(--focus\)/.test(server) && !/\.fields:focus-within/.test(server));
 
 console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
