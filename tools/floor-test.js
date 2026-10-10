@@ -58,6 +58,13 @@ ok('...and the page leaves room under its last card for it', /\.wrap \{[^}]*env\
 ok('the bar\'s blur is drawn behind it, not on it, so the tab bar inside it is held to the screen', !/\.top \{[^}]*backdrop-filter/.test(css) && /\.top::before \{[^}]*backdrop-filter/.test(css));
 ok('a hidden view, tab or tile is gone whatever its own display', /\[hidden\] \{ display: none !important; \}/.test(css));
 
+// ---- the overview's two tiles (2026-10-10): the main desk leads, the prediction desk sits quieter beside it
+ok('the prediction-market tile is the quiet one', /<section class="card tile quiet" id="ovpm"/.test(html));
+ok('the main desk takes 7 of the 12 columns and the quiet tile 5, lining up with the chart and the latest under them',
+  /\.ov \.tile \{ grid-column: span 7;/.test(css) && /\.ov \.tile\.quiet \{ grid-column: span 5; \}/.test(css) && /\.ov \.chartcard \{ grid-column: span 7;/.test(css) && /\.ov \.latest \{ grid-column: span 5; \}/.test(css));
+ok('the quiet tile\'s figure is a card figure, not the desk\'s headline', /\.tile\.quiet \.big \{ font-size: var\(--type-figure\); \}/.test(css));
+ok('on a tablet or a phone both tiles go full width, the quiet one too', /\.ov \.tile, \.ov \.tile\.quiet, \.ov \.chartcard, \.ov \.latest \{ grid-column: 1 \/ -1; \}/.test(css));
+
 // ---- the floor's words (2026-10-10 audit): a bet named by its pick, an overdue arb, arbs over their cap, the
 // switched-off books on one line, and no book named twice under its tag
 ok('a game bet is named by the team it is on, with what it pays', /Bet on \$\{g\.pick\} over \$\{g\.foe\}/.test(js) && /pays \$\{money\(f\.qty\)\} if they win/.test(js) && /Won on \$\{g\.pick\} over \$\{g\.foe\}/.test(js));
