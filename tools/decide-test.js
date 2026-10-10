@@ -721,6 +721,7 @@ group('every game: one bet a game, on the favourite, at the cheaper venue');
   ok('a quote five minutes old is vetoed', stale && stale.veto === 'quote stale', stale);
   ok('the pick reads the label: YES the named team, NO the other', d.betPick('MLB Cubs v Padres · Cubs', 'no') === 'Padres' && d.betPick('MLB Cubs v Padres · Padres', 'no') === 'Cubs' && d.betPick('MLB Cubs v Padres · Cubs', 'yes') === 'Cubs');
   ok('a label it cannot read is the side', d.betPick('Something else', 'yes') === 'YES');
+  ok('a college name is read whole: NO on Wake Forest is NC State', d.betPick('NCAAF Wake Forest v NC State · Wake Forest', 'no') === 'NC State' && d.betPick('NCAAF South Carolina State v Charleston Southern · South Carolina State', 'yes') === 'South Carolina State');
   const full = Array.from({ length: 50 }, (_, i) => ({ strategy: 'converge', group: `g${i}` }));
   ok('a full book never stops a game bet', d.bookFull(full, fav, { ...cfg, maxOpenPositions: 5 }, now) === null);
   const bets = Array.from({ length: 10 }, (_, i) => ({ strategy: 'bet', group: `b${i}` }));
