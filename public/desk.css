@@ -93,11 +93,11 @@ main { flex: 1 1 auto; min-height: 0; transition: opacity .4s; }
 main.gone { opacity: .45; }
 .view { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: var(--space-4); align-items: start; min-width: 0; }
 .card { min-width: 0; min-height: 0; padding: var(--space-4) var(--space-5); background: var(--bg-1); border-radius: var(--radius-lg); box-shadow: var(--shadow-card); }
-/* a view's cards rise into place as it opens (the stream patches them in place after that) */
+/* A view opens the way an app's tab does: at once. Until 2026-10-10 its cards rose into place on every switch
+   (opacity and 6px, .45s), a flourish no Mac or iPhone tab bar has; the control's own highlight moving to the
+   tab is the motion that answers the tap. What still moves answers an action and shows what changed: the chart
+   sheet as it opens, and a book's card lit for a moment when a line on the overview led to it. */
 @media (prefers-reduced-motion: no-preference) {
-  .card { animation: rise .45s cubic-bezier(.2, .8, .2, 1) both; }
-  @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
-  /* a book's card that a line on the overview led to is lit for a moment */
   .bk.flash { animation: flash 1.8s ease-out; }
   @keyframes flash { 0%, 35% { box-shadow: 0 0 0 3px var(--focus), var(--shadow-card); } }
 }
