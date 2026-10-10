@@ -78,6 +78,9 @@
   const optBook = (k) => k === 'options' || k === 'scalps' || k === 'dips';
   // the books whose rows are positions opened and closed, not a market held: the option books and the runners
   const lotBook = (k) => optBook(k) || k === 'runners';
+  // a book that is switched off and holds nothing: four of the six since 2026-10-08 (options, scalps, dips, runners)
+  const bookOff = (b) => ['options', 'scalps', 'dips', 'runners'].includes(b.key) && !((S[b.key] || {}).enabled) && !b.rows.length;
+  const listOf = (xs) => (xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
   // tokens.css, read for the one thing that cannot take a var(): the chart library. Each colour there is
   // light-dark(), which only an element can resolve, so a hidden one is given the token and its colour read
   // back; and it is read again when the iPhone or the Mac changes between light and dark (see the chart).
@@ -218,13 +221,18 @@
   }
   function ovDeskHtml() {
     const { vs } = deskTotals(), M = marketBits();
+    // The books that are switched off share one line: four of the six were each "Switched off" on a line of
+    // their own, and the two that trade were the ones a glance had to look for.
+    const on = (S.books || []).filter((b) => !bookOff(b)), off = (S.books || []).filter(bookOff);
+    const offLine = off.length ? bookLine({ k: 'off', href: `#desk/${off[0].key}`, color: 'var(--ink-3)', name: listOf(off.map((b, i) => (i ? b.name.toLowerCase() : b.name))),
+      chip: 'switched off', pnl: r2(off.reduce((a, b) => a + b.pnl, 0)), now: 'No longer trading; what was made before stays in the figure' }) : '';
     const mini = (S.today != null ? `<div><dt>Today</dt><dd>${figure(S.today)}</dd></div>` : '') +
       (vs != null ? `<div title="${esc(VS_HOLD)}"><dt>vs. just holding</dt><dd>${figure(vs)}</dd></div>` : '');
     return `<div class="tilehead"><h2 class="label">Stocks, crypto and options</h2></div>` +
       `<div class="tilefig"><span class="big ${tone(S.pnl)}">${signed(S.pnl)}</span>${mini ? `<dl class="mini">${mini}</dl>` : ''}</div>` +
       `<p class="sub">on ${money(S.initial, 0)} of paper · stock market ${esc(M.says || (M.open ? 'open' : 'closed'))}</p>` +
       `<p class="mkt"><span class="dot${M.cryptoOk ? '' : ' warn'}"></span>Crypto ${M.cryptoOk ? 'live' : 'stale'} <span class="dot ${M.spyOk ? 'late' : 'warn'}"></span>${esc(M.spy)}</p>` +
-      `<ul class="booklist">${(S.books || []).map((b) => bookLine({ k: b.key, href: `#desk/${b.key}`, color: BOOK_COLOR[b.key], name: b.name, chip: bookChip(b), pnl: b.pnl, now: nextLine(b) })).join('')}</ul>`;
+      `<ul class="booklist">${on.map((b) => bookLine({ k: b.key, href: `#desk/${b.key}`, color: BOOK_COLOR[b.key], name: b.name, chip: bookChip(b), pnl: b.pnl, now: nextLine(b) })).join('')}${offLine}</ul>`;
   }
   function renderOvPm() {
     const L = S.legacy, el = $('ovpm');
@@ -480,6 +488,9 @@
     return lotBook(b.key) ? (b.rows.length ? `${b.rows.length} open` : 'no position') : held ? `${held} held` : 'not holding yet';
   };
   function bookCard(b) {
+    // A switched-off book is its figure and its rule: no line that moves no more, and no table saying "the book is
+    // switched off" on every row (the Runners card said it seven times).
+    const off = bookOff(b);
     const held = b.rows.filter((r) => r.qty > 0).length;
     const traded = held || b.fees || !isZero(b.realized || 0) || (lotBook(b.key) && ((S[b.key] || {}).trades || []).length);
     const vs = b.bench != null ? `<span class="vs" title="Simply holding what this book trades, from its first trade${b.benchFee ? `, after its ${plain(money(b.benchFee))} fee to buy in` : ''}">` +
@@ -494,21 +505,28 @@
       `<div class="figline"><span class="fig ${tone(b.pnl)}">${signed(b.pnl)}</span>${vs}</div>` +
       `<p class="now">${nextLine(b)}</p>` +
       `<div class="bksub">worth ${money(b.equity)} of ${money(b.initial, 0)}${b.fees ? ` · fees ${money(b.fees)}` : ''}${b.realized && !isZero(b.realized) ? ` · banked ${signed(b.realized)}` : ''}</div>` +
-      (traded ? sparkSvg(b.key) : '') + body +
+      (traded && !off ? sparkSvg(b.key) : '') + (off ? '' : body) +
       `<details class="rule"><summary>How this book trades</summary><p>${esc(b.rule)}</p></details></article>`;
   }
   // Two kinds of book, which a reader new to the floor could not tell apart from six cards in a row: the ones
   // that hold crypto and SPY across days, and the ones that trade SPY's options within the day. A book the
   // page does not know yet goes with the first.
   const GROUPS = [
-    ['Crypto and SPY', 'Held across days, sized to how hard each one swings. Runners buy a coin that is popping and ride it until it turns.', ['crypto', 'stocks', 'runners']],
+    ['Crypto and SPY', 'Held across days, sized to how hard each one swings.', ['crypto', 'stocks', 'runners']],
     ['SPY same-day options', 'Calls and puts bought and sold within the session, at Cboe’s prices about 15 minutes late.', ['options', 'scalps', 'dips']],
   ];
+  // What a group says under its name: its sentence, Runners' own while it trades, and which of its books are off.
+  // The first blurb went on describing Runners buying coins for two days after it was switched off.
+  const groupNote = (text, bs) => {
+    const off = bs.filter(bookOff), runners = bs.find((b) => b.key === 'runners');
+    return text + (runners && !bookOff(runners) ? ' Runners buy a coin that is popping and ride it until it turns.' : '') +
+      (off.length ? ` ${listOf(off.map((b, i) => (i ? b.name.toLowerCase() : b.name)))} ${off.length === 1 ? 'is' : 'are'} switched off.` : '');
+  };
   function renderBooks() {
     const known = new Set(GROUPS.flatMap((g) => g[2]));
     const groups = GROUPS.map(([title, text, keys], i) => [title, text, [...keys.map(bookOf).filter(Boolean), ...(i ? [] : (S.books || []).filter((b) => !known.has(b.key)))]]);
     morph($('books'), groups.filter((g) => g[2].length).map(([title, text, bs], i) => `<section class="bkgroup" data-k="g${i}" aria-label="${esc(title)}">` +
-      `<h2>${esc(title)}</h2><p>${esc(text)}</p><div class="bkgrid">${bs.map(bookCard).join('')}</div></section>`).join(''));
+      `<h2>${esc(title)}</h2><p>${esc(groupNote(text, bs))}</p><div class="bkgrid">${bs.map(bookCard).join('')}</div></section>`).join(''));
   }
 
   // ------------------------------------------------------------ the prediction-market desk: its board and five books
@@ -524,7 +542,6 @@
   // a no-break space keeps "Oct 3" on one line; a date in another year says the year
   const settleDay = (t) => (yearOf(t) === yearOf(nowT()) ? ET_DAY : ET_DAY_Y).format(new Date(t)).replace(' ', ' ');
   const whenTxt = (t) => `${dayKey(t) === today() ? '' : `${dayName(t, today())} `}${ET_HM.format(new Date(t))}`;
-  const BOOK_NAME = { arb: 'arb', snipe: 'snipe', converge: 'convergence', maker: 'maker', bet: 'every game' };
   // Its loop's own heartbeat, like the desk's (stalled): two minutes, or twelve of its rounds
   function pmState(L) {
     const stuck = L.beat && L.now - L.beat.taker > Math.max(120000, 12 * ((L.every && L.every.taker) || 15) * 1000);
@@ -539,9 +556,14 @@
       (rows.length > first + 1 ? `<button type="button" class="rowsmore" data-all="${k}" aria-expanded="${all}">${all ? `Show the first ${first}` : `Show ${rows.length - first} more`}</button>` : '');
   }
   const HEAD = (a, b, lead = '') => `<thead><tr><th class="lead">${lead}</th><th>${a}</th><th>${b}</th></tr></thead>`;
-  // a taker position the snipe or convergence book holds: one leg on one venue
-  const legRow = (r) => `<tr data-k="${esc(r.id)}"><th><span class="nm">${esc(r.label)}</span><small>${esc(`${cap(r.side)} on ${r.venue} · ${nOf(r.qty, 'contract')} at ${cents(r.entry)}, ${cents(r.mark)} now`)}</small></th>` +
-    `<td class="v">${money(r.worth)}</td><td>${figure(r.pnl)}</td></tr>`;
+  // a taker position the snipe, convergence or every-game book holds: one leg on one venue. A game bet is named
+  // by the team it is on (src/pmfloor.js gameOf): "No on ... · Texas A&M" read as a bet on Texas A&M.
+  const legRow = (r) => {
+    const g = r.game;
+    return `<tr data-k="${esc(r.id)}"><th><span class="nm">${esc(g ? `${g.pick} over ${g.foe}` : r.label)}</span>` +
+      `<small>${esc(`${g ? `${g.league} · ` : ''}${cap(r.side)} on ${r.venue} · ${nOf(r.qty, 'contract')} at ${cents(r.entry)}, ${cents(r.mark)} now`)}</small></th>` +
+      `<td class="v">${money(r.worth)}</td><td>${figure(r.pnl)}</td></tr>`;
+  };
   // the overview's line and a book's card say the same things: its chip and what it does next (the card has
   // its figure's comparison, its rows and its rule as well)
   const PM_ORDER = ['arbs', 'maker', 'bets', 'snipe', 'converge'];
@@ -549,18 +571,22 @@
     const k = `pm-${b.key}`, L = S.legacy;
     let chip = '', vs = '', sub = '', body = '', next = '';
     if (b.key === 'arbs') {
-      chip = b.on ? `${b.rows.length} of ${b.max} open` : b.rows.length ? `${b.rows.length} open · off` : 'switched off';
+      // more open than the cap allows (opened before it was lowered): "19 of 12 open" read as a sum gone wrong
+      const over = b.rows.length > b.max;
+      chip = b.on ? (over ? `${b.rows.length} open` : `${b.rows.length} of ${b.max} open`) : b.rows.length ? `${b.rows.length} open · off` : 'switched off';
       vs = `<span class="vs" title="What the open arbs pay when their markets settle, with what the closed ones banked">at settlement <b class="${tone(b.atSettle)}">${signed(b.atSettle)}</b></span>`;
       sub = `paid ${money(b.cost)}, worth ${money(b.worth)} if sold now${b.closed ? ` · banked ${signed(b.realized)} on ${b.closed} closed` : ''}`;
       body = rowsTable(k, HEAD('Paid', 'Locks in'), b.rows, (r) => {
         const broken = r.integrity !== 'valid' && r.integrity !== 'half_settled';
-        const when = r.settlesAt ? `settles ${settleDay(r.settlesAt)}` : 'no settle date on record';
+        // a settle date that has passed is not "settles": the market has not paid out on the day it was to
+        const when = !r.settlesAt ? 'no settle date on record' : r.settlesAt < S.now ? `was to settle ${settleDay(r.settlesAt)}, still open` : `settles ${settleDay(r.settlesAt)}`;
         return `<tr data-k="${esc(r.id)}"><th><span class="nm">${esc(r.label)}</span><small>${esc(`${when} · ${nOf(r.qty, 'pair')}${r.integrity === 'half_settled' ? ' · one side settled' : ''}`)}` +
           `${broken ? ` · <b class="neg">${esc(String(r.integrity).replace(/_/g, ' '))}</b>` : ''}</small></th><td class="v">${money(r.cost)}</td><td>${r.locked == null ? '—' : figure(r.locked)}</td></tr>`;
       }) || '<p class="bksub">No arb open.</p>';
       const nxt = b.rows.find((r) => r.settlesAt && r.settlesAt > S.now), then = nxt ? `next settles <b>${esc(settleDay(nxt.settlesAt))}</b>` : '';
       next = !b.on ? `Switched off: the open ones ride to settlement${then ? ` · ${then}` : ''}`
-        : b.rows.length >= b.max ? `All ${b.max} slots taken: no new arb until one settles${then ? ` · ${then}` : ''}`
+        : over ? `${b.rows.length} open, more than its ${b.max} slots: no new arb until it is back under${then ? ` · ${then}` : ''}`
+          : b.rows.length >= b.max ? `All ${b.max} slots taken: no new arb until one settles${then ? ` · ${then}` : ''}`
           : `Looks for a new one every ${(L.every && L.every.taker) || 15} seconds${then ? ` · ${then}` : ''}`;
     } else if (b.key === 'maker') {
       chip = !b.on ? 'quoting off' : b.halted ? 'halted' : `quoting ${b.quoting}`;
@@ -661,10 +687,20 @@
   const pmTag = (name) => ({ name, color: 'var(--ink-3)' });
   const pmLogRow = (e) => ({ t: e.t, who: pmWho(e.agent), tag: pmTag(e.agent === 'MAKR' ? 'Maker' : 'Predictions'), text: grouped(String(e.text || '')), sub: grouped(String(e.sub || '')), level: e.level || 'info',
     pnl: e.level === 'trade' && Number.isFinite(e.pnl) ? e.pnl : null, key: `pm|${e.t}|${e.agent}|${e.text}`, src: 'pm', halt: e.kind === 'HALT' });
+  // The tag names the book, so the sub-line no longer says it again ("Polymarket at 51¢ · every game"). The
+  // maker's fills come folded by minute and price, with their count (src/pmfloor.js).
   function pmFillRow(f) {
     const verb = f.action === 'settled' ? 'Settled' : f.action === 'sold' ? 'Sold' : 'Bought';
-    return { t: f.at, who: f.book === 'maker' ? 'MAKR' : 'PRED', tag: pmTag(PM_TAG[f.book] || cap(f.book)), level: 'trade', src: 'pm', key: `pm|${f.id}`, pnl: Number.isFinite(f.pnl) ? f.pnl : null,
-      text: `${verb} ${Number(f.qty).toLocaleString('en-US')} ${cap(f.side)} on ${f.label}`, sub: `${f.venue} at ${cents(f.px)} · ${BOOK_NAME[f.book] || f.book}` };
+    const row = { t: f.at, who: f.book === 'maker' ? 'MAKR' : 'PRED', tag: pmTag(PM_TAG[f.book] || cap(f.book)), level: 'trade', src: 'pm', key: `pm|${f.id}`, pnl: Number.isFinite(f.pnl) ? f.pnl : null };
+    const g = f.game, qty = Number(f.qty).toLocaleString('en-US');
+    if (g) {
+      // a game bet, by the team it is on: "Bought 124 No on NCAAF Texas A&M v Missouri · Texas A&M" was a bet on
+      // Missouri, and the reader had to turn it round. Settled, it says who won.
+      const text = f.action === 'bought' ? `Bet on ${g.pick} over ${g.foe}` : f.action === 'sold' ? `Sold the bet on ${g.pick} over ${g.foe}`
+        : f.pnl > 0 ? `Won on ${g.pick} over ${g.foe}` : f.pnl < 0 ? `Lost on ${g.pick}: ${g.foe} won` : `Settled: ${g.pick} v ${g.foe}`;
+      return { ...row, text, sub: `${g.league} · ${qty} ${cap(f.side)} on ${f.venue} at ${cents(f.px)}${f.action === 'bought' ? ` · pays ${money(f.qty)} if they win` : ''}` };
+    }
+    return { ...row, text: `${verb} ${qty} ${cap(f.side)} on ${f.label}`, sub: `${f.venue} at ${cents(f.px)}${f.n > 1 ? ` · in ${f.n} fills` : ''}` };
   }
   // newest first; the same round said again by the same bot is shown once
   function activityRows() {
