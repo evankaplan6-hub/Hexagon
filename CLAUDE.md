@@ -64,7 +64,8 @@ npm run reset                                 # wipe the prediction-market paper
 - The **prediction-market** desk keeps trading **in paper** even though it is no longer the main focus
   (Evan, 2026-09-27: "doesn't mean you shouldn't be still running them in simulation"). fly.toml has
   `ARBS=1`, `MAKER_QUOTE=1`, `SNIPE=1`; `CONVERGE=0` stays off (its own verdict, 2026-09-21). Since 2026-09-30 `BETS=1` too: "every game should be bet" (Evan, Wild Card night), one $100
-  paper bet on the favourite of every MLB game (`BET_SERIES`), held to the final; README "Every game". All four
+  paper bet on the favourite of every game in `BET_SERIES`, held to the final: MLB until 2026-10-10, NBA, NFL
+  and college football since (Evan: "baseball is over switch it to NBA NFL CFB"); README "Every game". All four
   were off 2026-09-25 to 09-27 after every book lost on paper. Do not switch a book off, or
   convergence on, unasked. Kalshi closes a finished game first, every time (median 4.4 minutes after
   Polymarket's 99c reading, 105 of 105 games 09-27 to 09-29), and Polymarket's record says closed a median

@@ -656,8 +656,8 @@ the morning after.
 ## Every game (2026-09-30)
 
 Evan, on the MLB Wild Card's second night: "every game should be bet". So each game in `BET_SERIES`
-(`KXMLBGAME` by default, which since the regular season ended means every postseason game) gets one
-bet: `BET_USD` ($100) on the favourite, the side the two venues' mids, averaged, make likelier. It is
+(MLB until 2026-10-10; since then NBA, NFL and college football, `KXNBAGAME,KXNFLGAME,KXNCAAFGAME`,
+below) gets one bet: `BET_USD` ($100) on the favourite, the side the two venues' mids, averaged, make likelier. It is
 bought at whichever venue sells that side cheaper after its own fee (Kalshi charges MLB half its usual
 rate, Polymarket 5% of p(1-p)), off the live book, and held to the final: no stop, no early exit. A game
 is bet the first cycle it can be, before first pitch or during the game, and never twice (the book's
@@ -669,6 +669,14 @@ It claims no edge. Bought at the market's own price, a book like this should los
 many games, and that is the yardstick to read it against. Paper only: `decide.betSignal` makes nothing
 in live mode, and KETT refuses one there too. `BETS=1` in fly.toml turns it on; it has its own card on
 the floor ("Every game"). Code: `decide.betSignal`, BRAM finds, KETT buys.
+
+**2026-10-10, three leagues.** Evan: "baseball is over switch it to NBA NFL CFB". `BET_SERIES` in
+fly.toml (and the default in `src/config.js`) is now `KXNBAGAME,KXNFLGAME,KXNCAAFGAME`. Nothing else
+changed: the matcher already paired all three on both venues (50 college games on Saturday 10-03), the
+rule asks only for a price on both venues and a favourite under 90c, and Kalshi's fee multiplier for
+each series is read from the venue as before. The MLB bets open that day ride to their finals, as every
+bet does; no new MLB bet is placed. A college Saturday is about 50 bets, so the book's stake at work
+is several times what MLB's postseason had out at once.
 
 ## The MAKER desk (07)
 

@@ -191,7 +191,7 @@ function pmFloor(engine, cfg, now = Date.now()) {
 
   // Every game (decide.betSignal): one bet a game on the favourite, held to the final
   const betOpen = open('bet'), betShut = shut('bet');
-  const league = (cfg.betSeries || []).map((x) => ({ KXMLBGAME: 'MLB', KXNFLGAME: 'NFL', KXNBAGAME: 'NBA' }[x] || x)).join(', ') || 'no';
+  const league = (cfg.betSeries || []).map((x) => ({ KXMLBGAME: 'MLB', KXNFLGAME: 'NFL', KXNBAGAME: 'NBA', KXNCAAFGAME: 'college football' }[x] || x)).join(', ') || 'no';
   const bets = {
     key: 'bets', name: 'Every game', on: !!cfg.bets,
     pnl: r2(bankedBet + marked(betOpen)), realized: bankedBet,
