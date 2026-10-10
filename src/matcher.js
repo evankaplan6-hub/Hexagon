@@ -67,12 +67,25 @@ function tickerStartMs(ticker) {
   return t;
 }
 
-const GENERIC = new Set(['state', 'st.', 'st', 'tech', 'united', 'city', 'sox', 'jays', 'a&m', 'college', 'international', 'southern', 'northern']);
-function short(name) {
+// A pair's label names each side the way the game is spoken of. Polymarket names a pro team
+// "City Nickname", and the nickname is the team ("Yankees", "Red Sox", "Trail Blazers"); it names a
+// player "First Last", and the surname is the player. Those are shortened to the last word (two
+// when the nickname is two). A college or a club is its WHOLE name, and no list of last words can
+// tell which: cutting every name to its last word, with a list of words that kept one more ("State",
+// "Tech", "Southern"), made "Wake Forest" "Forest", "South Carolina State" "Carolina State",
+// "San Jose State" "Jose State", "Notre Dame" "Dame", "Air Force" "Force" and "Miami (FL)" "(FL)" on
+// every college slate from 2026-10-03, and from 2026-10-10 the Every game book put those labels on the
+// floor. So only the leagues whose names split that way are shortened; a college or a club keeps the
+// name Polymarket lists, less a club suffix ("Inter Miami CF" reads "Inter Miami"). Matching never
+// reads this: nameMatch walks the full names.
+const SHORTENS = new Set(['mlb', 'nfl', 'nba', 'tennis']);
+const TWO_WORD = new Set(['sox', 'jays', 'blazers']);
+function short(name, sport) {
   const t = String(name).trim().split(/\s+/).filter((w) => !/^(fc|sc|cf|afc)$/i.test(w));
   if (t.length <= 1) return t[0] || String(name);
+  if (!SHORTENS.has(sport)) return t.join(' ');
   const last = t[t.length - 1];
-  if (GENERIC.has(last.toLowerCase())) return t.slice(-2).join(' ');
+  if (TWO_WORD.has(last.toLowerCase())) return t.slice(-2).join(' ');
   return last;
 }
 function startMs(gameStart) {
@@ -306,7 +319,7 @@ function matchPairs(pmList, ksList) {
         const ia = sides.findIndex((x) => nameMatch(ksName(x), pa, people));
         const ib = sides.findIndex((x) => nameMatch(ksName(x), pb, people));
         if (ia < 0 || ib < 0 || ia === ib) continue;
-        const label = `${TAG[ser] || ser} ${short(A)} v ${short(B)} · ${short(A)}`;
+        const label = `${TAG[ser] || ser} ${short(A, sport)} v ${short(B, sport)} · ${short(A, sport)}`;
         const conflict = conflictWith(sides[ia]);
         if (conflict) { figRej = { label, detail: conflict, ks: sides[ia].title }; continue; }
         found.push({ ks: sides[ia], label });
@@ -339,7 +352,7 @@ function matchPairs(pmList, ksList) {
         const sideK = sides.length === 2 ? sides.findIndex((s) => nameMatch(k.subTitle, s)) : -1;
         const sideO = other && sideK >= 0 ? sides.findIndex((s, i) => i !== sideK && nameMatch(other.subTitle, s)) : -1;
         if (sideK < 0 || sideO < 0) continue;
-        const label = `${TAG[ser] || ser} ${short(r[1])} win ${r[2].slice(5)}`;
+        const label = `${TAG[ser] || ser} ${short(r[1], 'soccer')} win ${r[2].slice(5)}`;
         const conflict = conflictWith(k);
         if (conflict) { figRej = { label, detail: conflict, ks: k.title }; continue; }
         hit = { ks: k, tokenIndex: 0, kind: 'game', label };
