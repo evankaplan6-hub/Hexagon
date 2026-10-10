@@ -58,4 +58,15 @@ ok('...and the page leaves room under its last card for it', /\.wrap \{[^}]*env\
 ok('the bar\'s blur is drawn behind it, not on it, so the tab bar inside it is held to the screen', !/\.top \{[^}]*backdrop-filter/.test(css) && /\.top::before \{[^}]*backdrop-filter/.test(css));
 ok('a hidden view, tab or tile is gone whatever its own display', /\[hidden\] \{ display: none !important; \}/.test(css));
 
+// ---- the floor's words (2026-10-10 audit): a bet named by its pick, an overdue arb, arbs over their cap, the
+// switched-off books on one line, and no book named twice under its tag
+ok('a game bet is named by the team it is on, with what it pays', /Bet on \$\{g\.pick\} over \$\{g\.foe\}/.test(js) && /pays \$\{money\(f\.qty\)\} if they win/.test(js) && /Won on \$\{g\.pick\} over \$\{g\.foe\}/.test(js));
+ok('...on its card too', /\$\{g\.pick\} over \$\{g\.foe\}` : r\.label/.test(js));
+ok('an arb past its settle date says so', /was to settle \$\{settleDay\(r\.settlesAt\)\}, still open/.test(js));
+ok('arbs over their cap are not "19 of 12 open"', /const over = b\.rows\.length > b\.max/.test(js) && /more than its \$\{b\.max\} slots/.test(js));
+ok('the switched-off books share one line on the overview', /const bookOff = /.test(js) && /chip: 'switched off'/.test(js) && /\$\{on\.map\(/.test(js));
+ok('...and a card without a line or a table', /\(traded && !off \? sparkSvg\(b\.key\) : ''\) \+ \(off \? '' : body\)/.test(js));
+ok('a group says which of its books are off, and Runners\' sentence only while it trades', /const groupNote = /.test(js) && /groupNote\(text, bs\)/.test(js) && !/swings\. Runners buy/.test(js));
+ok('a fill\'s sub-line no longer repeats its book, and a folded maker fill says its count', !/BOOK_NAME/.test(js) && /in \$\{f\.n\} fills/.test(js));
+
 console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

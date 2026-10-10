@@ -9,7 +9,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { Engine } = require('../src/engine');
-const { pmFloor, pmLine, kindOf } = require('../src/pmfloor');
+const { pmFloor, pmLine, kindOf, gameOf } = require('../src/pmfloor');
 const base = require('../src/config');
 
 let pass = 0, fail = 0;
@@ -189,6 +189,51 @@ group('switched off and winding down');
   const F = pmFloor(E, cfg, T);
   ok('every book says it is off', F.books.every((b) => b.on === false), F.books.map((b) => [b.key, b.on]));
   ok('with things still open, it is winding down', F.trading === false && /^winding down/.test(F.note), F.note);
+}
+
+group('the floor\'s words (2026-10-10 audit): a bet names its pick, maker fills fold, a market is named not tickered');
+{
+  const { E, cfg } = engine({ bets: true }); const s = boxLike(E);
+  // a game bet open on the other side, and one that settled
+  s.positions.push(leg({ id: 'bt1', group: 'gbt1', pairId: 'pbt', label: 'NCAAF Texas A&M v Missouri · Texas A&M', venue: 'PM', side: 'no', qty: 124, entry: 0.80, mark: 0.79, cost: 99.8, strategy: 'bet' }));
+  s.closed.push({ ...leg({ id: 'bt0', group: 'gbt0', pairId: 'pbt0', label: 'NFL Vikings v Bears · Vikings', venue: 'KS', side: 'yes', qty: 150, entry: 0.6, cost: 90, strategy: 'bet' }), exit: 1, exitAt: T - 7200e3, exitPnl: 60, pnl: 60, reason: 'resolved YES' });
+  ok('a NO leg on the named side is a bet on the other team', JSON.stringify(gameOf(s.positions[s.positions.length - 1])) === JSON.stringify({ league: 'NCAAF', pick: 'Missouri', foe: 'Texas A&M' }));
+  ok('a YES leg is a bet on the named team', JSON.stringify(gameOf(s.closed[s.closed.length - 1])) === JSON.stringify({ league: 'NFL', pick: 'Vikings', foe: 'Bears' }));
+  ok('an arb leg, or a label that is not a game, has no pick', gameOf(s.positions[0]) === null && gameOf({ strategy: 'bet', label: 'Fed DEC 26 · Cut 25bps', side: 'yes' }) === null);
+  // the maker: twelve partial fills at one price inside a minute, one at another, and a market whose question
+  // starts with "the"
+  const mk = [
+    { ticker: 'GOVPARTYFL-26-R', title: 'Will the Republican party win the governorship in Florida?', sub: 'Republican', inv: 6, cost: 3, mark: 3, fills: 9, quoting: false },
+    { ticker: 'KXPHI-26', title: 'Will the Philadelphia pro football team win at least 9 games this season?', sub: '9+ wins', inv: -23, cost: 9.89, mark: 12.53, fills: 4, quoting: true },
+  ];
+  const sizes = [2, 1, 10, 2, 9, 8, 6, 4, 6, 30, 7, 1];
+  E.maker.snapshot = () => ({ cash: 9400, equity: 9512.34, realized: -41.2, fills: 1234, halted: null, lastFill: { at: T - 5e3 }, initial: 10000, enabled: true, quoting: 1, inv: 29, markets: mk,
+    recent: [...sizes.map((q, i) => ({ ticker: 'GOVPARTYOH-26-D', title: 'Will the Democratic party win the governorship in Ohio?', sub: 'Amy Acton', side: 'sell', qty: q, px: 0.69, pnl: -0.1, at: T - 50e3 + i * 3e3 })),
+      { ticker: 'GOVPARTYOH-26-D', title: 'Will the Democratic party win the governorship in Ohio?', sub: 'Amy Acton', side: 'sell', qty: 3, px: 0.70, pnl: 0, at: T - 5e3 }] });
+  s.log = [
+    { t: T - 1000, agent: 'MAKR', kind: 'OPS', pnl: null, text: 'GOVPARTYFL-26-R cooled 60m: 50% of its last 30 fills were run over (limit 40%) · quotes withdrawn, 6 held' },
+    { t: T - 2000, agent: 'MAKR', kind: 'SETTLE', pnl: -0.44, text: 'settled 2 finalized markets, 39 contracts · realised -$0.44 · equity $9100.81' },
+    { t: T - 3000, agent: 'MAKR', kind: 'OPS', pnl: null, text: 'KXSOMEWHERE-1 cooled 240m: 72% of the contracts in its last 30 fills were run over (limit 40%) · quotes withdrawn, 100 held' },
+    { t: T - 4000, agent: 'MAKR', kind: 'OPS', pnl: -1.2, text: 'KXPHI-26: its event is tomorrow · crossed out 40 at 55c (-$1.20 after the taker fee)' },
+  ];
+  const F = pmFloor(E, cfg, T);
+  const bets = F.books.find((b) => b.key === 'bets');
+  ok('the every-game card\'s row carries the pick and the opponent', bets.rows.length === 1 && bets.rows[0].game && bets.rows[0].game.pick === 'Missouri' && bets.rows[0].game.foe === 'Texas A&M', bets.rows);
+  const open = F.fills.find((f) => f.id === 'bt1:open'), done = F.fills.find((f) => f.id === 'bt0:close');
+  ok('so does its fill, opening and settled', open && open.game.pick === 'Missouri' && done && done.action === 'settled' && done.pnl === 60 && done.game.pick === 'Vikings', [open, done]);
+  ok('an arb\'s fill has none', F.fills.find((f) => f.id === 'a1:open').game === null);
+  const mkf = F.fills.filter((f) => f.book === 'maker');
+  ok('twelve fills at one price in one minute are one, with their count, and the other price its own', mkf.length === 2 && mkf.some((f) => f.qty === 86 && f.n === 12 && f.px === 0.69 && f.pnl === -1.2) && mkf.some((f) => f.qty === 3 && f.n === 1 && f.px === 0.7 && f.pnl === null), mkf);
+  ok('the folded fill is keyed by its minute, so it stays the same row as more arrives', mkf.find((f) => f.n === 12).id === `mk:GOVPARTYOH-26-D:${Math.floor((T - 50e3) / 60000)}:sell:0.69`, mkf.map((f) => f.id));
+  ok('and is dated by its last fill', mkf.find((f) => f.n === 12).at === T - 50e3 + 11 * 3e3);
+  const maker = F.books.find((b) => b.key === 'maker');
+  ok('a market whose question starts with "the" is capitalised', maker.rows.some((r) => r.title === 'The Philadelphia pro football team win at least 9 games this season'), maker.rows.map((r) => r.title));
+  const cooled = F.log.find((e) => /quotes pulled for an hour/.test(e.text));
+  ok('a cooled market is named, not tickered, and the line is in words', cooled && cooled.text === 'The Republican party win the governorship in Florida · Republican: quotes pulled for an hour' && cooled.sub === '50% of its last 30 fills were run over, the limit is 40% · 6 held' && cooled.level === 'info', cooled);
+  const unknown = F.log.find((e) => /^KXSOMEWHERE-1/.test(e.text));
+  ok('a ticker the snapshot does not know stays a ticker, with the hours spelt out', unknown && unknown.text === 'KXSOMEWHERE-1: quotes pulled for 4 hours' && unknown.sub === '72% of the contracts in its last 30 fills were run over, the limit is 40% · 100 held', unknown);
+  ok('a crossed-out market is named too', F.log.some((e) => e.text === 'The Philadelphia pro football team win at least 9 games this season · 9+ wins: its event is tomorrow' && e.level === 'trade'), F.log.map((e) => e.text));
+  ok('no maker line says "Maker:" under a tag that says Maker', F.log.every((e) => !/^Maker: /.test(e.text)) && F.log.some((e) => e.text === 'Settled 2 finalized markets, 39 contracts'), F.log.map((e) => e.text));
 }
 
 for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });

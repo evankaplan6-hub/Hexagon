@@ -29,6 +29,19 @@ const question = (s) => unellipsis(String(s || '').replace(/\*\*/g, '').replace(
 // game bet (every game, since 2026-09-30), or a convergence bet (any other signal the taker opened; the
 // book has been off since 2026-09-21).
 const kindOf = (p) => (p.strategy === 'arb' || p.strategy === 'snipe' || p.strategy === 'bet' ? p.strategy : 'converge');
+// A game bet, by the team it is on. The matcher's label names the game and its YES side ("NCAAF Texas A&M v
+// Missouri · Texas A&M"), so a NO leg is a bet on the other team, and until 2026-10-10 every line about it
+// read "No on ... · Texas A&M" and left the reader to turn it round. decide.betPick is the one reading of
+// that label (the engine's own log line says "game bet on Missouri" from it); the opponent is the other name.
+const { betPick } = require('./decide');
+function gameOf(p) {
+  if (kindOf(p) !== 'bet') return null;
+  const m = String(p.label || '').match(/^(\S+)\s+(.+?) v (.+?) · (.+)$/);
+  if (!m) return null;
+  const pick = betPick(p.label, p.side);
+  if (pick !== m[2] && pick !== m[3]) return null;
+  return { league: m[1], pick, foe: pick === m[2] ? m[3] : m[2] };
+}
 
 // ------------------------------------------------------------------ the log, in the floor's words
 // The engine writes its log for itself ("venue gap 9.5c: Polymarket over Kalshi @ ..."), and /pm turns
@@ -38,9 +51,13 @@ const kindOf = (p) => (p.strategy === 'arb' || p.strategy === 'snipe' || p.strat
 //             info   a decision       quiet  the desk doing its rounds
 // FILL and SETTLE lines are left out (skip()): the floor's trades come from the ledger's own fills below,
 // as the new desk's do, so a busy hour of routine lines cannot push a trade out of the frame.
-function pmLine(e) {
+function pmLine(e, titles = null) {
   const t = String(e.text || ''), parts = t.split(' · '), first = parts[0], rest = parts.slice(1).join(' · ');
   const line = (text, sub, level) => ({ text: cap(text), sub: sub || '', level });
+  // The maker names a market by its Kalshi ticker ("GOVPARTYFL-26-R cooled 60m: ..."); the floor is for reading,
+  // so a line that starts with a ticker the maker's snapshot knows starts with the market's name instead.
+  const named = (s) => s.replace(/^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*(?=[:\s]|$)/, (k) => (titles && titles.get(k)) || k);
+  const span = (m) => (m === 60 ? 'an hour' : m % 60 === 0 ? `${m / 60} hours` : `${m} minutes`);
   switch (`${e.agent} ${e.kind}`) {
     case 'TESS OPS':
       if (/^HALT\b/.test(first)) return line('Prediction markets stopped taking new risk', rest, 'warn');
@@ -82,21 +99,26 @@ function pmLine(e) {
       return n[1] ? line(`Watching ${n[1]} markets listed on both venues: ${n[2]}`, '', 'quiet') : line(first, rest, 'quiet');
     }
     case 'KETT PASS': { const m = t.match(/^(.+?): (.+)$/); return m ? line(`Passed on ${unellipsis(m[1])}`, m[2], 'info') : line(t, '', 'info'); }
-    case 'MAKR OPS':
+    case 'MAKR OPS': {
+      // The floor tags every maker line "Maker" (desk.js pmTag), so since 2026-10-10 the line does not say it again.
       // an event's markets crossed out ahead of it (MAKER_EVENT_DATES) carry the money they made or lost
-      if (Number.isFinite(e.pnl)) return line(`Maker: ${first}`, rest, 'trade');
-      if (/^(trade stream (connected|reconnected)|\d+\/\d+ candidate series|quoting off \(MAKER_QUOTE)/.test(t)) return line(`Maker: ${first}`, rest, 'quiet');
-      return line(`Maker: ${first}`, rest, /stale|fail|error|halt|stop|refused|dropped|gap|skipped/i.test(t) ? 'warn' : 'info');
+      if (Number.isFinite(e.pnl)) return line(named(first), rest, 'trade');
+      // a market whose fills were being run over, its quotes pulled for a while (src/maker.js's toxicity gate)
+      const c = first.match(/^(\S+) cooled (\d+)m: (\d+)% of (the contracts in )?its last (\d+) fills were run over \(limit (\d+)%\)$/);
+      if (c) return line(`${named(c[1])}: quotes pulled for ${span(+c[2])}`, `${c[3]}% of ${c[4] || ''}its last ${c[5]} fills were run over, the limit is ${c[6]}%${rest ? ` · ${rest.replace(/^quotes withdrawn, /, '')}` : ''}`, 'info');
+      if (/^(trade stream (connected|reconnected)|\d+\/\d+ candidate series|quoting off \(MAKER_QUOTE)/.test(t)) return line(first, rest, 'quiet');
+      return line(named(first), rest, /stale|fail|error|halt|stop|refused|dropped|gap|skipped/i.test(t) ? 'warn' : 'info');
+    }
     case 'MAKR RESEARCH': {
       const m = t.match(/book: (\d+) contracts.*marked \$([\d.]+) from \$([\d.]+)/);
       if (m) { const net = +m[2] - +m[3]; return line(`Maker holding ${Number(m[1]).toLocaleString('en-US')} contracts, ${net >= 0 ? 'up' : 'down'} ${money(net)} if closed now`, '', 'quiet'); }
-      return line(`Maker: ${first}`, rest, 'quiet');
+      return line(named(first), rest, 'quiet');
     }
     case 'MAKR SCAN': {
       const m = t.match(/quoting (\d+) of/);
-      return m ? line(`Maker offering to buy and sell in ${m[1]} markets`, '', 'quiet') : line(`Maker: ${first}`, rest, 'quiet');
+      return m ? line(`Maker offering to buy and sell in ${m[1]} markets`, '', 'quiet') : line(named(first), rest, 'quiet');
     }
-    case 'MAKR SETTLE': return line(`Maker: ${first}`, rest, 'trade');
+    case 'MAKR SETTLE': return line(named(first), rest, 'trade');
     case 'RIGO RESEARCH': {
       const m = t.match(/(\d+) open/), al = +((t.match(/(\d+) integrity alert/) || [])[1] || 0);
       if (m) return line(`Checked ${m[1]} open positions${al ? `: ${al} broken arb${al > 1 ? 's' : ''}` : ', all fine'}`, '', al ? 'warn' : 'quiet');
@@ -123,7 +145,7 @@ function pmFloor(engine, cfg, now = Date.now()) {
   const open = (k) => s.positions.filter((p) => kindOf(p) === k);
   const shut = (k) => closed.filter((c) => kindOf(c) === k);
   const marked = (ps) => sum(ps, (p) => p.qty * (p.mark ?? p.entry) - p.cost);
-  const posRow = (p) => ({ id: p.id, label: unellipsis(p.label), venue: VENUE[p.venue] || p.venue, side: p.side, qty: p.qty, entry: p.entry, mark: p.mark ?? null,
+  const posRow = (p) => ({ id: p.id, label: unellipsis(p.label), game: gameOf(p), venue: VENUE[p.venue] || p.venue, side: p.side, qty: p.qty, entry: p.entry, mark: p.mark ?? null,
     cost: r2(p.cost), worth: r2(p.qty * (p.mark ?? p.entry)), pnl: r2(p.qty * (p.mark ?? p.entry) - p.cost), settlesAt: Number.isFinite(p.settlesAt) ? p.settlesAt : null });
 
   // Banked, per book, from the closed legs. The ledger keeps its newest 2,000 closes, and its realised
@@ -159,7 +181,7 @@ function pmFloor(engine, cfg, now = Date.now()) {
     open: sum(held, (m) => m.mark - m.cost),
     fills: M.fills || 0, quoting: M.quoting || 0, markets: held.length, contracts: M.inv || 0,
     halted: M.halted || null, lastFillAt: M.lastFill ? M.lastFill.at || null : null,
-    rows: held.map((m) => ({ ticker: m.ticker, title: question(m.title), sub: String(m.sub || '').replace(/\*\*/g, ''), inv: m.inv, cost: r2(m.cost), worth: r2(Math.abs(m.mark)), pnl: r2(m.mark - m.cost) }))
+    rows: held.map((m) => ({ ticker: m.ticker, title: cap(question(m.title)), sub: String(m.sub || '').replace(/\*\*/g, ''), inv: m.inv, cost: r2(m.cost), worth: r2(Math.abs(m.mark)), pnl: r2(m.mark - m.cost) }))
       .sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl) || b.worth - a.worth).slice(0, 6),
     rule: 'Rests bids and offers on Kalshi markets that charge makers no fee, and is paid the spread when both sides fill. A market holding too much quotes only the side that brings it back to flat, election markets are left before election night, and each event has its own loss limit.',
   };
@@ -205,19 +227,30 @@ function pmFloor(engine, cfg, now = Date.now()) {
   // The ledger's own fills, newest first: the taker's legs as they opened and closed, and the maker's.
   const fills = [];
   for (const p of [...s.positions, ...closed.slice(-80)]) {
-    const base = { book: kindOf(p), label: unellipsis(p.label), qty: p.qty, venue: VENUE[p.venue] || p.venue, side: p.side };
+    const base = { book: kindOf(p), label: unellipsis(p.label), game: gameOf(p), qty: p.qty, venue: VENUE[p.venue] || p.venue, side: p.side };
     if (Number.isFinite(p.openedAt)) fills.push({ ...base, id: `${p.id}:open`, at: p.openedAt, action: 'bought', px: p.entry, pnl: null });
     if (Number.isFinite(p.exitAt)) fills.push({ ...base, id: `${p.id}:close`, at: p.exitAt, action: /^resolved/.test(String(p.reason || '')) ? 'settled' : 'sold', px: p.exit, pnl: Number.isFinite(p.exitPnl) ? p.exitPnl : p.pnl ?? null });
   }
+  // A resting quote is taken a few contracts at a time: twelve fills at one price inside a minute on 2026-10-08,
+  // and each was a line on the floor. The same market, side and price within one minute is one fill here, its
+  // contracts added up and the count kept (`n`), under the minute's own key so the row stays the same row as
+  // more of it arrives.
+  const folded = new Map();
   for (const f of M.recent || []) {
-    fills.push({ book: 'maker', id: `mk:${f.ticker}:${f.at}:${f.side}:${f.qty}:${f.px}`, at: f.at, action: f.side === 'sell' ? 'sold' : 'bought',
-      label: f.title ? `${cap(question(f.title))}${f.sub ? ` · ${String(f.sub).replace(/\*\*/g, '')}` : ''}` : f.ticker, qty: f.qty, px: f.px, venue: 'Kalshi', side: 'yes', pnl: Number.isFinite(f.pnl) && f.pnl !== 0 ? f.pnl : null });
+    const k = `mk:${f.ticker}:${Math.floor(f.at / 60000)}:${f.side}:${f.px}`, pnl = Number.isFinite(f.pnl) ? f.pnl : 0;
+    const prev = folded.get(k);
+    if (prev) { prev.qty += f.qty; prev.n++; prev.at = Math.max(prev.at, f.at); prev.pnl = r2(prev.pnl + pnl); continue; }
+    folded.set(k, { book: 'maker', id: k, at: f.at, action: f.side === 'sell' ? 'sold' : 'bought',
+      label: f.title ? `${cap(question(f.title))}${f.sub ? ` · ${String(f.sub).replace(/\*\*/g, '')}` : ''}` : f.ticker, qty: f.qty, n: 1, px: f.px, venue: 'Kalshi', side: 'yes', pnl });
   }
+  for (const f of folded.values()) fills.push({ ...f, pnl: f.pnl !== 0 ? f.pnl : null });
   fills.sort((a, b) => b.at - a.at);
 
   // The log: everything that is not routine from the engine's ring, and the newest routine lines, so a
   // busy hour of rounds (the ring holds about three) does not push a warning out.
-  const lines = (s.log || []).filter((e) => !skip(e)).map((e) => ({ t: e.t, agent: e.agent, kind: e.kind, pnl: Number.isFinite(e.pnl) ? e.pnl : null, ...pmLine(e) }));
+  // the maker's markets by ticker, for the lines that name one by its ticker (pmLine's `named`)
+  const titles = new Map((M.markets || []).filter((m) => m.ticker && m.title).map((m) => [m.ticker, `${cap(question(m.title))}${m.sub ? ` · ${String(m.sub).replace(/\*\*/g, '')}` : ''}`]));
+  const lines = (s.log || []).filter((e) => !skip(e)).map((e) => ({ t: e.t, agent: e.agent, kind: e.kind, pnl: Number.isFinite(e.pnl) ? e.pnl : null, ...pmLine(e, titles) }));
   let quiet = 0;
   const log = lines.filter((e) => e.level !== 'quiet' || quiet++ < 30).slice(0, 120);
 
@@ -242,4 +275,4 @@ function pmFloor(engine, cfg, now = Date.now()) {
   };
 }
 
-module.exports = { pmFloor, pmLine, kindOf };
+module.exports = { pmFloor, pmLine, kindOf, gameOf };
