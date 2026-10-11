@@ -831,6 +831,64 @@ const position = (over = {}) => ({
     }
   }
 
+  group('every game of a league is read off its Polymarket tag every PM_GAMES_EVERY_SEC and sits beside the top-N listing');
+  {
+    const pmv = require('../src/venues/polymarket'), ksv = require('../src/venues/kalshi');
+    const saved = { fu: pmv.fetchUniverse, fg: pmv.fetchGames, fp: pmv.fetchPrices, fa: ksv.fetchAll, ft: ksv.fetchMarketsByTickers };
+    let gameReads = [], gamesFail = false, failTags = [];
+    const game = (id, over = {}) => ({ id, tokenIds: [`${id}y`, `${id}n`], bestBid: 0.55, bestAsk: 0.56, vol24: 10, gameStart: '2026-10-11 17:00:00+00', sport: 'moneyline', ...over });
+    pmv.fetchUniverse = async () => [{ id: 'shared', tokenIds: ['t0', 't1'], bestBid: 0.40, bestAsk: 0.42, vol24: 1000, fromUniverse: true }];
+    pmv.fetchGames = async (tags) => {
+      gameReads.push([...tags]);
+      if (gamesFail) throw new Error('gamma down');
+      const byTag = new Map();
+      if (!failTags.includes('450')) byTag.set('450', [game('nfl-quiet'), game('shared', { fromGames: true })]);
+      if (!failTags.includes('100351')) byTag.set('100351', [game('cfb-1')]);
+      return { byTag, failed: [...failTags] };
+    };
+    pmv.fetchPrices = async () => new Map();
+    ksv.fetchAll = async () => [{ ticker: 'KXA', yesBid: 0.4, yesAsk: 0.42, vol24: 10 }];
+    ksv.fetchMarketsByTickers = async () => [];
+    try {
+      const E = engine({ pmListEverySec: 120, pmGamesEverySec: 600, ksSeries: ['KXNFLGAME', 'KXNCAAFGAME', 'KXFEDDECISION'], pmGameTags: { KXNFLGAME: '450', KXNCAAFGAME: '100351', KXNBAGAME: '745' } });
+      await E.refreshQuotes();
+      ok('the first cycle reads the leagues in KS_SERIES that PM_GAME_TAGS names, and no other', gameReads.length === 1 && gameReads[0].join() === '450,100351', gameReads);
+      ok('a game under the volume line is in the quote map off its league tag', E.quotes.pm.has('nfl-quiet') && E.quotes.pm.has('cfb-1'), [...E.quotes.pm.keys()]);
+      ok('...stamped with when it was read', E.quotes.pm.get('nfl-quiet').at > 0 && E.quotes.pm.get('nfl-quiet').at <= Date.now(), E.quotes.pm.get('nfl-quiet'));
+      ok('a market both listings have is the top-N listing\'s', E.quotes.pm.get('shared').fromUniverse === true && !E.quotes.pm.get('shared').fromGames, E.quotes.pm.get('shared'));
+      ok('no league failed, nothing logged as failed', E.pmGames.failed.length === 0, E.pmGames.failed);
+      await E.refreshQuotes();
+      ok('the next cycle inside the interval does not read the leagues again', gameReads.length === 1, gameReads.length);
+      ok('...and rebuilds the map with the games still in it', E.quotes.pm.has('nfl-quiet') && E.quotes.pm.has('cfb-1'), [...E.quotes.pm.keys()]);
+
+      E.pmGames.at -= 601 * 1000;
+      failTags = ['100351'];
+      await E.refreshQuotes();
+      ok('a due read happens', gameReads.length === 2, gameReads.length);
+      ok('a league whose page failed keeps its last good games; the others are replaced', E.quotes.pm.has('cfb-1') && E.quotes.pm.has('nfl-quiet') && E.pmGames.failed.join() === '100351', [...E.quotes.pm.keys()]);
+      await E.refreshQuotes();
+      ok('...and the failure does not bring the next read forward', gameReads.length === 2, gameReads.length);
+
+      E.pmGames.at -= 601 * 1000;
+      failTags = []; gamesFail = true;
+      const kept = E.quotes.pm.get('nfl-quiet');
+      await E.refreshQuotes();
+      ok('every league failing keeps every last good list and the quote map still has the games', E.quotes.pm.get('nfl-quiet') === kept && E.quotes.pm.has('cfb-1') && E.pmGames.failed.join() === '450,100351', [...E.quotes.pm.keys()]);
+      ok('...and the data age is not held back by it (the two fast listings decide that)', E.lastQuoteAt > 0);
+      gamesFail = false;
+
+      gameReads = [];
+      const off = engine({ pmListEverySec: 120, pmGamesEverySec: 600, ksSeries: ['KXNFLGAME'], pmGameTags: {} });
+      await off.refreshQuotes();
+      ok('PM_GAME_TAGS=off (no SERIES:id pair) reads no league and leaves the map to the top-N listing', gameReads.length === 0 && !off.pmGames && off.quotes.pm.has('shared') && !off.quotes.pm.has('nfl-quiet'), gameReads);
+      const none = engine({ pmListEverySec: 120, pmGamesEverySec: 600, ksSeries: ['KXFEDDECISION'], pmGameTags: { KXNFLGAME: '450' } });
+      await none.refreshQuotes();
+      ok('a league not in KS_SERIES is not read either', gameReads.length === 0, gameReads);
+    } finally {
+      pmv.fetchUniverse = saved.fu; pmv.fetchGames = saved.fg; pmv.fetchPrices = saved.fp; ksv.fetchAll = saved.fa; ksv.fetchMarketsByTickers = saved.ft;
+    }
+  }
+
   group('the Kalshi fast listing is re-read every KS_LIST_EVERY_SEC; the markets priced from it are repriced by ticker every cycle');
   {
     const pmv = require('../src/venues/polymarket'), ksv = require('../src/venues/kalshi');

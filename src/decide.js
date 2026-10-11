@@ -725,6 +725,9 @@ function betSignal(pair, cfg, now, done) {
   if (!cfg.bets || cfg.mode === 'live' || !pair || pair.kind !== 'game' || !pair.q || pair.pmGone || pair.watchOnly) return null;
   if (!(cfg.betSeries || []).includes(pair.series)) return null;
   if (done && done.has(pair.id)) return null;
+  // Not yet: a game more than BET_AHEAD_HOURS out waits, quietly (no veto: nothing is wrong with it).
+  // The league listings pair a week of games at once (2026-10-11); a game with no start time is bet as before.
+  if (Number.isFinite(pair.startsAt) && pair.startsAt - now > (cfg.betAheadHours ?? 24) * 3600e3) return null;
   const q = pair.q;
   if (pmReadsSettled(q, cfg)) return null;
   if (!Number.isFinite(q.t) || now - q.t > cfg.maxDataAgeSec * 1000) return { veto: 'quote stale' };

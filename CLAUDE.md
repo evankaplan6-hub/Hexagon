@@ -148,7 +148,9 @@ src/makerdesk.js  the maker's loop: universe from MAKER_SERIES (38 listed series
                   (MAKER_FAIR_RAIL), reduce-only quotes that stop at flat, a hold round while halted, the event
                   dates (MAKER_EVENT_DATES: midterm series crossed out 2026-11-02; update the map after 11-03) and the
                   event loss limit (MAKER_EVENT_MAX_LOSS); src/maker.js holds the pure decisions
-src/venues/       Polymarket (Gamma + CLOB) and Kalshi public data; cboe.js (delayed option quotes for the chain tape);
+src/venues/       Polymarket (Gamma + CLOB; since 2026-10-11 fetchGames reads every game of NFL/NBA/CFB/MLB off its league
+                  tag beside the top-N listing, PM_GAME_TAGS, after a quiet Sunday game's moneyline fell under the volume
+                  line and went unbet) and Kalshi public data; cboe.js (delayed option quotes for the chain tape);
                   chartexchange.js (read-only market data behind CHARTEXCHANGE_API_KEY; the trial key has answered "401 Expired" since the evening
                   of 2026-09-23, so nothing answers until a paid key is set: quotes, short volume, dark pool, max pain, the historical
                   option bars; only the Ask panel and tools/ read it, never the trading loop)

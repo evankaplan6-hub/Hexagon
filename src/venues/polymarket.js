@@ -92,6 +92,41 @@ async function fetchUniverse(limit = 300) {
   return out;
 }
 
+// Every game of a league, by Polymarket's own league tag (2026-10-11). The universe above is the top N
+// markets by 24h volume across ALL of Polymarket, and on a football Sunday a quiet game's moneyline sits
+// under that line: 4 of the 13 NFL games of 2026-10-11 (Vikings-Saints, Broncos-Chargers, Lions-Cardinals,
+// Ravens-Falcons) had $6-21k of day volume against a cutoff near $15k at rank 500, so the matcher never
+// saw their Polymarket side and the every-game book bet 9 of 13. Gamma filters its market rows by league
+// tag and by kind on the server (`tag_id`, `sports_market_types=moneyline`): one or two pages a league
+// return every game's moneyline at ~6 KB a row. (The league's season series, GET /events?series_id=,
+// embeds every spread, total and prop as well -- 50 MB for the NFL -- and is not used.) Season-series
+// futures share the moneyline type but have no gameStartTime, which the matcher needs, so they are
+// dropped here. Rows are filtered as fetchUniverse's are; the engine merges the two listings and the
+// universe wins where both have a market. One league failing does not fail the others: the result says
+// which did (`failed`), and the engine keeps that league's last good list.
+const GAMES_PAGE_MAX = 10;
+async function fetchGamesTag(tag) {
+  const rows = [];
+  for (let page = 0; page < GAMES_PAGE_MAX; page++) {
+    const got = await http.getJSON(`${GAMMA}/markets?closed=false&active=true&limit=100&offset=${page * 100}&tag_id=${encodeURIComponent(tag)}&sports_market_types=moneyline`);
+    if (!Array.isArray(got)) break;
+    for (const raw of got) {
+      const m = normalize(raw);
+      if (m && m.gameStart && m.accepting && !m.closed && m.bestBid != null && m.bestAsk != null && m.bestAsk > m.bestBid) rows.push(m);
+    }
+    if (got.length < 100) break;
+  }
+  return rows;
+}
+async function fetchGames(tagIds) {
+  const tags = [...new Set((tagIds || []).map(String).filter(Boolean))];
+  const res = await Promise.allSettled(tags.map(fetchGamesTag));
+  const byTag = new Map(), failed = [];
+  res.forEach((r, i) => (r.status === 'fulfilled' ? byTag.set(tags[i], r.value) : failed.push(tags[i])));
+  if (tags.length && failed.length === tags.length) throw new Error(`every Polymarket league listing failed (${String(res[0].reason && res[0].reason.message).slice(0, 80)})`);
+  return { byTag, failed };
+}
+
 // One market's record. Three stages matter for a finished game (2026-09-30): `proposed`, when its
 // resolver has put forward the result (UMA's umaResolutionStatus, about 20 seconds after an MLB final),
 // then `closed`/`resolved` once the challenge window is over, a median half an hour later. `closedTime`
@@ -232,4 +267,4 @@ async function fetchByConditions(ids) {
   return out;
 }
 
-module.exports = { fetchUniverse, fetchMarket, fetchBook, fetchPrices, fetchLeaderboard, fetchActivity, fetchActivityPage, fetchByConditions, normalizeFill, outcomeIndex, fillKey, normalize, feeRateOf, feePerShare, fee };
+module.exports = { fetchUniverse, fetchGames, fetchMarket, fetchBook, fetchPrices, fetchLeaderboard, fetchActivity, fetchActivityPage, fetchByConditions, normalizeFill, outcomeIndex, fillKey, normalize, feeRateOf, feePerShare, fee };
