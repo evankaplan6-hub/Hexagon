@@ -165,7 +165,10 @@ src/whales.js     whale watch: top wallets' big bets on Polymarket's sports/poli
 src/ask.js        the dashboard Ask panel: read-only Claude tool loop (src/ask-tools.js), ASK_DAILY_USD ceiling; needs ANTHROPIC_API_KEY
 tools/            edge-scan, replay, maker-replay, maker-rank, pm-maker-scan, maker-report, fillcheck (files only: replays the maker's own tape against its journal, and says what each missed fill was),
                   maker-slice (the same replay cut by market/side/run-over/price/hour, plus a stand-aside rail scored on it; the four-day verdict is in its header),
-                  settle-lag (when Polymarket settles a game, what Kalshi still offers the winner at: the study behind the settlement snipe), ufc-scan (prices a
+                  settle-lag (when Polymarket settles a game, what Kalshi still offers the winner at: the study behind the settlement snipe),
+                  td-tape (2026-10-11: Kalshi's anytime-touchdown board, "<player>: 1+", recorded every 15 min in the 3 hours before each
+                  NFL kickoff → data/td/, graded after: the hold of a one-sided prop board, both ways, net of fee; log-only, no bet;
+                  ops/install-td-tape.sh schedules it on the Mac; Evan asked "parlays? atd parlay?" and the answer was measure, not bet), ufc-scan (prices a
                   fight card on both venues, cross-venue and within Kalshi, net of fees; read-only),
                   history-scan, golden, api, lab-fetch + lab (strategy tournament on settled markets),
                   whale-fetch + whale-lab (does copying top sports wallets pay? no, out of sample),
@@ -225,6 +228,8 @@ data/chains/      gitignored: the option-chain tape, chains-YYYY-MM-DD.jsonl + .
                   IRREPLACEABLE for free: a lost day can only be bought back, never re-fetched (backed up hourly with the pull).
                   09-23 has no session quotes; the 09-24 09:45 ET lines are copies of 09-22 after-hours prices: filter on qt.
                   Each run leaves an ok/PROBLEM line in data/chains/chains.log and exits 1 on a PROBLEM
+data/td/          gitignored: the anytime-touchdown tape, td-YYYY-MM-DD.jsonl + td.log (tools/td-tape.js); a Sunday nobody recorded
+                  cannot be re-collected; not yet in the iCloud backup (add it to the pull job when the tape has a month)
 data/options/history/  gitignored: the ChartExchange option history (tools/option-history.js), one JSON per underlying per expiry
 data/options/dolt/     gitignored: DoltHub's free SPY chains, one JSON per weekday (tools/dolt-fetch.js); re-fetchable, 18 MB, rides along in the data/options backup
 data/whales-*.jsonl  gitignored: every bet whale watch saw (near-settled ones, WHALE_MAX_PX, are not announced), for scoring once they settle

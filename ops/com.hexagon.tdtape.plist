@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.hexagon.tdtape</string>
+
+  <!-- Through ops/run-td-tape.sh rather than node directly: launchd's PATH has no nvm node, and a
+       job that cannot find one exits 127 without anyone noticing. No WorkingDirectory on purpose:
+       run-td-tape.sh cds itself, so a checkout that has moved fails with a readable "No such file"
+       in the log below instead of launchd refusing to start. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__HEXDIR__/ops/run-td-tape.sh</string>
+  </array>
+
+  <!-- Every 15 minutes, all week. A run reads one Kalshi page (a few hundred KB) and writes nothing
+       unless an NFL game kicks off in the next three hours, so the quiet runs cost one request each;
+       the ones that matter are the 12 or so before each kickoff slot, after the inactives are out
+       (90 minutes before). Thursday, Sunday and Monday nights, Saturdays late in the season: the
+       calendar is Kalshi's listing, not this file. -->
+  <key>StartInterval</key>
+  <integer>900</integer>
+
+  <!-- Not kept alive: a chore, not a server. -->
+  <key>RunAtLoad</key>
+  <false/>
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <!-- ~/Library/Logs always exists. launchd will not create a log's folder, and a log path inside
+       the checkout would stop the job from starting at all -- silently -- the day that folder is
+       moved. data/td/td.log gets one ok/PROBLEM line per run (tools/td-tape.js writes it), and a
+       PROBLEM run exits 1, so `launchctl list | grep hexagon` shows it. -->
+  <key>StandardOutPath</key>
+  <string>__HOME__/Library/Logs/hexagon-tdtape.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/Library/Logs/hexagon-tdtape.log</string>
+</dict>
+</plist>
