@@ -2,8 +2,11 @@
  *
  * Four views of the one floor (2026-10-02; until then a single wall of boards, 2,800px long on a laptop,
  * the prediction-market desk's figure at its foot and its six books under the fold):
- *   Overview         each desk's figure with every one of its books on a line (what it holds or is
- *                    doing now, and its P&L), the P&L chart, and the latest trades and warnings
+ *   Overview         four questions in order (since 2026-10-12): is the desk up or down, is it beating
+ *                    just holding (crypto and SPY, with the chart), what did it just do and what is next,
+ *                    and is anything wrong; then what it holds, the prediction-market desk's books and the
+ *                    books that are off. Everything with more behind it opens it: a sheet for the desk, a
+ *                    book, a market and the health, or the card in the view that has it
  *   Stocks & crypto  the six books in full: the headline against simply holding, the desk's state, and
  *                    a card per book, in two groups (crypto and SPY, then SPY's same-day options)
  *   Predictions      the prediction-market desk that runs in the same process (since 2026-09-29): its
@@ -209,44 +212,293 @@
       (insight ? `<p class="insight">${insight}</p>` : '');
   }
 
-  // ------------------------------------------------------------ the overview: each desk, and every book on a line
-  // The question a glance asks of the floor is how each desk is doing and what each book is up to, and until
-  // 2026-10-02 the answer was spread down the whole wall: the prediction-market desk's figure at its foot,
-  // the books under the fold, what each was doing on the last line of its card. Each desk is a tile now, its
-  // books listed under its figure, each line a link to the book's card.
-  function bookLine(x) {
-    return `<li data-k="${esc(x.k)}"><a href="${x.href}" style="--bk:${x.color}"><i class="sw"></i>` +
-      `<span class="bl"><span class="bln">${esc(x.name)}<span class="blc">${esc(x.chip)}</span></span><span class="blnow">${x.now}</span></span>` +
-      `<span class="blf ${tone(x.pnl)}">${signed(x.pnl)}</span><i class="chev" aria-hidden="true"></i></a></li>`;
+  // ------------------------------------------------------------ the overview: four questions, in order
+  // Until 2026-10-12 the overview was each desk's figure with every book on a line, the chart and the latest
+  // lines, laid out for six books when two of them trade. It opens on what a glance asks now (Evan: "best way
+  // to redesign ux?", then "go" on a mockup): is the desk up or down, is it beating just holding, what did it
+  // just do and what is next, and is anything wrong; then what it holds, the prediction-market desk, and the
+  // books that are off. Anything with more behind it opens it ("make it so everything is interactive if it
+  // leads to something else"): a sheet for the desk, a book, a market and the desk's health, a view's card for
+  // the rest.
+  // The books with a holding to beat that still trade: crypto and SPY
+  const heldBooks = () => (S.books || []).filter((b) => !bookOff(b) && b.bench != null);
+  const MKT_WORDS = { crypto: 'the coins', stocks: 'SPY' };
+  const NUM = ['no', 'one', 'two', 'three', 'four', 'five', 'six'];
+  const mktName = (b, r) => (b.key === 'crypto' ? r.label : r.name);
+  const share = (r) => (r.worth > 0 ? (r.value || 0) / r.worth : 0);
+  const upDown = (x) => (isZero(x) ? 'level' : `${x > 0 ? 'up' : 'down'} ${money(x)}`);
+  const aheadTxt = (d) => (d == null ? '' : isZero(d) ? 'level with holding' : `<b class="${tone(d)}">${d > 0 ? 'ahead' : 'behind'} ${money(d)}</b>`);
+  const sinceDay = () => ET_DAY.format(new Date(S.startedAt));
+  // a time with its day: "Today, 8:00 PM ET", "Yesterday, ...", "Thu, Oct 8, ..."
+  const whenFull = (t) => `${dayKey(t) === today() ? 'Today' : dayName(t, today())}, ${ET_HM.format(new Date(t))} ET`;
+  const LONG_DAY = { Sun: 'Sunday', Mon: 'Monday', Tue: 'Tuesday', Wed: 'Wednesday', Thu: 'Thursday', Fri: 'Friday', Sat: 'Saturday' };
+  // when a book checks next, in words: crypto after midnight UTC, SPY a few minutes after the open
+  function nextCheck(b) {
+    if (b.key === 'crypto') {
+      const t = Math.floor(S.now / 864e5 + 1) * 864e5, k = dayKey(t);
+      return `${k === today() ? 'tonight' : k === dayKey(S.now + 864e5) ? 'tomorrow' : ET_DATE.format(new Date(t))} at ${ET_HM.format(new Date(t))} ET`;
+    }
+    if (S.market && S.market.open) return b.rows.some((r) => r.checkDay === today()) ? 'done today; next after the next open' : 'today, a few minutes after the open';
+    const n = nextOpenDay();
+    return n ? `${LONG_DAY[n] || n} after the 9:30 AM open` : 'after the next open';
   }
-  function ovDeskHtml() {
-    const { vs } = deskTotals(), M = marketBits();
-    // The books that are switched off share one line: four of the six were each "Switched off" on a line of
-    // their own, and the two that trade were the ones a glance had to look for.
-    const on = (S.books || []).filter((b) => !bookOff(b)), off = (S.books || []).filter(bookOff);
-    const offLine = off.length ? bookLine({ k: 'off', href: `#desk/${off[0].key}`, color: 'var(--ink-3)', name: listOf(off.map((b, i) => (i ? b.name.toLowerCase() : b.name))),
-      chip: 'switched off', pnl: r2(off.reduce((a, b) => a + b.pnl, 0)), now: 'No longer trading; what was made before stays in the figure' }) : '';
-    const mini = (S.today != null ? `<div><dt>Today</dt><dd>${figure(S.today)}</dd></div>` : '') +
-      (vs != null ? `<div title="${esc(VS_HOLD)}"><dt>vs. just holding</dt><dd>${figure(vs)}</dd></div>` : '');
-    return `<div class="tilehead"><h2 class="label">Stocks, crypto and options</h2></div>` +
-      `<div class="tilefig"><span class="big ${tone(S.pnl)}">${signed(S.pnl)}</span>${mini ? `<dl class="mini">${mini}</dl>` : ''}</div>` +
-      `<p class="sub">on ${money(S.initial, 0)} of paper · stock market ${esc(M.says || (M.open ? 'open' : 'closed'))}</p>` +
-      `<p class="mkt"><span class="dot${M.cryptoOk ? '' : ' warn'}"></span>Crypto ${M.cryptoOk ? 'live' : 'stale'} <span class="dot ${M.spyOk ? 'late' : 'warn'}"></span>${esc(M.spy)}</p>` +
-      `<ul class="booklist">${on.map((b) => bookLine({ k: b.key, href: `#desk/${b.key}`, color: BOOK_COLOR[b.key], name: b.name, chip: bookChip(b), pnl: b.pnl, now: nextLine(b) })).join('')}${offLine}</ul>`;
+  function vsHold() {
+    const bs = heldBooks();
+    if (!bs.length) return null;
+    const pnl = r2(bs.reduce((a, b) => a + b.pnl, 0)), hold = r2(bs.reduce((a, b) => a + b.benchPnl, 0));
+    return { bs, pnl, hold, vs: r2(pnl - hold) };
   }
-  function renderOvPm() {
-    const L = S.legacy, el = $('ovpm');
-    el.hidden = !L;
-    if (!L) return;
+  // a line of a list: a swatch, a name, a figure, a chevron, and a line under them. With `sheet` it opens that
+  // sheet, with `href` it goes there, and with neither it is only read. `name` and `why` are HTML already.
+  function rowHtml(o) {
+    const fig = o.fig == null ? '<span></span>' : typeof o.fig === 'number' ? `<span class="rf ${tone(o.fig)}">${signed(o.fig)}</span>` : `<span class="rf">${o.fig}</span>`;
+    const inner = `${o.color ? `<i class="sw" style="--bk:${o.color}"></i>` : ''}<span class="rn">${o.name}</span>${fig}` +
+      `${o.sheet || o.href ? '<i class="chev" aria-hidden="true"></i>' : '<span></span>'}${o.why ? `<span class="rw">${o.why}</span>` : ''}`;
+    const cls = o.color ? 'row' : 'row plain';
+    const tag = o.sheet ? `button type="button" class="${cls}" data-sheet="${esc(o.sheet)}"` : o.href ? `a class="${cls}" href="${esc(o.href)}"` : `div class="${cls}"`;
+    return `<li data-k="${esc(o.k)}"><${tag}>${inner}</${tag.split(' ')[0]}></li>`;
+  }
+  // Question one: up or down. The desk's worth, since its start and today; it opens every book.
+  function ovHeroHtml() {
+    const p = S.initial ? ` (${S.pnl > 0 && !isZero(S.pnl) ? '+' : S.pnl < 0 && !isZero(S.pnl) ? MINUS : ''}${Math.abs((S.pnl / S.initial) * 100).toFixed(1)}%)` : '';
+    return `<span class="ovlab">Stocks &amp; crypto desk<i class="chev" aria-hidden="true"></i></span><span class="big">${money(S.equity)}</span>` +
+      `<span class="ovsub"><span class="${tone(S.pnl)}">${signed(S.pnl)}${p} since ${esc(sinceDay())}</span>` +
+      `${S.today != null ? `<span class="${tone(S.today)}">${signed(S.today)} today</span>` : ''}</span>`;
+  }
+  // Question two: is it beating just holding. The books still trading against the same markets bought at
+  // their first trade and held, with the chart under it and a line for each book.
+  function vsHoldHtml() {
+    const v = vsHold();
+    if (!v) return '<p class="ovp">No book has bought in yet, so there is no holding to compare with.</p>';
+    const head = isZero(v.vs) ? 'Level with holding' : `${v.vs > 0 ? 'Ahead' : 'Behind'} by ${money(v.vs)}`;
+    return `<div class="verdict ${tone(v.vs)}">${head}</div><p class="ovp">${v.bs.length === 1 ? 'The book still trading is' : `The ${NUM[v.bs.length] || v.bs.length} books still trading are`} ` +
+      `<b class="${tone(v.pnl)}">${upDown(v.pnl)}</b>. Buying ${listOf(v.bs.map((b) => MKT_WORDS[b.key] || b.name))} at each book's first trade and holding would be <b class="${tone(v.hold)}">${upDown(v.hold)}</b>.</p>`;
+  }
+  function vsBooksHtml() {
+    const v = vsHold();
+    return v ? v.bs.map((b) => {
+      const w = b.rows.reduce((a, r) => a + (r.worth || 0), 0), h = w > 0 ? b.rows.reduce((a, r) => a + (r.value || 0), 0) / w : 0;
+      return rowHtml({ k: b.key, sheet: `book:${b.key}`, color: BOOK_COLOR[b.key], name: esc(b.name), fig: r2(b.pnl - b.benchPnl),
+        why: `${signed(b.pnl)} against ${signed(b.benchPnl)} for holding · ${h >= 0.995 ? 'all of its money is in the market, as holding\'s is' : `${pct(h)} of its money is in the market, the rest in cash`}` });
+    }).join('') : '';
+  }
+  // what it holds: each market, how much of its slot is in it, and against holding it
+  function mktsHtml() {
+    const rows = heldBooks().flatMap((b) => b.rows.map((r) => ({ b, r })));
+    if (!rows.length) return '<p class="ovp">Nothing held yet.</p>';
+    return '<div class="mkhead" aria-hidden="true"><span>Market</span><span>Held</span><span>Since start</span><span>Holding</span><span>Difference</span></div>' +
+      `<ul class="mklist">${rows.map(({ b, r }) => {
+        const since = r2(r.worth - r.initial), hold = r.hold == null ? null : r2(r.hold - r.initial), d = hold == null ? null : r2(since - hold);
+        return `<li data-k="${esc(r.sym)}"><button type="button" class="mkrow" data-sheet="mkt:${esc(r.sym)}" style="--bk:${BOOK_COLOR[b.key]}">` +
+          `<span class="mkn">${esc(mktName(b, r))}<i class="chev" aria-hidden="true"></i></span>` +
+          `<span class="mkh"><span class="mkm"><i style="width:${(share(r) * 100).toFixed(1)}%"></i></span>${pct(share(r))}<span class="sr"> held</span></span>` +
+          `<span class="mks" data-l="Since start">${figure(since)}</span><span class="mkb" data-l="Holding">${hold == null ? '—' : figure(hold)}</span>` +
+          `<span class="mkd">${d == null ? '—' : figure(d)}<span class="sr"> against holding</span></span></button></li>`;
+      }).join('')}</ul>`;
+  }
+  // Question three: what did it just do. The last trade of a book still trading, the rule's own reason for it,
+  // and when each book checks next.
+  const liveFills = () => (S.fills || []).filter((f) => f.book === 'crypto' || f.book === 'stocks');
+  // the reason from the signal line the rule wrote as it moved ("ETH: move from 100% to 88% (45% swings, target 40%)")
+  function moveWhy(f) {
+    const name = f.book === 'crypto' ? coin(f.sym) : f.sym, label = f.label || name;
+    const e = (S.log || []).find((x) => x.kind === 'SIGNAL' && Math.abs(x.t - f.at) < 5 * 6e4 && String(x.text).startsWith(`${name}:`));
+    const m = e && String(e.text).match(/: (?:move from (\d+)% to|start at) (\d+)% \((\d+)% swings, target (\d+)%\)/);
+    if (!m) return cap(f.why || '');
+    return m[1] == null ? `${label} started at ${m[2]}% of its slot: it swings ${m[3]}% a year, and the book aims at ${m[4]}%.`
+      : `${label} swings ${m[3]}% a year and the book aims at ${m[4]}%, so the rule moved it from ${m[1]}% to ${m[2]}% of its slot.`;
+  }
+  function lastTradeHtml() {
+    const f = liveFills()[0], band = Math.round(((S.cfg && S.cfg.rebalBand) || 0.1) * 100);
+    let top = '<p class="ovp">No trade yet.</p>';
+    if (f) {
+      const r = fillRow(f), bits = [whenFull(f.at), money(f.value)];
+      if (f.side === 'sell' && Number.isFinite(f.pnl)) bits.push(`${plain(signed(f.pnl))} banked`);
+      top = `<button type="button" class="lt" data-sheet="mkt:${esc(f.sym)}"><span class="ltw">${esc(r.text)}</span><span class="ltd">${esc(bits.join(' · '))}</span>` +
+        `<span class="ltp">${esc(moveWhy(f))}</span><i class="chev" aria-hidden="true"></i></button>`;
+    }
+    const next = heldBooks().map((b) => rowHtml({ k: `next-${b.key}`, sheet: `book:${b.key}`, name: `<b>Next ${b.key === 'crypto' ? 'crypto' : 'SPY'} check:</b> ${esc(nextCheck(b))}` })).join('');
+    return `${top}${next ? `<ul class="rows next">${next}</ul>` : ''}<p class="ovnote">Quiet days are normal: a book trades only when a market's share should move ${band} points or more.</p>`;
+  }
+  // Question four: is anything wrong. The light in the bar says it in a word; these say what it looked at.
+  function healthChecks() {
+    const M = marketBits(), C = S.cfg || {}, coins = (bookOf('crypto') || { rows: [] }).rows;
+    const at = Math.max(0, ...coins.map((r) => r.at || 0));
+    const ago = (t) => { const s = Math.max(0, Math.round((S.now - t) / 1000)); return s < 90 ? `${s} seconds ago` : s < 5400 ? `${Math.round(s / 60)} minutes ago` : `at ${ET_HM.format(new Date(t))} ET`; };
+    const start = S.today != null ? S.equity - S.today : 0, down = start > 0 && S.today < 0 ? -S.today / start : 0;
+    const sha = S.build && S.build.sha ? String(S.build.sha).slice(0, 7) : 'dev';
+    return [
+      { k: 'crypto', ok: M.cryptoOk ? 'ok' : 'warn', name: M.cryptoOk ? `Crypto prices live${at ? `, ${ago(at)}` : ''}` : 'Crypto prices stale', detail: `${coins.length} coins from Coinbase` },
+      { k: 'spy', ok: M.spyOk ? 'ok' : 'warn', name: !M.spyOk ? 'SPY prices stale' : M.open ? 'SPY prices about 15 minutes late, as always' : 'SPY prices fine; the market is closed',
+        detail: `From Cboe's free feed · the stock market ${M.says ? `${M.open ? 'is ' : ''}${M.says}` : M.open ? 'is open' : 'is closed'}` },
+      { k: 'loop', ok: stale() || stalled() ? 'bad' : 'ok', name: stale() ? 'No signal from the desk' : stalled() ? `No round since ${ET_HM.format(new Date(S.beat))} ET` : S.beat ? `Last round ${ago(S.beat)}` : 'Waiting for the first round',
+        detail: `Running since ${ET_DAY.format(new Date(S.startedAt))}, ${ET_HM.format(new Date(S.startedAt))} · build ${sha}` },
+      { k: 'buying', ok: S.halt ? 'warn' : 'ok', name: S.halt ? `Not buying: ${S.halt}` : down ? `Buying: down ${(down * 100).toFixed(2)}% today` : 'Buying: nothing lost today',
+        detail: C.maxDailyDdPct ? `Buying stops when the desk is down ${(C.maxDailyDdPct * 100).toFixed(0)}% in a day; selling never does` : '' },
+    ];
+  }
+  const checkName = (c) => `<span class="mark ${c.ok}" aria-hidden="true">${c.ok === 'ok' ? '✓' : '!'}</span><span class="sr">${c.ok === 'ok' ? 'Fine: ' : 'Look: '}</span>${esc(c.name)}`;
+  const healthHtml = () => healthChecks().map((c) => rowHtml({ k: c.k, sheet: 'health', name: checkName(c) })).join('');
+  // the prediction-market desk: below the books, smaller, each of its books a link to its card
+  function ovPmHtml(L) {
     const [state, cls] = pmState(L);
-    morph(el, `<div class="tilehead"><h2 class="label">Prediction markets</h2><span class="pill ${cls}"><i></i>${esc(state)}<span class="mode">Paper</span></span></div>` +
-      `<div class="tilefig"><span class="big ${tone(L.pnl)}">${signed(L.pnl)}</span></div>` +
-      `<p class="sub">on ${money(L.initial, 0)} of its own paper · the same outcomes on Polymarket and Kalshi${L.halt ? ` · ${esc(L.halt)}` : ''}</p>` +
-      `<ul class="booklist">${PM_ORDER.map((k) => (L.books || []).find((b) => b.key === k)).filter(Boolean).map((b) => {
+    const books = PM_ORDER.map((k) => (L.books || []).find((b) => b.key === k)).filter(Boolean);
+    return `<a class="sechead" href="#pm"><h2 class="sect" id="ovpm-h">Prediction markets</h2><i class="chev" aria-hidden="true"></i></a>` +
+      `<p class="lede">The side desk, in paper: ${Number.isFinite(L.equity) ? `${money(L.equity)} from ${money(L.initial, 0)}, ` : ''}${figure(L.pnl)}, counting what is open at today's prices` +
+      `${cls === 'good' ? '' : ` · <b>${esc(state)}</b>`}.</p>` +
+      `<div class="pmcards">${books.map((b) => {
         const x = pmBits(b);
-        return bookLine({ k: `pm-${b.key}`, href: `#pm/${b.key}`, color: 'var(--ink-3)', name: b.name, chip: x.chip, pnl: b.pnl, now: x.next });
-      }).join('')}</ul>`);
+        return `<a class="card pmc" data-k="pm-${b.key}" href="#pm/${b.key}"><span class="pmn">${esc(b.name)}${b.on ? '' : '<span class="offtag">Off</span>'}<i class="chev" aria-hidden="true"></i></span>` +
+          `<span class="fig ${tone(b.pnl)}">${signed(b.pnl)}</span><span class="pmw">${b.on ? `${esc(cap(x.chip))} · ` : ''}${x.next}</span></a>`;
+      }).join('')}</div>`;
   }
+  // the books that are switched off: one line of chips, each to its card on the Stocks & crypto view
+  function ovOffHtml(off) {
+    const sum = r2(off.reduce((a, b) => a + b.pnl, 0));
+    return `<h2 class="sect" id="ovoff-h">Switched off</h2><p class="lede">${esc(listOf(off.map((b, i) => (i ? b.name.toLowerCase() : b.name))))} no longer ` +
+      `trade and hold nothing; what they made before stays in the desk's figure. Together: ${figure(sum)}.</p>` +
+      `<div class="offchips">${off.map((b) => `<a class="offchip" data-k="off-${b.key}" href="#desk/${b.key}"><i class="sw" style="--bk:${BOOK_COLOR[b.key]}"></i>${esc(b.name)} ` +
+        `<span class="${tone(b.pnl)}">${signed(b.pnl)}</span><i class="chev" aria-hidden="true"></i></a>`).join('')}</div>`;
+  }
+  function renderOverview() {
+    morph($('ovhero'), ovHeroHtml());
+    $('ovhero').setAttribute('aria-label', `The desk: ${money(S.equity)}, ${plain(signed(S.pnl))} since ${sinceDay()}. Open every book`);
+    morph($('vshold'), vsHoldHtml());
+    morph($('vsbooks'), vsBooksHtml());
+    morph($('mkts'), mktsHtml());
+    morph($('lasttrade'), lastTradeHtml());
+    morph($('health'), healthHtml());
+    const L = S.legacy, off = (S.books || []).filter(bookOff);
+    $('ovpm').hidden = !L;
+    if (L) morph($('ovpm'), ovPmHtml(L));
+    $('ovoff').hidden = !off.length;
+    if (off.length) morph($('ovoff'), ovOffHtml(off));
+  }
+
+  // ------------------------------------------------------------ sheets: the desk, a book, a market, the health
+  // One sheet at a time over the page, drawn from the latest frame on every frame; a line in it can open
+  // another, and Back returns. A link to a view (a book's card, Activity) closes it, as any change of view does.
+  const card = (title, html) => `<section class="card shcard">${title ? `<h3 class="shlab">${title}</h3>` : ''}${html}</section>`;
+  const kv = (pairs) => `<dl class="kv">${pairs.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>`;
+  function tradeList(fills, here) {
+    if (!fills.length) return '<p>No trade yet.</p>';
+    return `<ul class="rows">${fills.slice(0, 30).map((f) => {
+      const r = fillRow(f), held = f.book === 'crypto' || f.book === 'stocks';
+      return rowHtml({ k: f.id, sheet: held && f.sym !== here ? `mkt:${f.sym}` : null, href: held ? null : `#desk/${f.book}`, name: esc(r.text), fig: r.pnl,
+        why: `${esc(whenFull(f.at))}${r.sub ? ` · ${esc(r.sub)}` : ''}` });
+    }).join('')}</ul>`;
+  }
+  function deskSheet() {
+    const { fees, atWork, cash } = deskTotals(), books = S.books || [];
+    const on = books.filter((b) => !bookOff(b)), off = books.filter(bookOff);
+    const line = (b) => rowHtml({ k: b.key, sheet: b.bench != null ? `book:${b.key}` : null, href: b.bench != null ? null : `#desk/${b.key}`, color: BOOK_COLOR[b.key], name: esc(b.name), fig: b.pnl,
+      why: `${money(b.initial)} at the start · ${money(b.equity)} now` });
+    return { title: 'The desk', html:
+      card('', `<div class="shfig">${money(S.equity)}</div><p>${figure(S.pnl)} since ${esc(sinceDay())}, from ${money(S.initial)} across ${books.length} books.${S.today != null ? ` ${figure(S.today)} today.` : ''}</p>` +
+        kv([['In the market', money(atWork)], ['Cash', money(cash)], ['Fees paid', money(fees)]])) +
+      card('Trading', `<ul class="rows">${on.map(line).join('')}</ul>`) +
+      (off.length ? card('Switched off', `<ul class="rows">${off.map(line).join('')}</ul><p>Together ${figure(r2(off.reduce((a, b) => a + b.pnl, 0)))}. They hold nothing.</p>`) : '') +
+      (S.legacy ? card('Prediction markets', `<ul class="rows">${rowHtml({ k: 'pm', href: '#pm', name: 'The side desk, in paper', fig: S.legacy.pnl, why: `on ${money(S.legacy.initial, 0)} of its own paper, apart from these books` })}</ul>`) : '') };
+  }
+  function bookSheet(key) {
+    const b = bookOf(key);
+    if (!b || b.bench == null) return null;
+    const d = r2(b.pnl - b.benchPnl), band = Math.round(((S.cfg && S.cfg.rebalBand) || 0.1) * 100);
+    return { title: b.name, html:
+      card('', `<div class="shfig">${money(b.equity)}</div><p>${figure(b.pnl)} since its start · holding would be ${figure(b.benchPnl)} · ${aheadTxt(d)}</p>` +
+        `<p class="now" style="--bk:${BOOK_COLOR[key]}">${nextLine(b)}</p>`) +
+      card('The rule', `<p>${esc(b.rule)}</p><p>It trades only when a market's share should move ${band} points or more.</p>`) +
+      card(key === 'crypto' ? 'Coins' : 'Market', `<ul class="rows">${b.rows.map((r) => {
+        const since = r2(r.worth - r.initial), hold = r.hold == null ? null : r2(r.hold - r.initial);
+        return rowHtml({ k: r.sym, sheet: `mkt:${r.sym}`, color: BOOK_COLOR[key], name: esc(mktName(b, r)), fig: hold == null ? null : r2(since - hold),
+          why: `${pct(share(r))} held${Number.isFinite(r.vol) ? ` · swings ${pct(r.vol)} a year` : ''} · ${signed(since)} since start` });
+      }).join('')}</ul><p>Each line's figure is how far it is ahead of simply holding it.</p>`) +
+      card('Trades', tradeList((S.fills || []).filter((f) => f.book === key))) +
+      `<p class="shlink"><a href="#desk/${key}">Its card on Stocks &amp; crypto</a></p>` };
+  }
+  // why a market holds what it holds: how much it swings, what the rule wants, and the band it trades outside
+  function whyHtml(b, r, name) {
+    const aim = (String(b.rule).match(/swing about (\d+)%/) || [])[1], band = Math.round(((S.cfg && S.cfg.rebalBand) || 0.1) * 100);
+    if (!(r.target > 0) && !(r.qty > 0)) return `<p>Not held yet: it buys at the book's next check.</p>`;
+    const want = Number.isFinite(r.want) ? r.want : r.target, gap = Math.round(Math.abs(want - r.target) * 100), moved = Math.round(Math.abs(share(r) - r.target) * 100);
+    const swings = Number.isFinite(r.vol) ? `${esc(name)} swings ${pct(r.vol)} a year, measured over the last ${b.key === 'crypto' ? '30 days' : '20 sessions'}${aim ? `, and the book aims at ${aim}%` : ''}. ` : '';
+    const rule = want >= 0.995 && r.target >= 0.995 ? 'The rule holds all of the slot in it.'
+      : `The rule wants ${pct(want)} of the slot in it; the book last set it at ${pct(r.target)}${gap < band ? `, ${gap} point${gap === 1 ? '' : 's'} away, under the ${band} it takes to trade` : ', and moves it at its next check'}.`;
+    return `<p>${swings}${rule}${moved >= 1 ? ` Prices have moved it to ${pct(share(r))} since.` : ''}</p>`;
+  }
+  function mktSheet(sym) {
+    const b = heldBooks().find((x) => x.rows.some((r) => r.sym === sym)) || (S.books || []).find((x) => x.bench != null && x.rows.some((r) => r.sym === sym));
+    if (!b) return null;
+    const r = b.rows.find((x) => x.sym === sym), name = mktName(b, r), P = b.key === 'crypto' ? coinPx : px;
+    const since = r2(r.worth - r.initial), hold = r.hold == null ? null : r2(r.hold - r.initial), d = hold == null ? null : r2(since - hold);
+    const last = b.key === 'stocks' && S.spy && S.spy.last > 0 ? S.spy.last : r.px, chg = last > 0 && r.prevClose > 0 ? last / r.prevClose - 1 : null;
+    const facts = [['Held', `${pct(share(r))} of its slot`], [b.key === 'crypto' ? 'Coins' : 'Shares', r.qty > 0 ? qtyTxt(r.qty, b.key, sym) : 'none'],
+      ['Average cost', r.qty > 0 ? P(r.cost / r.qty) : '—'], ['Price', `${P(last)}${chg == null ? '' : ` ${change(chg)}`}`], ['Cash in the slot', money(r.cash)],
+      ['Banked', figure(r.realized || 0)], ['Fees paid', money(r.fees || 0)]];
+    if (b.key === 'stocks') facts.push(['Prices', esc(marketBits().spy)]);
+    return { title: name, html:
+      card('', `<div class="shfig">${money(r.worth)}</div><p>${figure(since)} since start · holding would be ${hold == null ? '—' : figure(hold)}${d == null ? '' : ` · ${aheadTxt(d)}`}</p>`) +
+      card('Now', kv(facts)) +
+      card(`Why ${pct(share(r))}`, whyHtml(b, r, name) + `<p><button type="button" class="seeall" data-sheet="book:${b.key}">How the ${esc(b.name.toLowerCase())} book works</button></p>`) +
+      card('Trades', tradeList((S.fills || []).filter((f) => f.sym === sym && f.book === b.key), sym)) };
+  }
+  function healthSheet() {
+    const [state, cls] = deskState(), pm = S.legacy ? pmState(S.legacy) : null;
+    const line = (c) => rowHtml({ k: c.k, href: c.href, name: checkName(c), why: c.detail ? esc(c.detail) : '' });
+    return { title: 'Health', html:
+      card('', `<div class="shfig st-${cls}">${esc(state)}</div><p>The light in the bar turns amber when prices are stale or the desk is not buying, and red when the desk stops or this page loses its signal.</p>`) +
+      card('Checks', `<ul class="rows">${healthChecks().map(line).join('')}</ul>`) +
+      (pm ? card('Prediction markets', `<ul class="rows">${line({ k: 'pm', href: '#pm', ok: pm[1] === 'good' ? 'ok' : pm[1], name: pm[0], detail: 'Its own loop, trading in paper beside the books' })}</ul>`) : '') };
+  }
+  function sheetOf(id) {
+    const [kind, arg] = String(id).split(':');
+    return kind === 'desk' ? deskSheet() : kind === 'health' ? healthSheet() : kind === 'book' ? bookSheet(arg) : kind === 'mkt' ? mktSheet(arg) : null;
+  }
+  const sheet = $('sheet');
+  let sheetStack = [], sheetOpener = null;
+  function renderSheet() {
+    if (sheet.hidden || !S) return;
+    const s = sheetOf(sheetStack[sheetStack.length - 1]);
+    if (!s) { closeSheet(); return; }
+    if ($('sheettitle').textContent !== s.title) $('sheettitle').textContent = s.title;
+    const prev = sheetStack.length > 1 ? sheetOf(sheetStack[sheetStack.length - 2]) : null, back = $('sheetback');
+    back.hidden = !prev;
+    if (prev && back.textContent !== prev.title) back.textContent = prev.title;
+    morph($('sheetbody'), s.html);
+  }
+  function openSheet(id, from) {
+    if (!S || !sheetOf(id)) return;
+    if (sheet.hidden) { sheetOpener = from || document.activeElement; sheetStack = []; sheet.hidden = false; document.body.classList.add('sheeted'); }
+    const at = sheetStack.indexOf(id);
+    sheetStack = at >= 0 ? sheetStack.slice(0, at + 1) : [...sheetStack, id];
+    $('sheetbody').textContent = '';     // a sheet opens at its top, not where the last one was scrolled
+    renderSheet();
+    sheet.querySelector('.shdone').focus({ preventScroll: true });
+  }
+  function closeSheet() {
+    if (sheet.hidden) return;
+    sheet.hidden = true;
+    sheetStack = [];
+    document.body.classList.remove('sheeted');
+    if (sheetOpener && document.contains(sheetOpener)) sheetOpener.focus({ preventScroll: true });
+    sheetOpener = null;
+  }
+  $('sheetback').addEventListener('click', () => { sheetStack.pop(); $('sheetbody').textContent = ''; renderSheet(); });
+  // a tap on anything that opens a sheet, or the large chart, wherever it is; a tap on the dimmed page closes the sheet
+  document.addEventListener('click', (ev) => {
+    if (ev.target === sheet || ev.target.closest('#sheet [data-close]')) { closeSheet(); return; }
+    const t = ev.target.closest('[data-sheet], [data-expand]');
+    if (!t) return;
+    if (t.dataset.expand) { closeSheet(); openBigChart(); return; }
+    openSheet(t.dataset.sheet, t);
+  });
+  sheet.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Tab') return;
+    const f = [...sheet.querySelectorAll('button:not([hidden]), a[href]')];
+    const first = f[0], last = f[f.length - 1];
+    if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus(); }
+    else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus(); }
+  });
 
   // ------------------------------------------------------------ the desk: market, prices, the options day, the limits
   // the options book's day, in one sentence a person reads
@@ -752,12 +1004,6 @@
     const shown = rows.filter((r) => levels(feed.show).includes(r.level)).slice(0, 200);
     morph($('feedlist'), feedHtml(shown) || `<li class="empty">${rows.length ? 'Nothing of that kind yet.' : 'Waiting for the first desk round.'}</li>`);
   }
-  // The overview's few: the latest trades and warnings of both desks. The maker fills every few minutes and
-  // would be all of them, so its fills are left to the Activity view and its own line on the overview.
-  function renderLatest(all) {
-    const rows = all.filter((r) => (r.level === 'trade' || r.level === 'warn') && !(r.who === 'MAKR' && r.level === 'trade')).slice(0, 6);
-    morph($('latestlist'), feedHtml(rows) || `<li class="empty">${all.length ? 'No trade yet.' : 'Waiting for the first desk round.'}</li>`);
-  }
   $('v-activity').addEventListener('click', (ev) => {
     const b = ev.target.closest('button[data-show], button[data-desk]');
     if (!b) return;
@@ -809,15 +1055,23 @@
   const W_HM = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', hour: 'numeric', minute: '2-digit', hour12: true });
   const W_DAY = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' });
   const W_FULL = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-  // points: [t, desk P&L, holding P&L|null]. The live end comes from the stream, the rest from history.
+  // points: [t, the books' P&L, holding's P&L|null]. Since 2026-10-12 the chart is the overview's second question,
+  // crypto and SPY against simply holding the same markets (the history's c and s, bc and bs fields); until then it
+  // was every book's P&L with the four switched-off ones counted as cash in holding's line. The live end comes from
+  // the stream, the rest from history.
+  const HOLD_FIELDS = { crypto: ['c', 'bc'], stocks: ['s', 'bs'] };
   function chartSeries() {
-    const bk = hist.books || {}, opt = (bk.options || 0) + (bk.scalps || 0) + (bk.dips || 0) + (bk.runners || 0);
-    // holding: each book's benchmark, or its own value while it has not traded (the option books are never "held": their cash)
-    const pts = hist.points.map((p) => [p.t, r2(p.e - hist.initial), p.bc != null && p.bs != null ? r2(p.bc + p.bs + opt - hist.initial) : null]);
-    if (S && Number.isFinite(S.pnl)) {
-      const bc = bookOf('crypto'), bs = bookOf('stocks');
-      const held = (b) => (b.bench != null ? b.bench : b.equity);
-      pts.push([S.now, S.pnl, bc && bs ? r2(held(bc) + held(bs) + opt - hist.initial) : null]);
+    const bk = hist.books || {}, keys = Object.keys(HOLD_FIELDS).filter((k) => bk[k] != null);
+    const init = keys.reduce((a, k) => a + bk[k], 0);
+    const pts = [];
+    for (const p of hist.points) {
+      if (!keys.length || keys.some((k) => p[HOLD_FIELDS[k][0]] == null)) continue;
+      const v = keys.reduce((a, k) => a + p[HOLD_FIELDS[k][0]], 0), held = keys.every((k) => p[HOLD_FIELDS[k][1]] != null);
+      pts.push([p.t, r2(v - init), held ? r2(keys.reduce((a, k) => a + p[HOLD_FIELDS[k][1]], 0) - init) : null]);
+    }
+    const bs = keys.map(bookOf).filter(Boolean);
+    if (S && bs.length && bs.length === keys.length) {
+      pts.push([S.now, r2(bs.reduce((a, b) => a + b.pnl, 0)), bs.every((b) => b.bench != null) ? r2(bs.reduce((a, b) => a + b.benchPnl, 0)) : null]);
     }
     // from zero at the desk's start while the history reaches back to it (see beganAt)
     if (S && pts.length && beganAt(pts[0][0], S.startedAt)) pts.unshift([S.startedAt, 0, pts[0][2] != null ? 0 : null]);
@@ -825,13 +1079,12 @@
     const from = Number.isFinite(span) ? (S ? S.now : Date.now()) - span : -Infinity;
     return pts.filter((p) => p[0] >= from);
   }
-  function chartSkeleton(big) {
+  // The chart sits under its question on the overview, and in the large sheet under that sheet's own title,
+  // so it carries no title of its own (until 2026-10-12 it had one, and its own button to open it large; the
+  // card's "Large chart" opens it now)
+  function chartSkeleton() {
     const seg = `<span class="seg">${RANGES.map(([r]) => `<button type="button" data-range="${r}" class="${chart.range === r ? 'on' : ''}">${r}</button>`).join('')}</span>`;
-    // opened large, the dialog's header names the chart, so the chart leaves its own title out
-    const grow = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M9.5 2.5h4v4M13.5 2.5 9 7M6.5 13.5h-4v-4M2.5 13.5 7 9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-    return (big ? '' : `<div class="ct"><span class="ctitle">Profit and loss<span class="csub"> · stocks, crypto and options</span></span><button type="button" class="cx" data-expand="1" title="Open large" aria-label="Open the chart large">${grow}</button></div>`) +
-      `<div class="chead"><span class="cv"></span><span class="cd"></span></div>` +
-      `<div class="cplot"></div><div class="cb">${seg}<span class="cr"></span></div>`;
+    return `<div class="chead"><span class="cv"></span><span class="cd"></span></div><div class="cplot"></div><div class="cb">${seg}<span class="cr"></span></div>`;
   }
   function makePlot(el, big) {
     const LW = window.LightweightCharts;
@@ -883,7 +1136,7 @@
     // desk's move over the last hour
     const firstHold = pts.find((x) => x[2] != null), lastHold = [...pts].reverse().find((x) => x[2] != null);
     const held = lastHold ? r2(lastHold[2] - firstHold[2]) : null;
-    morph(el.querySelector('.cr'), held != null ? `<span title="The dashed line: every book simply holding what it trades, over the same stretch"><i class="dash" aria-hidden="true"></i>just holding: <b class="${tone(held)}">${signed(held)}</b></span>` : '');
+    morph(el.querySelector('.cr'), held != null ? `<span title="The dashed line: the same markets bought at each book's first trade and simply held, over the same stretch"><i class="dash" aria-hidden="true"></i>just holding: <b class="${tone(held)}">${signed(held)}</b></span>` : '');
     if (!p.plot) p.plot = makePlot(el, p.big);
     if (!p.plot) return;
     // The licence's logo sits in the plot's bottom-left corner, about 30px tall, just above the time
@@ -927,7 +1180,7 @@
     p.plot.c.timeScale().fitContent();
   }
   function wireChart(el, big) {
-    el.innerHTML = chartSkeleton(big);
+    el.innerHTML = chartSkeleton();
     plots.set(el, { big, plot: null });
     el.addEventListener('click', (ev) => {
       const b = ev.target.closest('button');
@@ -937,7 +1190,6 @@
         try { localStorage.setItem('desk-chart', JSON.stringify(chart)); } catch { /* private window */ }
         for (const [e2] of plots) { e2.querySelectorAll('[data-range]').forEach((x) => x.classList.toggle('on', x.dataset.range === chart.range)); drawChart(e2); }
       }
-      if (b.dataset.expand) openBigChart();
     });
   }
   // The chart opened large: it takes the keyboard while it is open and gives it back when it closes.
@@ -963,7 +1215,7 @@
     if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus(); }
     else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus(); }
   });
-  window.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') closeBigChart(); });
+  window.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') { closeBigChart(); closeSheet(); } });
   // The device went from light to dark or back (on a schedule, at sunset): the page's colours follow by
   // themselves, and the charts are built again in the new ones.
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
@@ -994,7 +1246,8 @@
     try { raw = decodeURIComponent(raw); } catch { /* malformed escape */ }
     const [v, k] = raw.split('/');
     const before = view;
-    if (!bigChart.hidden) closeBigChart();       // the sheet is not part of the address: it stayed over the new view
+    if (!bigChart.hidden) closeBigChart();       // the sheets are not part of the address: they stayed over the new view
+    closeSheet();
     setView(VIEWS.includes(v) && !(v === 'pm' && S && !S.legacy) ? v : 'overview');
     pendingBook = k && (view === 'desk' || view === 'pm') ? (view === 'pm' ? `pm-${k}` : k) : null;
     if (pendingBook) showBook(); else if (before !== null && before !== view) window.scrollTo({ top: 0, behavior: 'instant' });
@@ -1014,18 +1267,17 @@
   function render() {
     renderHeader();
     renderClock();
-    morph($('ovdesk'), ovDeskHtml());
-    renderOvPm();
+    renderOverview();
     morph($('hero'), heroHtml());
     morph($('deskcard'), deskHtml());
     renderBooks();
     renderPm();
     const rows = activityRows();
     renderActivity(rows);
-    renderLatest(rows);
     announce(rows);
     drawChart($('chart'));
     if (!bigChart.hidden) drawChart($('chartbig-pnl'));
+    renderSheet();
     $('floor').removeAttribute('aria-busy');
     if (pendingBook) showBook();
   }
@@ -1059,7 +1311,7 @@
   // Nothing redraws at rest: the clock ticks, and the page notices when the stream has gone quiet.
   setInterval(() => { if (quiet() && !retry) connect(); if (!S) return; renderClock(); if (!!stale() !== shownGone) renderHeader(); }, 1000);
   route();
-  morph($('ovdesk'), '<span class="label">Stocks, crypto and options</span><p class="sub">Connecting to the desk…</p>');
+  morph($('ovhero'), '<span class="ovlab">Stocks &amp; crypto desk</span><span class="ovsub">Connecting to the desk…</span>');
   wireChart($('chart'), false);
   wireChart($('chartbig-pnl'), true);
   connect();
