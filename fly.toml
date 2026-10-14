@@ -53,6 +53,9 @@ primary_region = "iad"          # Ashburn, Virginia — close to the exchange, a
   # two more Gamma requests a cycle and ~170 more market objects, against the 31,840 the
   # any-market crawl already holds. If the box gets tight, ANY_MAX_PAIRS above is still the
   # number to pull down first -- this one is small.
+  # Since 2026-10-11 the games themselves no longer depend on this number: every game of the NFL, NBA,
+  # college football and MLB is read off Polymarket's league tags beside this listing (PM_GAME_TAGS in
+  # src/config.js, ~1.5 MB every ten minutes), after 4 of 13 NFL games sat under the 500 line that Sunday.
   PM_UNIVERSE = "500"
   # Raised from src/config.js's 20 on 2026-09-20, because the crawl had grown into the gap between
   # crawls. One any-market scan now takes 474-541s, and at DISCOVER_EVERY_MIN=20 that is ~42% of

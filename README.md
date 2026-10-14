@@ -118,7 +118,7 @@ It has no broker. Nothing in `src/desk/` can reach Robinhood, Public, Webull, Co
 
 ## What the prediction-market desk does
 
-Every 15 seconds the engine prices every matched pair fresh -- Polymarket from the CLOB order book, Kalshi by ticker -- then runs the desks in order below. The two listings pairs are matched from are re-read every two minutes: the top 300 Polymarket markets by volume (`PM_UNIVERSE`, `PM_LIST_EVERY_SEC`) and every open market in 11 Kalshi series (Fed decisions, ATP/WTA, MLB, NFL, NBA, NCAAF, MLS, EPL, UCL, La Liga; `KS_SERIES`, `KS_LIST_EVERY_SEC`). Both were read every cycle until 2026-09-22, when they were half of everything the desk downloaded on a box pinned at its CPU cap.
+Every 15 seconds the engine prices every matched pair fresh -- Polymarket from the CLOB order book, Kalshi by ticker -- then runs the desks in order below. The two listings pairs are matched from are re-read every two minutes: the top 300 Polymarket markets by volume (`PM_UNIVERSE`, `PM_LIST_EVERY_SEC`) and every open market in 11 Kalshi series (Fed decisions, ATP/WTA, MLB, NFL, NBA, NCAAF, MLS, EPL, UCL, La Liga; `KS_SERIES`, `KS_LIST_EVERY_SEC`). Both were read every cycle until 2026-09-22, when they were half of everything the desk downloaded on a box pinned at its CPU cap. Since 2026-10-11 a third listing sits beside them: every game of the NFL, NBA, college football and MLB, read off Polymarket's own league tags every ten minutes (`PM_GAME_TAGS`, `PM_GAMES_EVERY_SEC`; `src/venues/polymarket.js` fetchGames). The top-N listing is the busiest markets of all Polymarket, and on a football Sunday a quiet game's moneyline sits under that line: on 2026-10-11 four of the 13 NFL games (Vikings-Saints, Broncos-Chargers, Lions-Cardinals, Ravens-Falcons) had $6-21k of day volume against a cutoff near $15k at rank 500, so they never paired and the every-game book bet 9 of 13. Gamma filters by league tag and by kind on the server, so the four leagues cost about 1.5 MB a read; the league's season series (`/events?series_id=`) embeds every spread, total and prop, 50 MB for the NFL alone, and is not used.
 
 | # | Agent | Desk | Job |
 |---|-------|------|-----|
@@ -664,6 +664,15 @@ is bet the first cycle it can be, before first pitch or during the game, and nev
 own open and settled positions say which games are done, so a restart does not double up). A favourite
 already over `BET_MAX_PX` (90c) is a game all but decided and is left alone, and so is a game
 Polymarket reads settled. It sits beside an arb on the same game rather than waiting for it.
+
+A game is bet only once both venues list it and the matcher has paired them. Until 2026-10-11 the
+Polymarket side came from the top-N listing alone, and that Sunday four of the 13 NFL games sat under
+its volume line and went unbet (the first college Saturday, 2026-10-10, bet 52 games: college football
+is busy enough on Polymarket that every game made the list). Since then every game of each league in
+`BET_SERIES` is read off Polymarket's league tag as well ("Every 15 seconds" above, `PM_GAME_TAGS`).
+That listing pairs a whole week of games at once, about a hundred on a football week against a $5k
+paper book, so a game is bet within `BET_AHEAD_HOURS` (24) of kickoff and not before: bet on listing,
+next Sunday's games would take the cash this Sunday's need, at prices a week of injury news can move.
 
 It claims no edge. Bought at the market's own price, a book like this should lose about the fee over
 many games, and that is the yardstick to read it against. Paper only: `decide.betSignal` makes nothing

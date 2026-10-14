@@ -419,6 +419,11 @@ module.exports = {
   betSeries: env('BET_SERIES', 'KXNBAGAME,KXNFLGAME,KXNCAAFGAME,KXMLBGAME').split(',').map((s) => s.trim()).filter(Boolean),
   betUsd: num('BET_USD', 100),
   betMaxPx: num('BET_MAX_PX', 0.9),     // a favourite dearer than this is a game all but decided: left alone
+  // A game is bet within this many hours of kickoff, not before. Since 2026-10-11 the league listings
+  // (PM_GAME_TAGS) pair a whole week's games the day they are listed, ~100 on a football week against
+  // a $5k paper book: bet on listing, next Sunday's games would take the cash this Sunday's need, at
+  // prices a week of injury news can move. The top-N listing used to bet them about a day ahead anyway.
+  betAheadHours: num('BET_AHEAD_HOURS', 24),
   exitGap: num('EXIT_GAP', 0.01),
   stopLoss: num('STOP_LOSS', 0.06),
   // Paper positions also use a percentage stop so a cheap contract cannot lose nearly all of
@@ -637,6 +642,16 @@ module.exports = {
   // start times and fee rates, and none of that moves in two minutes. A new game is paired up to
   // this much later; a game is untradeable two minutes before start regardless. 0 = every cycle.
   pmListEverySec: Math.max(0, num('PM_LIST_EVERY_SEC', 120)),
+  // Every game of a league, read straight off Polymarket's league tag beside that top-N listing
+  // (2026-10-11; src/venues/polymarket.js fetchGames says why: 4 of 13 NFL games sat under the volume
+  // line that Sunday and went unbet). Kalshi series -> Gamma tag id, applied to the series in KS_SERIES.
+  // The ids are Polymarket's own and outlive a season (GET /sports lists them); a value with no
+  // SERIES:id pair in it, e.g. PM_GAME_TAGS=off, turns the listing off. Re-read every
+  // PM_GAMES_EVERY_SEC: games are listed days ahead, and once paired a game is repriced from the
+  // CLOB every cycle like any other pair, so this only decides how soon a new listing is seen.
+  pmGameTags: Object.fromEntries(env('PM_GAME_TAGS', 'KXNFLGAME:450,KXNBAGAME:745,KXNCAAFGAME:100351,KXMLBGAME:100381')
+    .split(',').map((s) => s.trim().split(':').map((x) => x.trim())).filter(([k, v]) => k && /^\d+$/.test(v || ''))),
+  pmGamesEverySec: Math.max(0, num('PM_GAMES_EVERY_SEC', 600)),
   ksSeries: env('KS_SERIES', 'KXFEDDECISION,KXATPMATCH,KXWTAMATCH,KXMLBGAME,KXNFLGAME,KXNBAGAME,KXNCAAFGAME,KXMLSGAME,KXEPLGAME,KXUCLGAME,KXLALIGAGAME').split(',').map((s) => s.trim()).filter(Boolean),
   // The same for Kalshi's fast listing: every open market in KS_SERIES, read every cycle until
   // 2026-09-22, when it was ~7 MB a minute and the biggest steady read left -- a single series
