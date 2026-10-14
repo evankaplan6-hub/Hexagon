@@ -59,6 +59,7 @@ function readJournals(dirs) {
 // events the state has not absorbed yet. The maker's fill counter in the state says exactly how many
 // of the journal's fills it holds; everything else is cut at the newest moment the state vouches
 // for (stateTime). Without them the whole journal is compared, which is right for a stopped desk.
+const firstBalance = (S) => r2(S.initial - Object.values(S.deposits || {}).reduce((a, d) => a + (d.usd || 0), 0));
 function rebuild(events, initial, { until = Infinity, makerFills = Infinity } = {}) {
   const t = { cash: initial, fees: 0, realized: 0, positions: new Map(), drifts: [], groups: new Map(), events: 0 };
   // The line's own cash is compared with the arithmetic and the arithmetic goes on: a state that
@@ -69,7 +70,11 @@ function rebuild(events, initial, { until = Infinity, makerFills = Infinity } = 
   };
   events = events.filter((e) => Date.parse(e.t) <= until);
   for (const e of events) {
-    if (e.kind === 'OPEN') {
+    if (e.kind === 'DEPOSIT') {
+      // paper money added to the taker account (Engine.applyDeposits): cash, not profit
+      t.cash = r2(t.cash + e.usd);
+      chain(e);
+    } else if (e.kind === 'OPEN') {
       t.events++; t.cash = r2(t.cash - e.cost); t.fees = r2(t.fees + (e.fee || 0));
       t.positions.set(e.id, { qty: e.qty, group: e.group }); chain(e);
     } else if (e.kind === 'CLOSE_PARTIAL') {
@@ -278,7 +283,9 @@ function run(argv, { log = console.log } = {}) {
   const { events, days, torn } = readJournals(journals);
   let S;
   try { S = JSON.parse(fs.readFileSync(state, 'utf8')); } catch (e) { log(`ledger-check: cannot read ${state}: ${e.message}`); return 2; }
-  const built = rebuild(events, S.initial, { until: stateTime(S), makerFills: (S.maker || {}).fills });
+  // The account's first balance: its starting balance less any paper deposited since (a DEPOSIT line
+  // adds each back at its own place in the journal). The maker started on the same first balance.
+  const built = rebuild(events, firstBalance(S), { until: stateTime(S), makerFills: (S.maker || {}).fills });
   const { problems, makerRealizedSkew } = compare(built, S);
   log(`journal ${days[0] || '?'} → ${days[days.length - 1] || '?'} · ${events.length} events${torn ? ` · ${torn} torn line(s) skipped` : ''} · state as of ${new Date(stateTime(S)).toISOString().slice(0, 19)}Z (${ET_DAY.format(new Date(stateTime(S)))} ET)`);
   log(`TAKER   cash ${money(built.taker.cash)} · fees ${money(built.taker.fees)} · realised ${money(built.taker.realized)} · ${built.taker.positions.size} legs open · ${built.taker.tally.closed} groups closed (${built.taker.tally.wins} won, ${built.taker.tally.losses} lost)`);
@@ -289,7 +296,7 @@ function run(argv, { log = console.log } = {}) {
   return done.then((v) => (problems.length || (v && v.differ.length) ? 1 : 0));
 }
 
-module.exports = { readJournals, rebuild, compare, stateTime, checkVenues, pruneBoxNow, run };
+module.exports = { readJournals, rebuild, firstBalance, compare, stateTime, checkVenues, pruneBoxNow, run };
 
 if (require.main === module) {
   Promise.resolve(run(process.argv.slice(2))).then((code) => { process.exitCode = code; });

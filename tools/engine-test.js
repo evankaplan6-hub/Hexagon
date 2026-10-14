@@ -1414,6 +1414,31 @@ const position = (over = {}) => ({
     } finally { ksv.fetchMarket = orig; }
   }
 
+  group('paper deposited into the account is capital, not profit, and is added once (2026-10-14)');
+  {
+    const E = engine();
+    E.state.cash = 4673; E.state.initial = 10000; E.state.dayStartEquity = 8700;
+    E.state.balanceHistory = [{ t: 1, b: 8800 }, { t: 2, b: 8713.73 }];
+    const pnlBefore = E.equity() - E.state.initial;
+    E.cfg = { ...E.cfg, pmDeposits: [{ id: '2026-10-14', usd: 10000 }] };
+    E.applyDeposits();
+    ok('cash and the starting balance both rise by $10,000', E.state.cash === 14673 && E.state.initial === 20000, [E.state.cash, E.state.initial]);
+    ok('so P&L does not move', Math.abs((E.equity() - E.state.initial) - pnlBefore) < 0.005, [pnlBefore, E.equity() - E.state.initial]);
+    ok('the day\'s drawdown baseline moves with it', E.state.dayStartEquity === 18700, E.state.dayStartEquity);
+    ok('and the P&L chart\'s history, so the deposit draws no jump', E.state.balanceHistory.map((p) => p.b).join() === '18800,18713.73', E.state.balanceHistory);
+    const dep = (E.journalled || []).filter((j) => j.type === 'DEPOSIT');
+    ok('one DEPOSIT line, carrying the new cash', dep.length === 1 && dep[0].data.usd === 10000 && dep[0].data.cash === 14673, dep);
+    E.applyDeposits();
+    ok('a second start adds nothing', E.state.cash === 14673 && (E.journalled || []).filter((j) => j.type === 'DEPOSIT').length === 1, E.state.cash);
+    const E2 = engine({ pmDeposits: [{ id: '2026-10-14', usd: 10000 }] });
+    ok('a fresh paper account takes it at start', E2.state.cash === 20000 && E2.state.initial === 20000 && readState(E2.cfg.dataDir).deposits['2026-10-14'].usd === 10000, [E2.state.cash, E2.state.initial]);
+    const E3 = engine();   // built in paper (a live broker needs a key), then switched
+    E3.cfg = { ...E3.cfg, mode: 'live', pmDeposits: [{ id: 'x', usd: 10000 }] };
+    const err = console.error; console.error = () => {};
+    try { E3.applyDeposits(); } finally { console.error = err; }
+    ok('live mode takes no paper deposit', E3.state.cash === base.initialBalance && !E3.state.deposits.x, E3.state.cash);
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();
