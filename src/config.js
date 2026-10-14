@@ -14,6 +14,12 @@ module.exports = {
   // that does not depend on trusting the pipeline's own success message.
   buildSha: env('GIT_SHA', '').trim().slice(0, 40),
   initialBalance: num('INITIAL_BALANCE', 10000),
+  // Paper money added to the prediction-market desk's taker account after it started, as "id:usd" pairs
+  // (2026-10-14, Evan: "add $10k to the pm paper account"). Each id is applied once, on the first start
+  // that sees it (Engine.applyDeposits), and journaled as a DEPOSIT, so the ledger check still adds up.
+  // Paper only. Never remove an applied entry's record from state.json; adding a new id adds more.
+  pmDeposits: env('PM_DEPOSITS', '').split(',').map((s) => s.trim().split(':').map((x) => x.trim()))
+    .filter(([id, usd]) => id && Number(usd) > 0).map(([id, usd]) => ({ id, usd: Number(usd) })),
   dataDir: env('DATA_DIR', path.join(__dirname, '..', 'data')),
   record: env('RECORD', '1') !== '0', // append a tick line per priced pair per cycle under dataDir
   // The maker's book and prints go into the same tape (src/makertape.js). RECORD=0 turns both off; this

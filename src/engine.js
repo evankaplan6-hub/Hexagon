@@ -138,6 +138,7 @@ class Engine {
     this.liveBalance = null;
     this.dirty = false;
     this.stepping = false;
+    this.applyDeposits();   // last: it saves, and save() reads the maps built above
   }
 
   // ---------------------------------------------------------------- persistence
@@ -952,6 +953,27 @@ class Engine {
       this.history.set(p.id, h);
     }
     for (const id of [...this.history.keys()]) if (!this.pairs.some((p) => p.id === id)) this.history.delete(id);
+  }
+  // Paper money added after the account started (cfg.pmDeposits). A deposit is capital, not profit, so
+  // the starting balance rises with the cash and P&L (equity less initial) does not move; the day's
+  // drawdown baseline and the balance history the P&L chart draws from shift by the same amount, so
+  // neither reads it as a gain. Each id is applied once and journaled, and ledger-check adds DEPOSIT
+  // lines when it rebuilds the cash. Paper only: a live account's cash is the venue's.
+  applyDeposits() {
+    const s = this.state;
+    if (!s.deposits) s.deposits = {};
+    for (const d of this.cfg.pmDeposits || []) {
+      if (s.deposits[d.id] || !(d.usd > 0)) continue;
+      if (this.cfg.mode !== 'paper') { console.error(`deposit ${d.id} skipped: paper only`); continue; }
+      s.cash = r2(s.cash + d.usd);
+      s.initial = r2(s.initial + d.usd);
+      s.dayStartEquity = r2((s.dayStartEquity || 0) + d.usd);
+      for (const p of s.balanceHistory || []) p.b = r2(p.b + d.usd);
+      s.deposits[d.id] = { usd: d.usd, at: Date.now() };
+      this.journal(this, 'DEPOSIT', { id: d.id, usd: d.usd, initial: s.initial, cash: s.cash });
+      this.dirty = true;
+    }
+    if (this.dirty) this.save();
   }
   pushBalance() {
     const eq = this.equity();

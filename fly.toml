@@ -94,6 +94,12 @@ primary_region = "iad"          # Ashburn, Virginia — close to the exchange, a
   # (Evan: "raise the arb limit to 80"), the night soccer and the NBA started pairing: 454 pairs live
   # against 241, with 21 of the 40 held.
   MAX_ARB_GROUPS = "80"
+  # $10,000 of paper added to the taker account on 2026-10-14 (Evan: "add $10k to the pm paper account"),
+  # when 80 arb slots at ~$123 each would have run out of cash near 59 with the game bets drawing too.
+  # Applied once on the first start that sees the id and journaled as DEPOSIT (src/engine.js
+  # applyDeposits); the starting balance rises with the cash, so P&L does not. Leave the entry here:
+  # it is a no-op once applied, and a new "id:usd" pair after a comma adds more.
+  PM_DEPOSITS = "2026-10-14:10000"
   # The convergence book is off on the box since 2026-09-21. The verdict from the journals,
   # 2026-09-10 to 09-21: 72 convergence bets closed, 3 winners, -$637 (-$293 of it fees), and the
   # gates added on the 18th and 19th only slowed the bleeding (-$10, -$61, -$10 a day). Open
