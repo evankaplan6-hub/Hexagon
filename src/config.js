@@ -649,7 +649,9 @@ module.exports = {
   // SERIES:id pair in it, e.g. PM_GAME_TAGS=off, turns the listing off. Re-read every
   // PM_GAMES_EVERY_SEC: games are listed days ahead, and once paired a game is repriced from the
   // CLOB every cycle like any other pair, so this only decides how soon a new listing is seen.
-  pmGameTags: Object.fromEntries(env('PM_GAME_TAGS', 'KXNFLGAME:450,KXNBAGAME:745,KXNCAAFGAME:100351,KXMLBGAME:100381')
+  // Soccer since 2026-10-14: the top-N listing held 18 soccer markets, mostly the Champions League's,
+  // so MLS and the Premier League paired almost nothing; the four leagues add ~350 rows (~2 MB a read).
+  pmGameTags: Object.fromEntries(env('PM_GAME_TAGS', 'KXNFLGAME:450,KXNBAGAME:745,KXNCAAFGAME:100351,KXMLBGAME:100381,KXEPLGAME:82,KXMLSGAME:100100,KXUCLGAME:100977,KXLALIGAGAME:780')
     .split(',').map((s) => s.trim().split(':').map((x) => x.trim())).filter(([k, v]) => k && /^\d+$/.test(v || ''))),
   pmGamesEverySec: Math.max(0, num('PM_GAMES_EVERY_SEC', 600)),
   ksSeries: env('KS_SERIES', 'KXFEDDECISION,KXATPMATCH,KXWTAMATCH,KXMLBGAME,KXNFLGAME,KXNBAGAME,KXNCAAFGAME,KXMLSGAME,KXEPLGAME,KXUCLGAME,KXLALIGAGAME').split(',').map((s) => s.trim()).filter(Boolean),

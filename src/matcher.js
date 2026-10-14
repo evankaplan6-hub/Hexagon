@@ -5,9 +5,14 @@
 const MON = { january: 'JAN', february: 'FEB', march: 'MAR', april: 'APR', may: 'MAY', june: 'JUN', july: 'JUL', august: 'AUG', september: 'SEP', october: 'OCT', november: 'NOV', december: 'DEC' };
 const MONNUM = { JAN: '01', FEB: '02', MAR: '03', APR: '04', MAY: '05', JUN: '06', JUL: '07', AUG: '08', SEP: '09', OCT: '10', NOV: '11', DEC: '12' };
 
+// A letter NFD does not split into base + accent (Bodø, Łódź, Đorđe, Straße) used to drop out
+// altogether, leaving "bod glimt", so it is spelt out first. "Los Angeles FC" is spelt "lafc" before the
+// club suffix goes: stripped, it is "los angeles", which every Kalshi "Los Angeles G" (the Galaxy) prefixes.
 const norm = (s) => String(s || '')
   .normalize('NFD').replace(/[̀-ͯ]/g, '')
   .toLowerCase()
+  .replace(/ø/g, 'o').replace(/æ/g, 'ae').replace(/ß/g, 'ss').replace(/[đð]/g, 'd').replace(/ł/g, 'l')
+  .replace(/\blos angeles fc\b/g, 'lafc')
   .replace(/\bst\.?(?=\s|$)/g, 'state')
   .replace(/\b(fc|sc|cf|afc)\b/g, ' ')
   .replace(/[^a-z0-9 ]+/g, ' ')
@@ -219,6 +224,20 @@ function inLeague(set, name) { return nick(name).some((n) => set.has(n)); }
 // in seven on a full slate, and the coverage alarm cannot see two games missing out of fifteen.
 const KS_MLB_ALIAS = { 'chicago ws': 'Chicago White Sox', 'a s': 'Athletics' };
 const mlbName = (name) => KS_MLB_ALIAS[norm(name)] || name;
+// The same for soccer, where it was most of the misses. With every league read off Polymarket's own
+// tag (2026-10-14), 170 soccer markets paired and 27 games listed on both venues still did not, each
+// for one of these: Kalshi's short or English name against Polymarket's official one ("PSG", "Bilbao"
+// for Athletic Club, "Eindhoven" for PSV, "Slavia Prague" for SK Slavia Praha), a word Polymarket
+// leaves off ("AEK Athens" against "AEK"), or a spelling the prefix walk cannot cross ("New York RB",
+// "DC United" against "D.C. United", "Saint Louis" against "St. Louis City"). Keyed on norm(); the value
+// is written so norm() of it prefixes norm() of Polymarket's name and no other club's in the league.
+const KS_SOCCER_ALIAS = {
+  'los angeles f': 'LAFC', 'new york rb': 'New York Red Bulls', 'dc united': 'D.C. United', 'saint louis': 'St. Louis City',
+  psg: 'Paris Saint-Germain', 'bodoe glimt': 'Bodo/Glimt', 'aek athens': 'AEK', 'sabah masazir': 'Sabah',
+  'slavia prague': 'Slavia Praha', eindhoven: 'PSV', 'bayern munich': 'Bayern',
+  bilbao: 'Athletic Club', santander: 'Real Racing Club', 'deportivo de la coruna': 'Deportivo A Coruna',
+};
+const soccerName = (name) => KS_SOCCER_ALIAS[norm(name)] || name;
 
 // Polymarket's slug names the league outright ("mlb-tb-nyy-2026-09-22", "cfb-clmsn-cah-...",
 // "wta-mertens-chwalin-..."), so it is read first. Guessing from the team names filed every two-way
@@ -229,6 +248,7 @@ const mlbName = (name) => KS_MLB_ALIAS[norm(name)] || name;
 // nothing counted, nothing matched. And Polymarket stopped writing "ATP"/"WTA" in tennis questions
 // ("Korea Open: Anna Bondar vs Gabriela Ruse"), which is why the fast matcher paired no tennis after
 // 09-13; the prefix is how it is found now, with the old text test kept behind it.
+const SOCCER_SLUG = { epl: 'KXEPLGAME', mls: 'KXMLSGAME', ucl: 'KXUCLGAME', lal: 'KXLALIGAGAME' };
 const SLUG_SPORT = { mlb: 'mlb', nfl: 'nfl', nba: 'nba', cfb: 'college', atp: 'tennis', wta: 'tennis', epl: 'soccer', ucl: 'soccer', mls: 'soccer', lal: 'soccer' };
 function classify(m, A, B) {
   const question = m.question || '';
@@ -313,7 +333,7 @@ function matchPairs(pmList, ksList) {
       const [A, B] = m.outcomes;
       const sport = classify(m, A, B);
       const allowed = SPORT_SERIES[sport] || [];
-      if (sport && d) pmListing.add(`${sport}|${d}`);
+      if (sport && sport !== 'soccer' && d) pmListing.add(`${sport}|${d}`); // soccer: path 3, by league
       // Kalshi dates a tennis match by the day it was scheduled, and the Asian swing plays overnight:
       // KXWTAMATCH-26SEP24BONRUS against a Polymarket start of 2026-09-25 04:30Z, which is 09-25 in
       // New York. So tennis also looks one ET day back; the name, figure and price guards still apply.
@@ -345,12 +365,17 @@ function matchPairs(pmList, ksList) {
 
     // 3) "Will X win on YYYY-MM-DD?" (PM soccer style)  <->  Kalshi 3-way soccer market (event has a Tie leg)
     if (!hit && (r = q.match(/^Will (.+?) win on (\d{4}-\d{2}-\d{2})\?$/))) {
-      pmListing.add(`soccer|${r[2]}`);
+      // Listed by LEAGUE when the slug names it: a Champions League night listed on Polymarket used to
+      // count every MLS game that date as missing, so the coverage alarm cried wolf on a league it
+      // was not looking at.
+      const slugLeague = SOCCER_SLUG[String(m.slug || '').split('-')[0].toLowerCase()];
+      pmListing.add(slugLeague ? `${slugLeague}|${r[2]}` : `soccer|${r[2]}`);
       for (const ms of byDate.get(r[2]) || []) {
         const ser = series(ms[0].ticker);
         if (!SPORT_SERIES.soccer.includes(ser)) continue;
         if (!ms.some((x) => /^tie\b/i.test(x.subTitle) || /^tie\b/i.test(x.title))) continue;
-        const k = ms.find((x) => !/^tie\b/i.test(x.subTitle) && nameMatch(x.subTitle, r[1]));
+        if (slugLeague && slugLeague !== ser) continue;
+        const k = ms.find((x) => !/^tie\b/i.test(x.subTitle) && nameMatch(soccerName(x.subTitle), r[1]));
         if (!k) continue;
         // The OPPONENT has to match too. A PM question names one club, and one club name is not
         // an identity: "Everton" is a prefix of "Everton de Viña del Mar", so on 2026-09-12 a
@@ -361,8 +386,8 @@ function matchPairs(pmList, ksList) {
         // B"), so require each non-tie Kalshi leg to name a DIFFERENT side of it.
         const sides = String(m.eventTitle || '').split(/\s+vs\.?\s+/i);
         const other = ms.find((x) => x !== k && !/^tie\b/i.test(x.subTitle));
-        const sideK = sides.length === 2 ? sides.findIndex((s) => nameMatch(k.subTitle, s)) : -1;
-        const sideO = other && sideK >= 0 ? sides.findIndex((s, i) => i !== sideK && nameMatch(other.subTitle, s)) : -1;
+        const sideK = sides.length === 2 ? sides.findIndex((s) => nameMatch(soccerName(k.subTitle), s)) : -1;
+        const sideO = other && sideK >= 0 ? sides.findIndex((s, i) => i !== sideK && nameMatch(soccerName(other.subTitle), s)) : -1;
         if (sideK < 0 || sideO < 0) continue;
         const label = `${TAG[ser] || ser} ${short(r[1], 'soccer')} win ${r[2].slice(5)}`;
         const conflict = conflictWith(k);
@@ -428,7 +453,7 @@ function matchPairs(pmList, ksList) {
     const ser = series(ms[0].ticker);
     const sport = SPORT_KEY[ser];
     const d = tickerDate(ev);
-    if (!sport || !d || !pmListing.has(`${sport}|${d}`)) continue;
+    if (!sport || !d || !(pmListing.has(`${sport}|${d}`) || pmListing.has(`${ser}|${d}`))) continue;
     const key = `${ser}|${d}`;
     if (!coverage.has(key)) coverage.set(key, { series: ser, league: TAG[ser] || ser, date: d, events: 0, matched: 0 });
     const c = coverage.get(key);

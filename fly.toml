@@ -55,7 +55,8 @@ primary_region = "iad"          # Ashburn, Virginia — close to the exchange, a
   # number to pull down first -- this one is small.
   # Since 2026-10-11 the games themselves no longer depend on this number: every game of the NFL, NBA,
   # college football and MLB is read off Polymarket's league tags beside this listing (PM_GAME_TAGS in
-  # src/config.js, ~1.5 MB every ten minutes), after 4 of 13 NFL games sat under the 500 line that Sunday.
+  # src/config.js, ~1.5 MB every ten minutes), after 4 of 13 NFL games sat under the 500 line that Sunday;
+  # and since 2026-10-14 every game of the Premier League, MLS, Champions League and La Liga (~2 MB more).
   PM_UNIVERSE = "500"
   # Raised from src/config.js's 20 on 2026-09-20, because the crawl had grown into the gap between
   # crawls. One any-market scan now takes 474-541s, and at DISCOVER_EVERY_MIN=20 that is ~42% of
