@@ -656,8 +656,8 @@ the morning after.
 ## Every game (2026-09-30)
 
 Evan, on the MLB Wild Card's second night: "every game should be bet". So each game in `BET_SERIES`
-(MLB until 2026-10-10; since then NBA, NFL and college football, `KXNBAGAME,KXNFLGAME,KXNCAAFGAME`,
-below) gets one bet: `BET_USD` ($100) on the favourite, the side the two venues' mids, averaged, make likelier. It is
+(MLB until 2026-10-10; since then NBA, NFL and college football, and MLB again since 10-13:
+`KXNBAGAME,KXNFLGAME,KXNCAAFGAME,KXMLBGAME`, below) gets one bet: `BET_USD` ($100) on the favourite, the side the two venues' mids, averaged, make likelier. It is
 bought at whichever venue sells that side cheaper after its own fee (Kalshi charges MLB half its usual
 rate, Polymarket 5% of p(1-p)), off the live book, and held to the final: no stop, no early exit. A game
 is bet the first cycle it can be, before first pitch or during the game, and never twice (the book's
@@ -686,6 +686,11 @@ rule asks only for a price on both venues and a favourite under 90c, and Kalshi'
 each series is read from the venue as before. The MLB bets open that day ride to their finals, as every
 bet does; no new MLB bet is placed. A college Saturday is about 50 bets, so the book's stake at work
 is several times what MLB's postseason had out at once.
+
+**2026-10-13, MLB back.** Baseball was not over: the LCS was on (Cleveland-Tampa Bay Game 2 that night,
+Milwaukee-Los Angeles Game 3 the next). Evan: "mlb tonight". `KXMLBGAME` is back in `BET_SERIES`
+beside the other three, until the World Series ends. Nothing else changed: the matcher never stopped
+pairing MLB (`KS_SERIES` still lists it, and a postseason moneyline is well inside Polymarket's top-N).
 
 ## The MAKER desk (07)
 
