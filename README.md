@@ -680,6 +680,25 @@ many games, and that is the yardstick to read it against. Paper only: `decide.be
 in live mode, and KETT refuses one there too. `BETS=1` in fly.toml turns it on; it has its own card on
 the floor ("Every game"). Code: `decide.betSignal`, BRAM finds, KETT buys.
 
+## Anytime touchdown tape (2026-10-11)
+
+Evan, NFL Sunday: "parlays? atd parlay?" No parlay book: a parlay multiplies the house edge (three legs
+at -110 pay +596 and lose about 13%; state regulators show parlays holding 18-23% against 5-7% on
+straight bets), and an anytime-touchdown leg is a player prop the desk has no data to price. What can be
+done for free is to measure the board. Sportsbooks list anytime touchdowns one-sided, so their hold never
+shows as a two-way sum and nobody has measured it; Kalshi lists the same market two-sided (`KXNFLTD`,
+"<player>: 1+", about 23 players a game). `tools/td-tape.js --record` appends every such market for the
+games kicking off in the next three hours to `data/td/td-YYYY-MM-DD.jsonl` (the game's Eastern day), and
+`ops/install-td-tape.sh` runs it on the Mac every 15 minutes, so the tape holds each board after the
+inactives are out (90 minutes before kickoff). Kickoff is Kalshi's `occurrence_datetime` less three hours
+(checked on the four kickoff slots of 2026-10-11; the raw field is kept on every line).
+
+`--grade [--day D]` takes each market's last record before kickoff and asks Kalshi how it settled: buy
+every YES at the ask, or every NO at its ask, gross and net of the fee, cut by the YES ask in four bands.
+A fair two-sided board returns about minus half the spread on either side, minus the fee; both sides losing
+more than that is the hold. A player who was active but took no snap settles at the pre-game price and is
+void. Log-only research: no bet, no broker, nothing in the desk reads it. Tests: `tools/td-tape-test.js`.
+
 **2026-10-10, three leagues.** Evan: "baseball is over switch it to NBA NFL CFB". `BET_SERIES` in
 fly.toml (and the default in `src/config.js`) is now `KXNBAGAME,KXNFLGAME,KXNCAAFGAME`. Nothing else
 changed: the matcher already paired all three on both venues (50 college games on Saturday 10-03), the
