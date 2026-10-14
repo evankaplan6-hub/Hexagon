@@ -352,6 +352,28 @@ group('matchPairs: an NFL game -- Kalshi says the city, Polymarket says the nick
   ok('an MLB Giants game still pairs as MLB', mlbGiants.pairs.length === 1 && /^MLB/.test(mlbGiants.pairs[0].label), mlbGiants.pairs);
 }
 
+group('matchPairs: an NBA game -- Kalshi says the city, Polymarket says the nickname, as in the NFL');
+{
+  // Real names from 2026-10-14: before nbaFull none of the 24 games listed on both venues paired.
+  const nba = (ev, a, b) => [
+    ks({ ticker: `KXNBAGAME-${ev}-A`, eventTicker: `KXNBAGAME-${ev}`, subTitle: a, title: `${a} wins` }),
+    ks({ ticker: `KXNBAGAME-${ev}-B`, eventTicker: `KXNBAGAME-${ev}`, subTitle: b, title: `${b} wins` }),
+  ];
+  const game = (slug, q, outcomes, gameStart) => pm({ slug, question: q, sport: 'moneyline', outcomes, gameStart });
+  const r = matchPairs([game('nba-bkn-mia-2026-10-14', 'Nets vs. Heat', ['Nets', 'Heat'], '2026-10-14 23:30:00+00')], nba('26OCT14BKNMIA', 'Brooklyn', 'Miami'));
+  ok('a city-vs-nickname NBA game pairs', r.pairs.length === 1, r.pairs);
+  ok('...to the first-named side, tagged NBA', r.pairs[0] && r.pairs[0].label === 'NBA Nets v Heat · Nets' && /-A$/.test(r.pairs[0].ks.ticker), r.pairs[0]);
+  ok('...and the NBA is reported covered', r.coverage.every((c) => c.league !== 'NBA' || c.matched === c.events), r.coverage);
+
+  // Kalshi's "Los Angeles C" is the Clippers, never the Lakers; two-word cities and nicknames line up
+  const la = matchPairs([game('nba-den-lac-2026-10-14', 'Nuggets vs. Clippers', ['Nuggets', 'Clippers'], '2026-10-15 02:30:00+00'),
+    game('nba-okc-por-2026-10-16', 'Thunder vs. Trail Blazers', ['Thunder', 'Trail Blazers'], '2026-10-17 02:00:00+00')],
+  [...nba('26OCT14DENLAC', 'Denver', 'Los Angeles C'), ...nba('26OCT16OKCPOR', 'Oklahoma City', 'Portland')]);
+  ok('"Los Angeles C" pairs the Clippers, and Oklahoma City-Portland pairs', la.pairs.length === 2, la.pairs.map((p) => `${p.label} -> ${p.ks.ticker}`));
+  const wrongLa = matchPairs([game('nba-den-lal-2026-10-14', 'Nuggets vs. Lakers', ['Nuggets', 'Lakers'], '2026-10-15 02:30:00+00')], nba('26OCT14DENLAC', 'Denver', 'Los Angeles C'));
+  ok('the Lakers do not pair with the Clippers\' game', wrongLa.pairs.length === 0, wrongLa.pairs);
+}
+
 group('matchPairs: coverage names a league that pairs nothing');
 {
   const nflEvent = (ev, a, b) => [

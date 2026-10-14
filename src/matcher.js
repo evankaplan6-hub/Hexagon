@@ -185,8 +185,8 @@ const TAG = { KXMLBGAME: 'MLB', KXNFLGAME: 'NFL', KXNBAGAME: 'NBA', KXATPMATCH: 
 const MLB = new Set(['diamondbacks', 'braves', 'orioles', 'red sox', 'cubs', 'white sox', 'reds', 'guardians', 'rockies', 'tigers', 'astros', 'royals', 'angels', 'dodgers', 'marlins', 'brewers', 'twins', 'mets', 'yankees', 'athletics', 'phillies', 'pirates', 'padres', 'giants', 'mariners', 'cardinals', 'rays', 'rangers', 'blue jays', 'nationals']);
 const NFL = new Set(['cardinals', 'falcons', 'ravens', 'bills', 'panthers', 'bears', 'bengals', 'browns', 'cowboys', 'broncos', 'lions', 'packers', 'texans', 'colts', 'jaguars', 'chiefs', 'raiders', 'chargers', 'rams', 'dolphins', 'vikings', 'patriots', 'saints', 'giants', 'jets', 'eagles', 'steelers', '49ers', 'seahawks', 'buccaneers', 'titans', 'commanders']);
 // Polymarket names an NFL side by nickname alone ("Vikings"); Kalshi names it by city ("Minnesota",
-// "New York J"). No other league splits the name this way -- MLB and NBA carry the city on
-// Polymarket, college and soccer use the club on both -- so nameMatch, which walks Kalshi's tokens
+// "New York J"). The NBA splits it the same way ("Nets" against "Brooklyn"; see NBA_CITY below).
+// MLB carries the city on Polymarket, college and soccer use the club on both -- so nameMatch, which walks Kalshi's tokens
 // as prefixes of Polymarket's, could never pair a single NFL game: 0 of 14 on Sunday 2026-09-20,
 // silently, all season. Putting the city back in front of the nickname is the whole fix:
 // "New York J" then prefixes "New York Jets" and not "New York Giants", exactly as MLB's
@@ -199,6 +199,17 @@ const NFL_CITY = { cardinals: 'Arizona', falcons: 'Atlanta', ravens: 'Baltimore'
   steelers: 'Pittsburgh', '49ers': 'San Francisco', seahawks: 'Seattle', buccaneers: 'Tampa Bay', titans: 'Tennessee',
   commanders: 'Washington' };
 const nflFull = (name) => { const c = NFL_CITY[norm(name)]; return c ? `${c} ${name}` : name; };
+// The NBA is named as the NFL is: "Nets vs. Heat" on Polymarket, "Brooklyn" and "Miami" on Kalshi. This
+// file said the NBA carried the city, and so no NBA game had ever paired: 0 of 24 on both venues on
+// 2026-10-14 (preseason), four days after the every-game book switched to the NBA, and six before the
+// season opened. Kalshi's two Los Angeles teams are "Los Angeles C" and "Los Angeles L", as the NFL's are.
+const NBA_CITY = { hawks: 'Atlanta', celtics: 'Boston', nets: 'Brooklyn', hornets: 'Charlotte', bulls: 'Chicago',
+  cavaliers: 'Cleveland', mavericks: 'Dallas', nuggets: 'Denver', pistons: 'Detroit', warriors: 'Golden State',
+  rockets: 'Houston', pacers: 'Indiana', clippers: 'Los Angeles', lakers: 'Los Angeles', grizzlies: 'Memphis',
+  heat: 'Miami', bucks: 'Milwaukee', timberwolves: 'Minnesota', pelicans: 'New Orleans', knicks: 'New York',
+  thunder: 'Oklahoma City', magic: 'Orlando', '76ers': 'Philadelphia', suns: 'Phoenix', 'trail blazers': 'Portland',
+  kings: 'Sacramento', spurs: 'San Antonio', raptors: 'Toronto', jazz: 'Utah', wizards: 'Washington' };
+const nbaFull = (name) => { const c = NBA_CITY[norm(name)]; return c ? `${c} ${name}` : name; };
 const NBA = new Set(['hawks', 'celtics', 'nets', 'hornets', 'bulls', 'cavaliers', 'mavericks', 'nuggets', 'pistons', 'warriors', 'rockets', 'pacers', 'clippers', 'lakers', 'grizzlies', 'heat', 'bucks', 'timberwolves', 'pelicans', 'knicks', 'thunder', 'magic', '76ers', 'suns', 'trail blazers', 'kings', 'spurs', 'raptors', 'jazz', 'wizards']);
 function nick(name) { const t = toks(name); return [t.slice(-2).join(' '), t[t.length - 1]]; }
 function inLeague(set, name) { return nick(name).some((n) => set.has(n)); }
@@ -314,7 +325,8 @@ function matchPairs(pmList, ksList) {
         const sides = ms.filter((x) => !/^tie\b/i.test(x.subTitle) && !/^tie\b/i.test(x.title));
         if (sides.length !== 2) continue;
         const people = /MATCH/.test(ser); // tennis-style series carry player names
-        const [pa, pb] = ser === 'KXNFLGAME' ? [nflFull(A), nflFull(B)] : [A, B];
+        const full = ser === 'KXNFLGAME' ? nflFull : ser === 'KXNBAGAME' ? nbaFull : (x) => x;
+        const [pa, pb] = [full(A), full(B)];
         const ksName = (x) => (ser === 'KXMLBGAME' ? mlbName(x.subTitle) : x.subTitle);
         const ia = sides.findIndex((x) => nameMatch(ksName(x), pa, people));
         const ib = sides.findIndex((x) => nameMatch(ksName(x), pb, people));
