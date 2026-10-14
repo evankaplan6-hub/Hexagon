@@ -6,7 +6,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { rebuild, compare, stateTime, readJournals, pruneBoxNow } = require('./ledger-check');
+const { rebuild, compare, stateTime, readJournals, pruneBoxNow, firstBalance } = require('./ledger-check');
 
 let pass = 0, fail = 0;
 const ok = (name, cond, got) => {
@@ -55,6 +55,23 @@ group('a state that matches its journal has no problems');
   const c = compare(built, STATE());
   ok('no problems', c.problems.length === 0, c.problems);
   ok('and the maker realised figures agree', Math.abs(c.makerRealizedSkew) < 0.005, c.makerRealizedSkew);
+}
+
+group('paper deposited mid-journal is cash, not a drift (2026-10-14: $10k added to the account)');
+{
+  // the same life with $10,000 deposited after the first arb opened: every later line's cash is $10k higher
+  const at = 2;
+  const ev = EVENTS.map((e, i) => (i >= at && e.cash != null ? { ...e, cash: Math.round((e.cash + 10000) * 100) / 100 } : e));
+  ev.splice(at, 0, { t: T(1), kind: 'DEPOSIT', id: '2026-10-14', usd: 10000, initial: 20000, cash: 19903.50 });
+  const S = { ...STATE(), initial: 20000, cash: 19993.45, deposits: { '2026-10-14': { usd: 10000 } } };
+  ok('the account\'s first balance is its starting balance less what was deposited', firstBalance(S) === 10000, firstBalance(S));
+  const built = rebuild(ev, firstBalance(S));
+  ok('the cash chains across the deposit with no drift', built.taker.drifts.length === 0 && Math.abs(built.taker.cash - 19993.45) < 0.005, [built.taker.drifts, built.taker.cash]);
+  ok('the deposit is not realised P&L', Math.abs(built.taker.realized - 3.65) < 0.005, built.taker.realized);
+  ok('the maker still starts from the first balance', Math.abs(built.maker.cash - 9996.56) < 0.005, built.maker.cash);
+  const c = compare(built, S);
+  ok('and the state has no problems', c.problems.length === 0, c.problems);
+  ok('a state with no deposits starts where it says', firstBalance(STATE()) === 10000);
 }
 
 group('every way the state can drift from the journal is named');

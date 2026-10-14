@@ -265,10 +265,9 @@ class Desk {
     if (!all.some(([, sl]) => sl.benchPx > 0)) return null;
     let v = 0;
     for (const [id, sl] of all) {
-      if (!(sl.benchPx > 0)) { v += sl.initial; continue; }
-      const px = key === 'crypto' ? this.coinBid(id) : this.spyBid();
-      if (!(px > 0)) return null;
-      v += sl.initial * px / (sl.benchPx * (1 + (sl.benchFeeBps || 0) / 10000));
+      const h = slotHold(sl, key === 'crypto' ? this.coinBid(id) : this.spyBid());
+      if (h == null) return null;
+      v += h;
     }
     return r2(v);
   }
@@ -1230,12 +1229,15 @@ class Desk {
     const legacy = safe(this.legacy);
     const pa = this.agentStatus.PRED;
     if (legacy) { pa.note = legacy.note || ''; pa.lastActive = legacy.lastCycleAt || 0; }
+    // A slot's own figures as the overview's market list and a market's sheet show them: what it is worth with
+    // its cash, and what simply holding it would be worth (the book's benchmark, one slot at a time)
     const sleeveRow = (bookKey, id, sl, px, extra) => {
-      const value = sl.qty > 0 && px > 0 ? r2(sl.qty * px) : 0;
+      const value = sl.qty > 0 && px > 0 ? r2(sl.qty * px) : 0, hold = slotHold(sl, px);
       return {
         sym: id, name: bookKey === 'crypto' ? short(id) : id, label: bookKey === 'crypto' ? COIN_NAME[id] || short(id) : 'SPDR S&P 500 ETF',
         qty: sl.qty, px, value, cost: sl.cost, pnl: r2(value - sl.cost), realized: sl.realized, fees: sl.fees,
-        cash: sl.cash, target: sl.target, checkDay: sl.checkDay, initial: sl.initial, benchPx: sl.benchPx, ...extra,
+        cash: sl.cash, target: sl.target, checkDay: sl.checkDay, initial: sl.initial, benchPx: sl.benchPx,
+        worth: r2(sl.cash + value), hold: hold == null ? null : r2(hold), ...extra,
       };
     };
     const coinRows = Object.entries(b.crypto.sleeves).map(([id, sl]) => {
@@ -1314,7 +1316,9 @@ class Desk {
         slots: RN.slots, trades: rn.trades.slice(0, 20),
       },
       spy: quote ? { last: quote.last, bid: quote.bid, ask: quote.ask, prevClose: quote.prevClose, open: quote.open, high: quote.high, low: quote.low, at: quote.at, vol: S.vol, want: S.w, spark: S.intra ? S.intra.bars.filter((_, i) => i % 5 === 0).map((x) => x.c) : [] } : null,
-      fills: this.state.fills.slice(0, 80),
+      // the newest eighty, and every older trade of the books that hold markets across days: a market's sheet lists
+      // all of its trades, and the switched-off books' scalps and runners pushed Solana's first buy out of the eighty
+      fills: [...this.state.fills.slice(0, 80), ...this.state.fills.slice(80).filter((f) => f.book === 'crypto' || f.book === 'stocks').slice(0, 60)],
       log: this.state.log.slice(0, 150).map((e) => ({ ...e, level: logLevel(e) })),
       agents: AGENTS.map((a) => ({ ...a, ...this.agentStatus[a.key], active: t - this.agentStatus[a.key].lastActive < 4000 })),
       legacy,
@@ -1327,6 +1331,13 @@ class Desk {
 
 const hm = (m) => { const h = Math.floor(m / 60), mm = m % 60, h12 = ((h + 11) % 12) + 1; return `${h12}:${String(mm).padStart(2, '0')}`; };
 // an option book's ledger: its cash, what it has banked and paid, the contracts it holds and its day
+// What holding one slot would be worth at this price: the slot bought at its first trade's price, less the fee
+// a buyer pays; a slot not bought in yet is the cash it is, and with no price there is no figure
+function slotHold(sl, px) {
+  if (!(sl.benchPx > 0)) return sl.initial;
+  if (!(px > 0)) return null;
+  return sl.initial * px / (sl.benchPx * (1 + (sl.benchFeeBps || 0) / 10000));
+}
 // a slot of the crypto or stocks book: its cash, what it holds, and where holding it started
 function sleeve(initial) {
   return { initial, cash: initial, qty: 0, cost: 0, realized: 0, fees: 0, target: null, checkDay: null, benchPx: null, benchFeeBps: null };

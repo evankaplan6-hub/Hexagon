@@ -138,6 +138,7 @@ class Engine {
     this.liveBalance = null;
     this.dirty = false;
     this.stepping = false;
+    this.applyDeposits();   // last: it saves, and save() reads the maps built above
   }
 
   // ---------------------------------------------------------------- persistence
@@ -784,9 +785,15 @@ class Engine {
     const now = Date.now();
     const due = (list, sec) => !list || now - list.at >= sec * 1000;
     const pmDue = due(this.pmList, this.cfg.pmListEverySec), ksDue = due(this.ksList, this.cfg.ksListEverySec);
-    const [pmRes, ksRes] = await Promise.allSettled([
+    // Every game of the leagues in KS_SERIES that PM_GAME_TAGS names, off Polymarket's league tags: the
+    // top-N listing above misses a quiet game's moneyline on a busy Sunday (src/venues/polymarket.js,
+    // fetchGames). Read every PM_GAMES_EVERY_SEC; a league whose page failed keeps its last good list.
+    const gameTags = [...new Set(this.cfg.ksSeries.map((s) => (this.cfg.pmGameTags || {})[s]).filter(Boolean))];
+    const gamesDue = gameTags.length > 0 && due(this.pmGames, this.cfg.pmGamesEverySec);
+    const [pmRes, ksRes, gmRes] = await Promise.allSettled([
       pmDue ? pm.fetchUniverse(this.cfg.pmUniverse) : null,
       ksDue ? ks.fetchAll(this.cfg.ksSeries) : null,
+      gamesDue ? pm.fetchGames(gameTags) : null,
     ]);
     // Stamp each market with when IT was fetched. lastQuoteAt only advances when BOTH venues
     // succeed, so it cannot tell "everything is fresh" from "this one market stopped updating" \u2014
@@ -799,7 +806,24 @@ class Engine {
       const markets = ksRes.value.map((m) => Object.assign(m, { at }));
       this.ksList = { at, markets, tickers: new Set(markets.map((m) => m.ticker)) };
     }
-    if (pmOk && this.pmList) this.quotes.pm = new Map(this.pmList.markets.map((m) => [m.id, m]));
+    if (gamesDue) {
+      const byTag = (this.pmGames && this.pmGames.byTag) || new Map();
+      let failed = gameTags;
+      if (gmRes.status === 'fulfilled') {
+        for (const [tag, ms] of gmRes.value.byTag) byTag.set(tag, ms.map((m) => Object.assign(m, { at })));
+        failed = gmRes.value.failed;
+      }
+      this.pmGames = { at, byTag, failed };   // `at` moves on a failure too: no retry storm, the next read is in PM_GAMES_EVERY_SEC
+      if (failed.length && this.due('pm-games-err', 300)) {
+        const why = gmRes.status === 'rejected' ? String(gmRes.reason && gmRes.reason.message).slice(0, 100) : `${failed.length} of ${gameTags.length} league pages`;
+        this.log('TESS', 'OPS', null, `Polymarket game listing failed: ${why} · keeping the last good list for ${failed.length === gameTags.length ? 'every league' : 'the leagues that failed'}`);
+      }
+    }
+    if (pmOk && this.pmList) {
+      this.quotes.pm = new Map(this.pmList.markets.map((m) => [m.id, m]));
+      // the league listings' games, where the top-N listing lacks them: the listing wins a market both have
+      if (this.pmGames) for (const ms of this.pmGames.byTag.values()) for (const m of ms) if (!this.quotes.pm.has(m.id)) this.quotes.pm.set(m.id, m);
+    }
     if (ksOk && this.ksList) this.quotes.ks = new Map(this.ksList.markets.map((m) => [m.ticker, m]));
     if (pmOk && ksOk) this.lastQuoteAt = Date.now();
     else if (this.due('quote-err', 60)) {
@@ -930,6 +954,27 @@ class Engine {
     }
     for (const id of [...this.history.keys()]) if (!this.pairs.some((p) => p.id === id)) this.history.delete(id);
   }
+  // Paper money added after the account started (cfg.pmDeposits). A deposit is capital, not profit, so
+  // the starting balance rises with the cash and P&L (equity less initial) does not move; the day's
+  // drawdown baseline and the balance history the P&L chart draws from shift by the same amount, so
+  // neither reads it as a gain. Each id is applied once and journaled, and ledger-check adds DEPOSIT
+  // lines when it rebuilds the cash. Paper only: a live account's cash is the venue's.
+  applyDeposits() {
+    const s = this.state;
+    if (!s.deposits) s.deposits = {};
+    for (const d of this.cfg.pmDeposits || []) {
+      if (s.deposits[d.id] || !(d.usd > 0)) continue;
+      if (this.cfg.mode !== 'paper') { console.error(`deposit ${d.id} skipped: paper only`); continue; }
+      s.cash = r2(s.cash + d.usd);
+      s.initial = r2(s.initial + d.usd);
+      s.dayStartEquity = r2((s.dayStartEquity || 0) + d.usd);
+      for (const p of s.balanceHistory || []) p.b = r2(p.b + d.usd);
+      s.deposits[d.id] = { usd: d.usd, at: Date.now() };
+      this.journal(this, 'DEPOSIT', { id: d.id, usd: d.usd, initial: s.initial, cash: s.cash });
+      this.dirty = true;
+    }
+    if (this.dirty) this.save();
+  }
   pushBalance() {
     const eq = this.equity();
     const h = this.state.balanceHistory;
@@ -966,7 +1011,7 @@ class Engine {
     // Kalshi adds series and can change a fee schedule; a box that runs for weeks re-reads it daily.
     setInterval(() => { loadSeries(false); }, 24 * 3600 * 1000);
     if (this.cfg.mode === 'live') await this.broker.init();
-    this.log('TESS', 'OPS', null, `desk online · ${this.cfg.mode.toUpperCase()} mode${this.cfg.demo ? ' with DEMO quote noise' : ''} · equity $${this.equity().toFixed(2)} · ${this.cfg.ksSeries.length} Kalshi series vs top ${this.cfg.pmUniverse} Polymarket markets`);
+    this.log('TESS', 'OPS', null, `desk online · ${this.cfg.mode.toUpperCase()} mode${this.cfg.demo ? ' with DEMO quote noise' : ''} · equity $${this.equity().toFixed(2)} · ${this.cfg.ksSeries.length} Kalshi series vs top ${this.cfg.pmUniverse} Polymarket markets${(() => { const n = this.cfg.ksSeries.filter((s) => (this.cfg.pmGameTags || {})[s]).length; return n ? ` + every game of ${n} league${n > 1 ? 's' : ''}` : ''; })()}`);
     await this.step();
     setInterval(() => this.step().catch((e) => console.error(e)), this.cfg.priceEvery * 1000);
     // The maker gets its own loop. Riding the taker's 15s cycle every other tick meant a 30-second

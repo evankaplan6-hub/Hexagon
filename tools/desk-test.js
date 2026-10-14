@@ -531,6 +531,20 @@ async function engineTests() {
   ok('the prediction-market desk sits at the seventh', snap.agents[6].note === 'winding down: 3 held');
   ok('each book carries its benchmark', snap.books[0].bench > 0 && snap.books[1].bench > 0 && snap.books.slice(2).every((x) => x.bench === null), snap.books.map((x) => x.bench));
   eq('and what that holding paid to buy in (the option books and the runners are never "held")', snap.books.map((x) => x.benchFee), [35.86, 0, null, null, null, null]);
+  // the overview's market list: each slot's worth and its holding, adding up to its book's
+  for (const bk of snap.books.slice(0, 2)) {
+    near(`${bk.key}: each slot's worth (its cash and what it holds) adds up to the book`, bk.rows.reduce((a, r) => a + r.worth, 0), bk.equity, 0.02 * bk.rows.length);
+    near(`${bk.key}: each slot's holding adds up to the book's benchmark`, bk.rows.reduce((a, r) => a + r.hold, 0), bk.bench, 0.01 * bk.rows.length);
+  }
+  {
+    // a market's sheet lists all of its trades: ninety newer option trades do not push the crypto book's first buys out
+    const firsts = desk.state.fills.filter((f) => f.book === 'crypto').map((f) => f.id);
+    const real = desk.state.fills;
+    desk.state.fills = [...Array.from({ length: 90 }, (_, i) => ({ id: `x${i}`, at: T, book: 'scalps', sym: 'SPY', side: 'buy', qty: 1, px: 1, value: 100, fee: 0.03 })), ...real];
+    const ids = desk.snapshot().fills.map((f) => f.id);
+    ok('the frame keeps every older crypto and SPY trade after the newest eighty', firsts.length > 0 && firsts.every((id) => ids.includes(id)) && ids.slice(0, 80).every((id) => id.startsWith('x')), { firsts, n: ids.length });
+    desk.state.fills = real;
+  }
   ok('paper, always', snap.mode === 'paper');
   near('the headline is every book together', snap.equity, snap.books.reduce((a, x) => a + x.equity, 0), 0.02);
   eq('the frame says when the last round finished', snap.beat, T);

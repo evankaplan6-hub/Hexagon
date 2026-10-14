@@ -1,5 +1,5 @@
 'use strict';
-// Static contract for the floor at / (public/desk.*) as four views (2026-10-02): every view has its link and
+// Static contract for the floor at / (public/desk.*) as four views (2026-10-02), the overview's four questions (2026-10-12): every view has its link and
 // its panel and only the overview shows at load, no element's id is a view's name (a link to #desk would
 // otherwise scroll to it), every element desk.js reads is in desk.html, the six books are each in one of the
 // two groups, the page only reads, and on a phone the views are a tab bar at the foot of the screen.
@@ -26,7 +26,7 @@ ok('no element is named for a view, so a view\'s link never scrolls the page to 
 ok('ids are unique', new Set(ids).size === ids.length, ids.filter((i, k) => ids.indexOf(i) !== k));
 const read$ = [...new Set([...js.matchAll(/\$\('([\w-]+)'\)/g)].map((m) => m[1]))];
 ok('every element desk.js reads is in desk.html', read$.every((i) => ids.includes(i)), read$.filter((i) => !ids.includes(i)));
-ok('a book\'s own link (#desk/crypto, #pm/arbs) opens its view and its card', /let raw = location\.hash\.slice\(1\)/.test(js) && /\[v, k\] = raw\.split\('\/'\)/.test(js) && /href: `#desk\/\$\{b\.key\}`/.test(js) && /href: `#pm\/\$\{b\.key\}`/.test(js));
+ok('a book\'s own link (#desk/crypto, #pm/arbs) opens its view and its card', /let raw = location\.hash\.slice\(1\)/.test(js) && /\[v, k\] = raw\.split\('\/'\)/.test(js) && /href="#desk\/\$\{b\.key\}"/.test(js) && /href="#pm\/\$\{b\.key\}"/.test(js));
 ok('the views follow the back button', /addEventListener\('hashchange', route\)/.test(js));
 // A hash cut short inside an escape (#%E0%A4%A) makes decodeURIComponent throw, and route() runs at load before
 // the stream is opened: the floor stayed blank for good (found 2026-10-07, in the browser).
@@ -58,16 +58,34 @@ ok('...and the page leaves room under its last card for it', /\.wrap \{[^}]*env\
 ok('the bar\'s blur is drawn behind it, not on it, so the tab bar inside it is held to the screen', !/\.top \{[^}]*backdrop-filter/.test(css) && /\.top::before \{[^}]*backdrop-filter/.test(css));
 ok('a hidden view, tab or tile is gone whatever its own display', /\[hidden\] \{ display: none !important; \}/.test(css));
 
-// ---- the overview's two tiles (2026-10-10): the main desk leads, the prediction desk sits quieter beside it
-ok('the prediction-market tile is the quiet one', /<section class="card tile quiet" id="ovpm"/.test(html));
-ok('the main desk takes 7 of the 12 columns and the quiet tile 5, lining up with the chart and the latest under them',
-  /\.ov \.tile \{ grid-column: span 7;/.test(css) && /\.ov \.tile\.quiet \{ grid-column: span 5; \}/.test(css) && /\.ov \.chartcard \{ grid-column: span 7;/.test(css) && /\.ov \.latest \{ grid-column: span 5; \}/.test(css));
-ok('the quiet tile\'s figure is a card figure, not the desk\'s headline', /\.tile\.quiet \.big \{ font-size: var\(--type-figure\); \}/.test(css));
+// ---- the overview (2026-10-12): four questions in order, and everything with more behind it opens it
+const ov = (html.match(/<section class="view ov" id="v-overview"[\s\S]*?\n    <\/section>\n/) || [''])[0];
+const at = (id) => ov.indexOf(`id="${id}"`);
+ok('the overview asks its four questions in order: up or down, against holding, the last trade, the health',
+  ['ovhero', 'vshold', 'lasttrade', 'health'].every((id, i, a) => at(id) > 0 && (i === 0 || at(a[i - 1]) < at(id))), ['ovhero', 'vshold', 'lasttrade', 'health'].map(at));
+ok('...then what it holds, the prediction-market desk and the books that are off', at('mkts') > at('vshold') && at('ovpm') > at('health') && at('ovoff') > at('ovpm'));
+ok('the holding question carries the chart, and the card opens it large', ov.indexOf('id="chart"') > at('vshold') && /data-expand="1">Large chart</.test(ov));
+ok('the main column takes 7 of the 12 and the side 5; on a tablet or a phone both are full width',
+  /\.ovmain \{ grid-column: span 7; \}/.test(css) && /\.ovaside \{ grid-column: span 5; \}/.test(css) && /\.ovmain, \.ovaside \{ grid-column: 1 \/ -1; \}/.test(css));
+// "Make it so everything is interactive if it leads to something else" (Evan, 2026-10-12)
+const sheets = [...new Set([...(html + js).matchAll(/data-sheet="([a-z]+)(?::|")/g)].map((m) => m[1]))];
+const known = ((js.match(/function sheetOf\(id\) \{[\s\S]*?\n  \}/) || [''])[0].match(/kind === '(\w+)'/g) || []).map((m) => m.slice(10, -1));
+ok('every sheet the page opens is one sheetOf draws', sheets.length >= 4 && sheets.every((k) => known.includes(k)), { sheets, known });
+ok('the figure opens every book, the light opens the health, and each check does too',
+  /id="ovhero" data-sheet="desk"/.test(html) && /id="deskstate" data-sheet="health"/.test(html) && /sheet: 'health', name: checkName\(c\)/.test(js));
+ok('each book against holding, each market, the last trade and each next check opens its sheet',
+  /sheet: `book:\$\{b\.key\}`, color: BOOK_COLOR/.test(js) && /class="mkrow" data-sheet="mkt:/.test(js) && /class="lt" data-sheet="mkt:/.test(js) && /k: `next-\$\{b\.key\}`, sheet: `book:/.test(js));
+ok('the side desk\'s books and the switched-off books go to their cards', /class="card pmc" data-k="pm-\$\{b\.key\}" href="#pm\/\$\{b\.key\}"/.test(js) && /class="offchip" data-k="off-\$\{b\.key\}" href="#desk\/\$\{b\.key\}"/.test(js));
+ok('a sheet is a dialog with Back and Done, and a change of view or Escape closes it',
+  /<div id="sheet" hidden>\s*<div class="shbox" role="dialog" aria-modal="true"/.test(html) && /id="sheetback"/.test(html) && /class="shdone" data-close="1"/.test(html)
+  && /closeBigChart\(\);[^\n]*\n\s*closeSheet\(\);/.test(js) && /if \(ev\.key === 'Escape'\) \{ closeBigChart\(\); closeSheet\(\); \}/.test(js));
+ok('an open sheet is drawn again from every frame', /renderSheet\(\);\n\s*\$\('floor'\)\.removeAttribute\('aria-busy'\)/.test(js));
+ok('a line that opens nothing is not a button: only a sheet or a link makes one', /const tag = o\.sheet \? `button type="button" class="\$\{cls\}"[^`]*` : o\.href \? `a class="\$\{cls\}"[^`]*` : `div class="\$\{cls\}"`/.test(js));
+ok('the chart is crypto and SPY against holding them', /const HOLD_FIELDS = \{ crypto: \['c', 'bc'\], stocks: \['s', 'bs'\] \}/.test(js));
 // ---- motion (2026-10-10): a view opens at once, as an app's tab does; what moves answers an action
 ok('no card animates in when a view opens', !/animation: rise/.test(css) && !/@keyframes rise/.test(css));
 ok('the chart sheet still opens as a sheet, and a book\'s card still lights when a line led to it', /\.bk\.flash \{ animation: flash/.test(css) && /@keyframes sheetin/.test(css) && /@keyframes sheetup/.test(css));
-ok('...and both only when the device allows motion', (css.match(/@media \(prefers-reduced-motion: no-preference\)/g) || []).length >= 3);
-ok('on a tablet or a phone both tiles go full width, the quiet one too', /\.ov \.tile, \.ov \.tile\.quiet, \.ov \.chartcard, \.ov \.latest \{ grid-column: 1 \/ -1; \}/.test(css));
+ok('...and both only when the device allows motion', (css.match(/@media \(prefers-reduced-motion: no-preference\)/g) || []).length >= 4);
 
 // ---- the floor's words (2026-10-10 audit): a bet named by its pick, an overdue arb, arbs over their cap, the
 // switched-off books on one line, and no book named twice under its tag
@@ -75,7 +93,7 @@ ok('a game bet is named by the team it is on, with what it pays', /Bet on \$\{g\
 ok('...on its card too', /\$\{g\.pick\} over \$\{g\.foe\}` : r\.label/.test(js));
 ok('an arb past its settle date says so', /was to settle \$\{settleDay\(r\.settlesAt\)\}, still open/.test(js));
 ok('arbs over their cap are not "19 of 12 open"', /const over = b\.rows\.length > b\.max/.test(js) && /more than its \$\{b\.max\} slots/.test(js));
-ok('the switched-off books share one line on the overview', /const bookOff = /.test(js) && /chip: 'switched off'/.test(js) && /\$\{on\.map\(/.test(js));
+ok('the switched-off books share one line of chips on the overview', /const bookOff = /.test(js) && /function ovOffHtml\(off\)/.test(js) && /const L = S\.legacy, off = \(S\.books \|\| \[\]\)\.filter\(bookOff\)/.test(js));
 ok('...and a card without a line or a table', /\(traded && !off \? sparkSvg\(b\.key\) : ''\) \+ \(off \? '' : body\)/.test(js));
 ok('a group says which of its books are off, and Runners\' sentence only while it trades', /const groupNote = /.test(js) && /groupNote\(text, bs\)/.test(js) && !/swings\. Runners buy/.test(js));
 ok('a fill\'s sub-line no longer repeats its book, and a folded maker fill says its count', !/BOOK_NAME/.test(js) && /in \$\{f\.n\} fills/.test(js));
