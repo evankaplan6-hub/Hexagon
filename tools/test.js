@@ -16,6 +16,7 @@ const SUITES = [
   ['makerdesk', "the maker's loop: a restart reposts, an empty universe waits, settlement, the dropped tail, reduce-only, the gain lock, cooling"],
   ['broker', 'fills: ladder walking, paper fees, and the live Kalshi order path'],
   ['fees', 'what each venue charges a taker: Polymarket per market, Kalshi per series, nothing assumed free'],
+  ['polymarket', "Polymarket's game listing: every game of a league off its tag, moneylines with a start time only, pages until a short one, one league failing does not fail the others"],
   ['matcher', 'cross-venue matching: names, dates, sports, the figure guard and the price guard'],
   ['match-any', 'any-market matching: the same person, party, deadline or threshold, and every near-miss rejected'],
   ['rules', 'the rules gate: pairs whose rules match, look-alikes that do not, and the cached Claude check'],

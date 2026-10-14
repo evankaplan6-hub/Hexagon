@@ -352,6 +352,57 @@ group('matchPairs: an NFL game -- Kalshi says the city, Polymarket says the nick
   ok('an MLB Giants game still pairs as MLB', mlbGiants.pairs.length === 1 && /^MLB/.test(mlbGiants.pairs[0].label), mlbGiants.pairs);
 }
 
+group('matchPairs: soccer -- Kalshi\'s short club names, and coverage counted by league');
+{
+  // Real names from 2026-10-14, when every league was first read off Polymarket's tag: 27 games on both
+  // venues missed on a name, each fixed by KS_SOCCER_ALIAS or norm().
+  const ev = (ser, code, a, b) => ['A', 'TIE', 'B'].map((leg) => ks({ ticker: `${ser}-${code}-${leg}`, eventTicker: `${ser}-${code}`,
+    subTitle: leg === 'A' ? a : leg === 'B' ? b : 'Tie', title: leg === 'TIE' ? 'Tie is the result' : `${leg === 'A' ? a : b} wins` }));
+  const will = (id, slug, club, title, date) => pm({ id, slug, question: `Will ${club} win on ${date}?`, eventTitle: title, sport: 'moneyline', outcomes: ['Yes', 'No'], gameStart: `${date} 23:30:00+00` });
+  const lafcLag = ev('KXMLSGAME', '26OCT25LAFCLAG', 'Los Angeles G', 'Los Angeles F');
+  const title = 'Los Angeles FC vs. Los Angeles Galaxy';
+  const lafc = matchPairs([will('a', 'mls-lafc-lag-2026-10-25-lafc', 'Los Angeles FC', title, '2026-10-25')], lafcLag);
+  ok('"Los Angeles F" is LAFC', lafc.pairs.length === 1 && /-B$/.test(lafc.pairs[0].ks.ticker), lafc.pairs.map((x) => x.ks.ticker));
+  const lag = matchPairs([will('g', 'mls-lafc-lag-2026-10-25-lag', 'Los Angeles Galaxy', title, '2026-10-25')], lafcLag);
+  ok('...and the Galaxy is "Los Angeles G", never LAFC', lag.pairs.length === 1 && /-A$/.test(lag.pairs[0].ks.ticker), lag.pairs.map((x) => x.ks.ticker));
+
+  const named = matchPairs([
+    will('p', 'ucl-mnc-psg-2026-10-14-psg', 'Paris Saint-Germain FC', 'Manchester City FC vs. Paris Saint-Germain FC', '2026-10-14'),
+    will('b', 'ucl-bog-bvb-2026-10-14-bog', 'FK Bodø/Glimt', 'FK Bodø/Glimt vs. BV Borussia 09 Dortmund', '2026-10-14'),
+    will('r', 'mls-dcu-nyr-2026-10-14-nyr', 'New York Red Bulls', 'D.C. United SC vs. New York Red Bulls', '2026-10-14'),
+  ], [...ev('KXUCLGAME', '26OCT14MCIPSG', 'PSG', 'Manchester City'), ...ev('KXUCLGAME', '26OCT14BOGBVB', 'Dortmund', 'Bodoe/Glimt'),
+    ...ev('KXMLSGAME', '26OCT14DCUNYRB', 'New York RB', 'DC United')]);
+  ok('PSG, Bodoe/Glimt (against Bodø) and New York RB (against D.C. United) all pair', named.pairs.length === 3, named.pairs.map((x) => `${x.label} -> ${x.ks.ticker}`));
+
+  // A Champions League night on Polymarket says nothing about MLS: the alarm counts a league only
+  // when Polymarket lists that league that date.
+  const cov = matchPairs([will('p', 'ucl-mnc-psg-2026-10-14-psg', 'Paris Saint-Germain FC', 'Manchester City FC vs. Paris Saint-Germain FC', '2026-10-14')],
+    [...ev('KXUCLGAME', '26OCT14MCIPSG', 'PSG', 'Manchester City'), ...ev('KXMLSGAME', '26OCT14LAFCATX', 'Los Angeles F', 'Austin')]);
+  ok('UCL listed, MLS not: MLS is not reported as unpaired', !cov.coverage.some((c) => c.league === 'MLS') && cov.coverage.some((c) => c.league === 'UCL' && c.matched === 1), cov.coverage);
+}
+
+group('matchPairs: an NBA game -- Kalshi says the city, Polymarket says the nickname, as in the NFL');
+{
+  // Real names from 2026-10-14: before nbaFull none of the 24 games listed on both venues paired.
+  const nba = (ev, a, b) => [
+    ks({ ticker: `KXNBAGAME-${ev}-A`, eventTicker: `KXNBAGAME-${ev}`, subTitle: a, title: `${a} wins` }),
+    ks({ ticker: `KXNBAGAME-${ev}-B`, eventTicker: `KXNBAGAME-${ev}`, subTitle: b, title: `${b} wins` }),
+  ];
+  const game = (slug, q, outcomes, gameStart) => pm({ slug, question: q, sport: 'moneyline', outcomes, gameStart });
+  const r = matchPairs([game('nba-bkn-mia-2026-10-14', 'Nets vs. Heat', ['Nets', 'Heat'], '2026-10-14 23:30:00+00')], nba('26OCT14BKNMIA', 'Brooklyn', 'Miami'));
+  ok('a city-vs-nickname NBA game pairs', r.pairs.length === 1, r.pairs);
+  ok('...to the first-named side, tagged NBA', r.pairs[0] && r.pairs[0].label === 'NBA Nets v Heat · Nets' && /-A$/.test(r.pairs[0].ks.ticker), r.pairs[0]);
+  ok('...and the NBA is reported covered', r.coverage.every((c) => c.league !== 'NBA' || c.matched === c.events), r.coverage);
+
+  // Kalshi's "Los Angeles C" is the Clippers, never the Lakers; two-word cities and nicknames line up
+  const la = matchPairs([game('nba-den-lac-2026-10-14', 'Nuggets vs. Clippers', ['Nuggets', 'Clippers'], '2026-10-15 02:30:00+00'),
+    game('nba-okc-por-2026-10-16', 'Thunder vs. Trail Blazers', ['Thunder', 'Trail Blazers'], '2026-10-17 02:00:00+00')],
+  [...nba('26OCT14DENLAC', 'Denver', 'Los Angeles C'), ...nba('26OCT16OKCPOR', 'Oklahoma City', 'Portland')]);
+  ok('"Los Angeles C" pairs the Clippers, and Oklahoma City-Portland pairs', la.pairs.length === 2, la.pairs.map((p) => `${p.label} -> ${p.ks.ticker}`));
+  const wrongLa = matchPairs([game('nba-den-lal-2026-10-14', 'Nuggets vs. Lakers', ['Nuggets', 'Lakers'], '2026-10-15 02:30:00+00')], nba('26OCT14DENLAC', 'Denver', 'Los Angeles C'));
+  ok('the Lakers do not pair with the Clippers\' game', wrongLa.pairs.length === 0, wrongLa.pairs);
+}
+
 group('matchPairs: coverage names a league that pairs nothing');
 {
   const nflEvent = (ev, a, b) => [

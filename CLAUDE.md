@@ -65,7 +65,8 @@ npm run reset                                 # wipe the prediction-market paper
   (Evan, 2026-09-27: "doesn't mean you shouldn't be still running them in simulation"). fly.toml has
   `ARBS=1`, `MAKER_QUOTE=1`, `SNIPE=1`; `CONVERGE=0` stays off (its own verdict, 2026-09-21). Since 2026-09-30 `BETS=1` too: "every game should be bet" (Evan, Wild Card night), one $100
   paper bet on the favourite of every game in `BET_SERIES`, held to the final: MLB until 2026-10-10, NBA, NFL
-  and college football since (Evan: "baseball is over switch it to NBA NFL CFB"); README "Every game". All four
+  and college football since (Evan: "baseball is over switch it to NBA NFL CFB"), and MLB again since 10-13 for the
+  rest of the postseason (Evan: "mlb tonight"); README "Every game". All four
   were off 2026-09-25 to 09-27 after every book lost on paper. Do not switch a book off, or
   convergence on, unasked. Kalshi closes a finished game first, every time (median 4.4 minutes after
   Polymarket's 99c reading, 105 of 105 games 09-27 to 09-29), and Polymarket's record says closed a median
@@ -150,7 +151,9 @@ src/makerdesk.js  the maker's loop: universe from MAKER_SERIES (38 listed series
                   (MAKER_FAIR_RAIL), reduce-only quotes that stop at flat, a hold round while halted, the event
                   dates (MAKER_EVENT_DATES: midterm series crossed out 2026-11-02; update the map after 11-03) and the
                   event loss limit (MAKER_EVENT_MAX_LOSS); src/maker.js holds the pure decisions
-src/venues/       Polymarket (Gamma + CLOB) and Kalshi public data; cboe.js (delayed option quotes for the chain tape);
+src/venues/       Polymarket (Gamma + CLOB; since 2026-10-11 fetchGames reads every game of NFL/NBA/CFB/MLB, and since 10-14 EPL/MLS/UCL/La Liga, off its league
+                  tag beside the top-N listing, PM_GAME_TAGS, after a quiet Sunday game's moneyline fell under the volume
+                  line and went unbet) and Kalshi public data; cboe.js (delayed option quotes for the chain tape);
                   chartexchange.js (read-only market data behind CHARTEXCHANGE_API_KEY; the trial key has answered "401 Expired" since the evening
                   of 2026-09-23, so nothing answers until a paid key is set: quotes, short volume, dark pool, max pain, the historical
                   option bars; only the Ask panel and tools/ read it, never the trading loop)
