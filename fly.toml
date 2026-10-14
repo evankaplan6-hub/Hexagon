@@ -90,8 +90,10 @@ primary_region = "iad"          # Ashburn, Virginia — close to the exchange, a
   # tied up -- widened to give the book more room before the next one binds.
   MAX_LONG_ARB_GROUPS = "6"
   # 40 since 2026-10-07: 19 of the 20 slots were held on the box (the arb book restarted 2026-09-27),
-  # so the next real arb would have been turned away. Paper capital, as on 09-17.
-  MAX_ARB_GROUPS = "40"
+  # so the next real arb would have been turned away. Paper capital, as on 09-17. 80 since 2026-10-14
+  # (Evan: "raise the arb limit to 80"), the night soccer and the NBA started pairing: 454 pairs live
+  # against 241, with 21 of the 40 held.
+  MAX_ARB_GROUPS = "80"
   # The convergence book is off on the box since 2026-09-21. The verdict from the journals,
   # 2026-09-10 to 09-21: 72 convergence bets closed, 3 winners, -$637 (-$293 of it fees), and the
   # gates added on the 18th and 19th only slowed the bleeding (-$10, -$61, -$10 a day). Open
