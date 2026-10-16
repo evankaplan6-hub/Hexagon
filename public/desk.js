@@ -111,10 +111,32 @@
   }
   const sameNode = (x, y) => x.nodeType === y.nodeType && x.nodeName === y.nodeName
     && (x.nodeType !== 1 || x.getAttribute('data-k') === y.getAttribute('data-k'));
+  const keyOf = (n) => (n && n.nodeType === 1 ? n.getAttribute('data-k') : null);
+  // Children were matched by position alone until 2026-10-15: a new fill on top of a list pushed every line
+  // down one, each line then differed from the one at its place, and all of them were replaced, the focused
+  // one too (a sheet's trade list lost its focus to the page behind on every fill). Now a line whose data-k is
+  // still wanted stays the same element: a new one is put in before it, a line that is gone is taken out, and
+  // one that moved is moved. One pass and a Map, built on the first keyed miss, so a quiet frame pays nothing.
+  // A move keeps focus where the browser can (moveBefore); a new line or a removed one never moves the rest.
   function patch(a, b) {
     const want = [...b.childNodes];
+    let have = null, wanted = null;
     for (let i = 0; i < want.length; i++) {
-      const y = want[i], x = a.childNodes[i];
+      const y = want[i];
+      let x = a.childNodes[i];
+      if (x && !sameNode(x, y) && (keyOf(x) != null || keyOf(y) != null)) {
+        if (!have) {
+          have = new Map(); wanted = new Set(want.map(keyOf).filter((k) => k != null));
+          for (let j = i; j < a.childNodes.length; j++) { const k = keyOf(a.childNodes[j]); if (k != null && !have.has(k)) have.set(k, a.childNodes[j]); }
+        }
+        while (x && keyOf(x) != null && !wanted.has(keyOf(x))) { const n = x.nextSibling; a.removeChild(x); x = n; }
+        const m = keyOf(y) != null ? have.get(keyOf(y)) : null;
+        if (x && !sameNode(x, y)) {
+          if (m && m.nodeName === y.nodeName) { if (a.moveBefore && m.isConnected) a.moveBefore(m, x); else a.insertBefore(m, x); x = m; }
+          else if (keyOf(x) != null) { a.insertBefore(y, x); continue; }
+        }
+      }
+      if (have && keyOf(x) != null) have.delete(keyOf(x));
       if (!x) { a.appendChild(y); continue; }
       if (!sameNode(x, y)) { a.replaceChild(y, x); continue; }
       if (x.nodeType !== 1) { if (x.nodeValue !== y.nodeValue) x.nodeValue = y.nodeValue; continue; }
@@ -220,8 +242,12 @@
   // books that are off. Anything with more behind it opens it ("make it so everything is interactive if it
   // leads to something else"): a sheet for the desk, a book, a market and the desk's health, a view's card for
   // the rest.
-  // The books with a holding to beat that still trade: crypto and SPY
-  const heldBooks = () => (S.books || []).filter((b) => !bookOff(b) && b.bench != null);
+  // The books with a holding to beat that still trade: crypto and SPY. A book has bought in when one of its slots
+  // holds something or has a holding price (benchPx), read from its rows: the book's `bench` is null for the
+  // seconds after each restart before the first price, too, and the overview said "No book has bought in yet"
+  // and "Nothing held yet" on a desk holding $26,000 (found 2026-10-15).
+  const boughtIn = (b) => (b.key === 'crypto' || b.key === 'stocks') && b.rows.some((r) => r.qty > 0 || r.benchPx > 0);
+  const heldBooks = () => (S.books || []).filter((b) => !bookOff(b) && boughtIn(b));
   const MKT_WORDS = { crypto: 'the coins', stocks: 'SPY' };
   const NUM = ['no', 'one', 'two', 'three', 'four', 'five', 'six'];
   const mktName = (b, r) => (b.key === 'crypto' ? r.label : r.name);
@@ -245,6 +271,8 @@
   function vsHold() {
     const bs = heldBooks();
     if (!bs.length) return null;
+    // bought in, but with no price yet there is no holding to set against it
+    if (bs.some((b) => b.bench == null)) return { bs, waiting: true };
     const pnl = r2(bs.reduce((a, b) => a + b.pnl, 0)), hold = r2(bs.reduce((a, b) => a + b.benchPnl, 0));
     return { bs, pnl, hold, vs: r2(pnl - hold) };
   }
@@ -260,7 +288,10 @@
   }
   // Question one: up or down. The desk's worth, since its start and today; it opens every book.
   function ovHeroHtml() {
-    const p = S.initial ? ` (${S.pnl > 0 && !isZero(S.pnl) ? '+' : S.pnl < 0 && !isZero(S.pnl) ? MINUS : ''}${Math.abs((S.pnl / S.initial) * 100).toFixed(1)}%)` : '';
+    // the share to a tenth of a point, to a hundredth under a tenth (−$12 on $30,000 is −0.04%, not −0.0%), and
+    // with no sign when even that is nothing
+    const part = S.initial ? Math.abs((S.pnl / S.initial) * 100) : 0, ps = part.toFixed(part < 0.095 ? 2 : 1), none = Number(ps) === 0 || isZero(S.pnl);
+    const p = S.initial ? ` (${none ? '0.0' : `${S.pnl > 0 ? '+' : MINUS}${ps}`}%)` : '';
     return `<span class="ovlab">Stocks &amp; crypto desk<i class="chev" aria-hidden="true"></i></span><span class="big">${money(S.equity)}</span>` +
       `<span class="ovsub"><span class="${tone(S.pnl)}">${signed(S.pnl)}${p} since ${esc(sinceDay())}</span>` +
       `${S.today != null ? `<span class="${tone(S.today)}">${signed(S.today)} today</span>` : ''}</span>`;
@@ -270,6 +301,8 @@
   function vsHoldHtml() {
     const v = vsHold();
     if (!v) return '<p class="ovp">No book has bought in yet, so there is no holding to compare with.</p>';
+    if (v.waiting) return `<div class="verdict zero">Waiting on prices</div><p class="ovp">The desk has just started and has no price yet for ` +
+      `${listOf(v.bs.map((b) => MKT_WORDS[b.key] || b.name))}. What it holds is counted at what it paid until the first one comes, and then set against holding.</p>`;
     const head = isZero(v.vs) ? 'Level with holding' : `${v.vs > 0 ? 'Ahead' : 'Behind'} by ${money(v.vs)}`;
     return `<div class="verdict ${tone(v.vs)}">${head}</div><p class="ovp">${v.bs.length === 1 ? 'The book still trading is' : `The ${NUM[v.bs.length] || v.bs.length} books still trading are`} ` +
       `<b class="${tone(v.pnl)}">${upDown(v.pnl)}</b>. Buying ${listOf(v.bs.map((b) => MKT_WORDS[b.key] || b.name))} at each book's first trade and holding would be <b class="${tone(v.hold)}">${upDown(v.hold)}</b>.</p>`;
@@ -277,6 +310,7 @@
   function vsBooksHtml() {
     const v = vsHold();
     return v ? v.bs.map((b) => {
+      if (v.waiting) return rowHtml({ k: b.key, sheet: `book:${b.key}`, color: BOOK_COLOR[b.key], name: esc(b.name), fig: null, why: `${signed(b.pnl)} · waiting on prices to set holding against it` });
       const w = b.rows.reduce((a, r) => a + (r.worth || 0), 0), h = w > 0 ? b.rows.reduce((a, r) => a + (r.value || 0), 0) / w : 0;
       return rowHtml({ k: b.key, sheet: `book:${b.key}`, color: BOOK_COLOR[b.key], name: esc(b.name), fig: r2(b.pnl - b.benchPnl),
         why: `${signed(b.pnl)} against ${signed(b.benchPnl)} for holding · ${h >= 0.995 ? 'all of its money is in the market, as holding\'s is' : `${pct(h)} of its money is in the market, the rest in cash`}` });
@@ -391,7 +425,7 @@
   function deskSheet() {
     const { fees, atWork, cash } = deskTotals(), books = S.books || [];
     const on = books.filter((b) => !bookOff(b)), off = books.filter(bookOff);
-    const line = (b) => rowHtml({ k: b.key, sheet: b.bench != null ? `book:${b.key}` : null, href: b.bench != null ? null : `#desk/${b.key}`, color: BOOK_COLOR[b.key], name: esc(b.name), fig: b.pnl,
+    const line = (b) => rowHtml({ k: b.key, sheet: boughtIn(b) ? `book:${b.key}` : null, href: boughtIn(b) ? null : `#desk/${b.key}`, color: BOOK_COLOR[b.key], name: esc(b.name), fig: b.pnl,
       why: `${money(b.initial)} at the start · ${money(b.equity)} now` });
     return { title: 'The desk', html:
       card('', `<div class="shfig">${money(S.equity)}</div><p>${figure(S.pnl)} since ${esc(sinceDay())}, from ${money(S.initial)} across ${books.length} books.${S.today != null ? ` ${figure(S.today)} today.` : ''}</p>` +
@@ -402,10 +436,10 @@
   }
   function bookSheet(key) {
     const b = bookOf(key);
-    if (!b || b.bench == null) return null;
-    const d = r2(b.pnl - b.benchPnl), band = Math.round(((S.cfg && S.cfg.rebalBand) || 0.1) * 100);
+    if (!b || !boughtIn(b)) return null;
+    const d = b.bench == null ? null : r2(b.pnl - b.benchPnl), band = Math.round(((S.cfg && S.cfg.rebalBand) || 0.1) * 100);
     return { title: b.name, html:
-      card('', `<div class="shfig">${money(b.equity)}</div><p>${figure(b.pnl)} since its start · holding would be ${figure(b.benchPnl)} · ${aheadTxt(d)}</p>` +
+      card('', `<div class="shfig">${money(b.equity)}</div><p>${figure(b.pnl)} since its start · holding would be ${d == null ? 'known with the first price' : `${figure(b.benchPnl)} · ${aheadTxt(d)}`}</p>` +
         `<p class="now" style="--bk:${BOOK_COLOR[key]}">${nextLine(b)}</p>`) +
       card('The rule', `<p>${esc(b.rule)}</p><p>It trades only when a market's share should move ${band} points or more.</p>`) +
       card(key === 'crypto' ? 'Coins' : 'Market', `<ul class="rows">${b.rows.map((r) => {
@@ -427,7 +461,7 @@
     return `<p>${swings}${rule}${moved >= 1 ? ` Prices have moved it to ${pct(share(r))} since.` : ''}</p>`;
   }
   function mktSheet(sym) {
-    const b = heldBooks().find((x) => x.rows.some((r) => r.sym === sym)) || (S.books || []).find((x) => x.bench != null && x.rows.some((r) => r.sym === sym));
+    const b = heldBooks().find((x) => x.rows.some((r) => r.sym === sym)) || (S.books || []).find((x) => boughtIn(x) && x.rows.some((r) => r.sym === sym));
     if (!b) return null;
     const r = b.rows.find((x) => x.sym === sym), name = mktName(b, r), P = b.key === 'crypto' ? coinPx : px;
     const since = r2(r.worth - r.initial), hold = r.hold == null ? null : r2(r.hold - r.initial), d = hold == null ? null : r2(since - hold);
@@ -483,10 +517,21 @@
     if (sheetOpener && document.contains(sheetOpener)) sheetOpener.focus({ preventScroll: true });
     sheetOpener = null;
   }
-  $('sheetback').addEventListener('click', () => { sheetStack.pop(); $('sheetbody').textContent = ''; renderSheet(); });
+  // Back was the focused button, and on the first sheet it is hidden: the focus fell to the page behind and Tab
+  // walked out of the dialog (found 2026-10-15). It stays on Back while there is a sheet to go back to, else on Done.
+  const sheetback = $('sheetback');
+  sheetback.addEventListener('click', () => {
+    sheetStack.pop(); $('sheetbody').textContent = ''; renderSheet();
+    if (!sheet.hidden) (sheetback.hidden ? sheet.querySelector('.shdone') : sheetback).focus({ preventScroll: true });
+  });
   // a tap on anything that opens a sheet, or the large chart, wherever it is; a tap on the dimmed page closes the sheet
   document.addEventListener('click', (ev) => {
     if (ev.target === sheet || ev.target.closest('#sheet [data-close]')) { closeSheet(); return; }
+    // A link in a sheet to a view (the health sheet's prediction-market line, a book's card) closes it. Only a
+    // change of hash did, so the same link from that view's own page did nothing (found 2026-10-15): close it
+    // here, and go to the book's card again when the link is to the address already showing.
+    const go = ev.target.closest('#sheet a[href^="#"]');
+    if (go) { closeSheet(); if (go.hash === location.hash) route(); return; }
     const t = ev.target.closest('[data-sheet], [data-expand]');
     if (!t) return;
     if (t.dataset.expand) { closeSheet(); openBigChart(); return; }
@@ -1290,12 +1335,23 @@
   // not to follow it: a redirect that comes back means the viewer is signed out, so reload into the form.
   const signedOut = () => { fetch('/', { cache: 'no-store', redirect: 'manual' }).then((r) => { if (r.type === 'opaqueredirect') location.reload(); }).catch(() => {}); };
   let es = null, retry = null, lastTry = 0;
+  // For the seconds after a restart before the first price, a held slot's row came worth its cash alone: Bitcoin
+  // "worth $0.04, since start −$3,333" under a book worth what it paid (found 2026-10-15). The book's own figure
+  // holds a slot it has no price for at what it cost (the engine's sleeveValue); each slot's line does the same
+  // here, with no gain or loss on it, until the price comes.
+  function atCost(F) {
+    for (const b of F.books || []) {
+      if (b.key !== 'crypto' && b.key !== 'stocks') continue;
+      for (const r of b.rows) if (r.qty > 0 && !(r.px > 0)) { r.value = r2(r.cost); r.worth = r2(r.cash + r.cost); r.pnl = null; }
+    }
+    return F;
+  }
   function connect() {
     clearTimeout(retry); retry = null;
     if (es) es.close();
     lastTry = Date.now();
     const mine = es = new EventSource('/api/desk/stream');
-    mine.onmessage = (ev) => { try { S = JSON.parse(ev.data); S._rxPerf = performance.now(); lastFrameAt = Date.now(); render(); } catch (e) { console.error(e); } };
+    mine.onmessage = (ev) => { try { S = atCost(JSON.parse(ev.data)); S._rxPerf = performance.now(); lastFrameAt = Date.now(); render(); } catch (e) { console.error(e); } };
     mine.onerror = () => { if (es !== mine) return; mine.close(); es = null; retry = setTimeout(connect, 3000); signedOut(); };
   }
   // no frame since the last one, or since the last try when none has come at all
