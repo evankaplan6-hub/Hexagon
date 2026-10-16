@@ -135,6 +135,8 @@ tools/headline-lab.js would the investment stack's X feed trade a coin? (Coinbas
                   feed is not wired in; README, "Headlines: tested, not wired in"
 tools/desk-check.js step 8 of the daily check: the desk's loop alive, each book's check done today, its journal
                   rebuilding state.json to the penny, each book against holding (--box copies /data/desk first);
+tools/week-report.js the weeks (2026-10-15): each Eastern week, crypto and SPY against holding, the off books, the PM books'
+                  realised; from the daily check's copies, writes data/reports/weeks.html; read-only, no network
                   tests: tools/desk-test.js, tools/crypto-lab-test.js, tools/runner-lab-test.js, tools/spy-lab-test.js, tools/headline-lab-test.js, tools/desk-check-test.js (tools/desk-fixture.js
                   is their shared fake market, not a suite)
                   THE PREDICTION-MARKET DESK (paper, not the main focus: arbs, maker and snipe on since 2026-09-27; its books on / since 2026-09-29, old page /pm)

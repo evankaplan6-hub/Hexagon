@@ -57,6 +57,7 @@ const SUITES = [
   ['headline-lab', 'the headline lab: Eastern post times, one position at a time, no buying before the bot has the post, the fee both ways, a baseline from the same kind of day'],
   ['runner-lab', "the runner lab: 24-hour figures rebuilt from hourly candles, the book's own scan and exits, four slots, the cool-down, the fee"],
   ['spy-lab', "the SPY lab: minutes labelled by their end, the option model, and the scalp and dip books' days through their own code"],
+  ['week-report', 'the weekly report: Eastern weeks from Monday that add up to the run, counted from the starting cash, the prediction desk in the same weeks, one page with nothing fetched'],
   ['desk-check', "the desk's daily check: a real day replays to the penny, every drift named, alive and today's checks at any hour of the week"],
   ['pmfloor', "the prediction-market desk on the floor at /: its books add up to its own P&L to the cent, the log in the floor's words and levels, trades from the ledger, a box-sized desk in one frame"],
   ['floor', "the floor at / as four views: a link and a panel each, no id a view's link could scroll to, every element desk.js reads in desk.html, each book in one group, read-only, and a tab bar on a phone"],

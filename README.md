@@ -1642,6 +1642,14 @@ stocks, crypto and options desk; step 9 is the anytime-touchdown tape on the Mac
 
 First run, 2026-09-21: 159 settlements, 159 agree; 29 watchdog restarts on the 20th, 7 on the 21st.
 
+**The weeks.** After the check, `node tools/week-report.js` reads the copies it left (`data/fly/desk-now`,
+`data/fly/archive`, `data/fly/box-now`) and says, week by week (Monday to Sunday, Eastern), what the crypto
+and SPY books made against simply holding, what the off books cost, and what each prediction-market book
+banked; it writes the same as one page, `data/reports/weeks.html`, to read on a phone. Read-only, no network.
+Since the start is counted from the starting cash, so it agrees with step 8 to the penny. First run,
+2026-10-15, three weeks in: crypto -$1,136.13 against holding's -$1,678.50 (ahead $542.37), SPY level with
+holding, the game bets -$616.40.
+
 ### The pull and the backup
 
 `ops/install-pull.sh` installs a LaunchAgent that runs `ops/run-pull.sh` **every hour at :30**
