@@ -28,6 +28,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const maker = require('../src/maker');
 const { ET_DAY } = require('../src/recorder');
+const gaps = require('./journal-gaps');
 
 const r2 = (x) => Math.round(x * 100) / 100;
 const money = (x) => `${x < 0 ? '-' : ''}$${Math.abs(x).toFixed(2)}`;
@@ -111,7 +112,11 @@ function rebuild(events, initial, { until = Infinity, makerFills = Infinity } = 
     } else if (e.kind === 'MAKER_FLATTEN') {
       const x = mk(e.ticker), r = maker.applyFill(x, { side: e.qty > 0 ? 'sell' : 'buy', qty: Math.abs(e.qty), px: e.px });
       m.cash = r2(m.cash + r.cashDelta - (e.fee || 0)); m.realized = r2(m.realized + r.pnl - (e.fee || 0));
-      Object.assign(x, { inv: r.inv, cost: r.cost, realized: r2(r.realized - (e.fee || 0)) });
+      Object.assign(x, { inv: r.inv, cost: r.cost, realized: r2(r.realized - (e.fee || 0)) });    } else if (e.kind === 'MAKER_GAP') {
+      // a hole in the journal (tools/journal-gaps.js): what the lost lines did to each inventory, and the
+      // cash and fill count the state holds beyond the journal; the lost fills' prices are not known
+      for (const [ticker, d] of Object.entries(e.inv || {})) mk(ticker).inv += d;
+      m.cash = r2(m.cash + (e.cash || 0)); m.fills += e.fills || 0;
     }
   }
   return { taker: t, maker: m };
@@ -285,7 +290,10 @@ function run(argv, { log = console.log } = {}) {
     journals = [archive, got.journals];
     state = got.state;
   }
-  const { events, days, torn } = readJournals(journals);
+  const read = readJournals(journals);
+  const { days, torn } = read;
+  // the journal's known holes (tools/journal-gaps.js): their lines, restored beside the journal, never into it
+  const { events, restored } = gaps.withGaps(read.events);
   let S;
   try { S = JSON.parse(fs.readFileSync(state, 'utf8')); } catch (e) { log(`ledger-check: cannot read ${state}: ${e.message}`); return 2; }
   // The account's first balance: its starting balance less any paper deposited since (a DEPOSIT line
@@ -293,8 +301,12 @@ function run(argv, { log = console.log } = {}) {
   const built = rebuild(events, firstBalance(S), { until: stateTime(S), makerFills: (S.maker || {}).fills });
   const { problems, makerRealizedSkew } = compare(built, S);
   log(`journal ${days[0] || '?'} → ${days[days.length - 1] || '?'} · ${events.length} events${torn ? ` · ${torn} torn line(s) skipped` : ''} · state as of ${new Date(stateTime(S)).toISOString().slice(0, 19)}Z (${ET_DAY.format(new Date(stateTime(S)))} ET)`);
+  if (restored.length) {
+    const ids = [...new Set(restored.map((e) => e.restored))];
+    log(`GAPS    ${ids.length} known hole(s) in the journal (tools/journal-gaps.js: ${ids.join(', ')}): ${restored.filter((e) => e.kind !== 'MAKER_GAP').length} taker line(s) restored from the state's closed legs, ${restored.filter((e) => e.kind === 'MAKER_GAP').reduce((a, e) => a + Object.keys(e.inv || {}).length, 0)} maker inventory jump(s)`);
+  }
   log(`TAKER   cash ${money(built.taker.cash)} · fees ${money(built.taker.fees)} · realised ${money(built.taker.realized)} · ${built.taker.positions.size} legs open · ${built.taker.tally.closed} groups closed (${built.taker.tally.wins} won, ${built.taker.tally.losses} lost)`);
-  log(`MAKER   cash ${money(built.maker.cash)} · ${built.maker.fills} fills · realised ${money(built.maker.realized)} by replay, ${money((S.maker || {}).realized || 0)} in the state (${Math.abs(makerRealizedSkew) < 0.005 ? 'agree' : `${money(makerRealizedSkew)} apart: the pre-2026-09-12 arithmetic, cash is exact`})`);
+  log(`MAKER   cash ${money(built.maker.cash)} · ${built.maker.fills} fills · realised ${money(built.maker.realized)} by replay, ${money((S.maker || {}).realized || 0)} in the state (${Math.abs(makerRealizedSkew) < 0.005 ? 'agree' : `${money(makerRealizedSkew)} apart: the pre-2026-09-12 arithmetic, cash is exact${restored.length ? '; and the lost fills\' prices, see GAPS' : ''}`})`);
   if (problems.length) { log(`\n${problems.length} PROBLEM(S): the state does not match the journal`); for (const p of problems) log(`  ${p}`); }
   else log('OK      every number in the state is what the journal says it should be');
   const done = argv.includes('--venues') ? checkVenues(events, log) : Promise.resolve(null);

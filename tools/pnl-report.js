@@ -14,6 +14,7 @@
 const fs = require('fs');
 const path = require('path');
 const maker = require('../src/maker');
+const gaps = require('./journal-gaps');
 
 const usd = (x) => `${x < 0 ? '-' : '+'}$${Math.abs(x).toFixed(2)}`;
 const r2 = (x) => Math.round(x * 100) / 100;
@@ -36,10 +37,11 @@ function load(dir, since) {
   for (const [, f] of [...byDay].sort()) {
     for (const line of fs.readFileSync(f, 'utf8').split('\n')) {
       if (!line) continue;
-      try { const e = JSON.parse(line); if (!since || e.t.slice(0, 10) >= since) ev.push(e); } catch { /* a torn last line */ }
+      try { ev.push(JSON.parse(line)); } catch { /* a torn last line */ }
     }
   }
-  return ev;
+  // the journal's known holes (tools/journal-gaps.js): the lost lines restored beside it, before `since` cuts
+  return gaps.withGaps(ev.sort((a, b) => Date.parse(a.t) - Date.parse(b.t))).events.filter((e) => !since || e.t.slice(0, 10) >= since);
 }
 
 // Pure: journal events in, numbers out. `pos` is returned so --marks can price what is still held.
@@ -108,6 +110,9 @@ function summarize(events) {
     } else if (e.kind === 'MAKER_SETTLE') {
       mk.settles++; mk.settlePnl += e.pnl || 0; D(day(e)).maker += e.pnl || 0;
       if (pos[e.ticker]) { pos[e.ticker].inv = 0; pos[e.ticker].cost = 0; }
+    } else if (e.kind === 'MAKER_GAP') {
+      // a hole in the journal (tools/journal-gaps.js): the inventory the lost fills left, so --marks prices it
+      for (const [ticker, d] of Object.entries(e.inv || {})) (pos[ticker] || (pos[ticker] = { inv: 0, cost: 0, realized: 0 })).inv += d;
     } else if (e.kind === 'MAKER_FLATTEN') {
       // A whole position crossed out at the touch: the operator's flatten, and since 2026-09-24 the
       // maker's own cross-out the day before a configured event date. `pnl` is net of the taker fee.
@@ -150,7 +155,7 @@ function render(s, unreal) {
   L.push('SETTLEMENT SNIPE  (bought on Kalshi after Polymarket settled)');
   L.push(`  ${snipe.n} settled or closed · ${snipe.w} winners · realized ${usd(r2(snipe.pnl))} · fees paid ${usd(-r2(snipe.fees))} of that`);
   L.push('');
-  L.push('GAME BETS  (one favourite per MLB game, held to the final)');
+  L.push('GAME BETS  (one favourite per game in BET_SERIES, held to the final)');
   L.push(`  ${bets.n} settled or closed · ${bets.w} winners · realized ${usd(r2(bets.pnl))} · fees paid ${usd(-r2(bets.fees))} of that`);
   L.push('');
   L.push('MAKER');

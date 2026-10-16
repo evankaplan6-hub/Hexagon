@@ -197,7 +197,8 @@ tools/            edge-scan, replay, maker-replay, maker-rank, pm-maker-scan, ma
                   pnl-report (one-screen realised P&L per book from data/fly/archive + data/fly/box-now, every arb leg counted;
                   --marks prices held maker inventory), restarts (START/STOP/WATCHDOG/CRASH per ET day, and restarts nothing explains),
                   ledger-check (does the ledger add up: rebuilds both books from the journals and compares them with
-                  state.json line by line; --box checks the Fly box, --venues checks every settlement against the venues),
+                  state.json line by line; --box checks the Fly box, --venues checks every settlement against the venues;
+                  journal-gaps.js restores the 10-15/10-16 disk-full holes beside the journal, never into it),
                   fly-pull (copies the box's finished days to data/fly/archive, verifies, then trims old box tapes and probe files;
                   the desk's journals in /data/desk go to data/fly/archive/desk/ and, like every journal, are never trimmed)
                   tests: test.js (npm test) runs the suites in its SUITES list, one tools/<name>-test.js each; a *-test.js
