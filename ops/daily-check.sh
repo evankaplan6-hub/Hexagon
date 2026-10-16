@@ -1,6 +1,7 @@
 #!/bin/bash
-# The daily trust routine: eight questions about the Fly box and the Mac's tapes, one screen, nothing changed on the box.
-# Steps 1-7 are about the prediction-market desk and the box; step 8 is the stocks, crypto and options desk.
+# The daily trust routine: nine questions about the Fly box and the Mac's tapes, one screen, nothing changed on the box.
+# Steps 1-7 are about the prediction-market desk and the box; step 8 is the stocks, crypto and options desk;
+# step 9 is the anytime-touchdown tape on the Mac (research, no book).
 #
 #   bash ops/daily-check.sh
 #
@@ -35,6 +36,11 @@
 #      options desk well?                 book did today's check (crypto after midnight UTC, SPY after the
 #                                         open, the options book's 12:30 verdict), its journal rebuilds
 #                                         state.json to the penny, and each book against simply holding
+#   9. did the touchdown tape miss        tools/td-tape.js --check on this Mac, offline: the last td.log line,
+#      a game?                            how long ago it was (a day without a run is a PROBLEM), and each NFL
+#                                         game that kicked off in the last 48h with no tape line in the 2h
+#                                         before kickoff, by name (added 2026-10-15: SEA at DEN was missed
+#                                         with the Mac asleep, and nothing said so)
 #
 # Nothing on the box is changed. What it writes on the Mac: step 2 copies the box's state.json and
 # the journals the archive lacks into data/fly/box-now, replacing the copies from the previous run
@@ -115,6 +121,11 @@ fi
 say "8. the stocks, crypto and options desk: alive, today's checks, the ledger against its journal, each book against holding"
 # Read-only on the box (tools/desk-check.js --box): lists /data/desk and copies it down, nothing else.
 node tools/desk-check.js --box || bad=$((bad + 1))
+
+say "9. the anytime-touchdown tape on this Mac: the last run, and every game whose window passed with no tape"
+# Read-only and offline (tools/td-tape.js --check): td.log, data/td/games.json (the games each --record run
+# has seen listed, with kickoffs) and the day files. Added 2026-10-15, after the Thursday game went unrecorded.
+node tools/td-tape.js --check || bad=$((bad + 1))
 
 printf '\n%s\n' "$([ "$bad" = 0 ] && echo 'every step answered, nothing flagged' || echo "$bad step(s) flagged a problem: read up")"
 exit "$bad"

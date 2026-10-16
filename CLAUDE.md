@@ -213,8 +213,9 @@ ops/              Fly deploy, launchd desk autostart (not installed), the tape p
                   The option-history job was removed from launchd 2026-09-24 (ops/uninstall-history.sh): the key had expired. Its scripts (ops/install-history.sh, run-history.sh, the plist) stay for a paid key; README says how to put it back.
                   ops/daily-check.sh is the daily trust routine (read-only on the box): pull alive, ledger-check --box --venues, pnl-report
                   + fillcheck, restarts (tools/restarts.js), CPU steal/pressure + disk + probe files, the chain tape (chain-record --check),
-                  whether the encrypted secrets image is older than .env or the key, and (step 8) the stocks, crypto and
-                  options desk (tools/desk-check.js --box).
+                  whether the encrypted secrets image is older than .env or the key, (step 8) the stocks, crypto and
+                  options desk (tools/desk-check.js --box), and (step 9, since 2026-10-15) the anytime-touchdown tape
+                  (tools/td-tape.js --check: names each game whose window passed untaped, from data/td/games.json).
                   The box also has a disk brake (TAPE_MIN_FREE_MB) that trims its oldest tapes if the pull stops
 data/             gitignored: state.json, journal-*.jsonl, ticks-*.jsonl, desk.log (the prediction-market desk)
 data/desk/        gitignored: the stocks, crypto and options desk's state.json and journal-*.jsonl. From the box's
@@ -233,7 +234,7 @@ data/chains/      gitignored: the option-chain tape, chains-YYYY-MM-DD.jsonl + .
                   IRREPLACEABLE for free: a lost day can only be bought back, never re-fetched (backed up hourly with the pull).
                   09-23 has no session quotes; the 09-24 09:45 ET lines are copies of 09-22 after-hours prices: filter on qt.
                   Each run leaves an ok/PROBLEM line in data/chains/chains.log and exits 1 on a PROBLEM
-data/td/          gitignored: the anytime-touchdown tape, td-YYYY-MM-DD.jsonl + td.log (tools/td-tape.js); a Sunday nobody recorded
+data/td/          gitignored: the anytime-touchdown tape, td-YYYY-MM-DD.jsonl + td.log + games.json (tools/td-tape.js); a Sunday nobody recorded
                   cannot be re-collected; not yet in the iCloud backup (add it to the pull job when the tape has a month)
 data/options/history/  gitignored: the ChartExchange option history (tools/option-history.js), one JSON per underlying per expiry
 data/options/dolt/     gitignored: DoltHub's free SPY chains, one JSON per weekday (tools/dolt-fetch.js); re-fetchable, 18 MB, rides along in the data/options backup

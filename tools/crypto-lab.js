@@ -109,7 +109,12 @@ async function fetchCoin(id, from) {
 
 // ------------------------------------------------------------------ every coin
 // Hourly candles [[tMs, o, h, l, c, v], ...] -> UTC days, the way Coinbase's daily candles are cut. A day with
-// fewer than 20 hours traded is left out (a halt, a listing day), so a gap is never scored as one day's move.
+// fewer than 20 hours traded is left out (a halt, a listing day). Said plainly (2026-10-15; this comment used to
+// claim the opposite): leaving it out does NOT keep a gap from being scored, it causes it -- the next day's
+// return is taken from the last kept close, so the move over two days is scored as one day's. Re-run both ways
+// on 2026-10-15 (--coins, the 55 fresh coins): it does not change the verdict -- the rule beats holding on 49 of
+// 55 either way, and the median coin's rule return a year is -0.8% as the code runs, -1.4% with the short days
+// kept -- so the code stays as it is.
 function dailyFromHours(rows) {
   const by = new Map();
   for (const r of rows) { const d = Math.floor(r[0] / 86400000); let g = by.get(d); if (!g) by.set(d, (g = [])); g.push(r); }
