@@ -1615,6 +1615,16 @@ stocks, crypto and options desk; step 9 is the anytime-touchdown tape, recorded 
    line by line, and every settlement agrees with the venues. It copies the box's `state.json` and the
    journals the archive lacks into `data/fly/box-now`, replacing its own copies from the last run
    (the only thing the check writes, besides one line of `data/fly/archive/fillcheck.jsonl`).
+   **The journal's two holes (2026-10-16).** When the box's disk filled on 2026-10-15, two windows
+   of journal lines never reached it (10-15 00:00-04:17Z and 10-16 00:31-00:53Z) while the desk kept
+   trading in memory, and from then on every check was red: taker cash $383.24 apart, 9 legs "open"
+   that had settled, 9 maker inventories off. `tools/journal-gaps.js` records what the holes held and
+   both this check and `pnl-report` add it beside the journal (the files are never edited): the 3
+   lost buys and 9 lost settlements rebuilt from the state's own closed legs, which make up the
+   difference to the cent and agree with the venues, and one `MAKER_GAP` line per window with each
+   market's inventory jump (the lost fills' prices are not known, so the maker's realised-by-replay
+   sits $6.74 from the state's, reported as a note). Since then the check reads OK again, and the game
+   bets read -$1,024.51 over 106 bets, not -$826.12 over 97.
 3. **What has each book realised?** `tools/pnl-report.js`, from the archive plus `box-now` (the
    archive wins a day both have), so today is today's journal and not the tail of yesterday's; the
    newest row says `so far, through HH:MMZ`. Since 2026-09-24 it books every arb leg's `CLOSE`,
