@@ -119,6 +119,22 @@ group('the journal is compared only as far as the state had got');
   s.cash = 9893.45; s.stats = { fees: 2.15, realized: 0.15, groupsClosed: 1, wins: 1, losses: 0 }; s.maker.realized = -1.42;
   ok('...and such a state has no problems', compare(built, s).problems.length === 0, compare(built, s).problems);
   ok('stateTime is the newest moment the state vouches for', stateTime({ log: [{ t: 5 }], balanceHistory: [{ t: 7 }], maker: { lastFill: { at: 9 }, hist: [{ t: 8 }] } }) === 9 && stateTime({}) === Infinity);
+  ok('...a deposit\'s own time included', stateTime({ log: [{ t: 5 }], deposits: { a: { usd: 1, at: 11 }, b: { usd: 1 } } }) === 11);
+}
+
+group('a state saved at boot, right after a deposit, has no false cash mismatch (audit 2026-10-15)');
+{
+  // applyDeposits journals DEPOSIT and saves before the new run logs a line or samples a balance, so
+  // the state's newest log and balance times are the previous run's
+  const t0 = Date.parse('2026-10-14T23:00:00Z'), t1 = Date.parse('2026-10-14T23:05:00Z');
+  const S = { initial: 20000, cash: 20000, positions: [], closed: [], log: [{ t: t0 }], balanceHistory: [{ t: t0, b: 20000 }],
+    stats: { wins: 0, losses: 0, realized: 0, fees: 0, groupsClosed: 0 }, maker: { cash: 10000, fills: 0, markets: {} },
+    deposits: { '2026-10-14': { usd: 10000, at: t1 } } };
+  const ev = [{ t: new Date(t1).toISOString(), kind: 'DEPOSIT', id: '2026-10-14', usd: 10000, initial: 20000, cash: 20000 }];
+  ok('the state vouches for the deposit\'s moment', stateTime(S) === t1, new Date(stateTime(S)).toISOString());
+  const built = rebuild(ev, firstBalance(S), { until: stateTime(S), makerFills: 0 });
+  const c = compare(built, S);
+  ok('...so the DEPOSIT line is replayed and the cash agrees', c.problems.length === 0, c.problems);
 }
 
 group('box-now holds only what the archive lacks');
