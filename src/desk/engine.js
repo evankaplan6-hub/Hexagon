@@ -36,6 +36,7 @@ const feedsLib = require('./feeds');
 const broker = require('./broker');
 const books = require('./books');
 const watchdog = require('../watchdog');
+const { appendWhole } = require('../journal');
 
 const r2 = (x) => Math.round(x * 100) / 100;
 const r4 = (x) => Math.round(x * 10000) / 10000;
@@ -202,7 +203,9 @@ class Desk {
     const t = this.now();
     try {
       fs.mkdirSync(this.dir, { recursive: true });
-      fs.appendFileSync(path.join(this.dir, `journal-${clock.et(t).day}.jsonl`), JSON.stringify({ t: new Date(t).toISOString(), kind, ...payload }) + '\n');
+      // whole lines only: a line a full disk cut short does not swallow the next (src/journal.js)
+      if (!this.journalSt) this.journalSt = { check: true };
+      appendWhole(path.join(this.dir, `journal-${clock.et(t).day}.jsonl`), JSON.stringify({ t: new Date(t).toISOString(), kind, ...payload }) + '\n', this.journalSt);
     } catch (e) { if (this.due('journal-err', 300)) this.log('TESS', 'OPS', null, `journal write failed: ${String(e.message).slice(0, 100)}`); }
   }
   due(name, sec) {

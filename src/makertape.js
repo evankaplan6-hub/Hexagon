@@ -44,7 +44,7 @@
 // book or quote it is when this desk read it. Roughly 20 MB a day for 24 markets.
 const fs = require('fs');
 const path = require('path');
-const { ET_DAY } = require('./recorder');
+const { ET_DAY, tapeHold } = require('./recorder');
 
 const HEARTBEAT_MS = 60000;
 const r4 = (x) => Math.round(x * 10000) / 10000;
@@ -104,6 +104,8 @@ function makeMakerTape(cfg, { io = fs, clock = Date.now } = {}) {
         qb: q.bid == null ? 0 : Math.round(ahead.bid || 0), qa: q.ask == null ? 0 : Math.round(ahead.ask || 0), ...(q.reduceOnly ? { ro: 1 } : {}) }));
     }
     if (!lines.length) { inGap = nextGap; return; }
+    // the pair recorder's brake holds the shared tape while the disk is under its floor (src/recorder.js)
+    if (tapeHold.on) { lost = true; return; }
     try {
       io.mkdirSync(cfg.dataDir, { recursive: true });
       io.appendFileSync(path.join(cfg.dataDir, `ticks-${ET_DAY.format(new Date(now))}.jsonl`), lines.join('\n') + '\n');

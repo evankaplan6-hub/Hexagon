@@ -18,7 +18,14 @@ const ET_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', 
 // run hourly at :30 by ops/com.hexagon.pull.plist). This is for when that has stopped -- the Mac
 // asleep for a week, fly logged out. A full disk does not just stop the tape: the journal, the append-only truth, and state.json fail to write with it.
 // Losing the oldest tape is the cheaper failure, so below `tapeMinFreeMb` the recorder gives up
-// old tapes, oldest first, to keep everything else writing.
+// old tapes, oldest first, to keep everything else writing. And when that is not enough -- no old
+// tape left, or one still held open mid-copy -- it stops writing TODAY's tape (the pair lines and
+// src/makertape.js's, which share the file) until free space is back above the floor. That case
+// happened on 2026-10-15: every game of four leagues a day ahead (#198) put 435 game pairs on the
+// tape, a line each per cycle, 808 of the day's 852 MB; the disk filled with no old tape left, and
+// the journal lost lines. A day of tape lost is a study's gap; a journal line lost is the ledger's.
+const tapeHold = { on: false, since: 0 };   // one per process: both tape writers read it
+const HOLD_RECHECK_MS = 5 * 60000;          // while held, look this often whether the space came back
 const TICKS_FILE = /^ticks-(\d{4}-\d{2}-\d{2})\.jsonl$/;
 const BRAKE_EVERY_MS = 3600000;   // free space moves a few MB an hour; checking per cycle buys nothing
 const MB = 1024 * 1024;
@@ -60,15 +67,31 @@ function makeDiskBrake(cfg, io = fs) {
   // there is nothing to retry.
   if (!(minFreeBytes > 0) || typeof io.statfsSync !== 'function') return () => {};
   let nextAt = -Infinity;   // so the first write checks at once: a restart onto a full disk is the likeliest time to need it
+  let holdCheckAt = -Infinity;
   const freeNow = () => { const s = io.statfsSync(cfg.dataDir); return Number(s.bavail) * Number(s.bsize); };
+  const release = (E, free) => {
+    if (!tapeHold.on) return;
+    tapeHold.on = false;
+    E.log('TESS', 'OPS', null, `disk ok again · ${mb(free)} MB free · writing today's tick tape again (it has a gap since ${new Date(tapeHold.since).toISOString().slice(11, 16)}Z)`);
+  };
   return (E, now) => {
+    // While today's tape is held, look every few minutes whether the space came back -- a look,
+    // never a trim: trimming stays hourly, for the reason the pass below gives.
+    if (tapeHold.on && now >= holdCheckAt && now < nextAt) {
+      holdCheckAt = now + HOLD_RECHECK_MS;
+      let f;
+      try { f = freeNow(); } catch { return; }
+      if (Number.isFinite(f) && f >= minFreeBytes) release(E, f);
+      return;
+    }
     if (now < nextAt) return;
     nextAt = now + BRAKE_EVERY_MS;
     let free;
     // statfs failing (a filesystem that will not say) is not worth a log line or a retry next
     // cycle; the next look is already an hour out
     try { free = freeNow(); } catch { return; }
-    if (!Number.isFinite(free) || free >= minFreeBytes) return;
+    if (!Number.isFinite(free)) return;
+    if (free >= minFreeBytes) { release(E, free); return; }
     try {
       // Eastern, like the filename the recorder writes: from 20:00 to midnight ET the UTC date is
       // already tomorrow, and a UTC "today" would make the evening's own tape look old
@@ -105,16 +128,24 @@ function makeDiskBrake(cfg, io = fs) {
       remeasure();
       if (free < minFreeBytes) {
         const left = planTapeTrim(files.filter((f) => !gone.has(f.name)), { today, freeBytes: 0, minFreeBytes: Infinity }).length;
+        const wasOn = tapeHold.on;
+        if (!wasOn) { tapeHold.on = true; tapeHold.since = now; }
+        holdCheckAt = now + HOLD_RECHECK_MS;
+        const held = wasOn ? 'today\'s tick tape still held' : 'today\'s tick tape held (not written) until there is room, so the journals keep theirs';
         E.log('TESS', 'OPS', null, left
-          ? `disk low · ${mb(free)} MB free, still under the ${cfg.tapeMinFreeMb} MB floor · ${left} old tick tape${left === 1 ? '' : 's'} left; looking again in an hour (a tape still open elsewhere, mid-copy, frees its space only once closed)`
-          : `disk low · ${mb(free)} MB free, under the ${cfg.tapeMinFreeMb} MB floor, and no old tick tape is left to delete · journals and today's tape are never deleted`);
-      }
+          ? `disk low · ${mb(free)} MB free, still under the ${cfg.tapeMinFreeMb} MB floor · ${held} · ${left} old tick tape${left === 1 ? '' : 's'} left; trimming again in an hour (a tape still open elsewhere, mid-copy, frees its space only once closed)`
+          : `disk low · ${mb(free)} MB free, under the ${cfg.tapeMinFreeMb} MB floor, and no old tick tape is left to delete · ${held} · journals and today's tape are never deleted`);
+      } else release(E, free);
     } catch (e) {
       // the brake must never take the cycle down with it
       try { E.log('TESS', 'OPS', null, `disk low · could not trim old tick tapes: ${String(e && e.message).slice(0, 120)}`); } catch { /* nothing left to tell */ }
     }
   };
 }
+
+// Which pairs are written only on a change (plus the heartbeat): any-market pairs, and games that
+// have not started. tools/replay.js carries exactly these forward between lines.
+const onChange = (p) => p.kind === 'event' || (p.kind === 'game' && !p.inPlay);
 
 // `io` and `clock` are the fs module and Date.now in production; tools/disk-test.js passes a fake
 // disk and a fixed time to check the brake is really wired in, ahead of the empty-cycle return.
@@ -125,15 +156,19 @@ function makeRecorder(cfg, { io = fs, clock = Date.now } = {}) {
   // Pairs from the any-market scanner (kind 'event') are written when something on the line changes
   // -- a price level, the veto, in-play -- and otherwise once every RECORD_HEARTBEAT_MIN. There can be
   // hundreds of them, most long-dated and quiet: a line per pair per cycle is ~2 MB a day each, and
-  // the Fly box keeps three days of tape on a 1 GB volume. Games and Fed pairs keep a line every
-  // cycle, so tools/replay.js reads old and new tapes the same way for them. `hb: true` marks a
-  // heartbeat line, so a flat market and a gap in the tape stay distinguishable.
+  // the Fly box keeps three days of tape on a 1 GB volume. Games before kickoff are written the same
+  // way since 2026-10-15: the league listings (#198) brought every game a day ahead, 435 pairs and
+  // 808 MB in one day at a line per cycle. A game IN PLAY, and Fed pairs, keep a line every cycle
+  // (the settlement studies read a live game's every quote), and tools/replay.js carries a quiet
+  // line forward to the next one. `hb: true` marks a heartbeat line, so a flat market and a gap in
+  // the tape stay distinguishable.
   const lastLine = new Map();   // pairId -> { key, at }
   const heartbeatMs = Math.max(1, Number(cfg.recordHeartbeatMin) || 15) * 60000;
   return (E) => {
     const now = clock();
     // before the early return below: a cycle with nothing to write still owns the old tapes on disk
     brake(E, now);
+    if (tapeHold.on) return;   // the disk is under its floor: the journals come first
     const lines = [];
     for (const p of E.pairs) {
       const q = p.q;
@@ -172,7 +207,7 @@ function makeRecorder(cfg, { io = fs, clock = Date.now } = {}) {
       // Which rail stopped this pair, when one did. `edge` says how close it came; this says what
       // it came up short against, so a tape line explains itself without re-running the gates.
       if (p.veto) row.veto = p.veto;
-      if (p.kind === 'event') {
+      if (onChange(p)) {
         // a quote that stopped refreshing is a change too, or a carried-forward line in replay
         // would look fresh when the desk itself had stopped trusting it
         const stale = Number.isFinite(q.t) && now - q.t > (Number(cfg.maxDataAgeSec) || 90) * 1000;
@@ -181,8 +216,10 @@ function makeRecorder(cfg, { io = fs, clock = Date.now } = {}) {
         if (prev && prev.key === key && now - prev.at < heartbeatMs) continue;
         if (prev && prev.key === key) row.hb = true;
         lastLine.set(p.id, { key, at: now });
-        if (p.category) row.category = p.category;
         if (stale) row.stale = true;
+      } else lastLine.delete(p.id);   // in play: every cycle, and the first quiet line after it is written fresh
+      if (p.kind === 'event') {
+        if (p.category) row.category = p.category;
         // what the desk's time and rules gates read, so replay applies the same ones
         if (Number.isFinite(p.closesAt)) row.closesAt = new Date(p.closesAt).toISOString();
         if (Number.isFinite(p.settlesAt)) row.settlesAt = new Date(p.settlesAt).toISOString();
@@ -204,4 +241,4 @@ function makeRecorder(cfg, { io = fs, clock = Date.now } = {}) {
   };
 }
 
-module.exports = { makeRecorder, makeDiskBrake, planTapeTrim, ET_DAY, TICKS_FILE };
+module.exports = { makeRecorder, makeDiskBrake, planTapeTrim, onChange, tapeHold, ET_DAY, TICKS_FILE };

@@ -21,6 +21,7 @@ const decide = require('../src/decide');
 const ks = require('../src/venues/kalshi');
 const pm = require('../src/venues/polymarket');
 const base = require('../src/config');
+const { onChange } = require('../src/recorder');
 
 const args = process.argv.slice(2);
 const files = args.filter((a) => !a.startsWith('--'));
@@ -66,8 +67,8 @@ function loadCycles(files) {
     }
   }
   const cycles = [...byT.entries()].sort((a, b) => a[0] - b[0]);
-  // Any-market pairs (kind 'event') are written only when something changes, plus a heartbeat
-  // (src/recorder.js). Between lines the desk was still pricing them at the last written values, so
+  // Any-market pairs (kind 'event'), and since 2026-10-15 games before kickoff, are written only
+  // when something changes, plus a heartbeat (src/recorder.js, onChange). Between lines the desk was still pricing them at the last written values, so
   // carry each forward into every cycle until its next line, with the quote time moved up to the
   // cycle -- unless the line itself said the quote was stale. A pair silent for longer than two
   // heartbeats was no longer being priced and is dropped rather than carried.
@@ -80,7 +81,11 @@ function loadCycles(files) {
       if (t - at > HEARTBEAT_GRACE) { last.delete(id); continue; }
       pairs.push({ ...p, carried: true, q: { ...p.q, t: p.stale ? p.q.t : t } });
     }
-    for (const p of pairs) if (p.kind === 'event' && !p.carried) last.set(p.id, { p, at: t });
+    // a game in play is written every cycle, so it is not carried: a line that stops is a game gone
+    for (const p of pairs) {
+      if (p.carried) continue;
+      if (onChange(p)) last.set(p.id, { p, at: t }); else last.delete(p.id);
+    }
   }
   return cycles;
 }
