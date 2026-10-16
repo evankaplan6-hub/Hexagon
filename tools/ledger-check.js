@@ -119,6 +119,10 @@ function rebuild(events, initial, { until = Infinity, makerFills = Infinity } = 
 
 // The newest moment the state vouches for: its log's newest line, its last balance sample, the
 // maker's last fill and last history sample, whichever is latest. The save came after all of them.
+// And each paper deposit's own time (audit 2026-10-15): the engine applies a deposit at boot and saves
+// at once, before it has logged a line or sampled a balance, so a state.json copied in that window
+// vouched only for the previous run's last moment, the DEPOSIT line was cut off as "after the state",
+// and the check reported the $10k it had just been told about as a cash mismatch.
 function stateTime(S) {
   const times = [
     ((S.log || [])[0] || {}).t,
@@ -128,6 +132,7 @@ function stateTime(S) {
     // every taker event the state holds happened no later than the save
     ...(S.positions || []).map((p) => p.openedAt),
     ...(S.closed || []).map((c) => c.exitAt),
+    ...Object.values(S.deposits || {}).map((d) => d && d.at),
   ].filter(Number.isFinite);
   return times.length ? Math.max(...times) : Infinity;
 }

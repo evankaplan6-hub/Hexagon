@@ -636,5 +636,46 @@ group('matchPairs: a label keeps a college name whole, and shortens a pro one');
   ok('a club keeps its whole name, less "FC"', mls.pairs.length === 1 && mls.pairs[0].label === 'MLS Seattle Sounders v Portland Timbers · Seattle Sounders', mls.pairs.map((p) => p.label));
 }
 
+group('matchPairs: Kalshi\'s "Kentucky" is not Polymarket\'s "Western Kentucky" (audit 2026-10-15)');
+{
+  // A college ticker carries no start time, so a lone candidate pairs on its names alone, and the prefix
+  // walk let a Polymarket word go unmatched at the front: Western Kentucky v Middle Tennessee paired to
+  // Kentucky v Tennessee whenever Kalshi listed only the bigger game, and with both listed it was
+  // rejected as two games on one date. Kalshi's first word must begin Polymarket's first word.
+  const ev = (code, a, b) => [['A', a], ['B', b]].map(([l, n]) => ks({ ticker: `KXNCAAFGAME-${code}-${l}`, eventTicker: `KXNCAAFGAME-${code}`, subTitle: n, title: `${n} wins` }));
+  const ml = (id, slug, outcomes, gameStart) => pm({ id, slug, question: `${outcomes[0]} vs. ${outcomes[1]}`, sport: 'moneyline', outcomes, gameStart });
+  const wku = ml('wku', 'cfb-wku-mtsu-2026-10-17', ['Western Kentucky', 'Middle Tennessee'], '2026-10-17 23:00:00+00');
+  const uk = ml('uk', 'cfb-uk-tenn-2026-10-17', ['Kentucky', 'Tennessee'], '2026-10-17 16:00:00+00');
+  const UK = ev('26OCT17UKTENN', 'Kentucky', 'Tennessee'), WKU = ev('26OCT17WKUMTSU', 'Western Kentucky', 'Middle Tennessee');
+  const lone = matchPairs([wku, uk], UK);
+  ok('Kalshi lists only Kentucky-Tennessee: Western Kentucky-Middle Tennessee does not pair to it', lone.pairs.length === 1 && lone.pairs[0].pm.id === 'uk', lone.pairs.map((p) => `${p.pm.id} -> ${p.ks.ticker}`));
+  const onlyWku = matchPairs([uk], WKU);
+  ok('...nor the other way: Kentucky-Tennessee does not pair to Kalshi\'s Western Kentucky-Middle Tennessee', onlyWku.pairs.length === 0, onlyWku.pairs.map((p) => `${p.pm.id} -> ${p.ks.ticker}`));
+  for (const [name, pms, kss] of [['both listed', [uk, wku], [...UK, ...WKU]], ['both listed, the other order', [wku, uk], [...WKU, ...UK]]]) {
+    const r = matchPairs(pms, kss);
+    ok(`${name}: each game pairs to its own event`, r.pairs.length === 2 && r.pairs.every((p) => (p.pm.id === 'wku') === /WKUMTSU-A$/.test(p.ks.ticker)) && r.rejected.length === 0,
+      { pairs: r.pairs.map((p) => `${p.pm.id} -> ${p.ks.ticker}`), rejected: r.rejected });
+  }
+  // a word lost at the end, or an abbreviated first word, still pairs
+  const ok2 = matchPairs([ml('ap', 'cfb-app-gast-2026-10-17', ['Appalachian State', 'Georgia State'], '2026-10-17 16:00:00+00')], ev('26OCT17APPGAST', 'Appalachian St.', 'Georgia St.'));
+  ok('"Appalachian St." still pairs "Appalachian State"', ok2.pairs.length === 1, ok2.pairs);
+  // tennis is exempt: Kalshi may name a player by surname alone
+  ok('a player named by surname is still a match there', nameMatch('Medvedev', 'Daniil Medvedev', true));
+}
+
+group('matchPairs: a two-outcome moneyline never pairs with a three-way event (audit 2026-10-15)');
+{
+  // Kalshi's soccer events have a Tie leg. The game path dropped it and paired a two-outcome Polymarket
+  // moneyline as if a draw could not happen; such an event is skipped there now (path 3 is for it).
+  const ev3 = (ser, code, a, b) => ['A', 'TIE', 'B'].map((leg) => ks({ ticker: `${ser}-${code}-${leg}`, eventTicker: `${ser}-${code}`,
+    subTitle: leg === 'A' ? a : leg === 'B' ? b : 'Tie', title: leg === 'TIE' ? 'Tie is the result' : `${leg === 'A' ? a : b} wins` }));
+  const two = pm({ id: 'x', slug: 'mls-sea-atx-2026-10-25', question: 'Seattle Sounders FC vs. Austin FC', sport: 'moneyline', outcomes: ['Seattle Sounders FC', 'Austin FC'], gameStart: '2026-10-25 23:30:00+00' });
+  const r = matchPairs([two], ev3('KXMLSGAME', '26OCT25SEAATX', 'Seattle', 'Austin'));
+  ok('Seattle-Austin two-way does not pair with Seattle / Tie / Austin', r.pairs.length === 0, r.pairs.map((p) => `${p.label} -> ${p.ks.ticker}`));
+  const will = pm({ id: 'w', slug: 'mls-sea-atx-2026-10-25-sea', question: 'Will Seattle Sounders FC win on 2026-10-25?', eventTitle: 'Seattle Sounders FC vs. Austin FC', sport: 'moneyline', outcomes: ['Yes', 'No'], gameStart: '2026-10-25 23:30:00+00' });
+  const w = matchPairs([will], ev3('KXMLSGAME', '26OCT25SEAATX', 'Seattle', 'Austin'));
+  ok('...while "Will Seattle win on <date>?" still pairs with its Seattle leg', w.pairs.length === 1 && /-A$/.test(w.pairs[0].ks.ticker), w.pairs.map((p) => p.ks.ticker));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

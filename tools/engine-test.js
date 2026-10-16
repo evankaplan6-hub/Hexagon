@@ -583,6 +583,57 @@ const position = (over = {}) => ({
     } finally { ksv.fetchMarket = realK; pmv.fetchMarket = realP; }
   }
 
+  group('a Polymarket game long past its start is asked about even while it is still listed (audit 2026-10-15)');
+  {
+    // A league-tag game's flags are only as fresh as its last read; a quiet game that ended and closed
+    // still said "listed, accepting", so resolution() never asked and the leg never settled.
+    const pmv = require('../src/venues/polymarket');
+    const realP = pmv.fetchMarket;
+    let asked = 0, answer = null;
+    pmv.fetchMarket = async (id) => { asked++; return { id, tokenIds: ['Gy', 'Gn'], ...answer }; };
+    try {
+      const at = (h) => new Date(Date.now() - h * 3600e3).toISOString().replace('T', ' ').replace(/\.\d+Z$/, '+00');
+      const listedGame = (startedHoursAgo) => ({ id: 'G', tokenIds: ['Gy', 'Gn'], bestBid: 0.98, bestAsk: 0.99, gameStart: at(startedHoursAgo), sport: 'moneyline', accepting: true, closed: false });
+      const pmPos = position({ id: 'gl', venue: 'PM', ref: 'Gy', pmId: 'G', tokenIndex: 0 });
+
+      const early = engine();
+      early.state.positions = [{ ...pmPos }];
+      early.quotes.pm.set('G', listedGame(2));
+      answer = { closed: true, resolved: true, prices: [1, 0] };
+      ok('a listed game two hours in is not asked', (await early.resolution(early.state.positions[0])) === null && asked === 0, asked);
+
+      const late = engine();
+      late.state.positions = [{ ...pmPos }];
+      late.quotes.pm.set('G', listedGame(5));
+      const r = await late.resolution(late.state.positions[0]);
+      ok('a listed game five hours in is asked, and settles if Polymarket has resolved it', r && r.resolved && r.yesPx === 1 && asked === 1, [r, asked]);
+
+      // closed, the result proposed but not final: no settlement, but the listed row now says closed
+      const prop = engine();
+      prop.state.positions = [{ ...pmPos }];
+      const row = listedGame(5);
+      prop.quotes.pm.set('G', row);
+      answer = { closed: true, resolved: false, accepting: false, prices: [0.99, 0.01] };
+      ok('closed but not resolved: nothing settles', (await prop.resolution(prop.state.positions[0])) === null);
+      ok('...the listed row is marked closed, so no sale is booked into it', row.closed === true && row.accepting === false && /closed/.test(prop.marketHalted(prop.state.positions[0]) || ''), [row.closed, prop.marketHalted(prop.state.positions[0])]);
+
+      // still open (overtime, a rain delay): asked every five minutes, not every minute
+      const open = engine();
+      open.state.positions = [{ ...pmPos }];
+      open.quotes.pm.set('G', listedGame(5));
+      answer = { closed: false, resolved: false, accepting: true, prices: [0.6, 0.4] };
+      asked = 0;
+      await open.resolution(open.state.positions[0]);
+      open.resolutionChecks.set('gl', Date.now() - 2 * 60000);
+      await open.resolution(open.state.positions[0]);
+      ok('a late game still open is asked at most every five minutes', asked === 1, asked);
+      open.resolutionChecks.set('gl', Date.now() - 301 * 1000);
+      await open.resolution(open.state.positions[0]);
+      ok('...and asked again after five', asked === 2, asked);
+      ok('...an open answer leaves the row open and sellable', open.marketHalted(open.state.positions[0]) === null);
+    } finally { pmv.fetchMarket = realP; }
+  }
+
   group('an arb whose first venue has settled is half settled, not broken');
   {
     const E = engine();
@@ -835,7 +886,7 @@ const position = (over = {}) => ({
   {
     const pmv = require('../src/venues/polymarket'), ksv = require('../src/venues/kalshi');
     const saved = { fu: pmv.fetchUniverse, fg: pmv.fetchGames, fp: pmv.fetchPrices, fa: ksv.fetchAll, ft: ksv.fetchMarketsByTickers };
-    let gameReads = [], gamesFail = false, failTags = [];
+    let gameReads = [], gamesFail = false, failTags = [], cappedTags = [];
     const game = (id, over = {}) => ({ id, tokenIds: [`${id}y`, `${id}n`], bestBid: 0.55, bestAsk: 0.56, vol24: 10, gameStart: '2026-10-11 17:00:00+00', sport: 'moneyline', ...over });
     pmv.fetchUniverse = async () => [{ id: 'shared', tokenIds: ['t0', 't1'], bestBid: 0.40, bestAsk: 0.42, vol24: 1000, fromUniverse: true }];
     pmv.fetchGames = async (tags) => {
@@ -844,7 +895,7 @@ const position = (over = {}) => ({
       const byTag = new Map();
       if (!failTags.includes('450')) byTag.set('450', [game('nfl-quiet'), game('shared', { fromGames: true })]);
       if (!failTags.includes('100351')) byTag.set('100351', [game('cfb-1')]);
-      return { byTag, failed: [...failTags] };
+      return { byTag, failed: [...failTags], capped: [...cappedTags] };
     };
     pmv.fetchPrices = async () => new Map();
     ksv.fetchAll = async () => [{ ticker: 'KXA', yesBid: 0.4, yesAsk: 0.42, vol24: 10 }];
@@ -875,7 +926,28 @@ const position = (over = {}) => ({
       await E.refreshQuotes();
       ok('every league failing keeps every last good list and the quote map still has the games', E.quotes.pm.get('nfl-quiet') === kept && E.quotes.pm.has('cfb-1') && E.pmGames.failed.join() === '450,100351', [...E.quotes.pm.keys()]);
       ok('...and the data age is not held back by it (the two fast listings decide that)', E.lastQuoteAt > 0);
+
+      // ...but not forever (audit 2026-10-15): a row keeps the accepting/closed flags of the read it
+      // came from, so a game that closed while its league kept failing stayed "listed and open"
+      const lines = [];
+      E.log = (...a) => lines.push(a.join(' '));
+      E.pmGames.readAt.set('450', Date.now() - 1201 * 1000);   // two intervals and a second since NFL's last good read
+      await E.refreshQuotes();
+      ok('a league list older than two PM_GAMES_EVERY_SEC leaves the quote map', !E.quotes.pm.has('nfl-quiet') && E.quotes.pm.has('cfb-1'), [...E.quotes.pm.keys()]);
+      ok('...the listing still wins a market both had', E.quotes.pm.get('shared') && E.quotes.pm.get('shared').fromUniverse === true);
+      ok('...and the drop is said once', lines.filter((l) => /league 450 .*dropped/.test(l)).length === 1, lines);
+      await E.refreshQuotes();
+      ok('...and stays out until a read succeeds', !E.quotes.pm.has('nfl-quiet') && lines.filter((l) => /dropped/.test(l)).length === 1, lines);
       gamesFail = false;
+      E.pmGames.at -= 601 * 1000;
+      await E.refreshQuotes();
+      ok('a good read brings the league back, timed', E.quotes.pm.has('nfl-quiet') && Date.now() - E.pmGames.readAt.get('450') < 5000, [...E.quotes.pm.keys()]);
+      cappedTags = ['100351'];
+      E.pmGames.at -= 601 * 1000;
+      await E.refreshQuotes();
+      ok('a league cut short (page cap or time budget) is said, and what it read is kept', E.quotes.pm.has('cfb-1') && lines.some((l) => /cut short for league 100351/.test(l)), lines);
+      cappedTags = [];
+      E.log = () => {};
 
       gameReads = [];
       const off = engine({ pmListEverySec: 120, pmGamesEverySec: 600, ksSeries: ['KXNFLGAME'], pmGameTags: {} });

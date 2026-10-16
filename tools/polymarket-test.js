@@ -9,11 +9,14 @@ const httpPath = require.resolve('../src/http');
 const calls = [];
 let pages = {};       // tag -> [page0 rows, page1 rows, ...]
 let failTags = new Set();
+let pageMs = 0;       // how long each page takes to answer
+const opts = [];      // the options each call was made with
 require.cache[httpPath] = {
   id: httpPath, filename: httpPath, loaded: true, children: [], paths: [],
   exports: {
-    getJSON: async (url) => {
-      calls.push(url);
+    getJSON: async (url, o) => {
+      calls.push(url); opts.push(o || {});
+      if (pageMs) await new Promise((r) => setTimeout(r, pageMs));
       const u = new URL(url);
       const tag = u.searchParams.get('tag_id'), off = +u.searchParams.get('offset') || 0;
       if (failTags.has(tag)) throw new Error('HTTP 429');
@@ -92,8 +95,30 @@ const row = (id, over = {}) => ({
     ok('...and every row kept', r.byTag.get('100351').length === 201, r.byTag.get('100351').length);
     pages = { 100351: Array.from({ length: 30 }, (_, n) => full(n)) };
     calls.length = 0;
-    await pm.fetchGames(['100351']);
+    const capped = await pm.fetchGames(['100351']);
     ok('a league that never pages short stops at ten pages', calls.length === 10, calls.length);
+    ok('...keeps the thousand rows it read, and is named in capped (audit 2026-10-15: it was cut off silently)', capped.byTag.get('100351').length === 1000 && capped.capped.join() === '100351', capped.capped);
+    pages = { 100351: [full(0), [row('last')]] };
+    const whole = await pm.fetchGames(['100351']);
+    ok('a league that pages short is not capped', whole.capped.length === 0, whole.capped);
+  }
+
+  group('one time budget for the whole read (audit 2026-10-15: ten slow pages held the taker cycle)');
+  {
+    const full = (n) => Array.from({ length: 100 }, (_, i) => row(`${n}-${i}`));
+    pages = { 100351: Array.from({ length: 30 }, (_, n) => full(n)), 450: [[row('n1')]] };
+    calls.length = 0; opts.length = 0; pageMs = 40;
+    const t0 = Date.now();
+    const r = await pm.fetchGames(['100351', '450'], { budgetMs: 100 });
+    const took = Date.now() - t0;
+    pageMs = 0;
+    ok('no page starts once the budget is spent', calls.filter((c) => /tag_id=100351/.test(c)).length <= 3 && took < 250, { pages: calls.length, took });
+    ok('a league that runs out is a failed league (its last good list stands), the others are kept', r.failed.join() === '100351' && r.byTag.get('450').length === 1 && !r.byTag.has('100351'), [r.failed, [...r.byTag.keys()]]);
+    ok('each page\'s own timeout is held inside what is left of the budget', opts.every((o) => o.timeout > 0 && o.timeout <= 100), opts);
+    calls.length = 0; opts.length = 0;
+    pages = { 450: [[row('n1')]] };
+    await pm.fetchGames(['450']);
+    ok('the default budget is twenty seconds, and no page waits longer than the usual fifteen', opts[0].timeout === 15000, opts);
   }
 
   group('leagues in parallel, one failing does not fail the others');
