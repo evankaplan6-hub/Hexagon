@@ -58,6 +58,11 @@
 // early to grade) is a PROBLEM, one line each. A job that has not run for STALE_H is a PROBLEM too, since a
 // game listed and played in that time would never reach the schedule. And a run that comes more than
 // GAP_MIN after the last ok one, across a game's recording window, says so in its td.log line ("gap: ...").
+//
+// ON THE BOX (2026-10-16). The next Thursday it happened again, the check in place: the Mac asleep on battery,
+// SEA at DEN unrecorded. So the Fly box runs record() itself, every 15 minutes inside the desk (src/tdsched.js,
+// TD_TAPE=1), into /data/td; the hourly pull copies each finished day to data/fly/archive/td/, and the daily
+// check runs --check --dir /data/td on the box. The Mac's launchd job, if still installed, is a spare tape.
 const fs = require('fs');
 const path = require('path');
 const http = require('../src/http');
@@ -351,7 +356,7 @@ function check(dir = DIR, { now = Date.now(), listing = null } = {}) {
   const problems = [];
   if (/ PROBLEM /.test(last)) problems.push('the last run was a PROBLEM');
   if (!Number.isFinite(lastT) || now - lastT > STALE_H * 3600e3) {
-    problems.push(`no run for ${Number.isFinite(lastT) ? dur(now - lastT) : 'an unknown time'}: the job is not firing (launchctl list | grep tdtape), and a game listed and played meanwhile never reaches the schedule`);
+    problems.push(`no run for ${Number.isFinite(lastT) ? dur(now - lastT) : 'an unknown time'}: the job is not firing (on the box: TD_TAPE=1 in fly.toml, src/tdsched.js; on the Mac: launchctl list | grep tdtape), and a game listed and played meanwhile never reaches the schedule`);
   }
   let schedule = readSchedule(dir);
   const fromFile = Object.keys(schedule).length;

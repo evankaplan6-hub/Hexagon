@@ -135,6 +135,11 @@ primary_region = "iad"          # Ashburn, Virginia — close to the exchange, a
   # up to ~5 MB, so only the newest CHAINS_KEEP_DAYS days are kept. The Mac's tape keeps every day.
   CHAINS = "1"
   CHAINS_KEEP_DAYS = "14"
+  # The anytime-touchdown tape (tools/td-tape.js --record, every 15 minutes, into /data/td) runs here
+  # since 2026-10-16 (src/tdsched.js): on the Mac it ran from launchd, which does not fire while the
+  # Mac sleeps on battery, and two Thursday night games went unrecorded. Research only, no bet: about
+  # 200 KB a Sunday. The hourly pull copies each finished day to data/fly/archive/td/.
+  TD_TAPE = "1"
   # The stocks, crypto and options desk (src/desk/), the main work since 2026-09-25, runs in this same
   # process on src/config.js's own defaults: crypto, SPY and SPY same-day options, paper only, no
   # broker behind it. Its ledger and journal are /data/desk/, and its floor is the page at /; the
