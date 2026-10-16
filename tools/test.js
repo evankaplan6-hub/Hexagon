@@ -49,7 +49,7 @@ const SUITES = [
   ['pnl-report', 'the P&L report: convergence, arbs from every leg, maker realised from the journals, today from box-now'],
   ['settle-lag', "the settlement-lag study: from Polymarket's proposal and close on, what Kalshi offered the winner, for how long, with how much at the touch; and which venue closed each game first"],
   ['restarts', "the desk's lifecycle: START, STOP and CRASH in the journal, a restart nothing explains, and every reader passes them by"],
-  ['td-tape', "the anytime-touchdown tape: 1+ markets only, kickoff off Kalshi's expected end, the three-hour window, a Sunday night filed under Sunday, the last record before kickoff, voids, the fee, the bands"],
+  ['td-tape', "the anytime-touchdown tape: 1+ markets only, kickoff off Kalshi's expected end, the three-hour window, a Sunday night filed under Sunday, the last record before kickoff, voids (a finalized scalar), the fee and its fallback said, the bands, a missed game named and a gap noted"],
   ['lookout', 'the lookout page: the painted room, read-only, fed by the same stream as the floor'],
   ['themes', 'what a market is about: leagues off the series, the tickers that only look like one, and the page filter built on it'],
   ['desk', 'the stocks, crypto and options desk: the market calendar, the feeds, paper fills, every book\'s rules, and whole rounds of a trading day, a morning of scalps and a morning dip'],

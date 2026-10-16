@@ -4,21 +4,24 @@
 // A collector's only bad failure is a quiet one: a tape that recorded the 2+ markets as 1+, filed a
 // Sunday-night game under Monday, took an in-game price as "before kickoff", or graded a no-snap void
 // as a loss would read as a hold that is not there. So this leans on the parsing, the window, the
-// pick of the last pre-kickoff record and the grading arithmetic. http.getJSON is stubbed before the
-// tool loads.
+// pick of the last pre-kickoff record and the grading arithmetic. Since 2026-10-15 also three quiet failures
+// that happened: a game whose window passed with the Mac asleep, which --check must name; a void Kalshi
+// finalizes as 'scalar' (it read as pending); and a fee that fell back to the full rate unsaid.
+// http.getJSON is stubbed before the tool loads.
 //
 //   node tools/td-tape-test.js
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const httpPath = require.resolve('../src/http');
-let pages = [], calls = [], failNext = false;
+let pages = [], calls = [], failNext = false, seriesReply = null;
 require.cache[httpPath] = {
   id: httpPath, filename: httpPath, loaded: true, children: [], paths: [],
   exports: {
     getJSON: async (url) => {
       calls.push(url);
       if (failNext) { failNext = false; throw new Error('HTTP 503'); }
+      if (/\/series\//.test(url)) return seriesReply || {};
       const u = new URL(url), cursor = u.searchParams.get('cursor');
       const i = cursor ? +cursor.replace('page', '') : 0;
       const page = pages[i] || { markets: [] };
@@ -97,15 +100,62 @@ const ONE_END = '2026-10-11T20:00:00Z';   // the 1 PM ET games
     ok('the line carries the time of the run, the prices and the kickoff', lines.length === 1 && lines[0].t === '2026-10-11T16:00:00.000Z' && lines[0].bid === 0.33 && lines[0].ask === 0.35 && lines[0].kickoff === '2026-10-11T17:00:00.000Z', lines[0]);
     ok('td.log has the run\'s line', fs.readFileSync(path.join(dir, T.LOG), 'utf8').trim() === r.line);
     const quiet = await T.record({ dir, now: Date.parse('2026-10-11T18:00:00Z') });
-    ok('a run with no game in the window writes no tape line, and the log says 0 written', quiet.ok && quiet.recorded === 0 && / 0 games in the next 3h, 0 lines written$/.test(quiet.line) && fs.readFileSync(dir + '/td-2026-10-11.jsonl', 'utf8').trim().split('\n').length === 1, quiet.line);
+    ok('a run with no game in the window writes no tape line, and the log says 0 written', quiet.ok && quiet.recorded === 0 && / 0 games in the next 3h, 0 lines written · /.test(quiet.line) && fs.readFileSync(dir + '/td-2026-10-11.jsonl', 'utf8').trim().split('\n').length === 1, quiet.line);
+    ok('...and, two hours after the last run, across the 1 PM game\'s window, it notes the gap', / · gap: no run for 2h00m \(since 2026-10-11T16:00Z\), across the window of CINMIA$/.test(quiet.line), quiet.line);
+    const sched = T.readSchedule(dir);
+    ok('every run keeps the schedule: both games the listing showed, with kickoffs, not only the one due', sched['KXNFLTD-26OCT11CINMIA'] && sched['KXNFLTD-26OCT11CINMIA'].kickoff === '2026-10-11T17:00:00.000Z' && sched['KXNFLTD-26OCT11BALATL'] && sched['KXNFLTD-26OCT11BALATL'].seen === '2026-10-11T16:00:00.000Z', sched);
+    ok('...written whole (no .tmp left behind)', !fs.existsSync(path.join(dir, T.SCHEDULE + '.tmp')));
     failNext = true;
     const down = await T.record({ dir, now: noon });
     ok('Kalshi down: a PROBLEM line, nothing recorded, exit status false', !down.ok && down.recorded === 0 && / PROBLEM td-tape: .*Kalshi: HTTP 503/.test(down.line), down.line);
-    const c = T.check(dir);
-    ok('--check reads the last line as a PROBLEM', !c.ok && /^PROBLEM/.test(c.text) && /1 day on tape/.test(c.text), c.text);
+    const c = T.check(dir, { now: noon + 60000 });
+    ok('--check reads the last line as a PROBLEM', !c.ok && /^PROBLEM \(the last run was a PROBLEM\)/.test(c.text) && /1 day on tape/.test(c.text), c.text);
     await T.record({ dir, now: noon });
-    ok('...and ok once a run succeeds', T.check(dir).ok);
+    ok('...and ok once a run succeeds', T.check(dir, { now: noon + 60000 }).ok, T.check(dir, { now: noon + 60000 }).text);
     ok('--check with no log yet is a PROBLEM', !T.check(tmp()).ok);
+  }
+
+  group('--check names a game whose window passed with no usable tape (2026-10-15: SEA at DEN, the Mac asleep)');
+  {
+    const dir = tmp();
+    const seaden = row('KXNFLTD-26OCT15SEADEN-DENRHARVEY12-1', 'KXNFLTD-26OCT15SEADEN', 'RJ Harvey: 1+', '2026-10-16T03:15:00Z');
+    pages = [{ markets: [seaden] }];
+    // the day's real runs: 14:29Z and 18:23Z see the game (kickoff 00:15Z, out of the window), then nothing until 00:42Z
+    await T.record({ dir, now: Date.parse('2026-10-15T14:29:20Z') });
+    const r2 = await T.record({ dir, now: Date.parse('2026-10-15T18:23:48Z') });
+    ok('a gap that crosses no window is not noted', !/gap/.test(r2.line), r2.line);
+    ok('the schedule knows the game from the morning run', T.readSchedule(dir)['KXNFLTD-26OCT15SEADEN'].kickoff === '2026-10-16T00:15:00.000Z');
+    const before = T.check(dir, { now: Date.parse('2026-10-15T20:00:00Z') });
+    ok('before kickoff nothing is missed yet', before.ok && /0 games kicked off in the last 48h, each on tape/.test(before.text), before.text);
+    const late = await T.record({ dir, now: Date.parse('2026-10-16T00:42:54Z') });
+    ok('the 00:42Z run notes the gap across SEADEN\'s window', / · gap: no run for 6h19m \(since 2026-10-15T18:23Z\), across the window of SEADEN$/.test(late.line) && late.recorded === 0, late.line);
+    const c = T.check(dir, { now: Date.parse('2026-10-16T01:15:00Z') });
+    ok('--check: PROBLEM, exit status false, the game named with its kickoff and day file', !c.ok && c.missed.length === 1 && /^PROBLEM \(1 game kicked off in the last 48h with no usable tape\)/.test(c.text) &&
+      /\n  PROBLEM: SEADEN \(KXNFLTD-26OCT15SEADEN\) kicked off 2026-10-16T00:15Z with no line in td-2026-10-15\.jsonl/.test(c.text), c.text);
+    // a record 2h50m out only: on tape, but too early to grade, so still missed
+    fs.writeFileSync(path.join(dir, 'td-2026-10-15.jsonl'), JSON.stringify({ t: '2026-10-15T21:25:00.000Z', ticker: 'X', event: 'KXNFLTD-26OCT15SEADEN', kickoff: '2026-10-16T00:15:00.000Z' }) + '\n');
+    const early = T.check(dir, { now: Date.parse('2026-10-16T01:15:00Z') });
+    ok('a game with only lines too early to grade is missed too, and says how many', !early.ok && /with 1 line in td-2026-10-15\.jsonl, none in the 2h before kickoff/.test(early.text), early.text);
+    fs.appendFileSync(path.join(dir, 'td-2026-10-15.jsonl'), JSON.stringify({ t: '2026-10-16T00:05:00.000Z', ticker: 'X', event: 'KXNFLTD-26OCT15SEADEN', kickoff: '2026-10-16T00:15:00.000Z' }) + '\n');
+    const taped = T.check(dir, { now: Date.parse('2026-10-16T01:15:00Z') });
+    ok('a line ten minutes before kickoff: on tape, ok', taped.ok && /1 game kicked off in the last 48h, each on tape/.test(taped.text), taped.text);
+    ok('past the 48h lookback a miss is not repeated', T.missedGames(dir, { E: { game: 'OLD', kickoff: '2026-10-12T00:15:00.000Z' } }, Date.parse('2026-10-16T01:15:00Z')).length === 0);
+    const stale = T.check(dir, { now: Date.parse('2026-10-17T06:00:00Z') });
+    ok('no run for over a day is a PROBLEM on its own', !stale.ok && /no run for 29h17m: the job is not firing/.test(stale.text), stale.text);
+    // no schedule yet (a tape from before 2026-10-15): ok, but it says it cannot name a miss; --venue's listing fills in
+    const old = tmp();
+    fs.writeFileSync(path.join(old, T.LOG), '2026-10-16T00:42:54.208Z ok td-tape: 300 open 1+ markets, 0 games in the next 3h, 0 lines written\n');
+    const blind = T.check(old, { now: Date.parse('2026-10-16T01:15:00Z') });
+    ok('no schedule: ok, and says a miss cannot be named', blind.ok && /no schedule yet/.test(blind.text), blind.text);
+    const venue = T.check(old, { now: Date.parse('2026-10-16T01:15:00Z'), listing: [seaden] });
+    ok('...with the open listing (--venue) the in-progress game is found missed', !venue.ok && venue.missed.map((m) => m.game).join() === 'SEADEN', venue.text);
+    ok('the gap note: a quiet night with no window in it says nothing', T.gapNote(Date.parse('2026-10-15T02:04Z'), Date.parse('2026-10-15T14:29Z'), T.readSchedule(dir)) === '');
+    ok('...nor does a run within 30 minutes of the last', T.gapNote(Date.parse('2026-10-15T23:30Z'), Date.parse('2026-10-15T23:59Z'), T.readSchedule(dir)) === '');
+    ok('the schedule drops games older than 60 days and keeps the first sighting', (() => {
+      const m = T.mergeSchedule({ OLD: { game: 'OLD', kickoff: '2026-08-01T00:00:00.000Z', seen: 'x' }, NEW: { game: 'NEW', kickoff: '2026-10-16T00:15:00.000Z', seen: 'first' } },
+        [{ event: 'NEW', game: 'NEW', kickoff: '2026-10-16T00:20:00.000Z' }], Date.parse('2026-10-15T00:00Z'));
+      return !m.OLD && m.NEW.seen === 'first' && m.NEW.kickoff === '2026-10-16T00:20:00.000Z';
+    })());
   }
 
   group('grading: the last record before kickoff, results, voids, the fee, the bands');
@@ -144,6 +194,29 @@ const ONE_END = '2026-10-11T20:00:00Z';   // the 1 PM ET games
     const text = T.report(g, { day: '2026-10-11', skipped });
     ok('the report says what was graded and what was not', /4 markets graded over 1 game \(1 pending, 1 void, 0 unpriced, 1 with no record/.test(text) && /every market/.test(text) && /ask > 40c/.test(text), text);
     ok('a market with no two-sided price is counted, not graded', T.grade([rec('H', 30, 0.5, 0.5)], new Map([['H', { status: 'finalized', result: 'no', settlementValue: 0 }]])).noPrice === 1);
+    // 2026-10-15: Kalshi finalizes a void as result 'scalar'; it used to fall through to pending, forever
+    const v = T.grade([rec('V', 30, 0.20, 0.22), rec('W', 30, 0.20, 0.22)], new Map([
+      ['V', { status: 'finalized', result: 'scalar', settlementValue: 0.21 }],
+      ['W', { status: 'finalized', result: 'scalar', settlementValue: null }],
+    ]));
+    ok('a finalized scalar is void, not pending (with or without a settlement value)', v.voided === 2 && v.pending === 0 && v.graded === 0, v);
+  }
+
+  group('gradeTape end to end: the void from Kalshi\'s own row, and a fee multiplier that did not load is said');
+  {
+    const dir = tmp();
+    const k = '2026-10-11T17:00:00.000Z';
+    fs.writeFileSync(path.join(dir, 'td-2026-10-11.jsonl'), ['A', 'B'].map((t) => JSON.stringify({ t: '2026-10-11T16:45:00.000Z', ticker: t, event: 'KXNFLTD-26OCT11CINMIA', game: 'CINMIA', kickoff: k, bid: 0.20, ask: 0.22 })).join('\n') + '\n');
+    pages = [{ markets: [
+      { ticker: 'A', status: 'finalized', result: 'scalar', settlement_value_dollars: '0.2100' },
+      { ticker: 'B', status: 'finalized', result: 'yes', settlement_value_dollars: '1.0000' },
+    ] }];
+    seriesReply = null;   // /series/KXNFLTD answers with no fee_multiplier
+    const text = await T.gradeTape({ dir, day: '2026-10-11' });
+    ok('1 graded, 0 pending, 1 void', /1 markets graded over 1 game \(0 pending, 1 void,/.test(text), text);
+    ok('the full-rate fallback is said in one line', /\n  fee: Kalshi's KXNFLTD fee multiplier did not load, so "net" charges the full 7% rate$/.test(text), text);
+    seriesReply = { series: { fee_multiplier: 1 } };
+    ok('...and not said once the multiplier loads', !/fee:/.test(await T.gradeTape({ dir, day: '2026-10-11' })));
   }
 
   group('reading the tape back');
