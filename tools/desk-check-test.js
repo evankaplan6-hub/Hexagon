@@ -64,6 +64,30 @@ async function main() {
   // alive
   eq('a desk that recorded a minute ago is alive', C.health(S, at('12:48')).problems.filter((x) => /loop/.test(x)), []);
   ok('three hours of silence is a stopped loop', C.health(S, at('15:47')).problems.some((x) => /no round recorded for 18\d minutes/.test(x)), C.health(S, at('15:47')).problems);
+  // ...unless the desk was running and could not save (2026-10-15, the box's disk full)
+  {
+    const unsaved = (h) => h.problems.some((x) => /^the state has not been saved for 18\d minutes, but the desk did not stop/.test(x)) && !h.problems.some((x) => /loop has stopped/.test(x));
+    const hj = C.health(S, at('15:47'), { journalAt: at('15:40') });
+    ok('a journal newer than the state is a state that could not be saved, not a stopped loop', unsaved(hj) && hj.problems.some((x) => /journal has a line from 7 min ago/.test(x)), hj.problems);
+    const sf = JSON.parse(JSON.stringify(S));
+    sf.log.unshift({ t: at('12:50'), agent: 'TESS', kind: 'OPS', text: 'state save failed: ENOSPC: no space left on device, write · a restart now would lose the last minutes' });
+    ok("so is a 'state save failed' line after the last minute", unsaved(C.health(sf, at('15:47'))), C.health(sf, at('15:47')).problems);
+    const hd = C.health(S, at('15:47'), { freeMb: 12 });
+    ok('and a box with 12 MB free on /data', unsaved(hd) && hd.problems.some((x) => /^the box has 12 MB free on \/data \(under 200\)/.test(x)), hd.problems);
+    ok('a journal line from before the last minute changes nothing', C.health(S, at('15:47'), { journalAt: C.stateTime(S) }).problems.some((x) => /loop has stopped/.test(x)));
+    const roomy = C.health(S, at('12:48'), { freeMb: 4200 });
+    ok('room on the disk is a line, not a problem', roomy.lines.includes('the box has 4200 MB free on /data') && !roomy.problems.some((x) => /MB free/.test(x)), roomy);
+    ok('a low disk on a running desk is a problem of its own', C.health(S, at('12:48'), { freeMb: 150 }).problems.some((x) => /150 MB free/.test(x)));
+    const np = JSON.parse(JSON.stringify(S));
+    np.log.unshift({ t: at('15:40'), agent: 'HOLT', kind: 'OPS', text: "no price yet for ETH · the books' value is not recorded until every slot has one" });
+    const hp = C.health(np, at('15:47'), { journalAt: at('15:40') }).problems;
+    ok('a desk waiting for a price after a restart is running, and says which', hp.some((x) => /but the desk is running: HOLT: no price yet for ETH/.test(x)) && !hp.some((x) => /loop has stopped|has not been saved/.test(x)), hp);
+    eq("the journal's newest line is the loop's, not the watchdog's", C.journalTime([{ t: '2026-09-23T16:00:00Z', kind: 'FILL' }, { t: '2026-09-23T17:00:00Z', kind: 'WATCHDOG' }]), Date.parse('2026-09-23T16:00:00Z'));
+    // the box's one console call: the listing, then df -P's line for /data
+    const box = C.parseListing('state.json\njournal-2026-10-14.jsonl\njournal-2026-10-15.jsonl\nstate.json.tmp\nFilesystem     1048576-blocks  Used Available Capacity Mounted on\n/dev/vdc                  976   941        35      97% /data\n');
+    eq('the listing and the free space come from one call', box, { names: ['state.json', 'journal-2026-10-14.jsonl', 'journal-2026-10-15.jsonl'], freeMb: 35 });
+    eq('no df line: free space unknown, not zero', C.parseListing('state.json\n').freeMb, null);
+  }
 
   // today's checks, across the week (the state's history moved along so the loop reads alive)
   const MIN = 60000;

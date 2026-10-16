@@ -126,7 +126,72 @@ class Desk {
     this.chargeHoldingFee(s);
     for (const key of Object.keys(LATER)) this.addBook(s, key);
     this.addCoins(s);
+    this.catchUp(s);
     return s;
+  }
+  // The state on disk behind its own journal: a fill was journaled, the save after it failed (2026-10-15, the
+  // box's disk full: the journal's few hundred bytes went in, the 3.4 MB state did not), and the process
+  // restarted before a save got through. The old state came back, the crypto book found its day unchecked,
+  // and bought again. So every crypto and SPY fill the journal holds after the state's last moment is put
+  // back into its slot, rounded as kett rounds it, and each REBALANCE line marks its slot's day checked.
+  // The option and runner books (off since 2026-10-08) are not replayed: a fill of theirs found here is said
+  // on start (TESS), and tools/desk-check.js's ledger names the difference.
+  catchUp(s) {
+    const since = stateTime(s);
+    let names = [];
+    try { names = fs.readdirSync(this.dir).filter((n) => /^journal-\d{4}-\d{2}-\d{2}\.jsonl$/.test(n) && n.slice(8, 18) >= clock.et(since).day).sort(); }
+    catch { return; }
+    const events = [];
+    for (const n of names) {
+      for (const line of fs.readFileSync(path.join(this.dir, n), 'utf8').split('\n')) {
+        if (!line) continue;
+        let e;
+        try { e = JSON.parse(line); } catch { continue; }      // a line a full disk tore
+        if (Date.parse(e.t) >= since) events.push(e);
+      }
+    }
+    events.sort((a, b) => Date.parse(a.t) - Date.parse(b.t));
+    // a fill from the state's last moment may be in it already: the one whose save got through, the line
+    // journaled a moment before pushFill saved it
+    const saved = s.fills.filter((f) => f.at >= since - 5000);
+    const inState = (e) => {
+      const sym = e.kind === 'SETTLE' ? e.osi : e.sym, side = e.kind === 'SETTLE' ? 'sell' : e.side;
+      const i = saved.findIndex((f) => f.book === e.book && f.sym === sym && f.side === side && f.qty === e.qty && Math.abs(f.at - Date.parse(e.t)) <= 5000);
+      return i >= 0 && saved.splice(i, 1);
+    };
+    const to = {}, put = [], left = {};
+    for (const e of events) {
+      const sl = s.books[e.book] && s.books[e.book].sleeves && s.books[e.book].sleeves[e.sym];
+      if (e.kind === 'REBALANCE' && sl) {
+        const t = Date.parse(e.t);
+        sl.checkDay = e.book === 'crypto' ? utcDay(t) : clock.et(t).day;
+        to[`${e.book}:${e.sym}`] = e.to;
+        continue;
+      }
+      if (e.kind !== 'FILL' && e.kind !== 'SETTLE') continue;
+      if (inState(e)) continue;
+      if (!sl || e.kind !== 'FILL') { left[e.book] = (left[e.book] || 0) + 1; continue; }
+      if (e.side === 'buy') { sl.cash = r2(sl.cash + e.cash); sl.qty = r6(sl.qty + e.qty); sl.cost = r2(sl.cost - e.cash); }
+      else {
+        const q = Math.min(e.qty, sl.qty), out = r2(sl.cost * (sl.qty > 0 ? q / sl.qty : 0));
+        sl.realized = r2(sl.realized + (e.pnl || 0)); sl.cost = r2(sl.cost - out); sl.qty = r6(Math.max(0, sl.qty - q)); sl.cash = r2(sl.cash + e.cash);
+        if (sl.qty < 1e-6) { sl.qty = 0; sl.cost = 0; }
+      }
+      sl.fees = r2(sl.fees + (e.fee || 0));
+      if (to[`${e.book}:${e.sym}`] != null) sl.target = to[`${e.book}:${e.sym}`];
+      const at = Date.parse(e.t);
+      s.fills.unshift({ id: `${at}-${s.fills.length}`, at, book: e.book, sym: e.sym, label: e.book === 'crypto' ? COIN_NAME[e.sym] || short(e.sym) : e.sym, side: e.side, qty: e.qty, px: e.px, value: e.notional, fee: e.fee, pnl: e.pnl, why: e.why });
+      put.push(`${e.side === 'buy' ? 'bought' : 'sold'} ${e.book === 'crypto' ? short(e.sym) : e.sym}`);
+    }
+    if (s.fills.length > 300) s.fills.length = 300;
+    if (put.length || Object.keys(left).length) this.caughtUp = { put, left };
+  }
+  // What catchUp put back, said on start where the floor and the daily check see it, and saved at once.
+  sayCaughtUp() {
+    const cu = this.caughtUp;
+    if (!cu) return;
+    if (cu.put.length) { this.log('TESS', 'OPS', null, `the saved state was behind its journal (a state save failed before the restart): put back ${cu.put.join(', ')} from the journal`); this.save(); }
+    for (const [book, n] of Object.entries(cu.left)) this.log('TESS', 'OPS', null, `${book}: ${n} fill(s) in the journal after the state's last save (a state save failed before the restart) were not put back · its ledger is behind the journal: run tools/desk-check.js`);
   }
   // The scalp and dip books joined a desk that had been running since 2026-09-25 (Evan, 2026-09-29), and the
   // runner book on 2026-09-30. A
@@ -199,6 +264,10 @@ class Desk {
       if (this.due('save-failed', 600)) this.log('TESS', 'OPS', null, `state save failed: ${String(e.message).slice(0, 90)} · a restart now would lose the last minutes`);
     }
   }
+  // True when the line is on disk. Every fill and settlement is journaled BEFORE the book moves, and a fill
+  // whose line cannot be written is not made (2026-10-15, the box's disk full): a fill the journal never
+  // had is one no rebuild can find, and one the state lost while the journal kept it is put back from the
+  // journal on the next start (catchUp).
   journal(kind, payload) {
     const t = this.now();
     try {
@@ -206,7 +275,17 @@ class Desk {
       // whole lines only: a line a full disk cut short does not swallow the next (src/journal.js)
       if (!this.journalSt) this.journalSt = { check: true };
       appendWhole(path.join(this.dir, `journal-${clock.et(t).day}.jsonl`), JSON.stringify({ t: new Date(t).toISOString(), kind, ...payload }) + '\n', this.journalSt);
-    } catch (e) { if (this.due('journal-err', 300)) this.log('TESS', 'OPS', null, `journal write failed: ${String(e.message).slice(0, 100)}`); }
+      return true;
+    } catch (e) {
+      if (this.due('journal-err', 300)) this.log('TESS', 'OPS', null, `journal write failed: ${String(e.message).slice(0, 100)}`);
+      return false;
+    }
+  }
+  // An order whose fill could not be journaled: not made, and tried again once the journal can be written.
+  // Said once in five minutes, however many books are waiting.
+  held(what) {
+    if (this.due('fill-held', 300)) this.log('KETT', 'OPS', null, `${what}: not filled · the journal could not be written (disk full?), and a fill it does not have is one a restart can repeat · trying again`);
+    return null;
   }
   due(name, sec) {
     const t = this.now();
@@ -290,6 +369,18 @@ class Desk {
     return r2(f);
   }
   equity() { return r2(BOOKS.reduce((a, k) => a + this.bookValue(k), 0)); }
+  // Does every crypto and SPY slot that holds something, or is held against holding, have a price loaded
+  // since this start? Until one does, sleeveValue marks it at cost and benchValue has no holding figure, so
+  // the first minute after a restart with one coin's ticker failing recorded that coin at cost and holding
+  // equal to the book, and on the day's first mark started the loss limit from it (audit 2026-10-15).
+  // record() and the day's base wait for it; said once in ten minutes while they do.
+  priced() {
+    const B = this.state.books, missing = [];
+    for (const [id, sl] of Object.entries(B.crypto.sleeves)) if ((sl.qty > 0 || sl.benchPx > 0) && !(this.coinBid(id) > 0)) missing.push(short(id));
+    for (const [sym, sl] of Object.entries(B.stocks.sleeves)) if ((sl.qty > 0 || sl.benchPx > 0) && !(this.spyBid() > 0)) missing.push(sym);
+    if (missing.length && this.due('unpriced', 600)) this.log('HOLT', 'OPS', null, `no price yet for ${missing.join(', ')} · the books' value is not recorded until every slot has one`);
+    return !missing.length;
+  }
   initial() { const b = this.state.books; return r2(BOOKS.reduce((a, k) => a + b[k].initial, 0)); }
 
   // ---------------------------------------------------------------- the loop
@@ -308,6 +399,7 @@ class Desk {
     for (const [sym, a] of Object.entries(this.state.addedCoins || {})) {
       if (!a.journaled) { this.journal('SLEEVE_START', { book: 'crypto', sym, cash: a.cash }); a.journaled = true; this.dirty = true; }
     }
+    this.sayCaughtUp();
     await this.step();
     setInterval(() => { this.step().catch((e) => console.error('desk step', e)); }, this.D.everySec * 1000);
     setInterval(() => { if (this.dirty) this.save(); }, 10000);
@@ -455,9 +547,11 @@ class Desk {
     // the feed runs ~15 minutes late; in the session a quote more than 25 minutes old is a feed that stopped
     this.stale.stocks = !q || !q.at || (inSession && (t - q.at > 25 * MIN || t - this.mkt.spy.quoteAt > 5 * MIN));
     // the day's loss limit, on the whole desk, from the first mark of the Eastern day
-    const eq = this.equity();
-    if (this.state.dayKey !== e.day) { this.state.dayKey = e.day; this.state.dayStart = eq; }
-    const dd = this.state.dayStart > 0 ? eq / this.state.dayStart - 1 : 0;
+    // and only on a desk with a price for every slot: one marked at cost would start the day, or cross the
+    // limit, on a figure that is not the market's (priced)
+    const eq = this.equity(), priced = this.priced();
+    if (this.state.dayKey !== e.day && priced) { this.state.dayKey = e.day; this.state.dayStart = eq; }
+    const dd = priced && this.state.dayKey === e.day && this.state.dayStart > 0 ? eq / this.state.dayStart - 1 : 0;
     const live = dd <= -this.D.maxDailyDdPct ? `down ${(Math.abs(dd) * 100).toFixed(1)}% today, past the ${(this.D.maxDailyDdPct * 100).toFixed(0)}% limit: no new buying until tomorrow` : null;
     // "no new buying until tomorrow" means it: once the limit is crossed the halt holds for the rest of the Eastern day, saved
     // with the state. It used to lift the moment the day's figure came back inside the limit, and the desk bought again
@@ -567,10 +661,11 @@ class Desk {
     const val = spy > 0 ? Math.max(0, lot.right === 'C' ? spy - lot.strike : lot.strike - spy) : 0;
     const cash = r2(val * 100 * lot.qty);
     const pnl = r2(cash - lot.cost);
+    // the journal first, as a fill is (journal): an expiry it cannot hold is settled on a later round
+    if (!this.journal('SETTLE', { book: key, osi: lot.osi, qty: lot.qty, value: val, spy, pnl })) { this.held(`${key}: ${lotName(lot)} settlement`); return; }
     o.cash = r2(o.cash + cash); o.realized = r2(o.realized + pnl);
     o.lots = o.lots.filter((x) => x !== lot);
     this.noteExit(key, lot, pnl, false);
-    this.journal('SETTLE', { book: key, osi: lot.osi, qty: lot.qty, value: val, spy, pnl });
     this.pushFill({ book: key, sym: lot.osi, label: lotName(lot), side: 'sell', qty: lot.qty, px: r4(val), value: cash, fee: 0, pnl, why: 'expired: worth its intrinsic value' });
     this.log('RIGO', 'SETTLE', pnl, `${lotName(lot)} expired worth ${prem(val)} · ${pnl >= 0 ? 'made' : 'lost'} ${usd(Math.abs(pnl))}`);
   }
@@ -739,8 +834,10 @@ class Desk {
       const c = this.mkt.coins[id];
       if (!c || !c.tick || t - c.tickAt > 60000) continue;
       if (sl.checkDay === day || !c.daily || !c.daily.length || c.daily[c.daily.length - 1].day !== yday || !Number.isFinite(c.w)) continue;
+      const was = sl.checkDay;
       sl.checkDay = day; this.dirty = true;
-      await this.rebalance('crypto', id, sl, c.w, c.vol, c.tick);
+      // an order the journal could not take is not a check done: the next round tries again
+      if (await this.rebalance('crypto', id, sl, c.w, c.vol, c.tick) === 'held') sl.checkDay = was;
     }
   }
   // Once a trading day, from the first quote at or after 9:35 on the delayed tape.
@@ -754,8 +851,9 @@ class Desk {
     if (qe.day !== today || qe.min < clock.OPEN_MIN + 5 || qe.min >= s.close || t - q.at > 25 * MIN) return;
     for (const [sym, sl] of Object.entries(this.state.books.stocks.sleeves)) {
       if (sl.checkDay === today || !Number.isFinite(S.w)) continue;
+      const was = sl.checkDay;
       sl.checkDay = today; this.dirty = true;
-      await this.rebalance('stocks', sym, sl, S.w, S.vol, q);
+      if (await this.rebalance('stocks', sym, sl, S.w, S.vol, q) === 'held') sl.checkDay = was;
     }
   }
   async rebalance(bookKey, sym, sl, w, vol, quote) {
@@ -770,7 +868,7 @@ class Desk {
     const wantQty = (w * worth) / px, delta = wantQty - sl.qty;
     const from = sl.target;
     this.log('BRAM', 'SIGNAL', null, `${name}: ${from == null ? 'start at' : 'move from ' + Math.round(from * 100) + '% to'} ${Math.round(w * 100)}% (${volTxt}, target ${Math.round((bookKey === 'crypto' ? this.D.cryptoVolTarget : this.D.stockVolTarget) * 100)}%)`);
-    this.journal('REBALANCE', { book: bookKey, sym, from, to: r4(w), vol: r4(vol), px, worth });
+    if (!this.journal('REBALANCE', { book: bookKey, sym, from, to: r4(w), vol: r4(vol), px, worth })) { this.held(name); return 'held'; }
     const kind = bookKey === 'crypto' ? 'crypto' : 'stock';
     const minTrade = Math.abs(delta * px) >= 1;
     if (minTrade && delta > 0 && this.halt) { this.log('KETT', 'PASS', null, `${name}: not buying · ${this.halt}`); return; }
@@ -778,9 +876,13 @@ class Desk {
     // whatever price happened to be on the screen when the desk booted on a Saturday, and paying the same
     // fee to buy in. Set only once the buy is allowed: a halted first check used to start it at a price the book
     // never paid (BTC 84,000 benchmarked, bought at 80,000 the next day).
-    if (!(sl.benchPx > 0)) { sl.benchPx = px; sl.benchAt = this.now(); sl.benchFeeBps = this.feeBps(bookKey); }
+    const benchNew = !(sl.benchPx > 0);
+    if (benchNew) { sl.benchPx = px; sl.benchAt = this.now(); sl.benchFeeBps = this.feeBps(bookKey); }
     if (minTrade) {
-      const f = await this.kett({ book: bookKey, sym, sl, kind, side: delta > 0 ? 'buy' : 'sell', qty: Math.abs(delta), quote, why: `to ${Math.round(w * 100)}% of the ${name} slot` });
+      const order = { book: bookKey, sym, sl, kind, side: delta > 0 ? 'buy' : 'sell', qty: Math.abs(delta), quote, why: `to ${Math.round(w * 100)}% of the ${name} slot` };
+      const f = await this.kett(order);
+      // held for the journal: holding starts with the trade the book really makes, not this one
+      if (order.held) { if (benchNew) sl.benchPx = sl.benchAt = sl.benchFeeBps = null; return 'held'; }
       // `target` is what the book was last traded TO. Recording it for an order that did not fill (no depth, not enough cash) made
       // the next check compare tomorrow's weight with a position that was never taken, and sit in cash while the two were within the
       // band (audit 2026-10-07). The check still counts as done for today: the next one starts from what the book really holds.
@@ -1073,15 +1175,18 @@ class Desk {
     const f = broker.fill(buy ? { kind: 'crypto', side: 'buy', qty: order.spend / market.ask, cash: order.spend, step } : { kind: 'crypto', side: 'sell', qty: order.lot.qty, step },
       market, { ...this.fees, cryptoBps: this.D.runnerFeeBps });
     if (!(f.qty > 0)) { this.log('KETT', 'PASS', null, `runners: ${name} ${order.side} not filled · ${f.reason}`); return null; }
-    let pnl = null;
+    // the journal first: a fill it cannot hold is not made (journal)
+    const detail = buy ? { move: r4(order.row.move), offHigh: r4(order.row.offHigh), volUsd: Math.round(order.row.volUsd), last: order.row.last, was: order.row.was } : {};
+    const sold = buy ? 0 : Math.min(f.qty, order.lot.qty), out = buy ? 0 : r2(order.lot.cost * (sold / order.lot.qty));
+    const pnl = buy ? null : r2(f.cash - out);
+    if (!this.journal('FILL', { book: 'runners', sym, side: order.side, qty: f.qty, px: f.avg, notional: f.notional, fee: f.fee, cash: f.cash, pnl, why: order.why, ...detail })) return this.held(`runners: ${name} ${order.side}`);
     if (buy) {
       const id = `R${b.nextLot}`, r = order.row;
       b.lots.push({ id: b.nextLot++, trade: id, sym, qty: f.qty, cost: r2(-f.cash), entry: f.avg, peak: r.last, mark: r.last, openedAt: t });
       b.trades.unshift({ id, sym, qty: f.qty, entry: f.avg, cost: r2(-f.cash), openedAt: t, open: true, pnl: 0 });
       if (b.trades.length > 120) b.trades.length = 120;
     } else {
-      const lot = order.lot, sold = Math.min(f.qty, lot.qty), out = r2(lot.cost * (sold / lot.qty));
-      pnl = r2(f.cash - out);
+      const lot = order.lot;
       lot.qty = r6(lot.qty - sold); lot.cost = r2(lot.cost - out);
       b.realized = r2(b.realized + pnl);
       const tr = b.trades.find((x) => x.id === lot.trade);
@@ -1095,8 +1200,6 @@ class Desk {
     }
     b.cash = r2(b.cash + f.cash); b.fees = r2(b.fees + f.fee);
     this.dirty = true;
-    const detail = buy ? { move: r4(order.row.move), offHigh: r4(order.row.offHigh), volUsd: Math.round(order.row.volUsd), last: order.row.last, was: order.row.was } : {};
-    this.journal('FILL', { book: 'runners', sym, side: order.side, qty: f.qty, px: f.avg, notional: f.notional, fee: f.fee, cash: f.cash, pnl, why: order.why, ...detail });
     this.pushFill({ book: 'runners', sym, label: name, side: order.side, qty: f.qty, px: f.avg, value: f.notional, fee: f.fee, pnl, why: order.why });
     this.log('KETT', 'FILL', pnl, `${buy ? 'bought' : 'sold'} ${fmtCoins(f.qty)} ${name} at ${fmtPx(f.avg)} · ${usd(f.notional)}, fee ${usd(f.fee)}${buy ? '' : ` · ${pnl >= 0 ? 'made' : 'lost'} ${usd(Math.abs(pnl))}`} · ${order.why}`);
     return f;
@@ -1116,19 +1219,18 @@ class Desk {
     if (kind === 'stock' && !(market.bid > 0 && market.ask > 0)) market = { bid: order.quote.last, ask: order.quote.last };
     f = broker.fill({ kind, side, qty: side === 'sell' ? Math.min(order.qty, sl.qty) : order.qty, cash: side === 'buy' ? sl.cash : undefined, step: kind === 'crypto' ? COIN_STEP[sym] : undefined }, market, this.fees);
     if (!(f.qty > 0)) { this.log('KETT', 'PASS', null, `${short(sym)}: ${side} not filled · ${f.reason}`); return null; }
-    let pnl = null;
+    // the journal first: a fill it cannot hold is not made (journal)
+    const q = Math.min(f.qty, sl.qty), out = side === 'sell' ? r2(sl.cost * (sl.qty > 0 ? q / sl.qty : 0)) : 0;
+    const pnl = side === 'sell' ? r2(f.cash - out) : null;
+    if (!this.journal('FILL', { book: order.book, sym, side, qty: f.qty, px: f.avg, notional: f.notional, fee: f.fee, cash: f.cash, pnl, why: order.why })) { order.held = true; return this.held(`${short(sym)} ${side}`); }
     if (side === 'buy') { sl.cash = r2(sl.cash + f.cash); sl.qty = r6(sl.qty + f.qty); sl.cost = r2(sl.cost - f.cash); }
     else {
-      const q = Math.min(f.qty, sl.qty), frac = sl.qty > 0 ? q / sl.qty : 0;
-      const out = r2(sl.cost * frac);
-      pnl = r2(f.cash - out);
       sl.realized = r2(sl.realized + pnl); sl.cost = r2(sl.cost - out); sl.qty = r6(Math.max(0, sl.qty - q)); sl.cash = r2(sl.cash + f.cash);
       if (sl.qty < 1e-6) { sl.qty = 0; sl.cost = 0; }
     }
     sl.fees = r2(sl.fees + f.fee);
     this.dirty = true;
     const label = kind === 'crypto' ? `${COIN_NAME[sym] || short(sym)}` : sym;
-    this.journal('FILL', { book: order.book, sym, side, qty: f.qty, px: f.avg, notional: f.notional, fee: f.fee, cash: f.cash, pnl, why: order.why });
     this.pushFill({ book: order.book, sym, label, side, qty: f.qty, px: f.avg, value: f.notional, fee: f.fee, pnl, why: order.why });
     this.log('KETT', 'FILL', pnl, `${side === 'buy' ? 'bought' : 'sold'} ${fmtQty(f.qty, kind, sym)} ${label} at ${fmtPx(f.avg)} · ${usd(f.notional)}${f.fee ? `, fee ${usd(f.fee)}` : ''} · ${order.why}`);
     void b;
@@ -1141,6 +1243,8 @@ class Desk {
       const row = order.row;
       const f = broker.fill({ kind: 'option', side: 'buy', qty: order.qty, cash: o.cash }, { bid: row.bid, ask: row.ask, bidSz: row.bidSz, askSz: row.askSz }, this.fees);
       if (!(f.qty > 0)) { this.log('KETT', 'PASS', null, `${row.strike} ${row.right === 'C' ? 'call' : 'put'}: not bought · ${f.reason}`); return null; }
+      // the journal first: a fill it cannot hold is not made (journal)
+      if (!this.journal('FILL', { book: key, sym: row.osi, side: 'buy', qty: f.qty, px: f.avg, notional: f.notional, fee: f.fee, cash: f.cash, why: order.why, ...order.sync, ...(order.detail || {}) })) return this.held(`${key}: ${row.strike} ${row.right === 'C' ? 'call' : 'put'} buy`);
       const tradeId = `${d.date}-${d.entries + 1}`;
       const base = { expiry: d.date, osi: row.osi, strike: row.strike, right: row.right, entry: f.avg, high0: Number.isFinite(row.high) ? row.high : null, trade: tradeId, openedAt: this.now(), mark: f.avg, ...(order.lot || {}) };
       const each = r2(-f.cash / f.qty);
@@ -1158,7 +1262,6 @@ class Desk {
       if (o.trades.length > 120) o.trades.length = 120;
       this.dirty = true;
       const label = lotName(base);
-      this.journal('FILL', { book: key, sym: row.osi, side: 'buy', qty: f.qty, px: f.avg, notional: f.notional, fee: f.fee, cash: f.cash, why: order.why, ...order.sync, ...(order.detail || {}) });
       this.pushFill({ book: key, sym: row.osi, label, side: 'buy', qty: f.qty, px: f.avg, value: f.notional, fee: f.fee, pnl: null, why: order.why });
       const targets = o.lots.filter((l) => l.trade === tradeId && l.target != null).map((l) => prem(l.target));
       this.log('KETT', 'FILL', null, `bought ${f.qty} ${label} at ${prem(f.avg)} · ${usd(f.notional)}${targets.length ? ` · target${targets.length === 1 ? '' : 's'} ${targets.join(' and ')}` : ''}`);
@@ -1170,9 +1273,9 @@ class Desk {
     if (!market || !(market.bid > 0)) {
       // no bid at all: a same-day option with nothing bid for it is worth nothing to a seller
       const pnl = r2(-lot.cost);
+      if (!this.journal('FILL', { book: key, sym: lot.osi, side: 'sell', qty: lot.qty, px: 0, notional: 0, fee: 0, cash: 0, pnl, why: `${order.why}; no bid`, ...order.sync })) return this.held(`${key}: ${lotName(lot)} write-off`);
       o.realized = r2(o.realized + pnl); o.lots = o.lots.filter((x) => x !== lot);
       this.noteExit(key, lot, pnl, false);
-      this.journal('FILL', { book: key, sym: lot.osi, side: 'sell', qty: lot.qty, px: 0, notional: 0, fee: 0, cash: 0, pnl, why: `${order.why}; no bid`, ...order.sync });
       this.pushFill({ book: key, sym: lot.osi, label: lotName(lot), side: 'sell', qty: lot.qty, px: 0, value: 0, fee: 0, pnl, why: `${order.why}, no bid` });
       this.log('KETT', 'FILL', pnl, `${lotName(lot)}: no bid · written off, lost ${usd(Math.abs(pnl))} · ${order.why}`);
       return null;
@@ -1180,10 +1283,10 @@ class Desk {
     const f = broker.fill({ kind: 'option', side: 'sell', qty: lot.qty }, market, this.fees);
     if (!(f.qty > 0)) return null;
     const pnl = r2(f.cash - lot.cost);
+    if (!this.journal('FILL', { book: key, sym: lot.osi, side: 'sell', qty: f.qty, px: f.avg, notional: f.notional, fee: f.fee, cash: f.cash, pnl, why: order.why, ...order.sync })) return this.held(`${key}: ${lotName(lot)} sale`);
     o.cash = r2(o.cash + f.cash); o.realized = r2(o.realized + pnl); o.fees = r2(o.fees + f.fee);
     o.lots = o.lots.filter((x) => x !== lot);
     this.noteExit(key, lot, pnl, order.px != null);
-    this.journal('FILL', { book: key, sym: lot.osi, side: 'sell', qty: f.qty, px: f.avg, notional: f.notional, fee: f.fee, cash: f.cash, pnl, why: order.why, ...order.sync });
     this.pushFill({ book: key, sym: lot.osi, label: lotName(lot), side: 'sell', qty: f.qty, px: f.avg, value: f.notional, fee: f.fee, pnl, why: order.why });
     this.log('KETT', 'FILL', pnl, `sold ${f.qty} ${lotName(lot)} at ${prem(f.avg)} · ${pnl >= 0 ? 'made' : 'lost'} ${usd(Math.abs(pnl))} · ${order.why}`);
     return f;
@@ -1201,6 +1304,7 @@ class Desk {
     const t = this.now(), h = this.state.history;
     const last = h[h.length - 1];
     if (last && t - last.t < MIN) return;
+    if (!this.priced()) return;
     const v = Object.fromEntries(BOOKS.map((k) => [FIELD[k], this.bookValue(k)]));
     // what holding would be worth; a book that has not traded yet is its own cash, so the line is whole from the start
     const bc = this.benchValue('crypto'), bs = this.benchValue('stocks');
@@ -1389,5 +1493,11 @@ function logLevel(e) {
   }
 }
 function safe(fn) { try { return fn(); } catch { return null; } }
+// The newest moment a saved state vouches for: every fill is saved the instant it is made (pushFill), the
+// minute's value on the next save. tools/desk-check.js reads the same.
+function stateTime(S) {
+  const h = S.history || [], f = S.fills || [];
+  return Math.max(h.length ? h[h.length - 1].t : 0, f.length ? f[0].at : 0, S.startedAt || 0);
+}
 
-module.exports = { Desk, AGENTS, lotName, hm, logLevel, ROUTINE_KEEP };
+module.exports = { Desk, AGENTS, lotName, hm, logLevel, ROUTINE_KEEP, stateTime };

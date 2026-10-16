@@ -3,7 +3,8 @@
 // Four questions, one screen:
 //
 //   ALIVE   is its loop still running? It records the books' value once a minute; a state whose
-//           newest minute is old is a desk that stopped
+//           newest minute is old is a desk that stopped, or one that could not save it (a journal
+//           newer than the state, a 'state save failed' line, the box's disk nearly full: 2026-10-15)
 //   TODAY   did each book do today's check? Crypto once a UTC day, SPY once a trading day after the
 //           open, the options book's 12:30 verdict, the scalp and dip books watching from 10:05, the
 //           runner book's scan every 3 minutes -- a book that skipped its day is a book that could not
@@ -18,13 +19,15 @@
 //   node tools/desk-check.js            the desk on this Mac: data/desk/
 //   node tools/desk-check.js --dir D    any folder holding a desk's state.json and journal-*.jsonl
 //
-// Read-only on the box: `fly ssh console` to list /data/desk and `fly ssh sftp get` to copy, nothing
+// Read-only on the box: `fly ssh console` to list /data/desk and read /data's free space (one call),
+// and `fly ssh sftp get` to copy, nothing
 // else. It reads no secret and cannot place an order (the desk has no broker to place one with).
 // Exit code 1 on any PROBLEM, so the daily check counts it.
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const clock = require('../src/desk/clock');
+const { stateTime } = require('../src/desk/engine');
 
 const r2 = (x) => Math.round(x * 100) / 100;
 const r6 = (x) => Math.round(x * 1e6) / 1e6;
@@ -37,6 +40,8 @@ const utcDay = (t) => new Date(t).toISOString().slice(0, 10);
 const OPTION_BOOKS = ['options', 'scalps', 'dips'];
 // the option books that watch every morning from 10:05, and what each is called on a 1 PM close
 const MORNING = { scalps: 'scalps', dips: 'dip trades' };
+// free space on the box's /data under which the check says so: the state alone is a few MB, rewritten whole
+const LOW_DISK_MB = 200;
 
 // ---------------------------------------------------------------- reading
 function readDesk(dir) {
@@ -58,11 +63,15 @@ function readDesk(dir) {
   return { state, events, days, torn };
 }
 
-// The newest moment the state vouches for. Every fill is saved the instant it happens
-// (src/desk/engine.js pushFill), the minute's value on the next save.
-function stateTime(S) {
-  const h = S.history || [], f = S.fills || [];
-  return Math.max(h.length ? h[h.length - 1].t : 0, f.length ? f[0].at : 0, S.startedAt || 0);
+// stateTime, the newest moment the state vouches for, is the engine's own (src/desk/engine.js): it also
+// reads it on start, to put back fills the journal has and the saved state lost.
+
+// The newest line the desk's loop wrote to its journal: a fill, a check, a verdict. The watchdog's line and
+// the process's comings and goings are not the loop's work, so they do not count.
+function journalTime(events) {
+  let t = 0;
+  for (const e of events || []) if (e.kind !== 'WATCHDOG' && e.kind !== 'START' && e.kind !== 'STOP' && e.kind !== 'CRASH') t = Math.max(t, Date.parse(e.t) || 0);
+  return t;
 }
 
 // ---------------------------------------------------------------- pure: the rebuild
@@ -160,8 +169,10 @@ function compare(built, S) {
 }
 
 // ---------------------------------------------------------------- pure: alive, and today's checks
-// `now` is injected so the tests can stand anywhere in the week.
-function health(S, now) {
+// `now` is injected so the tests can stand anywhere in the week. `journalAt` is the newest line the loop
+// journaled (journalTime) and `freeMb` the free space on the box's /data (--box only), for telling a loop
+// that stopped from a state that could not be saved.
+function health(S, now, { journalAt = 0, freeMb = null } = {}) {
   const problems = [], lines = [], notes = [];
   const h = S.history || [];
   const last = h.length ? h[h.length - 1].t : null;
@@ -170,8 +181,24 @@ function health(S, now) {
     if (young) lines.push('started minutes ago: no minute recorded yet'); else problems.push('the desk has never recorded a minute');
   } else {
     const age = Math.round((now - last) / MIN);
-    if (now - last > 10 * MIN) problems.push(`no round recorded for ${age} minutes: the desk's loop has stopped (fly logs | grep " desk ")`);
+    // On 2026-10-15 the box's disk filled: the loop ran on, its journal lines went in, and state.json could
+    // not be written, and this said "the loop has stopped". A journal newer than the state's last minute, a
+    // 'state save failed' line, or a disk nearly full says which it is.
+    const saveFailed = (S.log || []).some((l) => l.t >= last && /state save failed/.test(l.text || ''));
+    const lowDisk = freeMb != null && freeMb < LOW_DISK_MB;
+    // and since then a minute is not recorded while a slot has no price (src/desk/engine.js priced): a loop
+    // running after a restart, waiting on one feed, says so in the log it saves
+    const unpriced = (S.log || []).find((l) => l.t >= last && /^no price yet for/.test(l.text || ''));
+    if (now - last > 10 * MIN && unpriced) problems.push(`no round recorded for ${age} minutes, but the desk is running: ${unpriced.agent}: ${unpriced.text}`);
+    else if (now - last > 10 * MIN && (journalAt > last + MIN || saveFailed || lowDisk)) {
+      const why = [journalAt > last + MIN ? `its journal has a line from ${Math.round((now - journalAt) / MIN)} min ago` : null, saveFailed ? "its log says 'state save failed'" : null, lowDisk ? `the box has ${freeMb} MB free on /data` : null].filter(Boolean);
+      problems.push(`the state has not been saved for ${age} minutes, but the desk did not stop: ${why.join(', ')}. state.json could not be written (disk full? df -m /data on the box); a restart now would load the old state`);
+    } else if (now - last > 10 * MIN) problems.push(`no round recorded for ${age} minutes: the desk's loop has stopped (fly logs | grep " desk ")`);
     else lines.push(`last round recorded ${age < 1 ? 'under a minute' : `${age} min`} ago`);
+  }
+  if (freeMb != null) {
+    if (freeMb < LOW_DISK_MB) problems.push(`the box has ${freeMb} MB free on /data (under ${LOW_DISK_MB}): the desk's 3 MB state saves fail on a full disk, and fills wait for the journal`);
+    else lines.push(`the box has ${freeMb} MB free on /data`);
   }
   // crypto: every sleeve checked on today's UTC day once it is 00:30 UTC
   const B = S.books || {};
@@ -303,25 +330,33 @@ function bookLines(S) {
 // ---------------------------------------------------------------- the box
 // Copies /data/desk/state.json and every journal there into `dest`, replacing the last run's copies.
 // The desk's journals are a few kilobytes a day, so all of them come down every time.
+// The one console call lists /data/desk and reads /data's free space with it (df -P: one line per disk, the
+// fourth field free 1 MB blocks), so the check sees a full disk without a second round trip.
+function parseListing(out) {
+  const rows = String(out || '').split('\n').map((x) => x.trim());
+  const names = rows.filter((n) => n === 'state.json' || JOURNAL.test(n));
+  const df = rows.map((r) => r.split(/\s+/)).find((f) => f.length >= 6 && f[f.length - 1] === '/data' && /^\d+$/.test(f[3]));
+  return { names, freeMb: df ? Number(df[3]) : null };
+}
 function pullDesk(app, dest, log) {
   const fly = process.env.FLY_BIN || (fs.existsSync(path.join(process.env.HOME || '', '.fly', 'bin', 'fly')) ? path.join(process.env.HOME, '.fly', 'bin', 'fly') : 'fly');
-  const listing = execFileSync(fly, ['ssh', 'console', '-q', '-a', app, '-C', 'ls /data/desk'], { encoding: 'utf8', timeout: 120000 });
-  const want = listing.split('\n').map((x) => x.trim()).filter((n) => n === 'state.json' || JOURNAL.test(n));
+  const listing = execFileSync(fly, ['ssh', 'console', '-q', '-a', app, '-C', "sh -c 'ls /data/desk; df -Pm /data'"], { encoding: 'utf8', timeout: 120000 });
+  const { names: want, freeMb } = parseListing(listing);
   if (!want.includes('state.json')) throw new Error('the box has no /data/desk/state.json: is DESK on in fly.toml?');
   fs.mkdirSync(dest, { recursive: true });
   for (const n of fs.readdirSync(dest)) if (n === 'state.json' || JOURNAL.test(n)) fs.unlinkSync(path.join(dest, n));
   for (const name of want) execFileSync(fly, ['ssh', 'sftp', 'get', '-q', '-a', app, `/data/desk/${name}`, path.join(dest, name)], { stdio: 'ignore', timeout: 300000 });
   log(`box     copied /data/desk: state.json and ${want.length - 1} journal(s) into ${path.relative(path.join(__dirname, '..'), dest)}`);
-  return dest;
+  return { dir: dest, freeMb };
 }
 
 // ---------------------------------------------------------------- main
 function run(argv, { log = console.log, now = Date.now() } = {}) {
   const flag = (n) => { const i = argv.indexOf(`--${n}`); return i >= 0 ? (argv[i + 1] || true) : null; };
   const root = path.join(__dirname, '..');
-  let dir = flag('dir') || path.join(root, 'data', 'desk');
+  let dir = flag('dir') || path.join(root, 'data', 'desk'), freeMb = null;
   if (argv.includes('--box')) {
-    try { dir = pullDesk(flag('app') || 'hexagon-desk', path.join(root, 'data', 'fly', 'desk-now'), log); }
+    try { ({ dir, freeMb } = pullDesk(flag('app') || 'hexagon-desk', path.join(root, 'data', 'fly', 'desk-now'), log)); }
     catch (e) { log(`PROBLEM could not copy the desk from the box: ${String(e.message).split('\n')[0].slice(0, 160)}`); return 1; }
   }
   const { state: S, events, days, torn } = readDesk(dir);
@@ -329,7 +364,7 @@ function run(argv, { log = console.log, now = Date.now() } = {}) {
   const until = stateTime(S);
   const built = rebuild(events, S, { until });
   const ledger = compare(built, S);
-  const hl = health(S, now);
+  const hl = health(S, now, { journalAt: journalTime(events), freeMb });
   const skipped = skips(events, now);
   if (skipped) hl.problems.push(skipped);
   log(`desk    state as of ${new Date(until).toISOString().slice(0, 19)}Z · journals ${days[0] || '?'} → ${days[days.length - 1] || '?'} · ${built.fills} fill(s) replayed${torn ? ` · ${torn} torn line(s) skipped` : ''}`);
@@ -344,6 +379,6 @@ function run(argv, { log = console.log, now = Date.now() } = {}) {
   return ledger.length || hl.problems.length ? 1 : 0;
 }
 
-module.exports = { readDesk, stateTime, rebuild, compare, health, bookLines, skips, run };
+module.exports = { readDesk, stateTime, journalTime, parseListing, rebuild, compare, health, bookLines, skips, run, LOW_DISK_MB };
 
 if (require.main === module) process.exitCode = run(process.argv.slice(2));
