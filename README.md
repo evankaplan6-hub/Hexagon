@@ -118,7 +118,7 @@ It has no broker. Nothing in `src/desk/` can reach Robinhood, Public, Webull, Co
 
 ## What the prediction-market desk does
 
-Every 15 seconds the engine prices every matched pair fresh -- Polymarket from the CLOB order book, Kalshi by ticker -- then runs the desks in order below. The two listings pairs are matched from are re-read every two minutes: the top 300 Polymarket markets by volume (`PM_UNIVERSE`, `PM_LIST_EVERY_SEC`) and every open market in 11 Kalshi series (Fed decisions, ATP/WTA, MLB, NFL, NBA, NCAAF, MLS, EPL, UCL, La Liga; `KS_SERIES`, `KS_LIST_EVERY_SEC`). Both were read every cycle until 2026-09-22, when they were half of everything the desk downloaded on a box pinned at its CPU cap. Since 2026-10-11 a third listing sits beside them: every game of the NFL, NBA, college football and MLB (and since 2026-10-14 the Premier League, MLS, Champions League and La Liga), read off Polymarket's own league tags every ten minutes (`PM_GAME_TAGS`, `PM_GAMES_EVERY_SEC`; `src/venues/polymarket.js` fetchGames). The top-N listing is the busiest markets of all Polymarket, and on a football Sunday a quiet game's moneyline sits under that line: on 2026-10-11 four of the 13 NFL games (Vikings-Saints, Broncos-Chargers, Lions-Cardinals, Ravens-Falcons) had $6-21k of day volume against a cutoff near $15k at rank 500, so they never paired and the every-game book bet 9 of 13. Gamma filters by league tag and by kind on the server, so the four leagues cost about 1.5 MB a read; the league's season series (`/events?series_id=`) embeds every spread, total and prop, 50 MB for the NFL alone, and is not used.
+Every 15 seconds the engine prices every matched pair fresh -- Polymarket from the CLOB order book, Kalshi by ticker -- then runs the desks in order below. The two listings pairs are matched from are re-read every two minutes: the top 300 Polymarket markets by volume (`PM_UNIVERSE`, `PM_LIST_EVERY_SEC`) and every open market in 11 Kalshi series (Fed decisions, ATP/WTA, MLB, NFL, NBA, NCAAF, MLS, EPL, UCL, La Liga; `KS_SERIES`, `KS_LIST_EVERY_SEC`). Both were read every cycle until 2026-09-22, when they were half of everything the desk downloaded on a box pinned at its CPU cap. Since 2026-10-11 a third listing sits beside them: every game of the NFL, NBA, college football and MLB (and since 2026-10-14 the Premier League, MLS, Champions League and La Liga), read off Polymarket's own league tags every ten minutes (`PM_GAME_TAGS`, `PM_GAMES_EVERY_SEC`; `src/venues/polymarket.js` fetchGames). The top-N listing is the busiest markets of all Polymarket, and on a football Sunday a quiet game's moneyline sits under that line: on 2026-10-11 four of the 13 NFL games (Vikings-Saints, Broncos-Chargers, Lions-Cardinals, Ravens-Falcons) had $6-21k of day volume against a cutoff near $15k at rank 500, so they never paired and the every-game book bet 9 of 13. Gamma filters by league tag and by kind on the server, so the four leagues cost about 1.5 MB a read; the league's season series (`/events?series_id=`) embeds every spread, total and prop, 50 MB for the NFL alone, and is not used. The read has one 20-second budget, and a league whose read fails keeps its last good list for two intervals at most (2026-10-15): a game's row carries the open/closed flags of the read it came from, so a held game in a list kept longer could close and never be asked after. A Polymarket game more than four hours past its start is asked after even while still listed.
 
 | # | Agent | Desk | Job |
 |---|-------|------|-----|
@@ -697,7 +697,19 @@ inactives are out (90 minutes before kickoff). Kickoff is Kalshi's `occurrence_d
 every YES at the ask, or every NO at its ask, gross and net of the fee, cut by the YES ask in four bands.
 A fair two-sided board returns about minus half the spread on either side, minus the fee; both sides losing
 more than that is the hold. A player who was active but took no snap settles at the pre-game price and is
-void. Log-only research: no bet, no broker, nothing in the desk reads it. Tests: `tools/td-tape-test.js`.
+void (Kalshi finalizes it with result `scalar`; until 2026-10-15 the grader read those as pending, so
+2026-10-11 said 7 pending, 0 void, and now says 0 pending, 7 void). If Kalshi's fee multiplier for the
+series does not load, "net" is at the full 7% and the report says so in one line.
+
+**A missed game says so (2026-10-15).** The Thursday game, SEA at DEN, has no tape: the Mac slept on
+battery and the 15-minute job did not fire between 18:23Z and 00:42Z, and `--check` (which read only
+the last `td.log` line) said ok. Each `--record` run now also keeps `data/td/games.json`, every game the
+listing has shown with its kickoff, at no extra request. `--check` (step 9 of the daily check) is
+offline: each game that kicked off in the last 48 hours with no line in the two hours before kickoff is
+a PROBLEM, by name, and so is a day without a run. A run that comes more than 30 minutes after the last,
+across a game's window, notes the gap in `td.log`. `--check --venue` adds one read of Kalshi's open
+listing, for a tape older than `games.json`. Log-only research: no bet, no broker, nothing in the desk
+reads it. Tests: `tools/td-tape-test.js`.
 
 **2026-10-10, three leagues.** Evan: "baseball is over switch it to NBA NFL CFB". `BET_SERIES` in
 fly.toml (and the default in `src/config.js`) is now `KXNBAGAME,KXNFLGAME,KXNCAAFGAME`. Nothing else
@@ -1584,9 +1596,9 @@ flatten and resume, never rewritten. `state.json` stays the fast working copy, b
 bash ops/daily-check.sh
 ```
 
-One screen, read-only, eight steps, and nothing on the box is changed. The exit code is the number of
+One screen, read-only, nine steps, and nothing on the box is changed. The exit code is the number of
 steps that flagged something. Steps 1 to 7 are the prediction-market desk and the box; step 8 is the
-stocks, crypto and options desk.
+stocks, crypto and options desk; step 9 is the anytime-touchdown tape on the Mac.
 
 1. **Did the pull run?** The last line of `data/fly/archive/pull.log` and its age.
 2. **Does the ledger add up?** `tools/ledger-check.js --box --venues`: the journal rebuilds the state
@@ -1624,6 +1636,9 @@ stocks, crypto and options desk.
    simply holding. What the bots flagged in the last day (a feed that did not load, a halt) is listed
    as a note; a round that threw is a problem. First run, 2026-09-25: the ledger exact, crypto checked,
    nothing flagged.
+9. **Did the touchdown tape miss a game?** `node tools/td-tape.js --check`, offline (*Anytime
+   touchdowns* above): the last `td.log` line, a day without a run, and every game that kicked off in
+   the last 48 hours with no tape line in the two hours before kickoff, by name. Added 2026-10-15.
 
 First run, 2026-09-21: 159 settlements, 159 agree; 29 watchdog restarts on the 20th, 7 on the 21st.
 

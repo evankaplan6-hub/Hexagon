@@ -21,6 +21,8 @@ const watchdog = require('./watchdog');
 const { themeOf, themeMeta, themeRank, tickerOfPairId } = require('./themes');
 
 const WATCHDOG_EVERY_MS = 15000;
+// resolution(): a Polymarket game this long past its start is asked even while still listed
+const PM_ASK_AFTER_START_MS = 4 * 3600e3;
 
 const AGENTS = [
   { key: 'BRAM', n: '01', role: 'PRICING', color: '#3b82f6' },
@@ -523,15 +525,28 @@ class Engine {
   // Checked when the market has left the open listing (a finished game drops out of it), and also
   // when it is still listed but its Kalshi close time has passed or it is no longer active -- a
   // closed market that lingers in a listing would otherwise never be asked.
+  //
+  // And a Polymarket game that started more than PM_ASK_AFTER_START_MS ago is asked even while it is
+  // listed and open (audit 2026-10-15). The listing's flags are only as fresh as the read they came
+  // from: a league-tag game (fetchGames) is re-read every PM_GAMES_EVERY_SEC, and a quiet game that
+  // ended and closed kept saying "listed, accepting" until then, so this never asked and the leg never
+  // settled; marketHalted said it could still be sold. A game is about three hours and Polymarket
+  // closes one a median half an hour after the final, so past four hours the listing is the likelier
+  // thing to be wrong. Asked at most every five minutes while listed (a rain delay or overtime is not
+  // a reason for a call a minute), and what the answer says about closed / accepting is written back
+  // onto the listed row, so marketHalted stops a sale into a market that has stopped taking orders.
   async resolution(pos) {
     const listed = pos.venue === 'KS' ? this.quotes.ks.get(pos.ref) : this.quotes.pm.get(pos.pmId);
+    let lateGame = false;
     if (listed) {
       const closeMs = pos.venue === 'KS' ? Date.parse(listed.closeTime || '') : NaN;
       const inactive = pos.venue === 'KS' ? (listed.status && listed.status !== 'active') : (listed.closed || listed.accepting === false);
-      if (!inactive && !(Number.isFinite(closeMs) && Date.now() >= closeMs)) return null;
+      const startMs = pos.venue === 'PM' ? Date.parse(String(listed.gameStart || '').replace(' ', 'T').replace(/\+00$/, 'Z')) : NaN;
+      lateGame = !inactive && Number.isFinite(startMs) && Date.now() - startMs > PM_ASK_AFTER_START_MS;
+      if (!inactive && !(Number.isFinite(closeMs) && Date.now() >= closeMs) && !lateGame) return null;
     }
     const last = this.resolutionChecks.get(pos.id) || 0;
-    if (Date.now() - last < 60000) return null;
+    if (Date.now() - last < (lateGame ? 300000 : 60000)) return null;
     this.resolutionChecks.set(pos.id, Date.now());
     if (this.resolutionChecks.size > 500) for (const [id, at] of this.resolutionChecks) if (Date.now() - at > 3600000) this.resolutionChecks.delete(id);
     if (pos.venue === 'KS') {
@@ -550,6 +565,9 @@ class Engine {
       if (this.due(`odd-settle-${pos.id}`, 3600)) this.log('RIGO', 'HALT', null, `${pos.label}: Polymarket resolved at ${m.prices[pos.tokenIndex]}, not 0, 0.5 or 1 · not settling it automatically, needs a person`);
       return null;
     }
+    // closed (or no longer accepting) but not yet resolved: say so on the listed row, which is the
+    // object the quote map is rebuilt from until the next read replaces it (see lateGame above)
+    if (m && listed && (m.closed || m.accepting === false)) Object.assign(listed, { closed: !!m.closed, accepting: m.accepting !== false });
     if (m && !m.closed && !listed) this.quotes.pm.set(m.id, m);
     return null;
   }
@@ -806,23 +824,45 @@ class Engine {
       const markets = ksRes.value.map((m) => Object.assign(m, { at }));
       this.ksList = { at, markets, tickers: new Set(markets.map((m) => m.ticker)) };
     }
+    // A league's last good list is kept through a failed read, but not forever (audit 2026-10-15): its
+    // rows carry the accepting/closed flags of the read they came from, so a quiet game that ended and
+    // closed while the league's page kept failing stayed "listed and open" for as long as it failed --
+    // resolution() never asked after it and marketHalted() said it could be sold. Each league's good
+    // read is timed (`readAt`), and a list older than two intervals leaves the merge; a held game then
+    // falls to pinPositions, which asks Polymarket for that one market and leaves a closed one to
+    // resolution(). Floored at two minutes for PM_GAMES_EVERY_SEC=0 (a read every cycle).
+    const gamesMaxAge = Math.max(2 * this.cfg.pmGamesEverySec, 120) * 1000;
     if (gamesDue) {
       const byTag = (this.pmGames && this.pmGames.byTag) || new Map();
+      const readAt = (this.pmGames && this.pmGames.readAt) || new Map();
       let failed = gameTags;
       if (gmRes.status === 'fulfilled') {
-        for (const [tag, ms] of gmRes.value.byTag) byTag.set(tag, ms.map((m) => Object.assign(m, { at })));
+        for (const [tag, ms] of gmRes.value.byTag) { byTag.set(tag, ms.map((m) => Object.assign(m, { at }))); readAt.set(tag, at); }
         failed = gmRes.value.failed;
+        // a league whose pages hit the page cap, or ran out of the read's time budget, is a short list
+        // that looks whole (src/venues/polymarket.js fetchGames)
+        const short = gmRes.value.capped || [];
+        if (short.length && this.due('pm-games-capped', 3600)) this.log('TESS', 'OPS', null, `Polymarket game listing cut short for league ${short.join(', ')} (page cap or time budget) · some of its games may be missing`);
       }
-      this.pmGames = { at, byTag, failed };   // `at` moves on a failure too: no retry storm, the next read is in PM_GAMES_EVERY_SEC
+      this.pmGames = { at, byTag, readAt, failed };   // `at` moves on a failure too: no retry storm, the next read is in PM_GAMES_EVERY_SEC
       if (failed.length && this.due('pm-games-err', 300)) {
         const why = gmRes.status === 'rejected' ? String(gmRes.reason && gmRes.reason.message).slice(0, 100) : `${failed.length} of ${gameTags.length} league pages`;
-        this.log('TESS', 'OPS', null, `Polymarket game listing failed: ${why} · keeping the last good list for ${failed.length === gameTags.length ? 'every league' : 'the leagues that failed'}`);
+        this.log('TESS', 'OPS', null, `Polymarket game listing failed: ${why} · keeping the last good list for ${failed.length === gameTags.length ? 'every league' : 'the leagues that failed'} up to ${Math.round(gamesMaxAge / 60000)} min`);
       }
     }
     if (pmOk && this.pmList) {
       this.quotes.pm = new Map(this.pmList.markets.map((m) => [m.id, m]));
       // the league listings' games, where the top-N listing lacks them: the listing wins a market both have
-      if (this.pmGames) for (const ms of this.pmGames.byTag.values()) for (const m of ms) if (!this.quotes.pm.has(m.id)) this.quotes.pm.set(m.id, m);
+      if (this.pmGames) {
+        for (const [tag, ms] of [...this.pmGames.byTag]) {
+          if (at - (this.pmGames.readAt.get(tag) || 0) > gamesMaxAge) {
+            this.pmGames.byTag.delete(tag); this.pmGames.readAt.delete(tag);
+            if (this.due(`pm-games-stale-${tag}`, 600)) this.log('TESS', 'OPS', null, `Polymarket game listing for league ${tag} is over ${Math.round(gamesMaxAge / 60000)} min old · dropped; held games there are asked one by one until a read succeeds`);
+            continue;
+          }
+          for (const m of ms) if (!this.quotes.pm.has(m.id)) this.quotes.pm.set(m.id, m);
+        }
+      }
     }
     if (ksOk && this.ksList) this.quotes.ks = new Map(this.ksList.markets.map((m) => [m.ticker, m]));
     if (pmOk && ksOk) this.lastQuoteAt = Date.now();
@@ -969,8 +1009,10 @@ class Engine {
       s.initial = r2(s.initial + d.usd);
       s.dayStartEquity = r2((s.dayStartEquity || 0) + d.usd);
       for (const p of s.balanceHistory || []) p.b = r2(p.b + d.usd);
-      s.deposits[d.id] = { usd: d.usd, at: Date.now() };
       this.journal(this, 'DEPOSIT', { id: d.id, usd: d.usd, initial: s.initial, cash: s.cash });
+      // stamped after the journal line, so `at` is never earlier than its `t`: tools/ledger-check.js
+      // reads it as a moment the state vouches for and replays the journal up to it (audit 2026-10-15)
+      s.deposits[d.id] = { usd: d.usd, at: Date.now() };
       this.dirty = true;
     }
     if (this.dirty) this.save();

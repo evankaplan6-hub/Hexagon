@@ -104,27 +104,43 @@ async function fetchUniverse(limit = 300) {
 // dropped here. Rows are filtered as fetchUniverse's are; the engine merges the two listings and the
 // universe wins where both have a market. One league failing does not fail the others: the result says
 // which did (`failed`), and the engine keeps that league's last good list.
+//
+// The engine awaits this inside the taker cycle, and a league's pages are read one after another, so
+// ten slow pages at the 15-second request timeout could hold the cycle two and a half minutes (audit
+// 2026-10-15). The whole read has one time budget instead (GAMES_BUDGET_MS, shared by the leagues,
+// which run side by side): no page starts once it is spent and none may run past it. A league that
+// runs out is a failed league -- its last good list stands, which is safer than a short list that
+// looks whole. A league that fills all GAMES_PAGE_MAX pages was cut off silently before; it still
+// keeps what it read, and is named in `capped` so the engine can say so.
 const GAMES_PAGE_MAX = 10;
-async function fetchGamesTag(tag) {
+const GAMES_BUDGET_MS = 20000;
+async function fetchGamesTag(tag, until) {
   const rows = [];
   for (let page = 0; page < GAMES_PAGE_MAX; page++) {
-    const got = await http.getJSON(`${GAMMA}/markets?closed=false&active=true&limit=100&offset=${page * 100}&tag_id=${encodeURIComponent(tag)}&sports_market_types=moneyline`);
-    if (!Array.isArray(got)) break;
+    const left = until - Date.now();
+    if (left <= 0) throw new Error(`league ${tag}: out of time after ${page} page${page === 1 ? '' : 's'}`);
+    const got = await http.getJSON(`${GAMMA}/markets?closed=false&active=true&limit=100&offset=${page * 100}&tag_id=${encodeURIComponent(tag)}&sports_market_types=moneyline`, { timeout: Math.min(15000, left) });
+    if (!Array.isArray(got)) return { rows, capped: false };
     for (const raw of got) {
       const m = normalize(raw);
       if (m && m.gameStart && m.accepting && !m.closed && m.bestBid != null && m.bestAsk != null && m.bestAsk > m.bestBid) rows.push(m);
     }
-    if (got.length < 100) break;
+    if (got.length < 100) return { rows, capped: false };
   }
-  return rows;
+  return { rows, capped: true };
 }
-async function fetchGames(tagIds) {
+async function fetchGames(tagIds, { budgetMs = GAMES_BUDGET_MS } = {}) {
   const tags = [...new Set((tagIds || []).map(String).filter(Boolean))];
-  const res = await Promise.allSettled(tags.map(fetchGamesTag));
-  const byTag = new Map(), failed = [];
-  res.forEach((r, i) => (r.status === 'fulfilled' ? byTag.set(tags[i], r.value) : failed.push(tags[i])));
+  const until = Date.now() + budgetMs;
+  const res = await Promise.allSettled(tags.map((t) => fetchGamesTag(t, until)));
+  const byTag = new Map(), failed = [], capped = [];
+  res.forEach((r, i) => {
+    if (r.status !== 'fulfilled') { failed.push(tags[i]); return; }
+    byTag.set(tags[i], r.value.rows);
+    if (r.value.capped) capped.push(tags[i]);
+  });
   if (tags.length && failed.length === tags.length) throw new Error(`every Polymarket league listing failed (${String(res[0].reason && res[0].reason.message).slice(0, 80)})`);
-  return { byTag, failed };
+  return { byTag, failed, capped };
 }
 
 // One market's record. Three stages matter for a finished game (2026-09-30): `proposed`, when its

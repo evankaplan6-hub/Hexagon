@@ -342,14 +342,28 @@ function matchPairs(pmList, ksList) {
       for (const ms of days.flatMap((x) => byDate.get(x) || [])) {
         const ser = series(ms[0].ticker);
         if (!allowed.includes(ser)) continue;
-        const sides = ms.filter((x) => !/^tie\b/i.test(x.subTitle) && !/^tie\b/i.test(x.title));
+        // An event with a Tie leg is a three-way market, and a two-outcome Polymarket moneyline is not
+        // the same bet: "Seattle" here is not "Seattle" there when the game is drawn. It used to drop the
+        // Tie leg and pair the rest (audit 2026-10-15; latent, as Polymarket lists soccer as "Will X win
+        // on <date>?", path 3 below, which is built for the three-way event). The whole event is skipped.
+        if (ms.some((x) => /^tie\b/i.test(x.subTitle) || /^tie\b/i.test(x.title))) continue;
+        const sides = ms;
         if (sides.length !== 2) continue;
         const people = /MATCH/.test(ser); // tennis-style series carry player names
         const full = ser === 'KXNFLGAME' ? nflFull : ser === 'KXNBAGAME' ? nbaFull : (x) => x;
         const [pa, pb] = [full(A), full(B)];
         const ksName = (x) => (ser === 'KXMLBGAME' ? mlbName(x.subTitle) : x.subTitle);
-        const ia = sides.findIndex((x) => nameMatch(ksName(x), pa, people));
-        const ib = sides.findIndex((x) => nameMatch(ksName(x), pb, people));
+        // A team's name may lose words at the END on Kalshi ("New York Y", "Tampa Bay" for the Rays), never
+        // at the front. nameMatch lets Polymarket words go unmatched anywhere, so Kalshi's "Kentucky"
+        // matched Polymarket's "Western Kentucky" and "Tennessee" "Middle Tennessee" (audit 2026-10-15),
+        // and with no start time in a college ticker a lone candidate pairs unchecked: Western Kentucky v
+        // Middle Tennessee paired to Kentucky v Tennessee whenever Kalshi listed only the bigger game. So
+        // here Kalshi's first word must also begin Polymarket's first word. Not for players, whom Kalshi
+        // may name by surname alone, and not for path 3's soccer clubs ("FK Bodø/Glimt" against "Bodoe/Glimt").
+        const leads = (k, p) => people || (toks(k)[0] !== undefined && (toks(p)[0] || '').startsWith(toks(k)[0]));
+        const same = (x, p) => nameMatch(ksName(x), p, people) && leads(ksName(x), p);
+        const ia = sides.findIndex((x) => same(x, pa));
+        const ib = sides.findIndex((x) => same(x, pb));
         if (ia < 0 || ib < 0 || ia === ib) continue;
         const label = `${TAG[ser] || ser} ${short(A, sport)} v ${short(B, sport)} · ${short(A, sport)}`;
         const conflict = conflictWith(sides[ia]);

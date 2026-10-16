@@ -17,7 +17,8 @@
 // A day that ends before 3:15 (a 1 PM close) is skipped, as both books skip it.
 // OPTIONS: SPY's option prices for past days are not free, so they are MODELLED. Black-Scholes, no rate,
 // time left in trading minutes to 4:00, volatility the last 20 sessions' realised volatility times --iv
-// (default 1.2: same-day implied volatility usually sits over realised), at least 8%; a dollar strike
+// (default 1.2: same-day implied volatility usually sits over realised), at least 2% (dayVol's floor; this
+// line said 8% until 2026-10-15, the code has always used 2%, and the verdict was read on 2%); a dollar strike
 // grid, a cent each side of the model's price under $1 and two cents above (SPY's same-day options
 // are about that wide), and the desk's $0.03 a contract each way. books.pickScalp and books.pickDip pick
 // from that grid. A 1.5x target fills if the modelled bid reaches it at the bar's high (low, for a put).

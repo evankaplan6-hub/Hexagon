@@ -98,4 +98,53 @@ ok('...and a card without a line or a table', /\(traded && !off \? sparkSvg\(b\.
 ok('a group says which of its books are off, and Runners\' sentence only while it trades', /const groupNote = /.test(js) && /groupNote\(text, bs\)/.test(js) && !/swings\. Runners buy/.test(js));
 ok('a fill\'s sub-line no longer repeats its book, and a folded maker fill says its count', !/BOOK_NAME/.test(js) && /in \$\{f\.n\} fills/.test(js));
 
+// ---- the 2026-10-15 audit: focus in a sheet, a sheet's links, the seconds after a restart, a share of nothing
+ok('Back keeps the focus in the sheet: on Back while there is one to go back to, else on Done',
+  /if \(!sheet\.hidden\) \(sheetback\.hidden \? sheet\.querySelector\('\.shdone'\) : sheetback\)\.focus\(/.test(js));
+ok('a link in a sheet closes it, and the same address as the one showing goes to its card again',
+  /const go = ev\.target\.closest\('#sheet a\[href\^="#"\]'\);\s*if \(go\) \{ closeSheet\(\); if \(go\.hash === location\.hash\) route\(\); return; \}/.test(js));
+ok('a book has bought in by its rows, not by its holding figure, which is null until the first price',
+  /const boughtIn = \(b\) => \(b\.key === 'crypto' \|\| b\.key === 'stocks'\) && b\.rows\.some\(\(r\) => r\.qty > 0 \|\| r\.benchPx > 0\)/.test(js)
+  && /const heldBooks = \(\) => \(S\.books \|\| \[\]\)\.filter\(\(b\) => !bookOff\(b\) && boughtIn\(b\)\)/.test(js) && !/heldBooks = [^\n]*bench != null/.test(js));
+ok('...and with no price yet the overview says it is waiting on prices', /if \(bs\.some\(\(b\) => b\.bench == null\)\) return \{ bs, waiting: true \}/.test(js) && /verdict zero">Waiting on prices</.test(js));
+ok('a held slot with no price is worth what it cost, as the book counts it, not its cash alone',
+  /if \(r\.qty > 0 && !\(r\.px > 0\)\) \{ r\.value = r2\(r\.cost\); r\.worth = r2\(r\.cash \+ r\.cost\); r\.pnl = null; \}/.test(js) && /S = atCost\(JSON\.parse\(ev\.data\)\)/.test(js));
+ok('the desk\'s share has no sign when it is nothing, and hundredths under a tenth', /toFixed\(part < 0\.095 \? 2 : 1\)/.test(js) && /\$\{none \? '0\.0' :/.test(js));
+
+// morph's patch, run on a small stand-in for the DOM: a line that is still wanted stays the same element when a
+// new one comes in on top, one goes, or two swap. Until 2026-10-15 a new fill replaced every line under it.
+{
+  const src = (js.match(/  const sameNode = [\s\S]*?\n  function patch\(a, b\) \{[\s\S]*?\n  \}\n/) || [''])[0];
+  class N {
+    constructor(name, k, text) { this.nodeName = name; this.nodeType = name === '#text' ? 3 : 1; this.nodeValue = text ?? null; this.attrs = new Map(k == null ? [] : [['data-k', k]]); this.childNodes = []; this.parentNode = null; }
+    get attributes() { return [...this.attrs].map(([name, value]) => ({ name, value })); }
+    getAttribute(n) { return this.attrs.has(n) ? this.attrs.get(n) : null; }
+    setAttribute(n, v) { this.attrs.set(n, String(v)); } removeAttribute(n) { this.attrs.delete(n); } hasAttribute(n) { return this.attrs.has(n); }
+    get nextSibling() { const p = this.parentNode; return p ? p.childNodes[p.childNodes.indexOf(this) + 1] || null : null; }
+    get lastChild() { return this.childNodes[this.childNodes.length - 1] || null; }
+    get isConnected() { return true; }
+    removeChild(c) { this.childNodes.splice(this.childNodes.indexOf(c), 1); c.parentNode = null; return c; }
+    insertBefore(c, ref) { if (c.parentNode) c.parentNode.removeChild(c); this.childNodes.splice(ref ? this.childNodes.indexOf(ref) : this.childNodes.length, 0, c); c.parentNode = this; return c; }
+    appendChild(c) { return this.insertBefore(c, null); }
+    replaceChild(c, old) { this.insertBefore(c, old); return this.removeChild(old); }
+  }
+  const li = (k) => { const n = new N('LI', k); n.appendChild(new N('#text', null, `line ${k}`)); return n; };
+  const list = (ks) => { const u = new N('UL'); for (const k of ks) u.appendChild(li(k)); return u; };
+  let patch = null;
+  try { patch = new Function(`${src}; return patch;`)(); } catch (e) { ok('patch can be read out of desk.js', false, e.message); }
+  if (patch) {
+    const run = (from, to) => { const a = list(from), was = new Map(a.childNodes.map((c) => [c.getAttribute('data-k'), c])); patch(a, list(to)); return { a, was }; };
+    const kept = ({ a, was }, ks) => ks.every((k) => a.childNodes.find((c) => c.getAttribute('data-k') === k) === was.get(k));
+    const order = ({ a }) => a.childNodes.map((c) => c.getAttribute('data-k')).join();
+    let r = run(['a', 'b', 'c'], ['n', 'a', 'b', 'c']);
+    ok('patch: a new line on top leaves every line under it the same element', order(r) === 'n,a,b,c' && kept(r, ['a', 'b', 'c']), order(r));
+    r = run(['a', 'b', 'c'], ['b', 'c']);
+    ok('patch: a line that goes takes no other with it', order(r) === 'b,c' && kept(r, ['b', 'c']), order(r));
+    r = run(['a', 'b', 'c', 'd'], ['b', 'a', 'd', 'x']);
+    ok('patch: lines that swap are moved, not drawn again', order(r) === 'b,a,d,x' && kept(r, ['a', 'b', 'd']), order(r));
+    r = run(['a', 'b'], ['a', 'b']);
+    ok('patch: a frame that changes nothing keeps everything', order(r) === 'a,b' && kept(r, ['a', 'b']) && r.a.childNodes[1].childNodes[0].nodeValue === 'line b');
+  }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
