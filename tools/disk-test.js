@@ -18,7 +18,8 @@ const path = require('path');
 const crypto = require('crypto');
 const pull = require('./fly-pull');
 const { planPull, listDir, isBytePrefix, parseArgs, addDays, mainCheckout, linkedWorktreeOf, isFrozenSnapshot, run } = pull;
-const { planTapeTrim, makeDiskBrake, makeRecorder, ET_DAY } = require('../src/recorder');
+const { planTapeTrim, makeDiskBrake, makeRecorder, tapeHold, ET_DAY } = require('../src/recorder');
+const { appendWhole } = require('../src/journal');
 
 let pass = 0, fail = 0;
 const ok = (name, cond, got) => {
@@ -705,6 +706,7 @@ group('planTapeTrim: oldest first, never today, only as much as needed');
 //   heldOpen:  tapes something still has open (the pull's sftp get): unlinked, space not back yet
 //   afterReaddir: run once the brake has listed the folder, to change the disk under it
 function fakeDisk(sizes, freeMb) {
+  tapeHold.on = false; tapeHold.since = 0;   // one per process: each case starts with the tape writing
   const d = { files: { ...sizes }, free: freeMb * MB, statfs: 0, readdir: 0, unlinked: [], appended: [], failStatfs: false, failUnlink: null, goneUnder: new Set(), heldOpen: new Set(), afterReaddir: null };
   d.io = {
     statfsSync: () => { d.statfs++; if (d.failStatfs) throw new Error('ENOSYS'); return { bavail: d.free, bsize: 1 }; },
@@ -765,6 +767,55 @@ group("the brake: nothing old left -- today's tape and the journals still stand"
   ok('and says the disk is still low, once', E.logs.length === 1 && /no old tick tape is left/.test(E.logs[0].text), E.logs);
 }
 
+group("the brake: nothing old left and still under the floor -- today's tape is held, so the journals keep their room (2026-10-15)");
+{
+  // the day the disk filled: 435 games on the tape, no old tape left, journal lines lost
+  const rcfg = { record: true, dataDir: '/fake/data', tapeMinFreeMb: 200 };
+  const d = fakeDisk({ [`ticks-${TODAY}.jsonl`]: 800 * MB }, 37);
+  let t = NOW;
+  const rec = makeRecorder(rcfg, { io: d.io, clock: () => t });
+  const E = { ...fakeE(), cycle: 1, pairs: [{ id: 'g', label: 'A v B', kind: 'game', inPlay: true, q: { pmBid: 0.5, pmAsk: 0.52, pmVol: 1, ksBid: 0.5, ksAsk: 0.52, ksVol: 1, t } }] };
+  rec(E);
+  ok('nothing is deleted, and the tape is held', d.unlinked.length === 0 && tapeHold.on === true && tapeHold.since === NOW);
+  ok('...so nothing is appended to it', d.appended.length === 0, d.appended.length);
+  ok('...and it says so once, naming the journals', E.logs.length === 1 && /today's tick tape held \(not written\) until there is room, so the journals keep theirs/.test(E.logs[0].text), E.logs.map((l) => l.text));
+  const looks = d.statfs;
+  for (let i = 1; i < 20; i++) { t = NOW + i * 15000; E.pairs[0].q.t = t; rec(E); }   // under five minutes of cycles
+  ok('cycles inside the five minutes neither write nor look again', d.appended.length === 0 && d.statfs === looks, { appended: d.appended.length, statfs: d.statfs, looks });
+  d.free = 900 * MB;   // the tape was moved off the box
+  t = NOW + 5 * 60000; E.pairs[0].q.t = t; rec(E);
+  ok('five minutes on, the space is back: released, said, and this cycle writes', tapeHold.on === false && d.appended.length === 1 && /disk ok again · 900.0 MB free/.test(E.logs[1] && E.logs[1].text), { on: tapeHold.on, appended: d.appended.length, logs: E.logs.map((l) => l.text) });
+  ok('...and the trim stays hourly: the look did not list the folder', d.readdir === 1, d.readdir);
+}
+
+group('the journals: a line a full disk cut short does not swallow the next one (2026-10-15)');
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hex-whole-'));
+  const f = path.join(dir, 'journal-2026-10-15.jsonl');
+  fs.writeFileSync(f, '{"kind":"OPEN","id":1}\n{"t":"x","kind":"MAKER_FIL');   // what the box's journal ended with
+  const st = { check: true };
+  appendWhole(f, '{"kind":"SETTLE","id":2}\n', st);
+  const lines = fs.readFileSync(f, 'utf8').split('\n').filter(Boolean);
+  const parsed = lines.filter((l) => { try { JSON.parse(l); return true; } catch { return false; } });
+  ok('a restart onto a torn file: the torn line ends where it was cut, the new one stands whole', lines.length === 3 && parsed.length === 2 && JSON.parse(lines[2]).id === 2, lines);
+  ok('...and from then on it reads nothing before a write', st.check === false);
+  const before = fs.readFileSync(f, 'utf8');
+  appendWhole(f, '{"id":3}\n', st);
+  ok('a healthy file gets exactly the line', fs.readFileSync(f, 'utf8') === before + '{"id":3}\n');
+  // a failed write, then the disk comes back
+  let reads = 0, threw = false;
+  const io = { ...fs, readSync: (...a) => { reads++; return fs.readSync(...a); }, appendFileSync: () => { const e = new Error('ENOSPC: no space left on device'); e.code = 'ENOSPC'; throw e; } };
+  try { appendWhole(f, '{"id":4}\n', st, io); } catch { threw = true; }
+  ok('a failed write still throws (the caller says so on the floor), and marks the file to check', threw && st.check === true);
+  fs.appendFileSync(f, '{"id":4,"cut');   // what that failed write left behind
+  appendWhole(f, '{"id":5}\n', st, { ...fs, readSync: (...a) => { reads++; return fs.readSync(...a); } });
+  const tail = fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).pop();
+  ok('...so the next write mends the cut first', tail === '{"id":5}' && reads === 1, { tail, reads });
+  appendWhole(path.join(dir, 'journal-new.jsonl'), '{"id":6}\n', { check: true });
+  ok('a new day\'s file that does not exist yet is simply written', fs.readFileSync(path.join(dir, 'journal-new.jsonl'), 'utf8') === '{"id":6}\n');
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 group('the brake: never throws into the cycle');
 {
   const d = fakeDisk({ 'ticks-2026-09-10.jsonl': 30 * MB }, 10);
@@ -819,10 +870,13 @@ group('the brake: never deletes more than one measurement says it needs');
   const brake = makeDiskBrake(cfg, h.io);
   brake(E, NOW);
   ok('a deleted tape still held open frees nothing yet: the brake stops at what it planned', JSON.stringify(h.unlinked) === '["ticks-2026-09-10.jsonl"]' && 'ticks-2026-09-11.jsonl' in h.files && 'ticks-2026-09-12.jsonl' in h.files, h.unlinked);
-  ok('...and says the disk is still low, with tapes left, and when it looks again', E.logs.length === 2 && /still under the 200 MB floor · 2 old tick tapes left; looking again in an hour/.test(E.logs[1].text), E.logs.map((l) => l.text));
+  ok('...and says the disk is still low, with tapes left, and when it trims again', E.logs.length === 2 && /still under the 200 MB floor · today's tick tape held .* · 2 old tick tapes left; trimming again in an hour/.test(E.logs[1].text), E.logs.map((l) => l.text));
+  ok("...holding today's tape meanwhile", tapeHold.on === true);
   h.free += 30 * MB;   // the copy finished and closed the file
+  brake(E, NOW + 5 * 60000);
+  ok('five minutes on, a look (not a trim) sees the space back and releases the tape', tapeHold.on === false && h.unlinked.length === 1 && /disk ok again/.test(E.logs[2] && E.logs[2].text), E.logs.map((l) => l.text));
   brake(E, NOW + HOUR);
-  ok('an hour on, the space is back and nothing more is deleted', h.unlinked.length === 1 && E.logs.length === 2, { unlinked: h.unlinked, logs: E.logs.length });
+  ok('an hour on, nothing more is deleted and nothing more said', h.unlinked.length === 1 && E.logs.length === 3, { unlinked: h.unlinked, logs: E.logs.length });
 }
 
 group("the brake: today is the Eastern date, even when UTC has moved on");
@@ -862,17 +916,26 @@ group('the recorder: any-market pairs are written on change and on a heartbeat')
   const q = (o = {}) => ({ pmBid: 0.5, pmAsk: 0.52, pmVol: 10, ksBid: 0.49, ksAsk: 0.53, ksVol: 5, t, ...o });
   const E = { ...fakeE(), cycle: 1, pairs: [
     { id: 'ev', label: 'Iowa Senate - Republicans', kind: 'event', category: 'Elections', closesAt: NOW + 86400000, settlesAt: NOW + 2 * 86400000, watchOnly: 'unclear', q: q() },
-    { id: 'gm', label: 'A v B', kind: 'game', q: q() },
+    { id: 'gm', label: 'A v B', kind: 'game', inPlay: true, q: q() },
+    { id: 'pre', label: 'C v D', kind: 'game', inPlay: false, q: q() },
   ] };
   const lines = () => d.appended.flatMap((a) => a.text.trim().split('\n')).map((l) => JSON.parse(l));
   rec(E);
   const first = lines();
-  ok('the first cycle writes both', first.length === 2, first.length);
+  ok('the first cycle writes all three', first.length === 3, first.length);
   const ev = first.find((r) => r.pair === 'ev');
   ok('an event line carries its category, close, settlement and rules status', ev && ev.category === 'Elections' && ev.closesAt && ev.settlesAt && ev.watch === 'unclear', ev);
   t += 15000; E.pairs.forEach((p) => { p.q = { ...p.q, t }; });
   rec(E);
-  ok('an unchanged event pair is not written again; the game still is', lines().filter((r) => r.pair === 'ev').length === 1 && lines().filter((r) => r.pair === 'gm').length === 2);
+  ok('an unchanged event pair is not written again; a game in play still is', lines().filter((r) => r.pair === 'ev').length === 1 && lines().filter((r) => r.pair === 'gm').length === 2);
+  ok('...and an unchanged game before kickoff is not (2026-10-15: 435 of them were 808 MB a day)', lines().filter((r) => r.pair === 'pre').length === 1);
+  t += 15000; E.pairs.forEach((p) => { p.q = { ...p.q, t }; }); E.pairs[2].inPlay = true;
+  rec(E);
+  ok('a game going in play is a change: written at once', lines().filter((r) => r.pair === 'pre').length === 2 && lines().filter((r) => r.pair === 'pre').pop().inPlay === true);
+  t += 15000; E.pairs.forEach((p) => { p.q = { ...p.q, t }; });
+  rec(E);
+  ok('...and from then on every cycle', lines().filter((r) => r.pair === 'pre').length === 3);
+  E.pairs[2].inPlay = false; E.pairs.splice(1, 1);
   t += 15000; E.pairs[0].q = { ...E.pairs[0].q, ksBid: 0.50, t };
   rec(E);
   ok('a moved price is written', lines().filter((r) => r.pair === 'ev').length === 2);

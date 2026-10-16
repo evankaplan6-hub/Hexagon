@@ -11,14 +11,36 @@ const path = require('path');
 
 const { ET_DAY } = require('./recorder');   // the Eastern day, one definition for every file that names one
 
+// Append one or more whole lines. A write a full disk cut short leaves part of a line and no
+// newline (2026-10-15: the box's journal stopped at exactly 61,440 bytes, mid "MAKER_FIL"), and
+// the next line appended would be glued onto it, so every reader drops both. So on the first write
+// of a process (a restart onto a torn file) and after any failed write, a file whose last byte is
+// not a newline gets one first: the torn line stays torn, the next one is whole. `st` is the
+// caller's { check } and starts true; a healthy desk reads no byte after its first line.
+function appendWhole(file, text, st, io = fs) {
+  if (st.check) {
+    try {
+      const fd = io.openSync(file, 'r');
+      try {
+        const size = io.fstatSync(fd).size;
+        const b = Buffer.alloc(1);
+        if (size > 0 && io.readSync(fd, b, 0, 1, size - 1) === 1 && b[0] !== 10) text = '\n' + text;
+      } finally { io.closeSync(fd); }
+    } catch { /* no file yet: nothing to mend */ }
+  }
+  try { io.appendFileSync(file, text); st.check = false; }
+  catch (e) { st.check = true; throw e; }
+}
+
 function makeJournal(cfg) {
   let warnedAt = 0;
+  const st = { check: true };
   return (E, kind, payload) => {
     const now = Date.now();
     const line = JSON.stringify({ t: new Date(now).toISOString(), cycle: E.cycle, mode: cfg.mode, kind, ...payload });
     try {
       fs.mkdirSync(cfg.dataDir, { recursive: true });
-      fs.appendFileSync(path.join(cfg.dataDir, `journal-${ET_DAY.format(new Date(now))}.jsonl`), line + '\n');
+      appendWhole(path.join(cfg.dataDir, `journal-${ET_DAY.format(new Date(now))}.jsonl`), line + '\n', st);
     } catch (e) {
       // the journal must never take the desk down, but a silent failure defeats the point
       if (now - warnedAt > 300000) { warnedAt = now; E.log('TESS', 'OPS', null, `journal write failed: ${String(e.message).slice(0, 120)}`); }
@@ -41,4 +63,4 @@ function crashRecord(ev, e) {
   return { ev, stack: String((e && e.stack) || e).slice(0, 800) };
 }
 
-module.exports = { makeJournal, crashRecord, LIFECYCLE };
+module.exports = { makeJournal, appendWhole, crashRecord, LIFECYCLE };
