@@ -1248,7 +1248,95 @@ async function auditTests() {
     ok('a save that fails says so once, not on every try', lines.length === 1, lines.map((l) => l.text));
     fs.rmSync(dir, { recursive: true, force: true });
   }
+
+  // The disk full (2026-10-15). A fill is journaled before the book moves, and one the journal cannot take is
+  // not made; a fill the journal took and the state lost to a failed save is put back from the journal on start.
+  const C = require('./desk-check');
+  const realWrite = fs.writeFileSync, realAppend = fs.appendFileSync;
+  const full = () => { const e = new Error('ENOSPC: no space left on device, write'); e.code = 'ENOSPC'; throw e; };
+  const noJournal = () => { fs.appendFileSync = (f, ...a) => (/journal-/.test(String(f)) ? full() : realAppend(f, ...a)); };
+  const noState = () => { fs.writeFileSync = (f, ...a) => (/state\.json\.tmp$/.test(String(f)) ? full() : realWrite(f, ...a)); };
+  const disk = () => { fs.writeFileSync = realWrite; fs.appendFileSync = realAppend; };
+  const quietErr = async (fn) => { const err = console.error; console.error = () => {}; try { return await fn(); } finally { console.error = err; disk(); } };
+  const ledger = (dir) => { const { state: s, events } = C.readDesk(path.join(dir, 'desk')); return C.compare(C.rebuild(events, s, { until: Infinity }), s); };
+  const fillLines = (dir) => fs.readdirSync(path.join(dir, 'desk')).filter((n) => /^journal-/.test(n)).flatMap((n) => fs.readFileSync(path.join(dir, 'desk', n), 'utf8').split('\n').filter((l) => /"FILL"/.test(l)));
+  const offCfg = (dir) => { const c = deskConfig(dir); Object.assign(c.desk, { options: false, scalps: false, dips: false, runners: false }); return c; };
+  {
+    // the journal cannot be written: nothing is bought, nothing claimed, and the check waits for it
+    const dir = mkDir();
+    let T = atT('12:31');
+    const M = fakeMarket(() => T); M.setMinutes(12 * 60 + 30);
+    const desk = new Desk(offCfg(dir), { feeds: M.feeds, now: () => T }); desk.quiet = true;
+    await quietErr(async () => { noJournal(); await desk.step(); desk.save(); });
+    const sl = desk.state.books.crypto.sleeves;
+    ok('a fill the journal cannot take is not made: every slot still all cash', Object.values(sl).every((x) => x.qty === 0 && x.cash === x.initial && x.fees === 0) && desk.state.books.stocks.sleeves.SPY.qty === 0, sl);
+    eq('no fill on the floor either', desk.state.fills.length, 0);
+    ok('the day is not checked, so it is tried again', Object.values(sl).every((x) => x.checkDay == null && x.target == null && x.benchPx == null), Object.values(sl).map((x) => [x.checkDay, x.benchPx]));
+    eq('said once, not once per order', desk.state.log.filter((l) => /the journal could not be written/.test(l.text)).length, 1);
+    // space frees: the next round buys, journal first, and the two agree to the penny
+    T += 30000; await desk.step(); desk.save();
+    ok('once the journal can be written the book buys', Object.values(sl).every((x) => x.qty > 0) && desk.state.books.stocks.sleeves.SPY.qty > 0);
+    eq('four fills, each in the journal', fillLines(dir).length, 4);
+    eq('and the journal rebuilds the state to the penny', ledger(dir), []);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  {
+    // the journal took the fill, the 3.4 MB state save did not, and the process restarted before one got through
+    const dir = mkDir();
+    let T = atT('12:31');
+    const M = fakeMarket(() => T); M.setMinutes(12 * 60 + 30);
+    let desk = new Desk(offCfg(dir), { feeds: M.feeds, now: () => T }); desk.quiet = true;
+    await desk.step(); desk.save();
+    // the next UTC day, BTC calmer: a rebalance is due
+    T += 86400000; M.W.ticks['BTC-USD'].at = T;
+    M.W.daily['BTC-USD'] = M.W.daily['BTC-USD'].map((b, i) => ({ ...b, c: 84000 * (1 + 0.001 * (i % 2)), day: new Date(Date.parse(`${b.day}T00:00:00Z`) + 86400000).toISOString().slice(0, 10), t: b.t + 86400000 }));
+    await quietErr(async () => { noState(); await desk.step(); });
+    const mem = desk.state.books.crypto.sleeves['BTC-USD'];
+    const before = fillLines(dir).length;
+    ok('the rebalance filled and was journaled while the state could not be saved', before === 5 && mem.checkDay === utcDayOf(T), [before, mem.checkDay]);
+    desk = new Desk(offCfg(dir), { feeds: M.feeds, now: () => T + 30000 }); desk.quiet = true;
+    const back = desk.state.books.crypto.sleeves['BTC-USD'];
+    ok('on start the lost fill is put back from the journal: what the desk held before the restart', back.qty === mem.qty && back.cash === mem.cash && back.cost === mem.cost && back.fees === mem.fees && back.target === mem.target, [back, mem]);
+    eq('and its day is checked', back.checkDay, mem.checkDay);
+    desk.sayCaughtUp(); await desk.step(); desk.save();
+    ok('the start says so', desk.state.log.some((l) => /saved state was behind its journal .*put back bought BTC|put back sold BTC/.test(l.text)), desk.state.log.slice(0, 4).map((l) => l.text));
+    eq('the book does not buy it again', fillLines(dir).length, before);
+    eq('the journal rebuilds the state to the penny', ledger(dir), []);
+    // a second start on the state saved with it puts nothing back twice
+    const again = new Desk(offCfg(dir), { feeds: M.feeds, now: () => T + 60000 }); again.quiet = true;
+    ok('a second restart puts nothing back twice', again.state.books.crypto.sleeves['BTC-USD'].qty === mem.qty && !again.caughtUp, again.caughtUp);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  // A restart whose first round cannot load one coin's price: that coin is marked at cost and holding has no
+  // figure, so the minute is not recorded and the day's loss base not set until it loads (audit 2026-10-15).
+  {
+    const dir = mkDir();
+    let T = atT('12:31');
+    const M = fakeMarket(() => T); M.setMinutes(12 * 60 + 30);
+    let desk = new Desk(offCfg(dir), { feeds: M.feeds, now: () => T }); desk.quiet = true;
+    await desk.step();
+    T += 120000;
+    for (const k of Object.keys(M.W.ticks)) { const x = M.W.ticks[k]; M.W.ticks[k] = { ...x, bid: x.bid * 0.8, ask: x.ask * 0.8, last: x.last * 0.8, at: T }; }
+    await desk.step(); desk.save();
+    const n = desk.state.history.length;
+    T += 120000;
+    let ethDown = true;
+    const feeds = { ...M.feeds, async ticker(id) { if (id === 'ETH-USD' && ethDown) throw new Error('HTTP 502'); return M.W.ticks[id]; } };
+    desk = new Desk(offCfg(dir), { feeds, now: () => T }); desk.quiet = true;
+    desk.state.dayKey = null;                                   // as if this were the day's first mark
+    await desk.step();
+    eq('no minute recorded while ETH has no price', desk.state.history.length, n);
+    eq("and the day's loss base is not set from a coin at cost", desk.state.dayKey, null);
+    ok('said in the log', desk.state.log.some((l) => /no price yet for ETH/.test(l.text)));
+    ethDown = false; T += 60000; await desk.step();
+    const p = desk.state.history[desk.state.history.length - 1];
+    ok('once it loads the minute is recorded, at the market and against holding', desk.state.history.length === n + 1 && p.c === desk.bookValue('crypto') && p.bc === desk.benchValue('crypto') && p.bc !== p.c, p);
+    ok("and the day's base is set from it", desk.state.dayKey === clock.et(T).day && desk.state.dayStart === desk.equity(), [desk.state.dayKey, desk.state.dayStart]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
+const utcDayOf = (t) => new Date(t).toISOString().slice(0, 10);
 
 engineTests().then(auditTests).then(() => {
   console.log(`${pass} passed, ${fail} failed`);
