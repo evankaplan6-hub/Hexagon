@@ -175,7 +175,8 @@ tools/            edge-scan, replay, maker-replay, maker-rank, pm-maker-scan, ma
                   settle-lag (when Polymarket settles a game, what Kalshi still offers the winner at: the study behind the settlement snipe),
                   td-tape (2026-10-11: Kalshi's anytime-touchdown board, "<player>: 1+", recorded every 15 min in the 3 hours before each
                   NFL kickoff → data/td/, graded after: the hold of a one-sided prop board, both ways, net of fee; log-only, no bet;
-                  ops/install-td-tape.sh schedules it on the Mac; Evan asked "parlays? atd parlay?" and the answer was measure, not bet), ufc-scan (prices a
+                  since 2026-10-16 the box records it (src/tdsched.js, TD_TAPE=1, /data/td; the pull copies days to
+                  data/fly/archive/td/) after the Mac slept through two Thursday games; ops/install-td-tape.sh's Mac job is a spare; Evan asked "parlays? atd parlay?" and the answer was measure, not bet), ufc-scan (prices a
                   fight card on both venues, cross-venue and within Kalshi, net of fees; read-only),
                   history-scan, golden, api, lab-fetch + lab (strategy tournament on settled markets),
                   whale-fetch + whale-lab (does copying top sports wallets pay? no, out of sample),
@@ -217,7 +218,7 @@ ops/              Fly deploy, launchd desk autostart (not installed), the tape p
                   + fillcheck, restarts (tools/restarts.js), CPU steal/pressure + disk + probe files, the chain tape (chain-record --check),
                   whether the encrypted secrets image is older than .env or the key, (step 8) the stocks, crypto and
                   options desk (tools/desk-check.js --box), and (step 9, since 2026-10-15) the anytime-touchdown tape
-                  (tools/td-tape.js --check: names each game whose window passed untaped, from data/td/games.json).
+                  (tools/td-tape.js --check on the box since 10-16: names each game whose window passed untaped, from games.json).
                   The box also has a disk brake (TAPE_MIN_FREE_MB) that trims its oldest tapes if the pull stops
 data/             gitignored: state.json, journal-*.jsonl, ticks-*.jsonl, desk.log (the prediction-market desk)
 data/desk/        gitignored: the stocks, crypto and options desk's state.json and journal-*.jsonl. From the box's
@@ -236,8 +237,9 @@ data/chains/      gitignored: the option-chain tape, chains-YYYY-MM-DD.jsonl + .
                   IRREPLACEABLE for free: a lost day can only be bought back, never re-fetched (backed up hourly with the pull).
                   09-23 has no session quotes; the 09-24 09:45 ET lines are copies of 09-22 after-hours prices: filter on qt.
                   Each run leaves an ok/PROBLEM line in data/chains/chains.log and exits 1 on a PROBLEM
-data/td/          gitignored: the anytime-touchdown tape, td-YYYY-MM-DD.jsonl + td.log + games.json (tools/td-tape.js); a Sunday nobody recorded
-                  cannot be re-collected; not yet in the iCloud backup (add it to the pull job when the tape has a month)
+data/td/          gitignored: the Mac's spare anytime-touchdown tape, td-YYYY-MM-DD.jsonl + td.log + games.json (tools/td-tape.js); since
+                  2026-10-16 the tape of record is the box's /data/td, copied by day to data/fly/archive/td/ (so in the iCloud backup
+                  with the archive); a Sunday nobody recorded cannot be re-collected
 data/options/history/  gitignored: the ChartExchange option history (tools/option-history.js), one JSON per underlying per expiry
 data/options/dolt/     gitignored: DoltHub's free SPY chains, one JSON per weekday (tools/dolt-fetch.js); re-fetchable, 18 MB, rides along in the data/options backup
 data/whales-*.jsonl  gitignored: every bet whale watch saw (near-settled ones, WHALE_MAX_PX, are not announced), for scoring once they settle

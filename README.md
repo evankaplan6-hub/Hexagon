@@ -711,6 +711,16 @@ across a game's window, notes the gap in `td.log`. `--check --venue` adds one re
 listing, for a tape older than `games.json`. Log-only research: no bet, no broker, nothing in the desk
 reads it. Tests: `tools/td-tape-test.js`.
 
+**On the box since 2026-10-16.** The next Thursday, with that check in place, it happened again: the
+Mac on battery, asleep, and SEA at DEN unrecorded. A board missed before kickoff is gone, so the tape
+cannot depend on a laptop. `src/tdsched.js` runs the same `record()` inside the desk on the Fly box
+(`TD_TAPE=1` in fly.toml), a minute after boot and every 15 minutes, into `/data/td`, through the desk's
+own paced Kalshi queue (one listing page per run). The hourly pull copies each finished day to
+`data/fly/archive/td/` and never deletes it from the box (about 200 KB a Sunday); grade it with
+`node tools/td-tape.js --grade --dir data/fly/archive/td`. Step 9 of the daily check runs `--check` on the
+box. The Mac's launchd job, if left installed, keeps its own spare tape in `data/td/`, shown in step 9
+but not counted, and never merged. Tests: `tools/tdsched-test.js`, `tools/disk-test.js`.
+
 **2026-10-10, three leagues.** Evan: "baseball is over switch it to NBA NFL CFB". `BET_SERIES` in
 fly.toml (and the default in `src/config.js`) is now `KXNBAGAME,KXNFLGAME,KXNCAAFGAME`. Nothing else
 changed: the matcher already paired all three on both venues (50 college games on Saturday 10-03), the
@@ -1598,7 +1608,7 @@ bash ops/daily-check.sh
 
 One screen, read-only, nine steps, and nothing on the box is changed. The exit code is the number of
 steps that flagged something. Steps 1 to 7 are the prediction-market desk and the box; step 8 is the
-stocks, crypto and options desk; step 9 is the anytime-touchdown tape on the Mac.
+stocks, crypto and options desk; step 9 is the anytime-touchdown tape, recorded on the box.
 
 1. **Did the pull run?** The last line of `data/fly/archive/pull.log` and its age.
 2. **Does the ledger add up?** `tools/ledger-check.js --box --venues`: the journal rebuilds the state
@@ -1636,9 +1646,10 @@ stocks, crypto and options desk; step 9 is the anytime-touchdown tape on the Mac
    simply holding. What the bots flagged in the last day (a feed that did not load, a halt) is listed
    as a note; a round that threw is a problem. First run, 2026-09-25: the ledger exact, crypto checked,
    nothing flagged.
-9. **Did the touchdown tape miss a game?** `node tools/td-tape.js --check`, offline (*Anytime
-   touchdowns* above): the last `td.log` line, a day without a run, and every game that kicked off in
-   the last 48 hours with no tape line in the two hours before kickoff, by name. Added 2026-10-15.
+9. **Did the touchdown tape miss a game?** `node tools/td-tape.js --check --dir /data/td`, run on the box
+   (*Anytime touchdowns* above): the last `td.log` line, a day without a run, and every game that kicked
+   off in the last 48 hours with no tape line in the two hours before kickoff, by name. Added 2026-10-15;
+   on the box since 2026-10-16, with the Mac's spare tape shown below it, not counted.
 
 First run, 2026-09-21: 159 settlements, 159 agree; 29 watchdog restarts on the 20th, 7 on the 21st.
 

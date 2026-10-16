@@ -1,7 +1,7 @@
 #!/bin/bash
 # The daily trust routine: nine questions about the Fly box and the Mac's tapes, one screen, nothing changed on the box.
 # Steps 1-7 are about the prediction-market desk and the box; step 8 is the stocks, crypto and options desk;
-# step 9 is the anytime-touchdown tape on the Mac (research, no book).
+# step 9 is the anytime-touchdown tape, recorded on the box (research, no book).
 #
 #   bash ops/daily-check.sh
 #
@@ -36,7 +36,7 @@
 #      options desk well?                 book did today's check (crypto after midnight UTC, SPY after the
 #                                         open, the options book's 12:30 verdict), its journal rebuilds
 #                                         state.json to the penny, and each book against simply holding
-#   9. did the touchdown tape miss        tools/td-tape.js --check on this Mac, offline: the last td.log line,
+#   9. did the touchdown tape miss        tools/td-tape.js --check on the box (since 2026-10-16), read-only: the last td.log line,
 #      a game?                            how long ago it was (a day without a run is a PROBLEM), and each NFL
 #                                         game that kicked off in the last 48h with no tape line in the 2h
 #                                         before kickoff, by name (added 2026-10-15: SEA at DEN was missed
@@ -122,10 +122,16 @@ say "8. the stocks, crypto and options desk: alive, today's checks, the ledger a
 # Read-only on the box (tools/desk-check.js --box): lists /data/desk and copies it down, nothing else.
 node tools/desk-check.js --box || bad=$((bad + 1))
 
-say "9. the anytime-touchdown tape on this Mac: the last run, and every game whose window passed with no tape"
-# Read-only and offline (tools/td-tape.js --check): td.log, data/td/games.json (the games each --record run
-# has seen listed, with kickoffs) and the day files. Added 2026-10-15, after the Thursday game went unrecorded.
-node tools/td-tape.js --check || bad=$((bad + 1))
+say "9. the anytime-touchdown tape on the box: the last run, and every game whose window passed with no tape"
+# Read-only (tools/td-tape.js --check, run on the box against /data/td): td.log, games.json (the games each
+# --record run has seen listed, with kickoffs) and the day files. Added 2026-10-15, after the Thursday game
+# went unrecorded with the Mac asleep; on the box since 2026-10-16 (src/tdsched.js, TD_TAPE=1), which never
+# sleeps. The Mac's launchd job, while it is installed, keeps a spare tape in data/td: shown, not counted.
+td="$("$FLY" ssh console -q -a "$APP" -C "node /app/tools/td-tape.js --check --dir /data/td" 2>&1)" || bad=$((bad + 1))
+printf '%s\n' "$td" | grep -v '^Connecting to'
+if [ -f "$HEXDIR/data/td/td.log" ]; then
+  printf 'the Mac'"'"'s spare tape (not counted): %s\n' "$(node tools/td-tape.js --check 2>&1 | head -1)"
+fi
 
 printf '\n%s\n' "$([ "$bad" = 0 ] && echo 'every step answered, nothing flagged' || echo "$bad step(s) flagged a problem: read up")"
 exit "$bad"

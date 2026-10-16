@@ -31,6 +31,10 @@ module.exports = {
   // The box keeps only the newest CHAINS_KEEP_DAYS days (its volume is 1 GB); the Mac keeps all.
   chains: env('CHAINS', '0') === '1',
   chainsKeepDays: num('CHAINS_KEEP_DAYS', 14),
+  // The anytime-touchdown tape on a timer inside the desk (src/tdsched.js): tools/td-tape.js --record
+  // every 15 minutes into DATA_DIR/td. The Mac's launchd job missed two Thursday games asleep on battery;
+  // the box never sleeps. Off by default -- on the Mac the launchd job is the recorder.
+  tdTape: env('TD_TAPE', '0') === '1',
   // ChartExchange (src/venues/chartexchange.js): read-only market data behind a paid key --
   // quotes, short volume, dark-pool prints, max pain, and the historical option bars
   // tools/option-history.js archives. The trial key has answered HTTP 401 Expired since the evening

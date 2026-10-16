@@ -247,6 +247,29 @@ group("listDir: the desk's journals in desk/, named by their path");
   ok('...and it still runs from its own source text, with no closure', JSON.stringify(shipped({ dir, todayET: TODAY, nowMs: NOW }).files) === JSON.stringify(r.files));
 }
 
+group('the anytime-touchdown tape the box records (/data/td, 2026-10-16): day files copied like journals, never deleted');
+{
+  const box = [
+    { name: 'td/td-2026-09-12.jsonl', size: 40, sha256: H('6') },
+    { name: `td/td-${TODAY}.jsonl`, size: 8, sha256: null },
+    { name: 'td/td.log', size: 50, sha256: H('7') },
+    { name: 'td/games.json', size: 60, sha256: H('8') },
+    { name: 'td/ticks-2026-09-12.jsonl', size: 9, sha256: H('9') },
+  ];
+  const plan = planPull(box, [], { todayET: TODAY, keep: 1, trim: true });
+  ok('a closed td day is copied under its td/ name', JSON.stringify(names(plan.copy)) === '["td/td-2026-09-12.jsonl"]', names(plan.copy));
+  ok("today's td file is open, not copied", JSON.stringify(plan.open) === JSON.stringify([`td/td-${TODAY}.jsonl`]), plan.open);
+  ok('td.log, games.json and anything else in td/ are not the pull\'s', plan.copy.length + plan.open.length + plan.errors.length === 2, plan);
+  ok('a td file is never deleted from the box', plan.deleteAfterCopy.length === 0 && plan.delete.length === 0, plan);
+  const dir = path.join(tmpRoot, 'list-td');
+  fs.mkdirSync(path.join(dir, 'td'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'td', 'td-2026-09-12.jsonl'), 'board\n');
+  fs.writeFileSync(path.join(dir, 'td', 'td.log'), 'ok\n');
+  fs.writeFileSync(path.join(dir, 'td', 'games.json'), '{}');
+  const r = eval(`(${listDir.toString()})`)({ dir, todayET: TODAY, nowMs: NOW });
+  ok('listDir names the td tape td/td-..., with its sha256, and nothing else in td/', JSON.stringify(r.files.map((f) => [f.name, f.sha256])) === JSON.stringify([['td/td-2026-09-12.jsonl', sha('board\n')]]), r.files);
+}
+
 group('isBytePrefix');
 {
   const f = (n, s) => { const p = path.join(tmpRoot, n); fs.writeFileSync(p, s); return p; };
