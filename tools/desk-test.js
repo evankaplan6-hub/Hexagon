@@ -1072,6 +1072,21 @@ async function auditTests() {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 
+  // the network going down fails every feed in one round: one line, not one a coin (2026-10-16, six in a minute)
+  {
+    const dir = mkDir();
+    let T = atT('12:31');
+    const M = fakeMarket(() => T); M.setMinutes(12 * 60 + 30);
+    M.feeds.ticker = async () => { throw new Error('fetch failed'); };
+    const desk = new Desk(deskConfig(dir), { feeds: M.feeds, now: () => T }); desk.quiet = true;
+    await desk.step();
+    const lines = desk.state.log.filter((e) => /did not load/.test(e.text) && /price/.test(e.text));
+    ok('three coins down in one round: one line naming all three', lines.length === 1 && lines[0].text === 'BTC price, ETH price and SOL price did not load: fetch failed · trying again', lines.map((e) => e.text));
+    T += 10000; await desk.step();
+    ok('...and not again ten seconds later', desk.state.log.filter((e) => /price did not load/.test(e.text)).length === 1);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
   // holding's start price must not be set by a first check TESS blocked; and a halt is said once
   {
     const dir = mkDir();

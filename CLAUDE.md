@@ -113,7 +113,7 @@ public/desk.*     the floor at /: since 2026-10-02 four views, each a link (#ove
                   with the chart of crypto + SPY vs holding, the last trade and next checks, health; then the markets held,
                   the PM desk's books and the off books; everything with more behind it opens a sheet (#sheet: desk,
                   book:<key>, mkt:<sym>, health) or its card), Stocks & crypto (headline vs holding, the desk, one card per book with
-                  the markets it trades, in two groups), Predictions (since 2026-09-29 the prediction-market desk's board and
+                  the markets it trades, in two groups; switched-off books last, in their own since 10-16), Predictions (since 2026-09-29 the prediction-market desk's board and
                   five books (arbs, maker, snipe, convergence, the game bets), fed by src/pmfloor.js; Evan: "Merge the desk to the new screen. It's data, not its look")
                   and Activity (both desks' lines, each tagged with its book); a tab bar on a phone; tools/floor-test.js holds
                   the views to the page. Laid out for reading, 12px and up; no pixel room or bots drawn since 2026-09-25 (Evan's
