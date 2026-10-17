@@ -98,7 +98,14 @@ function pmLine(e, titles = null) {
       const n = (t.match(/^(\d+) pairs live \(([^)]*)\)/) || []);
       return n[1] ? line(`Watching ${n[1]} markets listed on both venues: ${n[2]}`, '', 'quiet') : line(first, rest, 'quiet');
     }
-    case 'KETT PASS': { const m = t.match(/^(.+?): (.+)$/); return m ? line(`Passed on ${unellipsis(m[1])}`, m[2], 'info') : line(t, '', 'info'); }
+    case 'KETT PASS': {
+      // A full book passes on whatever comes next, every five minutes, in the same words ("long-dated arb budget
+      // full at 6 arbs ..., passing on Oscars 2027 ..."): 11 of the Activity view's lines on the evening of
+      // 2026-10-16. That the book is full is the arbs card's to say; here it is routine.
+      const full = t.match(/^(.*\bfull at .+|\d+\/\d+ arbs open), passing on (.+)$/);
+      if (full) return line(`Passed on ${unellipsis(full[2])}`, full[1], 'quiet');
+      const m = t.match(/^(.+?): (.+)$/); return m ? line(`Passed on ${unellipsis(m[1])}`, m[2], 'info') : line(t, '', 'info');
+    }
     case 'MAKR OPS': {
       // The floor tags every maker line "Maker" (desk.js pmTag), so since 2026-10-10 the line does not say it again.
       // an event's markets crossed out ahead of it (MAKER_EVENT_DATES) carry the money they made or lost
@@ -145,8 +152,12 @@ function pmFloor(engine, cfg, now = Date.now()) {
   const open = (k) => s.positions.filter((p) => kindOf(p) === k);
   const shut = (k) => closed.filter((c) => kindOf(c) === k);
   const marked = (ps) => sum(ps, (p) => p.qty * (p.mark ?? p.entry) - p.cost);
+  // a game's start, from the pair the matcher keeps while both venues list it: two bets on the Rays over the
+  // Guardians on 2026-10-16 were two games of a series, and read as one game bet twice
+  const startOf = new Map((engine.pairs || []).filter((x) => Number.isFinite(x.startsAt)).map((x) => [x.id, x.startsAt]));
   const posRow = (p) => ({ id: p.id, label: unellipsis(p.label), game: gameOf(p), venue: VENUE[p.venue] || p.venue, side: p.side, qty: p.qty, entry: p.entry, mark: p.mark ?? null,
-    cost: r2(p.cost), worth: r2(p.qty * (p.mark ?? p.entry)), pnl: r2(p.qty * (p.mark ?? p.entry) - p.cost), settlesAt: Number.isFinite(p.settlesAt) ? p.settlesAt : null });
+    cost: r2(p.cost), worth: r2(p.qty * (p.mark ?? p.entry)), pnl: r2(p.qty * (p.mark ?? p.entry) - p.cost), settlesAt: Number.isFinite(p.settlesAt) ? p.settlesAt : null,
+    startsAt: startOf.get(p.pairId) ?? null });
 
   // Banked, per book, from the closed legs. The ledger keeps its newest 2,000 closes, and its realised
   // total counts every one ever: were the oldest to go, they would be convergence's (the first book, off
@@ -195,8 +206,9 @@ function pmFloor(engine, cfg, now = Date.now()) {
     pnl: r2(bankedSnipe + marked(snipeOpen)), realized: bankedSnipe,
     bought: shut('snipe').length + snipeOpen.length, watched: closes.length, closedGames: closes.filter((w) => w.closedAt).length,
     rows: snipeOpen.map(posRow),
-    seen: (s.log || []).filter((e) => e.agent === 'BRAM' && /: Polymarket has (settled|proposed|closed)/.test(String(e.text))).slice(0, 3)
-      .map((e) => ({ t: e.t, ...pmLine(e) })),
+    // the watch asks again each round, so one game's "settled, no snipe" can be two lines in a row: one each
+    seen: (s.log || []).filter((e) => e.agent === 'BRAM' && /: Polymarket has (settled|proposed|closed)/.test(String(e.text)))
+      .map((e) => ({ t: e.t, ...pmLine(e) })).filter((x, i, xs) => xs.findIndex((y) => y.text === x.text) === i).slice(0, 3),
   };
   snipe.rule = "When a game ends, Polymarket's book goes to 99¢ on the winner while Kalshi can still be selling it under $1. Once Polymarket's own record says the result is in (its resolver proposes it about 20 seconds after the final), this buys the winner on Kalshi if the price clears the fee, and holds it to settlement." +
     (snipe.bought ? '' : " It has never fired. Until 2026-09-30 it waited for Polymarket to close the market, which comes half an hour after Kalshi has closed and paid out; Kalshi closes a finished game about four minutes after the final, so the window is short.");
@@ -218,7 +230,8 @@ function pmFloor(engine, cfg, now = Date.now()) {
     key: 'bets', name: 'Every game', on: !!cfg.bets,
     pnl: r2(bankedBet + marked(betOpen)), realized: bankedBet,
     games: betShut.length + betOpen.length, settled: betShut.length, wins: betShut.filter((c) => c.pnl > 0).length, stake: cfg.betUsd,
-    rows: betOpen.map(posRow),
+    // soonest game first; a game the listing has dropped (finished, waiting to settle) after them
+    rows: betOpen.map(posRow).sort((a, b) => (a.startsAt ?? Infinity) - (b.startsAt ?? Infinity)),
     rule: `Bets every ${league} game once: $${cfg.betUsd} on the favourite, bought at whichever venue sells it cheaper after its fee, and held to the final. ` +
       `A game already all but decided (the favourite over ${Math.round((cfg.betMaxPx || 0.9) * 100)}¢) is left alone. It claims no edge: bought at the market's own price, ` +
       'it should lose about the fee over many games. Evan, on the Wild Card\'s second night: "every game should be bet".',

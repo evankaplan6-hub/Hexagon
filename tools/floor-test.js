@@ -95,7 +95,15 @@ ok('an arb past its settle date says so', /was to settle \$\{settleDay\(r\.settl
 ok('arbs over their cap are not "19 of 12 open"', /const over = b\.rows\.length > b\.max/.test(js) && /more than its \$\{b\.max\} slots/.test(js));
 ok('the switched-off books share one line of chips on the overview', /const bookOff = /.test(js) && /function ovOffHtml\(off\)/.test(js) && /const L = S\.legacy, off = \(S\.books \|\| \[\]\)\.filter\(bookOff\)/.test(js));
 ok('...and a card without a line or a table', /\(traded && !off \? sparkSvg\(b\.key\) : ''\) \+ \(off \? '' : body\)/.test(js));
-ok('a group says which of its books are off, and Runners\' sentence only while it trades', /const groupNote = /.test(js) && /groupNote\(text, bs\)/.test(js) && !/swings\. Runners buy/.test(js));
+ok('a group holds only the books that trade, and Runners\' sentence only while it trades', /const groupNote = /.test(js) && /groupNote\(text, bs\.filter\(\(b\) => !bookOff\(b\)\)\)/.test(js) && !/swings\. Runners buy/.test(js));
+// ---- the exam (2026-10-16): the switched-off books in a group of their own, one name for the desk, a capped
+// game-bet list that says when each game is, and plain words on the health line
+ok('the switched-off books are a group of their own, last', /groups\.push\(\['Switched off', /.test(js));
+// (the phone's tab bar has 90px a tab at 375 wide: "Stocks & crypto" ran 2px over, so there it is "Desk", the view's own #desk)
+ok('the desk has one name: the tab, the headline, and "Desk" on a phone\'s tab bar, not "Markets"', /<span class="lg">Stocks &amp; crypto<\/span><span class="sh">Desk<\/span>/.test(html) && /<span class="label">Stocks &amp; crypto desk<\/span>/.test(js) && !/Stocks, crypto and options/.test(html + js));
+ok('the game bets show eight, the rest on asking, each with when its game is', /body = rowsTable\(k, HEAD\('Worth', 'P&amp;L'\), b\.rows, legRow, 8\)/.test(js) && /r\.startsAt > S\.now \? 'starts' : 'started'/.test(js));
+ok('"1 second ago", not "1 seconds ago"', /\$\{s\} second\$\{s === 1 \? '' : 's'\} ago/.test(js));
+ok('the health line says what the 5% is: a loss limit', /`Loss limit: \$\{down \?/.test(js));
 ok('a fill\'s sub-line no longer repeats its book, and a folded maker fill says its count', !/BOOK_NAME/.test(js) && /in \$\{f\.n\} fills/.test(js));
 
 // ---- the 2026-10-15 audit: focus in a sheet, a sheet's links, the seconds after a restart, a share of nothing

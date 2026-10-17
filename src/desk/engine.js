@@ -460,8 +460,14 @@ class Desk {
     const t = this.now(), e = clock.et(t);
     const s = clock.session(e.day);
     const onTape = !!s && e.min >= s.open && e.min < s.close + 25;
-    const jobs = [];
-    const fail = (what) => (err) => { if (this.due(`holt-${what}`, 300)) this.log('HOLT', 'OPS', null, `${what} did not load: ${String(err && err.message).slice(0, 90)} · trying again`); };
+    const jobs = [], failed = new Map();
+    // When the network goes, every feed fails in the same round: on 2026-10-16 that was six lines in one minute,
+    // one a coin. The round's failures with the same error are one line, "BTC price, ETH price and SPY quote".
+    const fail = (what) => (err) => {
+      if (!this.due(`holt-${what}`, 300)) return;
+      const why = String(err && err.message).slice(0, 90);
+      failed.set(why, [...(failed.get(why) || []), what]);
+    };
     for (const [id, c] of Object.entries(this.mkt.coins)) {
       jobs.push(this.feeds.ticker(id).then((x) => { if (x) { c.tick = x; c.tickAt = t; } }).catch(fail(`${short(id)} price`)));
       if (!c.daily || t - c.dailyAt > HOUR || utcDay(c.dailyAt) !== utcDay(t)) {
@@ -483,6 +489,10 @@ class Desk {
     if (t - S.intraAt > (onTape ? 60000 : 30 * MIN) && !waiting('intra')) cboe('intra', 'SPY minute bars', () => this.feeds.intraday(this.D.stockSym), (x) => { if (!(x && x.bars.length)) return false; S.intra = x; S.intraAt = t; return true; });
     if ((!S.daily || t - S.dailyAt > 3 * HOUR || clock.et(S.dailyAt).day !== e.day) && !waiting('daily')) cboe('daily', 'SPY daily bars', () => this.feeds.daily(this.D.stockSym), (x) => { if (!(x && x.length)) return false; S.daily = x; S.dailyAt = t; return true; });
     await Promise.all(jobs);
+    for (const [why, whats] of failed) {
+      const names = whats.length < 2 ? whats[0] : `${whats.slice(0, -1).join(', ')} and ${whats[whats.length - 1]}`;
+      this.log('HOLT', 'OPS', null, `${names} did not load: ${why} · trying again`);
+    }
     if (S.intra) {
       // the scalp book reads five-minute bars
       S.bars5 = feedsLib.fiveMinute(S.intra.bars);

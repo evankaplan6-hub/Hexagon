@@ -145,7 +145,9 @@ group('the log in the floor\'s words and levels');
   ok('a close with Kalshi long shut says so under it', cl.text === 'MLB Phillies v Braves · Phillies: Polymarket has closed the market, NO won, 67m after its 99¢ reading' && /^Kalshi had closed its own 64m before/.test(cl.sub), cl);
   ok('the widest gap is routine', L('BRAM', 'RESEARCH', 'venue gap 9.5c: Polymarket over Kalshi @ Next Google Gemini Pro Model released - September 30 · PM 0.12/0.14 · KS 0.02/0.05').level === 'quiet');
   const pass1 = L('KETT', 'PASS', '20/20 arbs open, passing on Fed DEC 26 · Cut 25bps');
-  ok('a pass is a decision', pass1.level === 'info', pass1);
+  ok('a full book passing on the next market is routine: it says so every five minutes', pass1.level === 'quiet' && pass1.text === 'Passed on Fed DEC 26 · Cut 25bps', pass1);
+  const pass3 = L('KETT', 'PASS', 'long-dated arb budget full at 6 arbs settling after 30 days, passing on Oscars 2027 Best Director Nominations - Beth de Araujo');
+  ok('...and so is the long-dated budget, the reason under it', pass3.level === 'quiet' && pass3.text === 'Passed on Oscars 2027 Best Director Nominations - Beth de Araujo' && /^long-dated arb budget full at 6/.test(pass3.sub), pass3);
   const pass2 = L('KETT', 'PASS', 'Fed DEC 26: gap 3c but ILSA reads it widening');
   ok('...named by its market', pass2.text === 'Passed on Fed DEC 26' && pass2.sub === 'gap 3c but ILSA reads it widening', pass2);
   const book = L('MAKR', 'RESEARCH', 'book: 2309 contracts, cash $9383.57, marked $9087.30 from $10000.00 · 12243 fills total');
@@ -219,6 +221,19 @@ group('the floor\'s words (2026-10-10 audit): a bet names its pick, maker fills 
   const F = pmFloor(E, cfg, T);
   const bets = F.books.find((b) => b.key === 'bets');
   ok('the every-game card\'s row carries the pick and the opponent', bets.rows.length === 1 && bets.rows[0].game && bets.rows[0].game.pick === 'Missouri' && bets.rows[0].game.foe === 'Texas A&M', bets.rows);
+  // 2026-10-16 exam: two bets on one series' games read as one game bet twice: each row says when its game is
+  s.positions.push(leg({ id: 'bt2', group: 'gbt2', pairId: 'p-sat', label: 'MLB Rays v Guardians · Rays', venue: 'KS', side: 'yes', qty: 181, entry: 0.54, mark: 0.52, cost: 99.3, strategy: 'bet' }),
+    leg({ id: 'bt3', group: 'gbt3', pairId: 'p-fri', label: 'MLB Rays v Guardians · Rays', venue: 'KS', side: 'yes', qty: 192, entry: 0.51, mark: 0.51, cost: 99.6, strategy: 'bet' }));
+  E.pairs = [{ id: 'p-sat', startsAt: T + 30 * 3600e3 }, { id: 'p-fri', startsAt: T + 6 * 3600e3 }];
+  const B2 = pmFloor(E, cfg, T).books.find((b) => b.key === 'bets');
+  ok('a bet row carries its game\'s start, soonest first, a game the listing dropped last', B2.rows.map((r) => r.id).join() === 'bt3,bt2,bt1' && B2.rows[0].startsAt === T + 6 * 3600e3 && B2.rows[2].startsAt === null, B2.rows.map((r) => [r.id, r.startsAt]));
+  s.positions = s.positions.filter((p) => p.id !== 'bt2' && p.id !== 'bt3'); E.pairs = [];
+  // the snipe's watch asks each round, so one game's line came twice in a row
+  const seenLog = s.log;
+  s.log = [1, 2].map((i) => ({ t: T - i * 300e3, agent: 'BRAM', kind: 'RESEARCH', pnl: null, text: 'NBA Heat v Magic · Heat: Polymarket has settled, no snipe: 0.0c net after the fee' }));
+  const sn = pmFloor(E, cfg, T).books.find((b) => b.key === 'snipe');
+  ok('the snipe card says a game\'s line once', sn.seen.length === 1, sn.seen);
+  s.log = seenLog;
   const open = F.fills.find((f) => f.id === 'bt1:open'), done = F.fills.find((f) => f.id === 'bt0:close');
   ok('so does its fill, opening and settled', open && open.game.pick === 'Missouri' && done && done.action === 'settled' && done.pnl === 60 && done.game.pick === 'Vikings', [open, done]);
   ok('an arb\'s fill has none', F.fills.find((f) => f.id === 'a1:open').game === null);

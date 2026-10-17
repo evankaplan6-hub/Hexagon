@@ -8,7 +8,8 @@
  *                    books that are off. Everything with more behind it opens it: a sheet for the desk, a
  *                    book, a market and the health, or the card in the view that has it
  *   Stocks & crypto  the six books in full: the headline against simply holding, the desk's state, and
- *                    a card per book, in two groups (crypto and SPY, then SPY's same-day options)
+ *                    a card per book, in two groups (crypto and SPY, then SPY's same-day options); since
+ *                    2026-10-16 a book switched off and holding nothing goes last, in a group of its own
  *   Predictions      the prediction-market desk that runs in the same process (since 2026-09-29): its
  *                    board and its five books, drawn the same way
  *   Activity         everything both desks did, newest first, each line tagged with the book it is about
@@ -225,7 +226,7 @@
       }
     }
     // the six books' headline; the prediction-market desk's has its own board below (renderPm)
-    return `<span class="label">Stocks, crypto and options</span>` +
+    return `<span class="label">Stocks &amp; crypto desk</span>` +
       `<div class="big ${tone(S.pnl)}">${signed(S.pnl)}</div>` +
       `<div class="sub">on ${money(S.initial, 0)} of paper · marked ${esc(ET_HM.format(new Date(S.now)))} ET</div>` +
       `<dl class="kpis">${kpi('Today', S.today != null ? figure(S.today) : '—')}` +
@@ -358,7 +359,7 @@
   function healthChecks() {
     const M = marketBits(), C = S.cfg || {}, coins = (bookOf('crypto') || { rows: [] }).rows;
     const at = Math.max(0, ...coins.map((r) => r.at || 0));
-    const ago = (t) => { const s = Math.max(0, Math.round((S.now - t) / 1000)); return s < 90 ? `${s} seconds ago` : s < 5400 ? `${Math.round(s / 60)} minutes ago` : `at ${ET_HM.format(new Date(t))} ET`; };
+    const ago = (t) => { const s = Math.max(0, Math.round((S.now - t) / 1000)); return s < 90 ? `${s} second${s === 1 ? '' : 's'} ago` : s < 5400 ? `${Math.round(s / 60)} minutes ago` : `at ${ET_HM.format(new Date(t))} ET`; };
     const start = S.today != null ? S.equity - S.today : 0, down = start > 0 && S.today < 0 ? -S.today / start : 0;
     const sha = S.build && S.build.sha ? String(S.build.sha).slice(0, 7) : 'dev';
     return [
@@ -367,7 +368,7 @@
         detail: `From Cboe's free feed · the stock market ${M.says ? `${M.open ? 'is ' : ''}${M.says}` : M.open ? 'is open' : 'is closed'}` },
       { k: 'loop', ok: stale() || stalled() ? 'bad' : 'ok', name: stale() ? 'No signal from the desk' : stalled() ? `No round since ${ET_HM.format(new Date(S.beat))} ET` : S.beat ? `Last round ${ago(S.beat)}` : 'Waiting for the first round',
         detail: `Running since ${ET_DAY.format(new Date(S.startedAt))}, ${ET_HM.format(new Date(S.startedAt))} · build ${sha}` },
-      { k: 'buying', ok: S.halt ? 'warn' : 'ok', name: S.halt ? `Not buying: ${S.halt}` : down ? `Buying: down ${(down * 100).toFixed(2)}% today` : 'Buying: nothing lost today',
+      { k: 'buying', ok: S.halt ? 'warn' : 'ok', name: S.halt ? `Not buying: ${S.halt}` : `Loss limit: ${down ? `down ${(down * 100).toFixed(2)}% today` : 'nothing lost today'}${C.maxDailyDdPct ? `; buying stops at ${(C.maxDailyDdPct * 100).toFixed(0)}%` : ''}`,
         detail: C.maxDailyDdPct ? `Buying stops when the desk is down ${(C.maxDailyDdPct * 100).toFixed(0)}% in a day; selling never does` : '' },
     ];
   }
@@ -814,16 +815,18 @@
   ];
   // What a group says under its name: its sentence, Runners' own while it trades, and which of its books are off.
   // The first blurb went on describing Runners buying coins for two days after it was switched off.
-  const groupNote = (text, bs) => {
-    const off = bs.filter(bookOff), runners = bs.find((b) => b.key === 'runners');
-    return text + (runners && !bookOff(runners) ? ' Runners buy a coin that is popping and ride it until it turns.' : '') +
-      (off.length ? ` ${listOf(off.map((b, i) => (i ? b.name.toLowerCase() : b.name)))} ${off.length === 1 ? 'is' : 'are'} switched off.` : '');
-  };
+  // Since 2026-10-16 a book that is switched off and holds nothing is not in its group: four of the six were, and
+  // their cards outnumbered the two that trade. They go last, in a group of their own (the overview's chips
+  // still open each card), so the groups above are what trades.
+  const groupNote = (text, bs) => text + (bs.some((b) => b.key === 'runners') ? ' Runners buy a coin that is popping and ride it until it turns.' : '');
   function renderBooks() {
     const known = new Set(GROUPS.flatMap((g) => g[2]));
-    const groups = GROUPS.map(([title, text, keys], i) => [title, text, [...keys.map(bookOf).filter(Boolean), ...(i ? [] : (S.books || []).filter((b) => !known.has(b.key)))]]);
+    const all = GROUPS.map(([title, text, keys], i) => [title, text, [...keys.map(bookOf).filter(Boolean), ...(i ? [] : (S.books || []).filter((b) => !known.has(b.key)))]]);
+    const off = all.flatMap((g) => g[2]).filter(bookOff);
+    const groups = all.map(([title, text, bs]) => [title, groupNote(text, bs.filter((b) => !bookOff(b))), bs.filter((b) => !bookOff(b))]);
+    if (off.length) groups.push(['Switched off', 'These no longer trade and hold nothing; what they made before stays in the desk’s figure.', off]);
     morph($('books'), groups.filter((g) => g[2].length).map(([title, text, bs], i) => `<section class="bkgroup" data-k="g${i}" aria-label="${esc(title)}">` +
-      `<h2>${esc(title)}</h2><p>${esc(groupNote(text, bs))}</p><div class="bkgrid">${bs.map(bookCard).join('')}</div></section>`).join(''));
+      `<h2>${esc(title)}</h2><p>${esc(text)}</p><div class="bkgrid">${bs.map(bookCard).join('')}</div></section>`).join(''));
   }
 
   // ------------------------------------------------------------ the prediction-market desk: its board and five books
@@ -858,7 +861,7 @@
   const legRow = (r) => {
     const g = r.game;
     return `<tr data-k="${esc(r.id)}"><th><span class="nm">${esc(g ? `${g.pick} over ${g.foe}` : r.label)}</span>` +
-      `<small>${esc(`${g ? `${g.league} · ` : ''}${cap(r.side)} on ${r.venue} · ${nOf(r.qty, 'contract')} at ${cents(r.entry)}, ${cents(r.mark)} now`)}</small></th>` +
+      `<small>${esc(`${g ? `${g.league} · ` : ''}${r.startsAt ? `${r.startsAt > S.now ? 'starts' : 'started'} ${whenTxt(r.startsAt)} · ` : ''}${cap(r.side)} on ${r.venue} · ${nOf(r.qty, 'contract')} at ${cents(r.entry)}, ${cents(r.mark)} now`)}</small></th>` +
       `<td class="v">${money(r.worth)}</td><td>${figure(r.pnl)}</td></tr>`;
   };
   // the overview's line and a book's card say the same things: its chip and what it does next (the card has
@@ -902,8 +905,9 @@
     } else if (b.key === 'bets') {
       chip = b.on ? `${b.rows.length} open` : b.rows.length ? `${b.rows.length} open · off` : 'switched off';
       vs = b.settled ? `<span class="vs">${b.wins} of ${nOf(b.settled, 'game')} won</span>` : `<span class="vs">${b.games ? `${nOf(b.games, 'game')} bet` : 'no game bet yet'}</span>`;
-      body = b.rows.length ? `<table class="hold-t">${HEAD('Worth', 'P&amp;L')}<tbody>${b.rows.map(legRow).join('')}</tbody></table>` : '';
-      next = b.on ? `Bets each game once, $${b.stake} on the favourite` : 'Switched off: open bets ride to the final';
+      // eighty-one open on a college Saturday's eve, every one a row, made this the longest card on the floor
+      body = rowsTable(k, HEAD('Worth', 'P&amp;L'), b.rows, legRow, 8);
+      next = b.on ? `Bets each game once, $${b.stake} on the favourite, in the hour before it starts` : 'Switched off: open bets ride to the final';
     } else {
       chip = b.on ? `${b.rows.length} open` : b.rows.length ? `${b.rows.length} open · off` : 'switched off';
       vs = b.trades ? `<span class="vs">${b.wins} of ${nOf(b.trades, 'trade')} made money</span>` : '';
