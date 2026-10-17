@@ -47,8 +47,9 @@ for (const [scheme, S] of SCHEMES) {
   }
   ok(`a picked segment's label (--ink-1 on --seg-on) reads at 4.5:1 or better in ${scheme}`, ratio(hex(S, scheme, '--ink-1'), hex(S, scheme, '--seg-on')) >= 4.5);
   ok(`the faintest ink is the one labels use, and it is not faint, in ${scheme}`, ratio(hex(S, scheme, '--ink-3'), hex(S, scheme, '--bg-1')) >= 6);
-  ok(`the six books are six colours apart from the money colours in ${scheme}`,
-    new Set(['--book-crypto', '--book-stocks', '--book-options', '--book-scalps', '--book-dips', '--book-runners', '--gain', '--loss'].map((n) => S[n])).size === 8);
+  // the two books, the games, the arbs and the maker, and the lab (2026-10-17; the six books had one each until then)
+  ok(`the five parts are five colours apart from the money colours in ${scheme}`,
+    new Set(['--book-crypto', '--book-stocks', '--part-games', '--part-side', '--part-lab', '--gain', '--loss'].map((n) => S[n])).size === 7);
 }
 ok('every text colour has a light and a dark value', INKS.every((n) => /^light-dark\(/.test(T[n])), INKS.filter((n) => !/^light-dark\(/.test(T[n])));
 for (const [name, c] of Object.entries(claims)) for (const [scheme, S] of SCHEMES) {

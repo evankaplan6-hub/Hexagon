@@ -69,9 +69,10 @@ const short = (id) => String(id).replace(/-USD$/, '');
 
 class Desk {
   // `feeds` and `now` are injectable so tools/desk-test.js can run whole rounds with no network and
-  // no clock. `legacy` is a function returning the prediction-market desk's summary, or null.
+  // no clock. `legacy` is a function returning the prediction-market desk's summary, or null; `lab` one
+  // returning the tapes' last runs (src/labstatus.js), or null.
   // `onStall` is server.js ending the process when the watchdog finds the loop stuck (watchdogCheck).
-  constructor(cfg, { feeds, now, legacy, onStall } = {}) {
+  constructor(cfg, { feeds, now, legacy, lab, onStall } = {}) {
     this.cfg = cfg;
     this.D = cfg.desk;
     this.dir = path.join(cfg.dataDir, 'desk');
@@ -79,6 +80,7 @@ class Desk {
     this.now = now || Date.now;
     this.feeds = feeds || feedsLib.makeFeeds();
     this.legacy = legacy || (() => null);
+    this.lab = lab || (() => null);
     this.onStall = onStall || null;
     this.fees = { cryptoBps: this.D.cryptoFeeBps, stockBps: this.D.stockFeeBps, optionPerContract: this.D.optionFee };
     this.state = this.load();
@@ -786,6 +788,8 @@ class Desk {
       log: this.state.log.slice(0, 150).map((e) => ({ ...e, level: logLevel(e) })),
       agents: AGENTS.map((a) => ({ ...a, ...this.agentStatus[a.key], active: t - this.agentStatus[a.key].lastActive < 4000 })),
       legacy,
+      // the tapes the box records for the lab, for the floor's Today view (src/labstatus.js)
+      lab: safe(this.lab),
       feed: { ...this.feeds.stats },
       cycleMs: this.lastStepMs,
       cfg: { everySec: D.everySec, rebalBand: D.rebalBand, cryptoFeeBps: D.cryptoFeeBps, optionFee: D.optionFee, maxDailyDdPct: D.maxDailyDdPct },

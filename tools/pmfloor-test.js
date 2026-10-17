@@ -253,6 +253,48 @@ group('the floor\'s words (2026-10-10 audit): a bet names its pick, maker fills 
   ok('no maker line says "Maker:" under a tag that says Maker', F.log.every((e) => !/^Maker: /.test(e.text)) && F.log.some((e) => e.text === 'Settled 2 finalized markets, 39 contracts'), F.log.map((e) => e.text));
 }
 
+group('the game board (2026-10-17): the games still to bet, the finals, and the record against the prices');
+{
+  const { E, cfg } = engine({ bets: true, betSeries: ['KXNFLGAME', 'KXNCAAFGAME', 'KXNBAGAME', 'KXMLBGAME'], betMaxPx: 0.9, betAheadHours: 1, betUsd: 100 });
+  const s = E.state;
+  s.positions = [leg({ id: 'ob', group: 'gob', pairId: 'p-open', label: 'NCAAF Ohio State v Indiana · Ohio State', side: 'yes', entry: 0.8, cost: 99.7, strategy: 'bet' })];
+  // T is 5 PM ET on Tuesday 2026-09-29. One final this afternoon (won), one that settled at 1:30 AM, a game from the
+  // evening before (lost), and one five days ago (won)
+  s.closed = [
+    { ...leg({ id: 'w1', group: 'gw1', pairId: 'p-w1', label: 'NFL Vikings v Bears · Vikings', side: 'yes', qty: 150, entry: 0.6, cost: 90, strategy: 'bet' }), exit: 1, exitAt: T - 7200e3, pnl: 60, reason: 'resolved YES' },
+    { ...leg({ id: 'l1', group: 'gl1', pairId: 'p-l1', label: 'NBA Heat v Magic · Heat', side: 'no', qty: 180, entry: 0.55, cost: 99, strategy: 'bet' }), exit: 0, exitAt: Date.parse('2026-09-29T05:30:00Z'), pnl: -99, reason: 'resolved YES' },
+    { ...leg({ id: 'o1', group: 'go1', pairId: 'p-o1', label: 'MLB Rays v Guardians · Rays', side: 'yes', qty: 198, entry: 0.5, cost: 100, strategy: 'bet' }), exit: 1, exitAt: T - 5 * 864e5, pnl: 98, reason: 'resolved YES' },
+    { ...leg({ id: 'ax', group: 'gax', strategy: 'arb', label: 'Fed OCT 26 · Cut 25bps' }), exit: 1, exitAt: T - 3600e3, pnl: 5, reason: 'resolved YES' },
+  ];
+  const H = 3600e3, pair = (id, series, label, startsAt, q) => ({ id, kind: 'game', series, label, startsAt, q });
+  E.pairs = [
+    pair('u1', 'KXNFLGAME', 'NFL Seahawks v Broncos · Seahawks', T + 3 * H, { pmMid: 0.40, ksMid: 0.42 }),
+    pair('u2', 'KXNFLGAME', 'NFL Seahawks v Broncos · Broncos', T + 3 * H, { pmMid: 0.60, ksMid: 0.58 }),   // the same game's other side
+    pair('u3', 'KXNCAAFGAME', 'NCAAF Georgia v Auburn · Georgia', T + 5 * H, { pmMid: 0.93, ksMid: 0.95 }),  // over the cap
+    pair('p-open', 'KXNCAAFGAME', 'NCAAF Ohio State v Indiana · Ohio State', T + 2 * H, { pmMid: 0.8, ksMid: 0.8 }),   // bet already
+    pair('u5', 'KXEPLGAME', 'EPL Arsenal v Chelsea · Arsenal', T + 2 * H, { pmMid: 0.5, ksMid: 0.5 }),         // not a series the book bets
+    pair('u6', 'KXNFLGAME', 'NFL Rams v Lions · Rams', T + 40 * H, { pmMid: 0.5, ksMid: 0.5 }),               // more than thirty hours out
+    pair('u7', 'KXMLBGAME', 'MLB Cubs v Brewers · Cubs', T + H, null),                                        // no price yet
+    pair('u8', 'KXNBAGAME', 'NBA Knicks v Nets · Knicks', T - 5 * H, { pmMid: 0.7, ksMid: 0.7 }),             // started five hours ago
+    { id: 'fed', kind: 'fed', series: 'KXFEDDECISION', label: 'Fed OCT 26 · Cut 25bps', startsAt: T + H },
+  ];
+  const G = pmFloor(E, cfg, T).games;
+  ok('the games still to bet: paired, in the book\'s series, from four hours ago to thirty hours on, each game once, soonest first',
+    G.upcoming.map((u) => u.id).join() === 'u7,u1,u3', G.upcoming.map((u) => u.id));
+  const u1 = G.upcoming.find((u) => u.id === 'u1');
+  ok('the favourite as the bets read it: the two venues\' mids averaged, Broncos at 59c', u1.pick === 'Broncos' && u1.px === 0.59 && u1.over === false && u1.league === 'NFL' && u1.a === 'Seahawks' && u1.b === 'Broncos', u1);
+  ok('a favourite over the cap is marked so', G.upcoming.find((u) => u.id === 'u3').over === true);
+  ok('a game with no price yet has no pick', G.upcoming.find((u) => u.id === 'u7').pick === null && G.upcoming.find((u) => u.id === 'u7').px === null);
+  ok('the finals: the last day and a half, newest first, by the team bet on', G.finals.map((f) => f.id).join() === 'w1,l1'
+    && G.finals[0].pick === 'Vikings' && G.finals[0].foe === 'Bears' && G.finals[1].pick === 'Magic' && G.finals[1].foe === 'Heat' && G.finals[1].pnl === -99, G.finals);
+  ok('the record: every settled bet, the wins the prices expected (their prices added up), the money', G.record.bets === 3 && G.record.won === 2 && G.record.expected === 1.65 && G.record.pnl === 59 && G.record.staked === 289, G.record);
+  ok('today\'s record is the games played today: one that settled at 1:30 AM was last night\'s', G.record.today.bets === 1 && G.record.today.won === 1 && G.record.today.pnl === 60, G.record.today);
+  ok('and by league', G.record.leagues.NFL.won === 1 && G.record.leagues.NBA.bets === 1 && G.record.leagues.NBA.won === 0 && G.record.leagues.MLB.pnl === 98 && !G.record.leagues.Fed, G.record.leagues);
+  ok('with the book\'s settings: on, an hour ahead, the cap, the stake, the leagues', G.on === true && G.aheadH === 1 && G.maxPx === 0.9 && G.stake === 100 && G.leaguesOn.join() === 'NFL,NCAAF,NBA,MLB', G);
+  const off = pmFloor(E, { ...cfg, bets: false }, T).games;
+  ok('switched off, the board says so and still lists the games', off.on === false && off.upcoming.length === 3);
+}
+
 for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
