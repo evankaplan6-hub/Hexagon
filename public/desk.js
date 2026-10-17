@@ -385,6 +385,7 @@
   // ------------------------------------------------------------ what happens next, across all of it
   const RETESTS = [
     { k: 'rt-odds', t: Date.parse('2026-11-09T15:00:00Z'), text: 'Grade four Sundays of the odds tape', short: 'grade the odds tape' },
+    { k: 'rt-dec', t: Date.parse('2026-12-07T15:00:00Z'), text: 'Re-test the game picks and the team model on the college regular season', short: 'the game picks on the college season' },
     { k: 'rt-jan', t: Date.parse('2027-01-25T15:00:00Z'), text: 'Re-test the crypto rule after three months live, and the game picks and the team model on full seasons', short: 'the crypto rule, the picks and the team model' },
     { k: 'rt-mar', t: Date.parse('2027-03-22T14:00:00Z'), text: "Re-run the option labs on six months of the desk's own chains", short: 'the option labs on our own chains' },
   ];

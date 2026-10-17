@@ -61,6 +61,7 @@ const SUITES = [
   ['spy-lab', "the SPY lab: minutes labelled by their end, the option model, and the scalp and dip books' days through their own code"],
   ['odds-tape', "the odds tape: a read only inside a game's window and a step apart, a game's line from the books and Kalshi's, Pinnacle without its margin, Kalshi's fee, the key cut from errors, the check, the box's timer"],
   ['bet-coverage', "the bets book's coverage: the journal's bets by Kalshi event, each game's day by when it settled (not its ticker's date), and each played game bet, over the cap or missed"],
+  ['bet-record', "the game bets' record against their prices: settled bets from the ledger, the wins the prices expected and chance's exact spread, a game's Eastern day and Monday week, and the report's lines"],
   ['labstatus', "the lab on the floor: each tape's last run off the end of its log (a torn line passed over, a long log read from its end), its next read from its games.json, a missing tape as not run, a minute's cache"],
   ['crypto-note', "the crypto note: the book against holding since the start and over seven days, each coin's aim against the band, the day's trades, the next check"],
   ['team-model', 'the team model: ratings from margins and home field, no game rated with its own result, Kalshi games matched to scores (codes, college names, hyphenated codes), the sources parsed'],
