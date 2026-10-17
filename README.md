@@ -22,10 +22,10 @@ Copy `.env.example` to `.env` to change anything. The desk keeps its ledger in `
 |---|---|---|---|---|
 | Crypto | BTC, ETH, SOL, XRP, DOGE, a fifth each | hold each coin sized to swing about 40% a year: weight = min(1, 40% / its 30-day volatility) | once a day, after midnight UTC | $10,000 for a new ledger; the box's is $16,667 since XRP and DOGE joined (below) |
 | Stocks | SPY | the same at 15% a year, on 20 sessions | once a trading day, after the open | $10,000 |
-| Options (**off since 2026-10-08**) | SPY same-day calls or puts | the afternoon trend-day rules, below | every one-minute bar, 12:30 to 3:15 | $1,000 |
-| Scalps (**off since 2026-10-08**) | one SPY same-day call or put at a time, held minutes | the stack's 0DTE scalp method on a 30-minute breakout, below | every five-minute bar, 10:05 to 3:15 | $1,000 |
-| Dips (**off since 2026-10-08**) | two SPY same-day calls at a time | Evan's own morning dip under VWAP, below | every one-minute bar, 10:05 to noon | $1,000 |
-| Runners (**off since 2026-10-08**) | up to four coins popping right now, a quarter of the book each | a coin Robinhood sells, up 8%+ in 24 hours, near its high and still climbing; out 10% off its best, below | every 3 minutes, around the clock | $1,000 |
+| Options (**retired 2026-10-17**, off since 10-08) | SPY same-day calls or puts | the afternoon trend-day rules, below | every one-minute bar, 12:30 to 3:15 | $1,000 |
+| Scalps (**retired 2026-10-17**, off since 10-08) | one SPY same-day call or put at a time, held minutes | the stack's 0DTE scalp method on a 30-minute breakout, below | every five-minute bar, 10:05 to 3:15 | $1,000 |
+| Dips (**retired 2026-10-17**, off since 10-08) | two SPY same-day calls at a time | Evan's own morning dip under VWAP, below | every one-minute bar, 10:05 to noon | $1,000 |
+| Runners (**retired 2026-10-17**, off since 10-08) | up to four coins popping right now, a quarter of the book each | a coin Robinhood sells, up 8%+ in 24 hours, near its high and still climbing; out 10% off its best, below | every 3 minutes, around the clock | $1,000 |
 
 Each book keeps its own cash. The crypto and stocks books are scored against simply holding what they trade, from their first trade (the three option books and the runner book against their own cash): the wall screen says "holding would be ..." beside every book, and the chart draws holding as a dashed line. Holding buys its whole slot at that trade's mid price and pays the fee the book pays on a buy (0.40% for crypto, none for SPY), once. Until 2026-09-26 it paid none, so every crypto book started about 0.4% of its slot behind holding before any price moved: the crypto book was $41.72 behind holding that morning, and with the fee about $1.55. The books still pay a fee on every trade after that, which holding never does, and that is the honest cost of their rule. A book trades only when its target moves 10 points from the last one it traded to (0.72 becoming 0.83) or goes back to full size, so prices drifting never trade on their own. Rarely trading is normal here, as it was on the old desk.
 
@@ -109,6 +109,64 @@ The coins moved no more after a post than at the same time on other days. A bot 
 ### What it does not do
 
 It has no broker. Nothing in `src/desk/` can reach Robinhood, Public, Webull, Coinbase or any exchange, and nothing should without an explicit decision to build it. Evan's real accounts belong to the investment stack (`~/Downloads/stack`), read-only, and every real order is his to place.
+
+### The plan from here (2026-10-17)
+
+Five weeks and about fifteen labs in, one rule on the desk has evidence behind it: the crypto book's, holding
+less of a coin the harder it swings. It loses less than holding, it does not make money on its own ("Every
+coin", above). Everything else tested lost to the market's price after fees. So, at Evan's word ("Go"), the
+desk has three jobs and stops the rest:
+
+1. **Run the crypto rule, and say what it does in plain words**: the crypto note, below.
+2. **Test any idea Evan brings, the same way every time**: "Testing an idea", below, a verdict within a day.
+3. **Keep collecting what cannot be fetched later** (the option-chain tape, the touchdown tape) and re-test on
+   fixed dates: the crypto rule after three months live (January 2027), the game picks and the team model on
+   full NFL and college seasons (January 2027), the option labs on six months of the desk's own chains (March 2027).
+
+No new books; the prediction-market desk runs on in paper as Evan asked, without new work; no more hunting for an
+edge in free data. The one hunt still worth its cost needs a free account only Evan can open: The Odds API's free
+tier carries Pinnacle, and a few NFL Sundays logged against Kalshi would show whether Kalshi's price trails the
+sharp book's after news by more than its fee (log only, no bet, as the touchdown tape). Three decisions are his:
+Cboe's terms (below: the desk now reads only SPY's quote and daily bars from it), that account, and whether the note
+ever informs his own trades.
+
+### The crypto note (2026-10-17)
+
+`node tools/crypto-note.js --box` prints, in a dozen lines: the crypto book against simply holding the same coins
+since its start and over the last seven days; each coin's share of its slot, what the rule would hold at today's
+swings, and whether that is a trade at the next 8 PM ET check (the 10-point band); and the day's trades. Its figures
+are the desk's own: it loads the real engine on a copy of the box's state (desk-check's read-only copy), fetches the
+prices from Coinbase as the desk does, and reads the snapshot, writing nothing back. It is about the paper desk:
+not advice, and the desk has no broker.
+
+### Retired books (2026-10-17)
+
+The options, scalp, dip and runner books were switched off on 2026-10-08 (`tools/spy-lab.js`: no edge in two years of
+SPY minutes; `tools/runner-lab.js`: the runner rule lost over four years even before fees), and their code came out
+of the engine on 2026-10-17. Each keeps its ledger in the desk's state (its cash, what it banked and paid, its trades),
+its figure stays in the desk's total (together −$229.27), and the floor shows it in the "Switched off" group with what
+it did. Their rules stay in `src/desk/books.js`, where the two labs run them, so the verdicts can be re-run. The daily
+check still replays their old fills to the penny, against three days recorded by the engine as it was
+(`tools/fixtures/retired/`). Going with them: SPY's minute bars and the option chain, two downloads a minute from
+Cboe's delayed feed during the session, whose terms forbid automated download.
+
+### Testing an idea
+
+Every verdict on this desk was reached the same way, and an idea of Evan's gets the same treatment, usually within a
+day. The pick lab (`tools/pick-lab.js`) is the template.
+
+1. **Write the rule down before looking at results**: entry, exit, size, and the price it would really pay (the ask,
+   not the mid; the venue's fee; a stock's spread).
+2. **Get the data the rule needs, as it was at the time**: nothing published after the moment of the decision
+   (a game's score, a candle not yet closed, a list made later).
+3. **Split it**: choose any setting on the older part, then read the newer part once. A rule that wins only on the
+   part it was chosen on found noise.
+4. **Count the noise**: every result with ±2 standard errors, and against the obvious alternative (holding, the
+   favourite, doing nothing) on the same trades. Many rules tried means some win by luck: one clearing its noise out
+   of twenty is expected.
+5. **Write the verdict where it is found**: a README section with the table, the command that rebuilds it, and what
+   would change the answer. A tool for it is `tools/<name>-fetch.js` and `tools/<name>-lab.js`, with a test suite.
+6. **Wire in only a winner**, and say what it would have to keep doing to stay.
 
 ---
 

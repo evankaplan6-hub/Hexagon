@@ -38,8 +38,6 @@ const MIN = 60000;
 const short = (id) => String(id).replace(/-USD$/, '');
 const utcDay = (t) => new Date(t).toISOString().slice(0, 10);
 const OPTION_BOOKS = ['options', 'scalps', 'dips'];
-// the option books that watch every morning from 10:05, and what each is called on a 1 PM close
-const MORNING = { scalps: 'scalps', dips: 'dip trades' };
 // free space on the box's /data under which the check says so: the state alone is a few MB, rewritten whole
 const LOW_DISK_MB = 200;
 
@@ -216,46 +214,12 @@ function health(S, now, { journalAt = 0, freeMb = null } = {}) {
     else if (sess && e.min >= 10 * 60 + 15 && !young) problems.push(`SPY: not checked today (${e.day}): the Cboe quote did not reach the desk after the open`);
     else lines.push(`SPY: next check after the ${sess && e.min < sess.open ? 'open today' : 'next open'} (last ${spy.checkDay || 'never'})`);
   }
-  // the options book: a 12:30 verdict by 1:00 ET on a trading day with a normal close, and nothing
-  // still held once the 3:15 clock and the late tape are both past
-  const o = B.options || {}, d = o.day;
-  const said = { 'no-trade': 'no trade', armed: 'a trend day, watching for the trigger until 2:45', done: 'done for the day', 'early-close': 'a 1 PM close, no trade', waiting: 'waiting for 12:30' };
-  const optTxt = (x) => {
-    const why = x.why || (x.test && x.test.why) || '';
-    return `options today: ${said[x.status] || x.status}${x.test ? ` (${x.test.dir}, ${x.test.moveAtr.toFixed(2)} ATR from the open)` : ''}${why ? `: ${why}` : ''}`;
-  };
-  if (o.off && !(o.lots || []).length) lines.push('options: switched off');
-  else if (sess && !sess.early && e.min >= 13 * 60 && !young) {
-    if (!d || d.date !== e.day || d.status === 'waiting') problems.push(`options: no 12:30 verdict today (${e.day}): SPY's minute bars or daily bars did not load`);
-    else lines.push(optTxt(d));
-  } else if (d && d.date === e.day) lines.push(optTxt(d));
-  else lines.push(sess && sess.early ? 'options: no trade on a 1 PM close' : 'options: the next 12:30 test is on the next trading day');
-  for (const [key, none] of Object.entries(MORNING)) {
-    const x = B[key], xd = x && x.day;
-    if (!x) continue;
-    if (x.off && !(x.lots || []).length) { lines.push(`${key}: switched off`); continue; }
-    // the book's day starts with the first bar it reads, so by 10:30 on the late tape a book that has run
-    // before has today's (one that never has, switched off or new, has none to miss)
-    const count = xd ? `${xd.entries} trade${xd.entries === 1 ? '' : 's'}${xd.status === 'done' && xd.why ? `, done: ${xd.why}` : ''}` : '';
-    if (xd && xd.date === e.day) lines.push(`${key} today: ${xd.status === 'early-close' ? `a 1 PM close, no ${none}` : count}`);
-    else if (xd && sess && !sess.early && e.min >= 10 * 60 + 30 && !young) problems.push(`${key}: not watching today (${e.day}): SPY's minute bars did not reach the book`);
-    else lines.push(!xd ? `${key}: has not watched a session yet` : sess && sess.early ? `${key}: no ${none} on a 1 PM close` : `${key}: watching from 10:05 on the next trading day`);
-  }
-  // the runner book scans every 3 minutes, whatever the day: a quarter of an hour without one is a scan that stopped
-  const R = B.runners;
-  if (R) {
-    const hold = (R.lots || []).map((l) => short(l.sym));
-    const scanAge = R.scan ? Math.round((now - R.scan.at) / MIN) : null;
-    const joined = S.added && S.added.runners ? S.added.runners.at : R.startedAt || 0;
-    if (R.off && !hold.length) lines.push('runners: switched off, holding nothing');
-    else if (scanAge != null && scanAge > 15) problems.push(`runners: no scan for ${scanAge} minutes (Coinbase's 24-hour figures not loading, or the book switched off)`);
-    else if (scanAge == null && now - joined > 15 * MIN) problems.push('runners: has never scanned (Coinbase\'s 24-hour figures not loading, or the book switched off)');
-    else lines.push(scanAge == null ? 'runners: first scan due' : `runners: scanned ${scanAge < 1 ? 'under a minute' : `${scanAge} min`} ago, ${R.scan.n} coins · holding ${hold.length ? hold.join(', ') : 'nothing'}`);
-  }
-  for (const key of OPTION_BOOKS) {
-    const held = ((B[key] && B[key].lots) || []).filter((l) => l.expiry < e.day || (l.expiry === e.day && sess && e.min >= 15 * 60 + 40));
-    if (held.length) problems.push(`${key}: ${held.length} contract(s) still held past the 3:15 clock`);
-  }
+  // The options, scalp, dip and runner books were retired on 2026-10-17 (switched off since 10-08): nothing of
+  // theirs runs to check. Until then this asked each for its 12:30 verdict, its morning watch, its scan every three
+  // minutes and its contracts out by 3:15. Their ledgers are still replayed to the penny (rebuild, above).
+  const retired = ['options', 'scalps', 'dips', 'runners'].filter((k) => B[k]);
+  if (retired.length) lines.push(`${retired.join(', ')}: retired, holding nothing`);
+  for (const k of retired) if ((B[k].lots || []).length) problems.push(`${k}: retired but holding ${B[k].lots.length}: the engine no longer marks or sells them`);
   // what the bots flagged in the last day, most recent first, each wording once
   const since = now - 24 * 3600000, seen = new Set();
   for (const l of S.log || []) {

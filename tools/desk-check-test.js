@@ -1,13 +1,16 @@
 'use strict';
 // The desk check (step 8 of the daily check): a real day of the desk replays from its journal to the
 // penny, every kind of drift is named, and "alive" and "did today's check" are read right at every
-// hour of the week. No network, no clock: the desk runs on tools/desk-fixture.js's fake market.
+// hour of the week. No network, no clock. The days are tools/fixtures/retired/: a trend day of the options book,
+// a morning of scalps and a morning dip, recorded on 2026-10-17 by the engine as it was before those books were
+// retired (it ran tools/desk-fixture.js's fake market), so that the ledgers the box still carries for them are
+// replayed by a test that no longer needs their code.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const clock = require('../src/desk/clock');
-const { Desk } = require('../src/desk/engine');
-const { deskConfig, fakeMarket, playTrendDay, playScalpMorning, playDipMorning, at } = require('./desk-fixture');
+const { at } = require('./desk-fixture');
+const FIX = path.join(__dirname, 'fixtures', 'retired');
 const C = require('./desk-check');
 
 let pass = 0, fail = 0;
@@ -20,14 +23,7 @@ const eq = (name, got, want) => ok(`${name}\n        want: ${JSON.stringify(want
 
 async function main() {
   // a real afternoon: crypto and SPY bought, two options bought, one sold at 2x, one on a VWAP break
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-check-'));
-  let T = at('12:31');
-  const M = fakeMarket(() => T);
-  const desk = new Desk(deskConfig(dir), { feeds: M.feeds, now: () => T });
-  desk.quiet = true;
-  await playTrendDay(desk, M, (t) => { T = t; });
-  desk.record(); desk.save();
-  const ddir = path.join(dir, 'desk');
+  const ddir = path.join(FIX, 'trend');
 
   const { state: S, events } = C.readDesk(ddir);
   const built = C.rebuild(events, S, { until: C.stateTime(S) });
@@ -44,6 +40,7 @@ async function main() {
   ok('and what holding paid to buy in: 0.40% of what its $9,000 bought', lines.some((l) => /crypto .*holding would be \S+ after its \$35\.86 fee to buy in · banked/.test(l)), lines);
   ok('SPY holding pays no fee, and its line claims none', lines.some((l) => /stocks .*holding would be/.test(l)) && !lines.some((l) => /stocks .*fee to buy in/.test(l)), lines);
   ok('the options book counts its closed trades', lines.some((l) => /options .*1 trade closed \(1 made money\)/.test(l)), lines);
+  ok('the four retired books are one line, not a check each', lines.some((l) => /^TODAY   options, scalps, dips, runners: retired, holding nothing$/.test(l)), lines);
   ok("today's checks are reported, not flagged", lines.some((l) => /^TODAY   SPY checked today/.test(l)) && lines.some((l) => /^TODAY   crypto checked 2026-09-23/.test(l)), lines);
 
   // drift: each kind is named, on the book it is in
@@ -91,8 +88,7 @@ async function main() {
 
   // today's checks, across the week (the state's history moved along so the loop reads alive)
   const MIN = 60000;
-  // (the runner book's scan too: it runs every 3 minutes with the loop)
-  const alive = (t) => { const s = JSON.parse(JSON.stringify(S)); s.history.push({ ...s.history[s.history.length - 1], t: t - MIN }); if (s.books.runners.scan) s.books.runners.scan.at = t - MIN; return s; };
+  const alive = (t) => { const s = JSON.parse(JSON.stringify(S)); s.history.push({ ...s.history[s.history.length - 1], t: t - MIN }); return s; };
   const thu2am = Date.parse('2026-09-24T02:00:00Z');
   const pc = C.health(alive(thu2am), thu2am).problems;
   ok('crypto not checked by 2 AM UTC on the next day is flagged, coin by coin', pc.some((x) => /crypto: BTC, ETH, SOL not checked today \(2026-09-24 UTC\)/.test(x)), pc);
@@ -105,16 +101,10 @@ async function main() {
   const sat = clock.etToUtc('2026-09-26T11:00:00');
   eq('on a Saturday there is no SPY check to miss', C.health(alive(sat), sat).problems.filter((x) => /SPY|options/.test(x)), []);
   const thu13 = clock.etToUtc('2026-09-24T13:05:00');
-  ok('no 12:30 verdict by 1 PM on a trading day is flagged', C.health(alive(thu13), thu13).problems.some((x) => /^options: no 12:30 verdict today/.test(x)));
-  eq('on the day it had one, it is reported', C.health(alive(at('13:05')), at('13:05')).problems, []);
-  const quiet = alive(at('13:05')); quiet.books.runners.scan.at = at('12:40');
-  ok("a runner book that has not scanned for a quarter of an hour is flagged, whatever the day", C.health(quiet, at('13:05')).problems.some((x) => /^runners: no scan for 25 minutes/.test(x)), C.health(quiet, at('13:05')).problems);
-  ok('a scan three minutes old is reported with what the book holds', C.health(alive(at('13:05')), at('13:05')).lines.some((x) => /^runners: scanned 1 min ago, \d+ coins · holding nothing/.test(x)));
-  const thanksgivingFri = clock.etToUtc('2026-11-27T13:30:00');
-  eq('a 1 PM close has no 12:30 test to miss', C.health(alive(thanksgivingFri), thanksgivingFri).problems.filter((x) => /options/.test(x)), []);
+  eq('a retired book has no 12:30 verdict or scan to miss', C.health(alive(thu13), thu13).problems.filter((x) => /options|scalps|dips|runners/.test(x)), []);
   const stuck = JSON.parse(JSON.stringify(S));
   stuck.books.options.lots = [{ expiry: '2026-09-23', qty: 1, osi: 'SPY260923C00705000' }];
-  ok('a contract still held after 3:40 on its day is flagged', C.health(stuck, at('15:45')).problems.some((x) => /still held past the 3:15 clock/.test(x)));
+  ok('a retired book that somehow holds a contract is a problem: nothing marks or sells it', C.health(stuck, at('15:45')).problems.some((x) => /^options: retired but holding 1/.test(x)));
 
   // what the bots flagged: a note, except a round that failed outright
   const noisy = JSON.parse(JSON.stringify(S));
@@ -131,14 +121,7 @@ async function main() {
 
   // a morning of scalps replays to the penny too, and the scalp book has its own line
   {
-    const sdir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-check-'));
-    let TS = at('10:06');
-    const MS = fakeMarket(() => TS);
-    const ds = new Desk(deskConfig(sdir), { feeds: MS.feeds, now: () => TS });
-    ds.quiet = true;
-    await playScalpMorning(ds, MS, (t) => { TS = t; });
-    ds.record(); ds.save();
-    const sd = path.join(sdir, 'desk');
+    const sd = path.join(FIX, 'scalps');
     const { state: SS, events: ev } = C.readDesk(sd);
     const bs = C.rebuild(ev, SS, { until: C.stateTime(SS) });
     eq("the scalp book's journal rebuilds its state to the penny", C.compare(bs, SS), []);
@@ -149,26 +132,12 @@ async function main() {
     const out = [];
     eq('a healthy scalp morning exits 0', C.run(['--dir', sd], { log: (l) => out.push(l), now: at('10:22') }), 0);
     ok('its line counts the trades and what they made', out.some((l) => /scalps .*2 trades closed \(1 made money\) · banked \+\$28\.88/.test(l)), out);
-    ok("and today's scalps are reported", out.some((l) => /^TODAY   scalps today: 2 trades/.test(l)), out);
-    const nextDay = clock.etToUtc('2026-09-24T11:00:00');
-    const moved = JSON.parse(JSON.stringify(SS)); moved.history.push({ ...moved.history[moved.history.length - 1], t: nextDay - 60000 });
-    ok('a book that ran yesterday and is not watching by 10:30 today is flagged', C.health(moved, nextDay).problems.some((x) => /^scalps: not watching today/.test(x)), C.health(moved, nextDay).problems);
-    const held = JSON.parse(JSON.stringify(SS));
-    held.books.scalps.lots = [{ expiry: '2026-09-23', qty: 1, osi: 'SPY260923C00702000' }];
-    ok('a scalp still held after 3:40 is flagged', C.health(held, at('15:45')).problems.some((x) => /^scalps: 1 contract\(s\) still held past the 3:15 clock/.test(x)));
-    fs.rmSync(sdir, { recursive: true, force: true });
+
   }
 
   // a morning dip replays to the penny too
   {
-    const pdir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-check-'));
-    let TP = at('10:05');
-    const MP = fakeMarket(() => TP);
-    const dp = new Desk(deskConfig(pdir), { feeds: MP.feeds, now: () => TP });
-    dp.quiet = true;
-    await playDipMorning(dp, MP, (t) => { TP = t; });
-    dp.record(); dp.save();
-    const pd = path.join(pdir, 'desk');
+    const pd = path.join(FIX, 'dips');
     const { state: PS, events: pev } = C.readDesk(pd);
     const bp = C.rebuild(pev, PS, { until: C.stateTime(PS) });
     eq("the dip book's journal rebuilds its state to the penny", C.compare(bp, PS), []);
@@ -176,13 +145,11 @@ async function main() {
     const out = [];
     eq('a healthy dip morning exits 0', C.run(['--dir', pd], { log: (l) => out.push(l), now: at('10:23') }), 0);
     ok('its line counts the trade and what it made', out.some((l) => /dips .*1 trade closed \(1 made money\) · banked \+\$54\.88/.test(l)), out);
-    ok("and today's dip trades are reported", out.some((l) => /^TODAY   dips today: 1 trade/.test(l)), out);
     ok('the desk line counts all six books', out.some((l) => /desk .*\$23,/.test(l)), out);
-    fs.rmSync(pdir, { recursive: true, force: true });
   }
 
   // no state at all
-  const none = [];
+  const none = [], dir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-check-'));
   eq('no desk state is a problem, said plainly', C.run(['--dir', path.join(dir, 'nowhere')], { log: (l) => none.push(l) }), 1);
   ok('and it names the folder', /^PROBLEM no desk state in/.test(none[0]), none);
   fs.rmSync(dir, { recursive: true, force: true });
