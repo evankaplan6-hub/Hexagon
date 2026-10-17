@@ -663,6 +663,24 @@ group('matchPairs: Kalshi\'s "Kentucky" is not Polymarket\'s "Western Kentucky" 
   ok('a player named by surname is still a match there', nameMatch('Medvedev', 'Daniil Medvedev', true));
 }
 
+group('matchPairs: Kansas v Kansas State pairs, either order (2026-10-17)');
+{
+  // Kalshi's "Kansas" begins Polymarket's "Kansas State" too, so the first side that matched took both names
+  // and the game was skipped as one team playing itself: the noon game's favourite went unbet.
+  const ev = (a, b) => [['KU', a], ['KSU', b]].map(([l, n]) => ks({ ticker: `KXNCAAFGAME-26OCT17KUKSU-${l}`, eventTicker: 'KXNCAAFGAME-26OCT17KUKSU', subTitle: n, title: `${n} wins` }));
+  const ml = (outcomes) => pm({ id: 'ku', slug: 'cfb-kan-kanst-2026-10-17', question: `${outcomes[0]} vs. ${outcomes[1]}`, sport: 'moneyline', outcomes, gameStart: '2026-10-17 16:00:00+00' });
+  for (const [name, outcomes, kss] of [
+    ['as listed', ['Kansas', 'Kansas State'], ev('Kansas', 'Kansas St.')],
+    ['Polymarket the other way', ['Kansas State', 'Kansas'], ev('Kansas', 'Kansas St.')],
+    ['Kalshi the other way', ['Kansas', 'Kansas State'], ev('Kansas', 'Kansas St.').reverse()],
+  ]) {
+    const r = matchPairs([ml(outcomes)], kss);
+    const want = outcomes[0] === 'Kansas' ? /-KU$/ : /-KSU$/;
+    ok(`${name}: pairs, and YES on "${outcomes[0]}" is Kalshi's ${outcomes[0]}`, r.pairs.length === 1 && want.test(r.pairs[0].ks.ticker),
+      r.pairs.map((p) => p.ks.ticker));
+  }
+}
+
 group('matchPairs: a two-outcome moneyline never pairs with a three-way event (audit 2026-10-15)');
 {
   // Kalshi's soccer events have a Tie leg. The game path dropped it and paired a two-outcome Polymarket
