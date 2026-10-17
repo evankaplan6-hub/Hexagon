@@ -362,8 +362,15 @@ function matchPairs(pmList, ksList) {
         // may name by surname alone, and not for path 3's soccer clubs ("FK Bodø/Glimt" against "Bodoe/Glimt").
         const leads = (k, p) => people || (toks(k)[0] !== undefined && (toks(p)[0] || '').startsWith(toks(k)[0]));
         const same = (x, p) => nameMatch(ksName(x), p, people) && leads(ksName(x), p);
-        const ia = sides.findIndex((x) => same(x, pa));
-        const ib = sides.findIndex((x) => same(x, pb));
+        // Kalshi's "Kansas" is a prefix of Polymarket's "Kansas State" as well as of "Kansas", so the first
+        // side that matched claimed both names and Kansas v Kansas State never paired (2026-10-17, the
+        // favourite went unbet). When both of Kalshi's sides match a name, the one naming more of it wins.
+        const side = (p) => {
+          const hits = sides.map((x, i) => [i, toks(ksName(x)).length]).filter(([i]) => same(sides[i], p));
+          return hits.length ? hits.reduce((a, b) => (b[1] > a[1] ? b : a))[0] : -1;
+        };
+        const ia = side(pa);
+        const ib = side(pb);
         if (ia < 0 || ib < 0 || ia === ib) continue;
         const label = `${TAG[ser] || ser} ${short(A, sport)} v ${short(B, sport)} · ${short(A, sport)}`;
         const conflict = conflictWith(sides[ia]);
