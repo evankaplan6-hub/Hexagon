@@ -18,6 +18,7 @@ const flag = (name, d) => { const i = args.indexOf(`--${name}`); return i >= 0 &
 const FILE = flag('file', 'data/lab/picks/games.jsonl');
 const SPLIT = Date.parse(flag('split', '2026-03-01')) / 1000;
 const ONLY = flag('series', '');
+const MODEL = args.includes('--model');
 const USD = 100;
 
 // the game's two sides at a bar: team at the YES ask, opponent at the NO ask (100 - YES bid)
@@ -86,6 +87,14 @@ const PICKERS = {
   'Elo favourite': (g) => (g.eloTeam >= 0.5 ? 'team' : 'opp'),
   // the same favourite, bought a day out (the book bet up to a day before until 2026-10-16): does waiting
   // for the late news pay? Only games with both bars, so the two rows are the same games
+  // the team model (tools/team-model.js), on the games whose score it found; null on the rest, so these rows are
+  // read against the favourite on the same games ('favourite, model's games')
+  "favourite, model's games": (g) => (g.model ? fav(g) : null),
+  'model favourite': (g) => (g.model ? (g.model.p >= 0.5 ? 'team' : 'opp') : null),
+  'model 5 pts likelier than price': (g) => { if (!g.model) return null; const e = g.model.p - g.now.team.mid; return e >= 0.05 ? 'team' : e <= -0.05 ? 'opp' : null; },
+  'model 10 pts likelier than price': (g) => { if (!g.model) return null; const e = g.model.p - g.now.team.mid; return e >= 0.10 ? 'team' : e <= -0.10 ? 'opp' : null; },
+  'blend favourite (price and model)': (g) => (g.model && g.blend != null ? (g.blend >= 0.5 ? 'team' : 'opp') : null),
+  'blend 3 pts likelier than price': (g) => { if (!g.model || g.blend == null) return null; const e = g.blend - g.now.team.mid; return e >= 0.03 ? 'team' : e <= -0.03 ? 'opp' : null; },
   'favourite, bought a day out': (g) => (g.early ? [g.early.team.mid >= 0.5 ? 'team' : 'opp', 'early'] : null),
   'favourite, bought an hour out (same games)': (g) => (g.early ? fav(g) : null),
 };
@@ -122,8 +131,43 @@ function calibration(games) {
   return L.join('\n');
 }
 
+// The model's chance for each game's team side, where its score is found (tools/score-fetch.js first)
+function addModel(games) {
+  const TM = require('./team-model');
+  const names = TM.withEvents(JSON.parse(fs.readFileSync('data/lab/picks/names.json', 'utf8')), games.map((g) => g.event));
+  const scores = {}, models = {};
+  for (const l of ['nfl', 'cfb', 'mlb']) { const s = JSON.parse(fs.readFileSync(`data/lab/scores/${l}.json`, 'utf8')); scores[l] = TM.indexScores(s); models[l] = TM.modeller(s, l); }
+  for (const g of games) {
+    const m = TM.matchGame(g, scores, names);
+    if (!m) continue;
+    // rated as of the start of the game's day, before it: the model never sees its result
+    const out = models[m.league](m.teamKey, m.oppKey, m.score.home, m.score.t, m.score.neutral);
+    g.model = { p: out.p, mu: out.mu, league: m.league };
+  }
+}
+// How well a set of chances called the games: log loss (lower is better) and the Brier score.
+const logit = (p) => Math.log(p / (1 - p)), sig = (x) => 1 / (1 + Math.exp(-x)), clip = (p) => Math.min(0.99, Math.max(0.01, p));
+function lossOf(games, f) {
+  let n = 0, ll = 0, br = 0;
+  for (const g of games) { const p = f(g); if (p == null) continue; const y = g.teamWon ? 1 : 0, q = clip(p); n++; ll += -(y * Math.log(q) + (1 - y) * Math.log(1 - q)); br += (q - y) ** 2; }
+  return { n, ll: n ? ll / n : NaN, br: n ? br / n : NaN };
+}
+// The blend: logit(p) = a·logit(price) + b·logit(model), a and b fitted on the train games by gradient descent on
+// log loss. b near zero says the model adds nothing the price does not already have.
+function fitBlend(games) {
+  let a = 1, b = 0;
+  const xs = games.filter((g) => g.model).map((g) => [logit(clip(g.now.team.mid)), logit(clip(g.model.p)), g.teamWon ? 1 : 0]);
+  for (let it = 0; it < 4000; it++) {
+    let ga = 0, gb = 0;
+    for (const [u, v, y] of xs) { const e = sig(a * u + b * v) - y; ga += e * u; gb += e * v; }
+    a -= 0.5 * ga / xs.length; b -= 0.5 * gb / xs.length;
+  }
+  return { a, b, n: xs.length };
+}
+
 if (require.main === module) {
   const all = loadGames();
+  if (MODEL) addModel(all);
   const series = ONLY ? [ONLY] : [...new Set(all.map((g) => g.series))].sort();
   const K = { KXNFLGAME: 20, KXNCAAFGAME: 30, KXMLBGAME: 4, KXNBAGAME: 12 };
   for (const s of series) addElo(all.filter((g) => g.series === s), K[s] || 20);
@@ -133,10 +177,19 @@ if (require.main === module) {
     const gs = s === 'ALL' ? all : all.filter((g) => g.series === s);
     const train = gs.filter((g) => g.kickTs < SPLIT), test = gs.filter((g) => g.kickTs >= SPLIT);
     console.log(`== ${s}: ${train.length} train games, ${test.length} holdout games`);
+    if (MODEL && s !== 'KXNBAGAME') {
+      const B = fitBlend(train);
+      for (const g of gs) g.blend = g.model ? sig(B.a * logit(clip(g.now.team.mid)) + B.b * logit(clip(g.model.p))) : null;
+      const row = (name, f) => { const t = lossOf(train.filter((g) => g.model), f), h = lossOf(test.filter((g) => g.model), f); return `  ${name.padEnd(30)} train ${String(t.n).padStart(5)} log loss ${t.ll.toFixed(4)} brier ${t.br.toFixed(4)}   holdout ${String(h.n).padStart(5)} log loss ${h.ll.toFixed(4)} brier ${h.br.toFixed(4)}`; };
+      console.log(`  how well each called the games it could rate (lower is better); blend = ${B.a.toFixed(2)}·price + ${B.b.toFixed(2)}·model, fitted on train`);
+      console.log(row('the price (Kalshi mid)', (g) => g.now.team.mid));
+      console.log(row('the model', (g) => g.model.p));
+      console.log(row('the blend', (g) => g.blend));
+    }
     console.log(`  ${'picker'.padEnd(44)} ${'TRAIN  bets  won   mean   ±2se'.padEnd(29)}   HOLDOUT  bets  won   mean   ±2se`);
     for (const [name, pick] of Object.entries(PICKERS)) console.log(`  ${name.padEnd(44)} ${fmt(score(train, pick))}      ${fmt(score(test, pick))}`);
     console.log(`\n  calibration, every game (both sides):\n${calibration(gs)}\n`);
   }
 }
 
-module.exports = { bet, sides, barAt, score, calibration, addElo, prepare, preseason, PICKERS };
+module.exports = { bet, sides, barAt, score, calibration, addElo, prepare, preseason, PICKERS, fitBlend, lossOf };

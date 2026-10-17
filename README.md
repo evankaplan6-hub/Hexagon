@@ -733,6 +733,39 @@ node tools/pick-fetch.js     # → data/lab/picks/games.jsonl, about 45 minutes 
 node tools/pick-lab.js       # the tables above, per league; --split, --series
 ```
 
+### A team model (2026-10-16): built, tested, not used
+
+Then Evan: "build a model". An Elo from wins and losses is the desk's own data; a team's scores say more,
+so `tools/team-model.js` rates every team by its margins (capped), with home field, by ridge regression over
+every earlier game weighted by how recent it is, rebuilt each day so no game is rated with its own result, and
+turns the predicted margin into a chance with the league's spread of results. Scores from open sources
+(`tools/score-fetch.js`): nflverse for the NFL, sportsdataverse's cfbfastR-data for college (about a week
+behind), MLB's own stats API (free for individual non-commercial use). No open NBA source runs past 2023, so
+the NBA is not rated. Its settings were picked on the 2025 season's own games (it picks 66% of NFL winners,
+72% of FBS games, 56% of MLB's). Then `node tools/pick-lab.js --model` set it against Kalshi's price an hour
+before each game it could match (5,874 of them), chosen on the games before 2026-03-01 and read on the
+2,892 after. How well each called the holdout games (log loss, lower is better):
+
+| league | games | the price | the model | the two blended |
+|---|---|---|---|---|
+| MLB | 2,424 | 0.6784 | 0.6849 | 0.6785 |
+| college football | 389 | 0.4070 | 0.5676 | 0.4098 |
+| NFL | 79 | 0.6437 | 0.6585 | 0.6461 |
+
+The price is better in every league, and a blend fitted on the train games is no better than the price alone
+on the holdout: whatever the model knows, the price already has. Bet on, it does what that predicts: the
+model's favourite lost $3.08 a $100 bet against the market favourite's $1.42 on the same games, and betting
+where the model saw a side 5 points likelier than its price lost $7.40 a bet (10 points: $25.41). College is
+the widest gap: in the first weeks of a season the model has only last year's games and the price has
+everything else. A model that could beat the price would need what the price is made of and a scores table is
+not: starting pitchers, injuries, lineups, the sharp books' numbers. None of that is free to automate, so the
+game bets stay on the market's favourite.
+
+```bash
+node tools/score-fetch.js        # → data/lab/scores/{nfl,cfb,mlb}.json and data/lab/picks/names.json, a minute
+node tools/pick-lab.js --model   # the table above, with every picker
+```
+
 ## Anytime touchdown tape (2026-10-11)
 
 Evan, NFL Sunday: "parlays? atd parlay?" No parlay book: a parlay multiplies the house edge (three legs

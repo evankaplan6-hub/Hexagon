@@ -195,6 +195,9 @@ tools/            edge-scan, replay, maker-replay, maker-rank, pm-maker-scan, ma
                   pick-fetch + pick-lab (2026-10-16, "pick the winner": every settled Kalshi game in BET_SERIES priced an
                   hour and a day before the start → data/lab/picks/; no picker beat the favourite, but betting it an hour out
                   beat a day out in MLB, so BET_AHEAD_HOURS is 1; README "Picking the winner"),
+                  score-fetch + team-model (same day, "build a model": teams rated by their scores from open sources,
+                  nflverse / cfbfastR-data / MLB's stats API → data/lab/scores/; pick-lab --model: the price beats it in
+                  every league out of sample, so nothing is wired in; README "A team model"),
                   weather-fetch + weather-lab (Kalshi daily-high-temperature markets vs the public forecast; no edge, out of sample),
                   favorites-check (one preset rule on older settled markets from lab-fetch --historical; the non-Sports favourite lead did not replicate),
                   pnl-report (one-screen realised P&L per book from data/fly/archive + data/fly/box-now, every arb leg counted;
