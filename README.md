@@ -781,6 +781,21 @@ many games, and that is the yardstick to read it against. Paper only: `decide.be
 in live mode, and KETT refuses one there too. `BETS=1` in fly.toml turns it on; it has its own card on
 the floor ("Every game"). Code: `decide.betSignal`, BRAM finds, KETT buys.
 
+**Is the book unlucky? (2026-10-17.)** The new Games view set the record against the prices for the first time: 69 won
+of 123 where the prices paid said 81.0, 2.35 standard deviations short (exact, from each bet's own price). Checked
+the same day: no bug (every result matches Kalshi's); the 20 bets placed during a game won 16 against 15.4; and
+between each bet and the hour before its game Kalshi's price for the pick moved +0.1c on average, so the market an
+hour before kickoff still expected about 48 wins from the bets placed earlier, and 37 came. Valued at Kalshi's mid
+rather than the price paid (1.7c a bet over it), the shortfall is 1.9 sds. Across every Kalshi game in those weeks
+(307, the favourite at 90c or less an hour before), favourites won 188 where their prices said 204.4, 2.0 sds short,
+and the 204 games the book did not bet fell short as much as the ones it did: a run of upsets, mostly college
+football, not the book. The real part is small: six picks bet over an hour ahead (the 24-hour rule) were no longer
+the favourite an hour before the start, four of them NBA preseason games, and five lost; the one-hour rule since
+2026-10-16 is for that. Of the −$1,688: $139 of fees, about $276 over Kalshi's mid, the rest the upsets. Evan, told
+the next look was January: "boooo". So `node tools/bet-record.js --box --flips` gives the record every Monday (the
+weekly check): by week and league against the prices, with chance's spread, and last week's picks that stopped
+being the favourite; and the game picks are re-tested on Dec 7, on the college regular season.
+
 **Is every game bet? (2026-10-17.)** Not always, and until that Saturday nothing said so. Evan asked "cfb ready?":
 Kalshi listed 71 college games dated 10-17 and the box had paired 69. Kansas v Kansas State was one of the two:
 Kalshi's "Kansas" begins Polymarket's "Kansas State", so the first side to match took both names and the game
