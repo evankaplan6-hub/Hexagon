@@ -48,15 +48,16 @@
   --bad: light-dark(#d70015, #ff453a);
   --focus: light-dark(#0071e3, #2997ff);              /* the keyboard focus ring, Apple's blue */
 
-  /* ---- the six books: a book's swatch beside its name, and the line on its own card. Apple's system
-     orange, blue, pink, purple, teal and indigo. A book's colour is never the only thing that says which book
-     it is: it sits beside the book's name, and no chart draws two books. */
+  /* ---- the parts of the Hexagon (2026-10-17): the crypto book and the SPY book, the games, the arbs and the maker,
+     and the lab. A swatch beside a part's name, its line on a chart, a game tile's pick. Apple's system orange,
+     blue, indigo, purple and teal. A colour is never the only thing that says which part it is: it sits beside
+     the name, and no chart draws two. (Until 2026-10-17 the six books had one each; the four retired that day,
+     options, scalps, dips and runners, gave theirs up.) */
   --book-crypto: light-dark(#ff9500, #ff9f0a);
   --book-stocks: light-dark(#007aff, #0a84ff);
-  --book-options: light-dark(#ff2d55, #ff375f);
-  --book-scalps: light-dark(#af52de, #bf5af2);
-  --book-dips: light-dark(#30b0c7, #40c8e0);
-  --book-runners: light-dark(#5856d6, #5e5ce6);
+  --part-games: light-dark(#5856d6, #5e5ce6);
+  --part-side: light-dark(#af52de, #bf5af2);
+  --part-lab: light-dark(#30b0c7, #40c8e0);
 
   /* ---- the app icon: graphite, the mark in white, its core in the gain's green. The same in both
      appearances, as an icon on a Home Screen is; tools/icons.js draws the PNGs in these colours. */

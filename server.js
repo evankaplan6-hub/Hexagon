@@ -10,6 +10,7 @@ const cfg = require('./src/config');
 const { Engine } = require('./src/engine');
 const { Desk } = require('./src/desk/engine');
 const { pmFloor } = require('./src/pmfloor');
+const { labStatus } = require('./src/labstatus');
 const { actionRefusal, rebindRefusal, routeAsk } = require('./src/ask');
 const chaintape = require('./src/chaintape');
 const { crashRecord } = require('./src/journal');
@@ -40,7 +41,7 @@ const pmSummary = () => pmFloor(engine, cfg);
 // to the prediction-market floor: its positions still have to settle.
 let desk = null;
 if (cfg.desk.on) {
-  try { desk = new Desk(cfg, { legacy: pmSummary, onStall: deskStalled }); }
+  try { desk = new Desk(cfg, { legacy: pmSummary, lab: () => labStatus(cfg.dataDir), onStall: deskStalled }); }
   catch (e) { console.error(`stocks/crypto/options desk not started: ${e.message}`); }
 }
 // START, STOP and CRASH in the journal (src/journal.js says why): a restart the desk did not ask

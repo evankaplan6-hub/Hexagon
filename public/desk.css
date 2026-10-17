@@ -1,4 +1,4 @@
-/* The stocks, crypto and options floor at /: four views of the one desk, each a page of cards.
+/* The floor at /: four views of the whole Hexagon, Today, Games, Markets and Activity (desk.js says what each holds).
 
    Until 2026-09-25 the boards were painted into a pixel room with the bots at their desks, placed in
    the room's drawing units and sized by its zoom, which is why most of their words were under 12px.
@@ -11,9 +11,11 @@
    phone that scrolls away and leaves the desk's light pinned, segmented controls drawn as iOS draws
    them, the large chart as a sheet, and the safe areas around a notch.
 
-   Since 2026-10-02 the wall is four views (desk.js says what each holds): a segmented control in the
-   bar picks one, as a Mac app's toolbar does, and on a phone a tab bar along the foot of the screen,
-   as an iPhone app has. Until then it was one wall, 2,800px long on a laptop and 3,300 on a phone. */
+   Since 2026-10-17 (the fifth version, Evan: "u do everything surprise me") the views follow what is happening,
+   not the code: Today opens on the date, all the paper in play and its three parts, as iOS opens Today; the games
+   are tiles on a scoreboard, as Apple's Sports app draws a slate; the crypto rule is a bar per market with a mark
+   where the rule wants it. A segmented control in the bar picks a view, as a Mac app's toolbar does, and on a
+   phone a tab bar along the foot of the screen, as an iPhone app has. */
 
 * { box-sizing: border-box; }
 /* a view, a tab or a tile that is not showing is not there, whatever display its own rule gives it */
@@ -77,7 +79,7 @@ h1 { margin: 0; font: 600 var(--type-title)/1.2 var(--sans); letter-spacing: -.0
 .views a { display: inline-flex; align-items: center; justify-content: center; padding: 6px 14px; border-radius: var(--radius-pill);
   font: 600 var(--type-small)/1.2 var(--sans); color: var(--ink-2); white-space: nowrap; transition: background-color .2s, box-shadow .2s, color .2s; }
 .views a[aria-current] { background: var(--seg-on); color: var(--ink-1); box-shadow: var(--shadow-seg); }
-.views svg, .views .sh { display: none; }
+.views svg { display: none; }
 
 .wrap { flex: 1 0 auto; display: flex; flex-direction: column; gap: var(--space-4); width: 100%; max-width: 1680px; margin: 0 auto;
   padding: var(--space-2) max(var(--space-5), env(safe-area-inset-right)) max(var(--space-5), env(safe-area-inset-bottom)) max(var(--space-5), env(safe-area-inset-left)); }
@@ -87,7 +89,7 @@ h1 { margin: 0; font: 600 var(--type-title)/1.2 var(--sans); letter-spacing: -.0
 /* past the daily loss limit: the desk is working as it should and not buying, which is amber, not broken */
 .banner.warn { background: var(--warn-wash); } .banner.warn::before { background: var(--warn); }
 
-/* ---- the views. Each a twelve-column grid of cards. -------------------------------------------- */
+/* ---- the views. Each a twelve-column grid. ------------------------------------------------------ */
 main { flex: 1 1 auto; min-height: 0; transition: opacity .4s; }
 /* no signal: the last state received, dimmed, under the banner that says so */
 main.gone { opacity: .45; }
@@ -97,14 +99,13 @@ body.offline #sheetbody > :not(.shstale), body.offline #chartbig-pnl { opacity: 
 .shstale { margin: 0 0 var(--space-3); padding: 10px 12px; border-radius: 10px; background: var(--bad-wash); color: var(--ink-1); font-size: var(--type-small); }
 .view { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: var(--space-4); align-items: start; min-width: 0; }
 .card { min-width: 0; min-height: 0; padding: var(--space-4) var(--space-5); background: var(--bg-1); border-radius: var(--radius-lg); box-shadow: var(--shadow-card); }
-/* A view opens the way an app's tab does: at once. Until 2026-10-10 its cards rose into place on every switch
-   (opacity and 6px, .45s), a flourish no Mac or iPhone tab bar has; the control's own highlight moving to the
-   tab is the motion that answers the tap. What still moves answers an action and shows what changed: the chart
-   sheet as it opens, and a book's card lit for a moment when a line on the overview led to it. */
+/* A view opens the way an app's tab does: at once. What moves answers an action and shows what changed: the
+   sheets as they open, and a card lit for a moment when a link led to it. */
 @media (prefers-reduced-motion: no-preference) {
-  .bk.flash { animation: flash 1.8s ease-out; }
+  [data-anchor].flash { animation: flash 1.8s ease-out; }
   @keyframes flash { 0%, 35% { box-shadow: 0 0 0 3px var(--focus), var(--shadow-card); } }
 }
+[data-anchor] { scroll-margin-top: var(--space-3); }
 /* a card's title, sentence case, as iOS titles a group */
 .label { display: block; margin: 0; font: 600 var(--type-title)/1.25 var(--sans); letter-spacing: -.02em; color: var(--ink-1); }
 .cardhead { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2) var(--space-3); flex-wrap: wrap; }
@@ -114,97 +115,161 @@ body.offline #sheetbody > :not(.shstale), body.offline #chartbig-pnl { opacity: 
 /* working as it always does, but not live: SPY's feed, a quarter of an hour late */
 .dot.late { background: var(--ink-3); }
 .sw { width: 10px; height: 10px; flex: none; border-radius: 50%; background: var(--bk); }
-
-/* ---- the overview (2026-10-12): four questions in order, then what it holds, the side desk and the books
-   that are off. Its figure across the top; under it two columns, the holding question and the markets on the
-   left (7 of 12), the last trade and the health on the right (5). Anything that opens something has a chevron
-   and lights under a pointer. ------------------------------------------------------------------------ */
-.ov { align-items: start; }
-.ovhero { grid-column: 1 / -1; display: block; margin: 0 calc(-1 * var(--space-3)); padding: var(--space-2) var(--space-3) var(--space-3);
-  border: 0; border-radius: var(--radius-lg); background: none; color: inherit; text-align: left; cursor: pointer; transition: background-color .15s; }
-.ovlab { display: flex; align-items: center; gap: var(--space-2); font: 600 var(--type-small)/1.3 var(--sans); color: var(--ink-3); }
-.ovhero .big { display: block; margin-top: 2px; font: 700 var(--type-headline)/1.05 var(--sans); letter-spacing: -.025em; color: var(--ink-1); }
-.ovsub { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-4); margin-top: 6px; font: 600 var(--type-title)/1.3 var(--sans); color: var(--ink-3); }
-.ovcol { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
-.ovmain { grid-column: span 7; }
-.ovaside { grid-column: span 5; }
 .verdict { margin-top: var(--space-2); font: 700 var(--type-figure)/1.15 var(--sans); letter-spacing: -.02em; }
+.verdict .vfig { font-size: 22px; font-weight: 600; }
+/* a verdict is a sentence ("Ahead of just holding by $603.65"): it wraps, though a figure's colour keeps a figure whole */
+.verdict.pos, .verdict.neg, .verdict.zero { white-space: normal; }
 .ovp { margin: 6px 0 0; max-width: 62ch; color: var(--ink-2); }
 .ovp b { font-weight: 600; }
-.ovnote { margin: var(--space-2) 0 0; font-size: var(--type-small); color: var(--ink-3); }
-/* the chart under its question: no title of its own, and its figure a size down from the verdict over it */
-.vshold .pnl { height: 280px; margin-top: var(--space-3); }
-.vshold .pnl .cv { font-size: 20px; }
-/* a list of lines: a swatch, a name, a figure, a chevron, and a line under them, each the whole width */
-.rows { list-style: none; margin: var(--space-2) 0 0; padding: 0; }
-.rows li + li { border-top: 1px solid var(--line-1); }
-.row { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto 8px; align-items: center; gap: 2px var(--space-3); width: calc(100% + 2 * var(--space-3));
-  margin: 0 calc(-1 * var(--space-3)); padding: 10px var(--space-3); border: 0; border-radius: var(--radius-md); background: none; color: inherit; font: inherit; text-align: left; }
-button.row, a.row { cursor: pointer; transition: background-color .15s; }
-/* a line with no swatch (a check, a next check, a trade) starts at the card's edge */
-.row.plain { grid-template-columns: minmax(0, 1fr) auto 8px; }
-.row.plain .rw { grid-column: 1 / -1; }
-.rn { min-width: 0; font: 600 15px/1.3 var(--sans); color: var(--ink-1); overflow-wrap: anywhere; }
-.rf { font: 600 var(--type-title)/1.2 var(--sans); letter-spacing: -.015em; text-align: right; white-space: nowrap; }
-.rw { grid-column: 2 / -1; font-size: var(--type-small); line-height: 1.35; color: var(--ink-3); }
-.next { margin-top: var(--space-3); border-top: 1px solid var(--line-1); }
-.next .rn, .checks .rn { font-weight: 400; color: var(--ink-2); }
-.next .rn b { font-weight: 600; color: var(--ink-1); }
-.mark { display: inline-block; width: 1.3em; font-weight: 700; }
-.mark.ok { color: var(--ok); } .mark.warn { color: var(--warn); } .mark.bad { color: var(--bad); }
-/* what it holds: a market to a line, how much of its slot is in it, and against holding it */
-.mkhead, .mkrow { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) repeat(3, minmax(0, .9fr)); gap: var(--space-3); align-items: center; }
-.mkhead { margin-top: var(--space-3); padding-bottom: 6px; border-bottom: 1px solid var(--line-1); font-size: var(--type-label); letter-spacing: 0; color: var(--ink-3); }
-.mkhead span:nth-child(n+3) { text-align: right; }
-.mklist { list-style: none; margin: 0; padding: 0; }
-.mklist li + li { border-top: 1px solid var(--line-1); }
-.mkrow { width: calc(100% + 2 * var(--space-3)); margin: 0 calc(-1 * var(--space-3)); padding: 10px var(--space-3); border: 0; border-radius: var(--radius-md);
-  background: none; color: inherit; font: inherit; font-size: var(--type-small); text-align: left; cursor: pointer; transition: background-color .15s; }
-.mkn { display: flex; align-items: center; gap: var(--space-2); min-width: 0; font: 600 15px/1.3 var(--sans); color: var(--ink-1); }
-.mkh { display: flex; align-items: center; gap: var(--space-2); color: var(--ink-2); }
-.mkm { flex: none; width: 44px; height: 6px; border-radius: var(--radius-pill); background: var(--fill-1); overflow: hidden; }
-.mkm i { display: block; height: 100%; border-radius: inherit; background: var(--bk); }
-.mks, .mkb, .mkd { text-align: right; font-weight: 600; white-space: nowrap; }
-/* the last trade, the whole of it one button to its market */
-.lt { display: grid; grid-template-columns: minmax(0, 1fr) 8px; align-items: center; gap: 2px var(--space-3); width: calc(100% + 2 * var(--space-3));
-  margin: var(--space-2) calc(-1 * var(--space-3)) 0; padding: var(--space-2) var(--space-3); border: 0; border-radius: var(--radius-md);
-  background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background-color .15s; }
-.lt > span { grid-column: 1; }
-.lt .chev { grid-column: 2; grid-row: 1 / span 3; }
-.ltw { font: 600 var(--type-title)/1.3 var(--sans); color: var(--ink-1); }
-.ltd { font-size: var(--type-small); color: var(--ink-3); }
-.ltp { margin-top: 4px; color: var(--ink-2); }
-button.seeall { padding: 0; border: 0; background: none; cursor: pointer; color: var(--accent); }
-/* the side desk and the books that are off: a section each under the two columns, smaller */
-.ovsec { grid-column: 1 / -1; margin-top: var(--space-2); min-width: 0; }
-.sechead { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--ink-1); }
+.ovnote { margin: var(--space-3) 0 0; font-size: var(--type-small); color: var(--ink-3); }
+.ovnote b { font-weight: 600; color: var(--ink-2); }
 .sect { margin: 0; font: 700 22px/1.2 var(--sans); letter-spacing: -.02em; color: var(--ink-1); }
 .lede { margin: 2px 0 var(--space-3); max-width: 80ch; font-size: var(--type-small); color: var(--ink-3); }
 .lede b { font-weight: 600; color: var(--ink-2); }
-.pmcards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--space-3); }
-.pmc { display: flex; flex-direction: column; gap: 2px; color: inherit; transition: background-color .15s; }
-.pmn { display: flex; align-items: center; gap: var(--space-2); font: 600 15px/1.3 var(--sans); color: var(--ink-1); }
-.pmn .chev { margin-left: auto; }
-.pmc .fig { font-size: 22px; }
-.pmw { font-size: var(--type-small); line-height: 1.35; color: var(--ink-3); }
-.pmw b { font-weight: 600; color: var(--ink-2); }
 .offtag { padding: 1px 7px; border-radius: var(--radius-pill); background: var(--fill-1); font: 600 var(--type-label)/1.4 var(--sans); letter-spacing: 0; color: var(--ink-3); }
-.offchips { display: flex; flex-wrap: wrap; gap: var(--space-2); }
-.offchip { display: inline-flex; align-items: center; gap: var(--space-2); padding: 8px 14px; border-radius: var(--radius-pill); background: var(--fill-1);
-  font: 500 var(--type-small)/1.2 var(--sans); color: var(--ink-2); transition: background-color .15s; }
-.offchip .sw { width: 8px; height: 8px; }
 .seeall { font-size: var(--type-small); font-weight: 500; white-space: nowrap; }
+button.seeall { padding: 0; border: 0; background: none; cursor: pointer; color: var(--accent); }
 /* a link the size of its 15px text was 19px tall: 24 is the least a finger or a shaky pointer should have to hit
    (WCAG 2.2, target size), reached without moving the text (2026-10-16 audit) */
 .seeall, .pmold, .rule summary { display: inline-flex; align-items: center; min-height: 24px; }
 .seeall::after { content: ''; display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-1px) rotate(-45deg); }
 .chev { flex: none; width: 7px; height: 7px; border-right: 1.5px solid var(--ink-3); border-bottom: 1.5px solid var(--ink-3); transform: rotate(-45deg); }
 
-/* ---- the stocks, crypto and options view: the headline beside the desk's state, then the books ---- */
-.dv .hero { grid-column: span 7; align-self: stretch; }
-.dv .deskcard { grid-column: span 5; align-self: stretch; }
-/* the headline's figure only: the large chart is .pnl.big, and a bare .big gave it 48px type, which pushed
-   the licence's logo down onto the first time label */
+/* ---- a list of lines: a swatch, a name, a figure, a chevron, and a line under them, each the whole width */
+.rows { list-style: none; margin: var(--space-2) 0 0; padding: 0; }
+.rows li + li { border-top: 1px solid var(--line-1); }
+.row { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto 8px; align-items: center; gap: 2px var(--space-3); width: calc(100% + 2 * var(--space-3));
+  margin: 0 calc(-1 * var(--space-3)); padding: 10px var(--space-3); border: 0; border-radius: var(--radius-md); background: none; color: inherit; font: inherit; text-align: left; }
+button.row, a.row { cursor: pointer; transition: background-color .15s; }
+/* a line with no swatch (a check, a tape, a trade) starts at the card's edge */
+.row.plain { grid-template-columns: minmax(0, 1fr) auto 8px; }
+.row.plain .rw { grid-column: 1 / -1; }
+.rn { min-width: 0; font: 600 15px/1.3 var(--sans); color: var(--ink-1); overflow-wrap: anywhere; }
+.rn b { font-weight: 600; }
+.rf { font: 600 var(--type-title)/1.2 var(--sans); letter-spacing: -.015em; text-align: right; white-space: nowrap; }
+.rw { grid-column: 2 / -1; font-size: var(--type-small); line-height: 1.35; color: var(--ink-3); }
+.rw b { font-weight: 600; color: var(--ink-2); }
+.checks .rn { font-weight: 400; color: var(--ink-2); }
+.mark { display: inline-block; width: 1.3em; font-weight: 700; }
+.mark.ok { color: var(--ok); } .mark.warn { color: var(--warn); } .mark.bad { color: var(--bad); }
+.mark.idle, .mark.no { color: var(--ink-3); }
+
+/* ---- Today: the date and all the paper across the top, its three parts beside it; under them two columns, the
+   games and the crypto rule on the left (7 of 12), what comes next, the lab, the arbs and the health on the right ---- */
+.tv { align-items: start; }
+.tdhero { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); align-items: end; gap: var(--space-3) var(--space-5); padding-top: var(--space-2); }
+.tddate { grid-column: 1 / -1; margin: 0; font: 600 var(--type-small)/1.2 var(--sans); letter-spacing: .02em; text-transform: uppercase; color: var(--accent); }
+.tdtotal { display: block; margin: 0 calc(-1 * var(--space-3)); padding: var(--space-1) var(--space-3) var(--space-2); border: 0; border-radius: var(--radius-lg);
+  background: none; color: inherit; text-align: left; cursor: pointer; transition: background-color .15s; }
+.tdlab { display: flex; align-items: center; gap: var(--space-2); font: 600 var(--type-small)/1.3 var(--sans); color: var(--ink-3); }
+.tdtotal .big { display: block; margin-top: 2px; font: 700 var(--type-headline)/1.05 var(--sans); letter-spacing: -.03em; color: var(--ink-1); white-space: nowrap; }
+.tdsub { display: block; margin-top: 6px; font: 600 var(--type-title)/1.3 var(--sans); color: var(--ink-3); }
+/* the three parts: crypto and SPY, the games, the arbs and the maker; each to the view that has it */
+.parts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); }
+.part { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; padding: var(--space-3) var(--space-4); border-radius: 18px; background: var(--bg-1); box-shadow: var(--shadow-card);
+  color: inherit; transition: background-color .15s, box-shadow .15s; }
+.part .pn { display: flex; align-items: center; gap: var(--space-2); font: 600 var(--type-small)/1.3 var(--sans); color: var(--ink-2); }
+.part .pn .chev { margin-left: auto; }
+.part .sw { width: 8px; height: 8px; }
+.part .pf { font: 700 22px/1.2 var(--sans); letter-spacing: -.02em; }
+.part .ps { font-size: var(--type-small); line-height: 1.35; color: var(--ink-3); }
+.tdcol { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
+.tdmain { grid-column: span 7; }
+.tdaside { grid-column: span 5; }
+.verdict .rec { letter-spacing: -.01em; }
+/* the crypto rule's chart under its verdict: no title of its own, its figure a size down */
+.tdrule .pnl { height: 220px; margin-top: var(--space-3); }
+.tdrule .pnl .cv { font-size: 20px; }
+/* how much of each slot is in the market (the bar) and where the rule wants it (the mark) */
+.aims { list-style: none; margin: var(--space-3) 0 0; padding: 0; border-top: 1px solid var(--line-1); }
+.aims li + li { border-top: 1px solid var(--line-1); }
+.aim { display: grid; grid-template-columns: minmax(6.5em, auto) minmax(0, 1fr) auto 8px; grid-template-areas: "n b v c" "n w w c"; align-items: center; gap: 4px var(--space-3);
+  width: calc(100% + 2 * var(--space-3)); margin: 0 calc(-1 * var(--space-3)); padding: 10px var(--space-3); border: 0; border-radius: var(--radius-md);
+  background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background-color .15s; }
+.aim .an { grid-area: n; font: 600 15px/1.3 var(--sans); color: var(--ink-1); }
+.aim .ab { grid-area: b; position: relative; height: 8px; border-radius: var(--radius-pill); background: var(--fill-1); }
+.aim .ab i { display: block; height: 100%; border-radius: inherit; background: var(--bk); }
+.aim .ab b { position: absolute; top: -4px; width: 2px; height: 16px; margin-left: -1px; border-radius: 1px; background: var(--ink-1); }
+.aim .av { grid-area: v; font: 600 var(--type-small)/1.2 var(--sans); color: var(--ink-1); white-space: nowrap; text-align: right; }
+.aim .aw { grid-area: w; font-size: var(--type-label); letter-spacing: 0; color: var(--ink-3); }
+.aim .chev { grid-area: c; }
+/* the game tiles: a scoreboard (Today shows the next six; the Games view all of them) */
+.tiles { list-style: none; margin: var(--space-3) 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: var(--space-2); }
+.gt { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto auto 1fr; gap: 3px var(--space-2); width: 100%; height: 100%; padding: 10px 12px 11px; border: 1px solid var(--line-1);
+  border-radius: 16px; background: var(--bg-1); color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background-color .15s, border-color .15s; }
+.gth { grid-column: 1 / -1; display: flex; align-items: center; gap: var(--space-2); font: 600 var(--type-label)/1.3 var(--sans); letter-spacing: 0; color: var(--ink-3); }
+.gth .gtw { margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gth .gtl { flex: none; }
+.gtb { flex: none; }
+.gtlive { color: var(--part-games); }
+.gtlive::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: currentColor; vertical-align: 1px; }
+.gtb { padding: 1px 7px; border-radius: var(--radius-pill); background: var(--fill-1); font: 600 var(--type-label)/1.4 var(--sans); color: var(--ink-3); }
+.gtr { grid-column: 1 / -1; display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; align-items: baseline; gap: var(--space-2); }
+.gtd { align-self: center; }
+/* a team's whole name, on two lines if it needs them: cut short, three in four of a phone's college names read "Central C…" */
+.gtn { grid-column: 2; min-width: 0; overflow-wrap: break-word; -webkit-hyphens: auto; hyphens: auto; font: 500 15px/1.25 var(--sans); color: var(--ink-2); }
+.gtpick .gtn { font-weight: 600; color: var(--ink-1); }
+/* the pick: a dot in the games' colour before its name */
+.gtd { grid-column: 1; width: 7px; height: 7px; border-radius: 50%; background: var(--part-games); }
+.gtp { font: 600 var(--type-small)/1.2 var(--sans); color: var(--ink-2); white-space: nowrap; }
+.gts { grid-column: 1 / -1; align-self: end; margin-top: 3px; padding-top: 6px; border-top: 1px solid var(--line-1); font-size: var(--type-label); line-height: 1.35; letter-spacing: 0; color: var(--ink-3); }
+.gts b { font-weight: 600; }
+.gtsp { display: none; }
+/* a game left alone (its favourite over the cap) is there, quietly */
+.gt.st-skip .gtn, .gt.st-skip .gtp { color: var(--ink-3); }
+.gt.st-skip .gtd { background: var(--ink-3); }
+.gt.st-live { border-color: var(--part-games); }
+/* what comes next, across all of it: a time, and what happens then */
+.tl { list-style: none; margin: var(--space-2) 0 0; padding: 0; }
+.tl li + li { border-top: 1px solid var(--line-1); }
+.tl li.empty { padding: var(--space-3) 0; color: var(--ink-3); }
+.tli { display: grid; grid-template-columns: 6.6em minmax(0, 1fr) 8px; align-items: center; gap: var(--space-3); width: calc(100% + 2 * var(--space-3));
+  margin: 0 calc(-1 * var(--space-3)); padding: 10px var(--space-3); border: 0; border-radius: var(--radius-md); background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background-color .15s; }
+.tlt { font: 600 var(--type-small)/1.25 var(--sans); color: var(--ink-1); white-space: nowrap; }
+.tld { display: block; font: 500 var(--type-label)/1.3 var(--sans); letter-spacing: 0; color: var(--ink-3); }
+.tlnow .tld { color: var(--part-games); font-weight: 600; }
+.tlx { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; color: var(--ink-2); }
+.tlx .sw { width: 8px; height: 8px; transform: translateY(-1px); }
+/* the lab's summary: how many ideas, how many kept, what is on test */
+.labsum { display: grid; grid-template-columns: minmax(0, 1fr) 8px; align-items: center; gap: 2px var(--space-3); width: calc(100% + 2 * var(--space-3));
+  margin: var(--space-2) calc(-1 * var(--space-3)) 0; padding: var(--space-2) var(--space-3); border: 0; border-radius: var(--radius-md); background: none; color: inherit; font: inherit;
+  text-align: left; cursor: pointer; transition: background-color .15s; }
+.labsum > span { grid-column: 1; }
+.labsum .chev { grid-column: 2; grid-row: 1 / span 2; }
+.lsn { font: 600 var(--type-title)/1.3 var(--sans); color: var(--ink-1); }
+.lsn b { font-weight: 700; color: var(--bk); }
+.lsw { font-size: var(--type-small); color: var(--ink-3); }
+
+/* ---- Games: the record across the top, then a tile per game in sections ------------------------------- */
+.gv > * { grid-column: 1 / -1; }
+.ghs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); }
+.ghb { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ghb + .ghb { padding-left: var(--space-4); border-left: 1px solid var(--line-1); }
+.ghl { font: 600 var(--type-small)/1.3 var(--sans); color: var(--ink-3); }
+.ghr { font: 700 var(--type-headline)/1.05 var(--sans); letter-spacing: -.03em; color: var(--ink-1); }
+.ghp { font-size: var(--type-small); color: var(--ink-2); }
+.ghero .ovp { max-width: 90ch; margin-top: var(--space-3); }
+/* the record by league */
+.lg-t { width: 100%; max-width: 640px; margin-top: var(--space-3); border-collapse: collapse; font-size: var(--type-small); }
+.lg-t th, .lg-t td { padding: 8px 0 8px var(--space-3); border-top: 1px solid var(--line-1); text-align: right; white-space: nowrap; }
+.lg-t th:first-child { padding-left: 0; text-align: left; font-weight: 600; color: var(--ink-1); }
+.lg-t thead th { border-top: 0; padding-top: 0; font-size: var(--type-label); font-weight: 500; letter-spacing: 0; color: var(--ink-3); }
+.lg-t thead th:first-child { font-weight: 500; color: var(--ink-3); }
+.lg-t td { color: var(--ink-2); }
+.lg-t td small { margin-left: 4px; font-size: var(--type-label); color: var(--ink-3); }
+.gbar { display: flex; }
+.gsec { min-width: 0; }
+.gsh { display: flex; align-items: baseline; gap: var(--space-3); margin-top: var(--space-2); }
+.gsn { font-size: var(--type-small); font-weight: 500; color: var(--ink-3); }
+.ggrp { margin-top: var(--space-3); }
+.ggrp > h3 { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--space-1) var(--space-3); margin: 0; font: 600 var(--type-title)/1.25 var(--sans); letter-spacing: -.015em; color: var(--ink-1); }
+.ggrp .tiles { margin-top: var(--space-2); }
+
+/* ---- Markets: crypto and SPY's headline beside the desk, the chart, the two books, then the arbs, maker and snipe */
+.mv .hero { grid-column: span 7; align-self: stretch; }
+.mv .deskcard { grid-column: span 5; align-self: stretch; }
+.mchart { grid-column: 1 / -1; }
+.mchart .pnl { height: 320px; margin-top: var(--space-2); }
 .hero .big { margin-top: var(--space-1); font: 700 var(--type-headline)/1.05 var(--sans); letter-spacing: -.025em; white-space: nowrap; }
 .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: var(--space-4) 0 0; padding-top: var(--space-3); border-top: 1px solid var(--line-1); }
 .kpis div { padding: 0 var(--space-3) 0 0; min-width: 0; }
@@ -226,14 +291,14 @@ button.seeall { padding: 0; border: 0; background: none; cursor: pointer; color:
 .meter i { display: block; height: 100%; border-radius: inherit; background: var(--ink-3); }
 .meter.warn i { background: var(--warn); } .meter.bad i { background: var(--bad); }
 .deskfoot { margin: var(--space-2) 0 0; font-size: var(--type-label); line-height: 1.45; color: var(--ink-3); }
-/* the books in their two groups, three to a row, each card as tall as what it has to say */
-.books { grid-column: 1 / -1; display: flex; flex-direction: column; gap: var(--space-5); min-width: 0; }
-.bkgroup > h2 { margin: var(--space-2) 0 0; font: 700 22px/1.2 var(--sans); letter-spacing: -.02em; }
-.bkgroup > p { margin: 2px 0 var(--space-3); max-width: 80ch; font-size: var(--type-small); color: var(--ink-3); }
-.bkgrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); align-items: start; }
+.books { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); align-items: start; min-width: 0; }
+.side { grid-column: 1 / -1; min-width: 0; }
+.sidehead { margin-top: var(--space-2); }
+.sidehead .cardhead { justify-content: flex-start; }
+.retired { grid-column: 1 / -1; margin: 0; max-width: 96ch; font-size: var(--type-small); color: var(--ink-3); }
 
 /* ---- a book: its figure against holding, what it is doing now, what it holds ---------------------- */
-.bk { display: flex; flex-direction: column; gap: var(--space-2); scroll-margin-top: var(--space-3); }
+.bk { display: flex; flex-direction: column; gap: var(--space-2); }
 /* a header that runs out of room puts its chip on a line of its own, never past the card's edge */
 .bk header { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-1) var(--space-2); }
 .bk h3 { margin: 0; font: 600 var(--type-title)/1.25 var(--sans); letter-spacing: -.02em; }
@@ -280,26 +345,14 @@ button.seeall { padding: 0; border: 0; background: none; cursor: pointer; color:
 .rule[open] summary::after { transform: translateY(-3px) rotate(45deg); }
 .rule p { margin: 6px 0 0; line-height: 1.5; color: var(--ink-2); }
 
-/* ---- the prediction-market view (2026-09-29): its board, then its five books, drawn as the books
-   above are. The arbs and the maker hold the most, so they are the widest; the game bets, the snipe and
-   convergence, which hold little or nothing, share the last column. ---------------------------------- */
-.pm { align-items: start; }
-.pm > * { grid-column: 1 / -1; }
-/* its board: the name and the light, the link to its old page beside them, the figure under both */
-.pmhero { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-2) var(--space-4); }
-.pmhero .cardhead { justify-content: flex-start; }
-.pmhero .figline { grid-column: 1 / -1; }
+/* ---- the arbs, the maker, the snipe and convergence: drawn as the books above are. The arbs and the maker hold
+   the most, so they are the widest; the snipe and convergence, which hold little or nothing, share the last column */
 .pmold { font-size: var(--type-small); font-weight: 500; white-space: nowrap; }
 .pmbooks { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: var(--space-4); align-items: start; min-width: 0; }
 .pmbooks > [data-k="pm-arbs"] { grid-column: span 5; }
 .pmbooks > [data-k="pm-maker"] { grid-column: span 4; }
-.pmside { grid-column: span 3; display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
-/* under 1,280px wide that last column is too narrow for "Convergence" and its chip (at 1,024 the chip ran
-   22px past the card's edge): the arbs and the maker side by side, the other three under them */
-@media (max-width: 1279px) {
-  .pmbooks > [data-k="pm-arbs"], .pmbooks > [data-k="pm-maker"] { grid-column: span 6; }
-  .pmside { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; }
-}
+.pmbooks > [data-k="pm-snipe"], .pmbooks > [data-k="pm-converge"] { grid-column: span 3; }
+.pmbooks > [data-k="pm-converge"] { grid-column: 10 / span 3; }
 /* a market's name is words, not a ticker, and it wraps */
 .hold-t .nm { font-weight: 600; color: var(--ink-1); overflow-wrap: anywhere; }
 .hold-t thead th.lead { text-align: left; }
@@ -310,30 +363,29 @@ button.seeall { padding: 0; border: 0; background: none; cursor: pointer; color:
 .pmbk .bkfacts div { justify-content: flex-start; }
 .pmbk .bkfacts dd { text-align: left; min-width: 0; }
 
-/* ---- the P&L chart: every book, and what holding would have made ------------------------------ */
-.chartcard { display: flex; flex-direction: column; }
+/* ---- the P&L chart: crypto and SPY, and what holding would have made --------------------------------- */
 .pnl { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; font-family: var(--sans); color: var(--ink-2); user-select: none; -webkit-user-select: none; }
 .pnl button { font: inherit; background: none; border: 0; cursor: pointer; color: inherit; padding: 0; }
-.pnl .cb { flex: none; display: flex; align-items: center; gap: var(--space-2); }
+.pnl .cb { flex: none; display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; row-gap: var(--space-1); }
 /* the change over the range drops under the figure when a narrow screen has no room for both */
 .pnl .chead { flex: none; display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-3); margin: var(--space-1) 0 0; min-width: 0; }
 .pnl .cv { font: 700 var(--type-figure)/1.1 var(--sans); letter-spacing: -.025em; }
 .pnl .cd { margin-left: auto; font: 500 var(--type-label)/1 var(--sans); letter-spacing: 0; color: var(--ink-3); white-space: nowrap; }
 .pnl .cplot { position: relative; flex: 1 1 auto; min-height: 120px; margin: var(--space-2) 0; }
-.pnl .cb { flex-wrap: wrap; row-gap: var(--space-1); }
 .pnl .cr { margin-left: auto; min-width: 0; white-space: nowrap; font: 500 var(--type-label)/1 var(--sans); letter-spacing: 0; color: var(--ink-3); text-align: right; }
 .pnl .cr b { font-weight: 700; }
 /* the dashed line, beside the figure it draws */
 .pnl .cr .dash { display: inline-block; width: 14px; margin-right: 6px; border-top: 2px dashed var(--ink-3); vertical-align: middle; }
 .pnl.big .cv { font-size: var(--type-headline); }
 .pnl.big .cd, .pnl.big .cr { font-size: var(--type-small); }
-/* a segmented control: the chart's range, and the activity's two choices; the picked segment raised on
+/* a segmented control: the chart's range, the league, and the activity's two choices; the picked segment raised on
    its track */
 .seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--radius-pill); background: var(--fill-1); }
 .seg button { min-width: 44px; padding: 6px 12px; border: 0; border-radius: var(--radius-pill); background: none; cursor: pointer;
   font: 600 var(--type-label)/1 var(--sans); letter-spacing: 0; color: var(--ink-2); white-space: nowrap; transition: background-color .2s, box-shadow .2s, color .2s; }
 .seg button.on { background: var(--seg-on); color: var(--ink-1); box-shadow: var(--shadow-seg); }
 .seg button span { margin-left: 5px; font-weight: 500; color: var(--ink-3); }
+.gbar .seg button { padding: 7px 16px; font-size: var(--type-small); }
 
 /* the chart opened large: a sheet over the page, which blurs behind it */
 #chartbig { position: fixed; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center; padding: var(--space-6);
@@ -352,8 +404,8 @@ button.seeall { padding: 0; border: 0; background: none; cursor: pointer; color:
   @keyframes sheetin { from { opacity: 0; transform: scale(.96); } }
 }
 
-/* a sheet (2026-10-12): the desk, a book, a market or the health, over the page as the large chart is; a grouped
-   page of cards, its title in the middle, Back on the left and Done on the right, as iOS draws one */
+/* a sheet (2026-10-12): the Hexagon, a book, a market, a game, the lab or the health, over the page as the large
+   chart is; a grouped page of cards, its title in the middle, Back on the left and Done on the right, as iOS draws one */
 #sheet { position: fixed; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center; padding: var(--space-6);
   background: var(--scrim); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
 .shbox { display: flex; flex-direction: column; width: min(640px, 100%); max-height: min(820px, 100%); overflow: hidden;
@@ -382,11 +434,11 @@ body.sheeted { overflow: hidden; }
   #sheet:not([hidden]) .shbox { animation: sheetin .38s cubic-bezier(.2, .9, .3, 1); }
 }
 
-/* ---- the activity: a list of lines, each tagged with the book it is about -------------------------- */
+/* ---- the activity: a list of lines, each tagged with the part it is about -------------------------- */
 .av .act { grid-column: 2 / span 10; }
 .filters { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-3); margin: var(--space-3) 0 var(--space-1); }
 .feed { list-style: none; margin: 0; padding: 0; }
-/* a wide list: the time, the book, what happened, the money; the time column holds "12:59 PM" */
+/* a wide list: the time, the part, what happened, the money; the time column holds "12:59 PM" */
 .feed li { display: grid; grid-template-columns: 4.9em 8.5em minmax(0, 1fr) auto; grid-template-areas: "time tag what amt";
   gap: 2px var(--space-3); align-items: baseline; padding: 10px 0; border-bottom: 1px solid var(--line-1); font-size: var(--type-small); }
 .feed li:last-child { border-bottom: 0; }
@@ -410,10 +462,11 @@ footer { max-width: 96ch; font-size: var(--type-label); line-height: 1.5; letter
 /* ---- a pointer that hovers (a Mac, an iPad with a trackpad); a finger gets none of this --------- */
 @media (hover: hover) {
   a:hover { text-decoration: underline; }
-  .views a:hover, a.row:hover, .pmc:hover, .offchip:hover, .sechead:hover { text-decoration: none; }
-  .ovhero:hover, .row:is(button, a):hover, .mkrow:hover, .lt:hover { background: var(--fill-1); }
-  .views a:not([aria-current]):hover, .seg button:not(.on):hover, .offchip:hover { background: var(--fill-2); }
-  .pmc:hover { box-shadow: var(--shadow-card), 0 0 0 1px var(--line-2); }
+  .views a:hover, a.row:hover, a.part:hover, a.tli:hover { text-decoration: none; }
+  .tdtotal:hover, .row:is(button, a):hover, .aim:hover, .tli:hover, .labsum:hover { background: var(--fill-1); }
+  .part:hover { box-shadow: var(--shadow-card), 0 0 0 1px var(--line-2); }
+  .gt:hover { border-color: var(--line-2); background: var(--fill-1); }
+  .views a:not([aria-current]):hover, .seg button:not(.on):hover { background: var(--fill-2); }
   .rowsmore:hover, #chartbig .cbback:hover, .rule summary:hover, button.seeall:hover, .shback:hover, .shdone:hover { text-decoration: underline; }
 }
 /* a finger: controls at least 32px tall, text buttons 44 */
@@ -424,26 +477,30 @@ footer { max-width: 96ch; font-size: var(--type-label); line-height: 1.5; letter
 
 /* ---- narrower windows ------------------------------------------------------------------------- */
 @media (max-width: 1279px) {
-  .view, .books, .bkgrid, .pmbooks, .pmside { gap: var(--space-3); }
+  .view, .books, .pmbooks { gap: var(--space-3); }
   .av .act { grid-column: 1 / -1; }
+  .pmbooks > [data-k="pm-arbs"], .pmbooks > [data-k="pm-maker"] { grid-column: span 6; }
+  .pmbooks > [data-k="pm-snipe"], .pmbooks > [data-k="pm-converge"] { grid-column: span 6; }
 }
-/* a tablet or a small laptop: the views on a row of their own under the name, the light and the time;
-   the overview's tiles one above the other; the books in pairs */
+/* a tablet or a small laptop: the views on a row of their own under the name, the light and the time; Today's
+   total over its parts and its columns one above the other */
 @media (max-width: 1023px) {
   .bar { flex-wrap: wrap; }
   .views { order: 5; flex: 1 1 100%; margin: 0 0 10px; }
   .views a { flex: 1 1 0; }
-  .ovmain, .ovaside { grid-column: 1 / -1; }
-  .dv .hero, .dv .deskcard { grid-column: span 6; }
-  .bkgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .tdhero { grid-template-columns: minmax(0, 1fr); }
+  .tdmain, .tdaside { grid-column: 1 / -1; }
+  .mv .hero, .mv .deskcard { grid-column: span 6; }
   .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .kpis div:nth-child(3) { padding-left: 0; border-left: 0; }
   .kpis div:nth-child(n+3) { margin-top: var(--space-3); }
-  .pmside { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 767px) {
-  .dv .hero, .dv .deskcard { grid-column: 1 / -1; }
-  .pmbooks > [data-k="pm-arbs"], .pmbooks > [data-k="pm-maker"] { grid-column: 1 / -1; }
+  .mv .hero, .mv .deskcard { grid-column: 1 / -1; }
+  .books { grid-template-columns: minmax(0, 1fr); }
+  .pmbooks > [data-k] { grid-column: 1 / -1; }
+  .ghs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ghb:nth-child(3) { grid-column: 1 / -1; padding-left: 0; border-left: 0; }
 }
 /* a phone: a large title that scrolls away, as an iOS title does, and under it the desk's light and the
    time, which stay; the views in a tab bar along the foot of the screen, over the home indicator, and
@@ -467,30 +524,35 @@ footer { max-width: 96ch; font-size: var(--type-label); line-height: 1.5; letter
     background: var(--material); -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px); box-shadow: 0 -.5px 0 var(--line-2); }
   .views a { flex: 1 1 0; flex-direction: column; gap: 3px; min-width: 0; padding: 2px 0; border-radius: 0; font: 500 var(--type-label)/1.1 var(--sans); letter-spacing: 0; color: var(--ink-3); }
   .views a span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
-  /* "Stocks & crypto" is wider than a quarter of a 375px screen: the tab says Markets */
-  .views .lg { display: none; } .views .sh { display: inline; }
   .views a[aria-current] { background: none; box-shadow: none; color: var(--accent); }
   .views svg { display: block; width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
   .views a[aria-current] svg { stroke-width: 2.1; }
   .wrap { padding: var(--space-1) max(var(--space-4), env(safe-area-inset-right)) calc(76px + env(safe-area-inset-bottom)) max(var(--space-4), env(safe-area-inset-left)); gap: var(--space-3); }
-  .view, .books { gap: var(--space-3); }
+  .view { gap: var(--space-3); }
   .card { padding: var(--space-4); border-radius: 20px; }
-  .ovhero .big { font-size: 44px; }
-  .vshold .pnl { height: 240px; }
+  .tdtotal .big { font-size: 44px; }
+  /* the parts as a list, one to a line: three side by side are too narrow for a figure at 375 wide */
+  .parts { grid-template-columns: minmax(0, 1fr); gap: 0; padding: var(--space-1) var(--space-4); border-radius: 20px; background: var(--bg-1); box-shadow: var(--shadow-card); }
+  .part { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "n f" "s f"; padding: 10px 0; border-radius: 0; background: none; box-shadow: none; }
+  .part + .part { border-top: 1px solid var(--line-1); }
+  .part .pn { grid-area: n; font-size: 15px; color: var(--ink-1); }
+  .part .pn .chev { display: none; }
+  .part .pf { grid-area: f; align-self: center; font-size: var(--type-title); }
+  .part .ps { grid-area: s; }
+  .tdrule .pnl { height: 200px; }
+  .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .gt { padding: 9px 10px 10px; }
+  .gtn { font-size: 14px; }
+  /* the price leaves the name's line for the foot of the tile: beside it, "Northwestern" broke in two at 375 wide */
+  .gtp { display: none; }
+  .gtsp { display: inline; font-weight: 600; color: var(--ink-2); }
   .sect { font-size: 20px; }
-  /* a market on two lines: its name and the difference, then how much is held, since start and holding */
-  .mkhead { display: none; }
-  .mkrow { grid-template-columns: minmax(0, 1fr) auto auto; grid-template-areas: "n n d" "h s b"; gap: 4px var(--space-3); }
-  .mkn { grid-area: n; } .mkd { grid-area: d; } .mkh { grid-area: h; } .mks { grid-area: s; } .mkb { grid-area: b; }
-  .mkh, .mks, .mkb { font-size: var(--type-label); font-weight: 400; }
-  .mks::before, .mkb::before { content: attr(data-l) ' '; color: var(--ink-3); }
-  .pmcards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .bkgrid, .pmbooks { grid-template-columns: minmax(0, 1fr); }
-  .pmbooks > [data-k], .pmside { grid-column: auto; }
-  .pmside { display: flex; }
-  .pmhero { grid-template-columns: minmax(0, 1fr); }
-  .pmold { order: 3; }
-  .bkgroup > h2 { font-size: 20px; }
+  .ghr { font-size: 36px; }
+  .ghb + .ghb { padding-left: var(--space-3); }
+  .lg-t th, .lg-t td { padding-left: var(--space-2); }
+  .gbar .seg { display: flex; width: 100%; }
+  .gbar .seg button { flex: 1 1 auto; min-width: 0; padding-left: 6px; padding-right: 6px; }
+  .mchart .pnl { height: 240px; }
   .feed li { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "tag time amt" "what what what"; }
   .feed time { padding-left: var(--space-1); }
   .filters .seg { display: flex; width: 100%; }
@@ -513,4 +575,8 @@ footer { max-width: 96ch; font-size: var(--type-label); line-height: 1.5; letter
     #chartbig:not([hidden]) .cbbox, #sheet:not([hidden]) .shbox { animation: sheetup .42s cubic-bezier(.2, .9, .3, 1); }
     @keyframes sheetup { from { transform: translateY(100%); } }
   }
+}
+/* the narrowest phones (320 wide): one tile to a row */
+@media (max-width: 359px) {
+  .tiles { grid-template-columns: minmax(0, 1fr); }
 }

@@ -120,20 +120,24 @@ tools/crypto-note.js the crypto note (2026-10-17): the crypto rule against holdi
                   a dozen lines, from the real engine on a copy of the box's state (--box); paper, not advice
 src/desk/broker.js  paper fills: crypto walks Coinbase's book + 0.40%, SPY at the touch, options at the touch + $0.03
 src/desk/clock.js   NYSE sessions, holidays and 1 PM closes through 2027 (TESS warns when the list runs out)
-public/desk.*     the floor at /: since 2026-10-02 four views, each a link (#overview, #desk, #pm, #activity; #desk/crypto
-                  for one book's card): the overview (since 2026-10-12 four questions: up or down, against just holding
-                  with the chart of crypto + SPY vs holding, the last trade and next checks, health; then the markets held,
-                  the PM desk's books and the off books; everything with more behind it opens a sheet (#sheet: desk,
-                  book:<key>, mkt:<sym>, health) or its card), Stocks & crypto (headline vs holding, the desk, one card per book with
-                  the markets it trades, in two groups; switched-off books last, in their own since 10-16), Predictions (since 2026-09-29 the prediction-market desk's board and
-                  five books (arbs, maker, snipe, convergence, the game bets), fed by src/pmfloor.js; Evan: "Merge the desk to the new screen. It's data, not its look")
-                  and Activity (both desks' lines, each tagged with its book); a tab bar on a phone; tools/floor-test.js holds
+public/desk.*     the floor at /: since 2026-10-17 (the fifth version, Evan: "u do everything surprise me") four views that
+                  follow what is happening, not the code, each a link (#today, #games, #markets, #activity; #markets/crypto,
+                  #markets/pm-arbs, #markets/side for one card; the old #overview, #desk, #pm, #pm/bets links still land):
+                  Today (the date; all the paper in play, both desks together, in three parts that add up: Crypto & SPY,
+                  Games, Arbs & maker; today's games as scoreboard tiles; the crypto rule vs holding with the chart and a bar
+                  per market with a mark where the rule wants it; Next up, one timeline across all of it; the lab, its TESTS
+                  list, tapes (src/labstatus.js) and re-test dates; the arbs/maker/snipe; health), Games (the record vs what the
+                  prices expected, by league; a tile per game: in progress, up next by start, final by the day played; from
+                  src/pmfloor.js gameBoard), Markets (crypto + SPY in full, then arbs, maker, snipe, convergence; the retired
+                  books one line) and Activity (tagged by part). Every tile, bar and line that leads somewhere opens a sheet
+                  (#sheet: desk = the whole Hexagon, book:<key>, mkt:<sym>, game:<id>, lab, health); a tab bar on a phone; tools/floor-test.js holds
                   the views to the page. Laid out for reading, 12px and up; no pixel room or bots drawn since 2026-09-25 (Evan's
                   call). desk.css is its own sheet on public/tokens.css, colours named by job; tools/tokens-test.js holds
                   every text colour to 4.5:1. desk.js patches boards in place (morph) so focus survives the 2s stream.
                   Since 2026-09-29 drawn as Apple draws its apps (Evan: "making the website iOS and macOS and Apple beautiful"):
                   the system font (no web fonts on the floor; the old /pm and lookout pages still load Google Fonts), Apple's colours as light-dark() pairs, light or dark as the device is set,
-                  a translucent bar, a phone's large title, the large chart as a sheet; addable to an iPhone's Home Screen
+                  a translucent bar, a phone's large title, the large chart as a sheet; the retired books' four colours went to the
+                  games, the arbs and the maker, and the lab (--part-*) on 2026-10-17; addable to an iPhone's Home Screen
                   or a Mac's Dock (manifest.webmanifest; tools/icons.js draws the icons; server.js OPEN_FILES serves those
                   five files, and only those, before the login). Checked in the iOS Simulator (Xcode 27, iPhone 18 Pro Max)
 tools/crypto-lab.js the evidence for the crypto book (Coinbase daily candles → data/crypto/bars/; XRP from its 2023-07-13

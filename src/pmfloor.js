@@ -242,6 +242,11 @@ function pmFloor(engine, cfg, now = Date.now()) {
       'it should lose about the fee over many games. Evan, on the Wild Card\'s second night: "every game should be bet".',
   };
 
+  // The game board (2026-10-17, the floor's Games view): every game the book bets, as a scoreboard. The bets it
+  // holds are its rows above; here are the games it has not bet yet (paired, in BET_SERIES, from four hours ago to
+  // thirty hours on), the games it has settled lately, and its record against what the prices said it would win.
+  const games = gameBoard(engine, cfg, betOpen, betShut, now);
+
   // The ledger's own fills, newest first: the taker's legs as they opened and closed, and the maker's.
   const fills = [];
   for (const p of [...s.positions, ...closed.slice(-80)]) {
@@ -288,9 +293,61 @@ function pmFloor(engine, cfg, now = Date.now()) {
     beat: engine.beat ? { taker: engine.beat.taker, maker: engine.beat.maker } : null, every: { taker: cfg.priceEvery, maker: cfg.makerEverySec },
     halt: engine.halt || null,
     books: [arbs, maker, snipe, converge, bets],
+    games,
     fills: fills.slice(0, 40),
     log,
   };
 }
 
-module.exports = { pmFloor, pmLine, kindOf, gameOf };
+// ------------------------------------------------------------------ the game board
+const ET_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' });
+const etDay = (t) => ET_DAY.format(new Date(t));
+const r3 = (x) => Math.round(x * 1000) / 1000;
+const leagueOf = (label) => (String(label || '').match(/^(\S+)\s/) || [])[1] || '';
+// A record over settled bets: how many, how many won, how many the prices said would win (each bet's price is the
+// market's chance for its team, so their sum is the wins a fair price expects), the money staked and made.
+function record(cs) {
+  return { bets: cs.length, won: cs.filter((c) => c.pnl > 0).length, expected: r2(cs.reduce((a, c) => a + (Number(c.entry) || 0), 0)),
+    staked: sum(cs, (c) => c.cost), pnl: sum(cs, (c) => c.pnl) };
+}
+function gameBoard(engine, cfg, betOpen, betShut, now) {
+  const series = new Set(cfg.betSeries || []), maxPx = cfg.betMaxPx || 0.9;
+  // a game the book has bet, open or settled, by its pair: not on the list of games still to bet
+  const bet = new Set([...betOpen, ...betShut].map((p) => p.pairId).filter(Boolean));
+  const seen = new Set(), upcoming = [];
+  for (const p of engine.pairs || []) {
+    if (p.kind !== 'game' || !series.has(p.series) || !Number.isFinite(p.startsAt) || bet.has(p.id)) continue;
+    if (p.startsAt < now - 4 * 3600e3 || p.startsAt > now + 30 * 3600e3) continue;
+    const m = String(p.label || '').match(/^(\S+)\s+(.+?) v (.+?) · (.+)$/);
+    if (!m) continue;
+    const k = `${m[2]}|${m[3]}|${p.startsAt}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    // the favourite as decide.betSignal reads it: the two venues' mids, averaged
+    const q = p.q, mid = q && Number.isFinite(q.pmMid) && Number.isFinite(q.ksMid) ? (q.pmMid + q.ksMid) / 2 : null;
+    const pick = mid == null ? null : betPick(p.label, mid >= 0.5 ? 'yes' : 'no');
+    const px = mid == null ? null : r3(Math.max(mid, 1 - mid));
+    upcoming.push({ id: p.id, league: m[1], a: m[2], b: m[3], startsAt: p.startsAt, pick, px, over: px != null && px > maxPx });
+  }
+  upcoming.sort((a, b) => a.startsAt - b.startsAt || a.a.localeCompare(b.a));
+  // settled in the last day and a half, newest first: the board's finals
+  const finals = betShut.filter((c) => Number.isFinite(c.exitAt) && now - c.exitAt < 36 * 3600e3).sort((a, b) => b.exitAt - a.exitAt).slice(0, 150).map((c) => {
+    const g = gameOf(c);
+    return { id: c.id, league: g ? g.league : leagueOf(c.label), pick: g ? g.pick : unellipsis(c.label), foe: g ? g.foe : '', venue: VENUE[c.venue] || c.venue,
+      qty: c.qty, entry: c.entry, cost: r2(c.cost), pnl: r2(c.pnl), at: c.exitAt, openedAt: c.openedAt ?? null };
+  });
+  const leagues = {};
+  for (const c of betShut) (leagues[leagueOf(c.label)] = leagues[leagueOf(c.label)] || []).push(c);
+  // today's record is the games played today: a game is dated by its settlement less four hours (Kalshi settles
+  // minutes after the final, and a game ending after midnight belongs to the evening it started)
+  const today = etDay(now);
+  return {
+    upcoming: upcoming.slice(0, 160), finals,
+    record: { ...record(betShut), today: record(betShut.filter((c) => Number.isFinite(c.exitAt) && etDay(c.exitAt - 4 * 3600e3) === today)),
+      leagues: Object.fromEntries(Object.entries(leagues).map(([k, cs]) => [k, record(cs)])) },
+    on: !!cfg.bets, aheadH: cfg.betAheadHours ?? 1, maxPx, stake: cfg.betUsd,
+    leaguesOn: [...series].map((x) => ({ KXMLBGAME: 'MLB', KXNFLGAME: 'NFL', KXNBAGAME: 'NBA', KXNCAAFGAME: 'NCAAF' }[x] || x)),
+  };
+}
+
+module.exports = { pmFloor, pmLine, kindOf, gameOf, gameBoard };
