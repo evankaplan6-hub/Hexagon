@@ -672,13 +672,66 @@ its volume line and went unbet (the first college Saturday, 2026-10-10, bet 52 g
 is busy enough on Polymarket that every game made the list). Since then every game of each league in
 `BET_SERIES` is read off Polymarket's league tag as well ("Every 15 seconds" above, `PM_GAME_TAGS`).
 That listing pairs a whole week of games at once, about a hundred on a football week against a $5k
-paper book, so a game is bet within `BET_AHEAD_HOURS` (24) of kickoff and not before: bet on listing,
+paper book, so a game is bet within `BET_AHEAD_HOURS` of kickoff and not before: bet on listing,
 next Sunday's games would take the cash this Sunday's need, at prices a week of injury news can move.
+That window was 24 hours until 2026-10-16 and is one hour since: "Picking the winner", below.
 
 It claims no edge. Bought at the market's own price, a book like this should lose about the fee over
 many games, and that is the yardstick to read it against. Paper only: `decide.betSignal` makes nothing
 in live mode, and KETT refuses one there too. `BETS=1` in fly.toml turns it on; it has its own card on
 the floor ("Every game"). Code: `decide.betSignal`, BRAM finds, KETT buys.
+
+## Picking the winner (2026-10-16)
+
+Evan, after the book's first college Saturdays lost: "u should be trying to pick the winner not just a
+pick". So `tools/pick-fetch.js` downloaded every settled Kalshi game in `BET_SERIES` (8,068 with a
+quoted book before the start: 4,661 MLB, 1,403 NBA, 1,646 college football, 358 NFL, exhibitions left
+out) with its hourly prices, and `tools/pick-lab.js` bet $100 on each game by a dozen rules at the
+ask an hour before the start, net of Kalshi's fee, choosing on the games before 2026-03-01 and reading the
+3,688 after once. Holdout, dollars a $100 bet, ±2 standard errors:
+
+| picker | bets | won | mean |
+|---|---|---|---|
+| the favourite (the book) | 3,688 | 63% | -1.89 ±2.60 |
+| the underdog | 3,688 | 37% | -6.86 ±5.27 |
+| the favourite at 90c+ only | 271 | 96% | +0.82 ±2.43 |
+| the side the line moved to in the last day (3c+) | 861 | 57% | -2.33 ±6.59 |
+| the side it moved away from | 861 | 43% | -9.60 ±8.22 |
+| an Elo rating says 5 points likelier than the price | 2,076 | 33% | -7.18 ±8.26 |
+| the Elo favourite | 3,688 | 58% | -2.28 ±3.26 |
+
+No rule picks winners better than the price does. The market is well calibrated in every league (a
+side priced 60-70c won 61.6%, 80-90c won 84.0%), the favourite loses about the fee, and the underdog
+loses more (the longshot side of a game is overpriced, most of all in college football: -$10 to -$24 a
+bet). Elo is built from the same results only, with no scores or rosters; it is the one rating the desk
+can make from its own data, and it is worse than the price in every league but the NFL's 79 holdout
+games, which are too few to read. No outside model (power ratings, sportsbook lines) was tried: none is
+free to automate.
+
+One thing does pick better: waiting. The same favourite bought an hour before the start against a day
+before, paired game by game:
+
+| league | games | an hour out, less a day out |
+|---|---|---|
+| MLB | 2,493 | +$3.18 ±2.29 |
+| NBA | 1,391 | -$0.67 ±2.38 |
+| college football | 1,632 | +$0.53 ±1.23 |
+| NFL | 358 | -$0.23 ±2.90 |
+| all | 5,874 | +$1.32 ±1.19 |
+
+Baseball's lineups and starting pitchers come out in that last day; in the 224 MLB games where the
+favourite changed between the two, the late favourite won 136. So since 2026-10-16 `BET_AHEAD_HOURS` is
+1, not 24: each game is bet in the hour before it starts, on the side the latest price favours. It is
+still the market's favourite, still no edge over the price (the book should still lose about the fee),
+and the gain is a few dollars a bet in baseball and nothing anywhere else. A game the desk cannot price
+in that hour (a restart, a pairing that comes late) is bet once it can be, during the game, as before.
+The book's college football loss to date (56 bets, favourites bought at 71c on average that won 63%) is
+inside the luck of 56 games: over 725 holdout college games the favourite lost $2.45 a bet.
+
+```bash
+node tools/pick-fetch.js     # → data/lab/picks/games.jsonl, about 45 minutes the first time (Kalshi rate-limits); resumes
+node tools/pick-lab.js       # the tables above, per league; --split, --series
+```
 
 ## Anytime touchdown tape (2026-10-11)
 

@@ -432,8 +432,12 @@ module.exports = {
   // A game is bet within this many hours of kickoff, not before. Since 2026-10-11 the league listings
   // (PM_GAME_TAGS) pair a whole week's games the day they are listed, ~100 on a football week against
   // a $5k paper book: bet on listing, next Sunday's games would take the cash this Sunday's need, at
-  // prices a week of injury news can move. The top-N listing used to bet them about a day ahead anyway.
-  betAheadHours: num('BET_AHEAD_HOURS', 24),
+  // prices a week of injury news can move. 24 until 2026-10-16; 1 since (Evan: "u should be trying to
+  // pick the winner"): on 8,068 settled Kalshi games (tools/pick-lab.js) the favourite an hour before
+  // the start beat the favourite a day before by $3.18 a $100 bet in MLB (±2.29, 2,493 games; lineups and
+  // starting pitchers come out in between: where the favourite changed, the late one won 136 of 224) and
+  // by $1.32 (±1.19) over all four leagues. No other picker beat the favourite.
+  betAheadHours: num('BET_AHEAD_HOURS', 1),
   exitGap: num('EXIT_GAP', 0.01),
   stopLoss: num('STOP_LOSS', 0.06),
   // Paper positions also use a percentage stop so a cheap contract cannot lose nearly all of
