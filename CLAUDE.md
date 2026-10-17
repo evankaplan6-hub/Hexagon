@@ -109,6 +109,10 @@ src/desk/books.js   the rules, pure: volatility targeting (crypto 40%/30 days, S
 src/desk/feeds.js   Coinbase (live) and Cboe (15 min late) parsers + fetches; the engine reads only Coinbase's tickers,
                   books and daily candles and Cboe's SPY quote and daily bars since 2026-10-17 (the minute bars, VWAP,
                   ATR14 and the option chain stay here for tools/spy-lab.js)
+tools/odds-tape.js  the odds tape (2026-10-17, The Odds API free tier, Evan's account; ODDS_API_KEY a Fly secret, never logged):
+                  Pinnacle + US books' NFL moneylines beside Kalshi's books in the 2h before each kickoff, every 8 min on the
+                  box (src/oddssched.js, ODDS_TAPE=1) → /data/odds, pulled to data/fly/archive/odds/; --grade: does Kalshi
+                  trail the sharp book by more than its fee? log only; ~90 of 500 credits a week; README "The odds tape"
 tools/crypto-note.js the crypto note (2026-10-17): the crypto rule against holding, each coin's aim and the next check, in
                   a dozen lines, from the real engine on a copy of the box's state (--box); paper, not advice
 src/desk/broker.js  paper fills: crypto walks Coinbase's book + 0.40%, SPY at the touch, options at the touch + $0.03

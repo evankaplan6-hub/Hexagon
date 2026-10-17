@@ -130,6 +130,24 @@ sharp book's after news by more than its fee (log only, no bet, as the touchdown
 Cboe's terms (below: the desk now reads only SPY's quote and daily bars from it), that account, and whether the note
 ever informs his own trades.
 
+### The odds tape (2026-10-17)
+
+The one edge hunt the plan keeps (above): does Kalshi's price for an NFL game trail the sharp sportsbook's after news?
+Evan opened The Odds API's free tier (500 credits a month), and `tools/odds-tape.js --record` runs on the box every 8
+minutes (`src/oddssched.js`, `ODDS_TAPE=1`, the `ODDS_API_KEY` Fly secret). In the two hours before each NFL kickoff it
+makes one read of every game's moneyline from Pinnacle, DraftKings, FanDuel, BetMGM and Betfair's exchange (1 credit:
+five books named cost one region), each with the time that book last moved, and in the same run reads Kalshi's NFL game
+books; one line a read, in `data/odds/odds-YYYY-MM-DD.jsonl` (the pull copies each day to `data/fly/archive/odds/`).
+Outside those windows it reads only the free list of games. That is about 15 credits a kickoff slot, 75-90 a week, and
+below 20 left it stops until the 1st. Log only: no bet, nothing in the desk reads it.
+
+`node tools/odds-tape.js --grade` takes Pinnacle's chance with its margin taken out against Kalshi's mid at every read,
+reports how far apart they run, and grades the buy a lag would call for: Kalshi's ask under Pinnacle's chance by more
+than Kalshi's fee, bought once per game and side at the first read that showed it, held to the final. If that loses
+after the fee, Kalshi tracks the sharp book closely enough and the hunt is over; if it makes money over a season's
+games, it is a rule worth testing the README's way (below). `--check` (daily check step 10) says whether the last run
+worked, how many credits are left, and names any NFL game that kicked off with no read.
+
 ### The crypto note (2026-10-17)
 
 `node tools/crypto-note.js --box` prints, in a dozen lines: the crypto book against simply holding the same coins

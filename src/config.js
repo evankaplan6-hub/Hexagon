@@ -35,6 +35,10 @@ module.exports = {
   // every 15 minutes into DATA_DIR/td. The Mac's launchd job missed two Thursday games asleep on battery;
   // the box never sleeps. Off by default -- on the Mac the launchd job is the recorder.
   tdTape: env('TD_TAPE', '0') === '1',
+  // The odds tape (src/oddssched.js, tools/odds-tape.js, 2026-10-17): Pinnacle's and the US books' NFL lines beside
+  // Kalshi's, in the two hours before each kickoff, to measure whether Kalshi trails the sharp book. Log only.
+  // Needs ODDS_API_KEY (The Odds API's free tier, Evan's account): a Fly secret on the box, .env on the Mac.
+  oddsTape: env('ODDS_TAPE', '0') === '1',
   // ChartExchange (src/venues/chartexchange.js): read-only market data behind a paid key --
   // quotes, short volume, dark-pool prints, max pain, and the historical option bars
   // tools/option-history.js archives. The trial key has answered HTTP 401 Expired since the evening

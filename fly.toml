@@ -140,6 +140,12 @@ primary_region = "iad"          # Ashburn, Virginia — close to the exchange, a
   # Mac sleeps on battery, and two Thursday night games went unrecorded. Research only, no bet: about
   # 200 KB a Sunday. The hourly pull copies each finished day to data/fly/archive/td/.
   TD_TAPE = "1"
+  # The odds tape (tools/odds-tape.js --record, src/oddssched.js, since 2026-10-17): Pinnacle's and the US books'
+  # NFL lines beside Kalshi's, in the two hours before each kickoff, every 8 minutes, to measure whether Kalshi's
+  # price trails the sharp book's after news. Log only, no bet. Needs the ODDS_API_KEY secret (The Odds API's
+  # free tier, 500 credits a month; about 90 a week used): `fly secrets set ODDS_API_KEY=...`, which Evan runs.
+  # The hourly pull copies each finished day to data/fly/archive/odds/.
+  ODDS_TAPE = "1"
   # The stocks, crypto and options desk (src/desk/), the main work since 2026-09-25, runs in this same
   # process on src/config.js's own defaults: crypto, SPY and SPY same-day options, paper only, no
   # broker behind it. Its ledger and journal are /data/desk/, and its floor is the page at /; the
