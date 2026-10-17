@@ -1,7 +1,8 @@
 #!/bin/bash
-# The daily trust routine: nine questions about the Fly box and the Mac's tapes, one screen, nothing changed on the box.
+# The daily trust routine: eleven questions about the Fly box and the Mac's tapes, one screen, nothing changed on the box.
 # Steps 1-7 are about the prediction-market desk and the box; step 8 is the stocks, crypto and options desk;
-# step 9 is the anytime-touchdown tape, recorded on the box (research, no book).
+# steps 9 and 10 are the touchdown and odds tapes, recorded on the box (research, no book); step 11 is whether the
+# game bets book bet every game it should have.
 #
 #   bash ops/daily-check.sh
 #
@@ -43,6 +44,10 @@
 #                                         game that kicked off in the last 48h with no tape line in the 2h
 #                                         before kickoff, by name (added 2026-10-15: SEA at DEN was missed
 #                                         with the Mac asleep, and nothing said so)
+#  11. did the bets book bet every game?  tools/bet-coverage.js (since 2026-10-17), Kalshi's public listing against the
+#                                         journals step 2 brought down: each game Kalshi settled yesterday (on a Monday,
+#                                         Friday to Sunday) bet, over the 90c cap, or MISSED, named. Added after Kansas v
+#                                         Kansas State and then 31 more of Saturday's college games went unbet unnoticed
 #
 # Nothing on the box is changed. What it writes on the Mac: step 2 copies the box's state.json and
 # the journals the archive lacks into data/fly/box-now, replacing the copies from the previous run
@@ -140,6 +145,11 @@ say "10. the odds tape on the box: the last run, the credits left, and every NFL
 # /events listing) and the day files. Since 2026-10-17 (src/oddssched.js, ODDS_TAPE=1, the ODDS_API_KEY secret).
 odds="$("$FLY" ssh console -q -a "$APP" -C "node /app/tools/odds-tape.js --check --dir /data/odds" 2>&1)" || bad=$((bad + 1))
 printf '%s\n' "$odds" | grep -v '^Connecting to'
+
+say "11. the game bets: every game Kalshi settled yesterday (Friday to Sunday on a Monday), bet, over the cap, or missed"
+# Read-only: Kalshi's public API and the journals step 2 copied (data/fly/archive + data/fly/box-now). A miss is a game
+# with its favourite under BET_MAX_PX and no bet: Polymarket did not list it, the matcher did not pair it, or a veto.
+node tools/bet-coverage.js --days "$([ "$(date +%u)" = 1 ] && echo 3 || echo 1)" || bad=$((bad + 1))
 
 printf '\n%s\n' "$([ "$bad" = 0 ] && echo 'every step answered, nothing flagged' || echo "$bad step(s) flagged a problem: read up")"
 exit "$bad"
