@@ -681,6 +681,22 @@ group('matchPairs: Kansas v Kansas State pairs, either order (2026-10-17)');
   }
 }
 
+group('matchPairs: a college game Kalshi dated the day before still pairs (2026-10-17)');
+{
+  // Kalshi listed Saturday 10-17's games on 10-03 dated Friday 10-16 ("originally scheduled for Oct 16"); Polymarket
+  // dates Florida v Texas Saturday at noon. 31 games went unpaired and unbet.
+  const kss = [['FLA', 'Florida'], ['TEX', 'Texas']].map(([l, n]) => ks({ ticker: `KXNCAAFGAME-26OCT16FLATEX-${l}`, eventTicker: 'KXNCAAFGAME-26OCT16FLATEX', subTitle: n, title: `${n} wins` }));
+  const pmGame = pm({ id: 'flatex', slug: 'cfb-fl-tx-2026-10-17', question: 'Florida vs. Texas', sport: 'moneyline', outcomes: ['Florida', 'Texas'], gameStart: '2026-10-17 16:00:00+00' });
+  const r = matchPairs([pmGame], kss);
+  ok('Florida v Texas pairs to Kalshi\'s Friday-dated event', r.pairs.length === 1 && /26OCT16FLATEX-FLA$/.test(r.pairs[0].ks.ticker), r.pairs.map((p) => p.ks.ticker));
+  // only a day back: two days is another week's game, and the pro leagues stay on their own date
+  const two = matchPairs([pm({ ...pmGame, gameStart: '2026-10-18 16:00:00+00' })], kss);
+  ok('two days apart does not pair', two.pairs.length === 0, two.pairs.map((p) => p.ks.ticker));
+  const nfl = matchPairs([pm({ id: 'n', slug: 'nfl-sea-den-2026-10-18', question: 'Seahawks vs. Broncos', sport: 'moneyline', outcomes: ['Seattle Seahawks', 'Denver Broncos'], gameStart: '2026-10-18 17:00:00+00' })],
+    [['SEA', 'Seattle'], ['DEN', 'Denver']].map(([l, n]) => ks({ ticker: `KXNFLGAME-26OCT17SEADEN-${l}`, eventTicker: 'KXNFLGAME-26OCT17SEADEN', subTitle: n, title: `${n} wins` })));
+  ok('an NFL game a day off does not pair', nfl.pairs.length === 0, nfl.pairs.map((p) => p.ks.ticker));
+}
+
 group('matchPairs: a two-outcome moneyline never pairs with a three-way event (audit 2026-10-15)');
 {
   // Kalshi's soccer events have a Tie leg. The game path dropped it and paired a two-outcome Polymarket

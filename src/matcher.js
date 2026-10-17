@@ -337,7 +337,11 @@ function matchPairs(pmList, ksList) {
       // Kalshi dates a tennis match by the day it was scheduled, and the Asian swing plays overnight:
       // KXWTAMATCH-26SEP24BONRUS against a Polymarket start of 2026-09-25 04:30Z, which is 09-25 in
       // New York. So tennis also looks one ET day back; the name, figure and price guards still apply.
-      const days = sport === 'tennis' && d ? [d, prevDay(d)] : [d];
+      // College football too: Kalshi listed a week of games on 2026-10-03 before their days were set, dated the
+      // Friday ("KXNCAAFGAME-26OCT16FLATEX", "the Florida vs Texas college football game originally scheduled for
+      // Oct 16") and never re-dated, so 31 of Saturday 10-17's games never paired and went unbet. A college team
+      // plays once a week, so the day before cannot be another game of the same two teams; the name guards hold.
+      const days = (sport === 'tennis' || sport === 'college') && d ? [d, prevDay(d)] : [d];
       const found = [];
       for (const ms of days.flatMap((x) => byDate.get(x) || [])) {
         const ser = series(ms[0].ticker);
