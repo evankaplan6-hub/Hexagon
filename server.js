@@ -125,7 +125,6 @@ function authed(req, who) {
 // the first thing an iPhone shows when the floor is opened from its Home Screen: the app's icon, and the
 // two fields as an iOS grouped list. Their type is 17px: under 16, Safari on an iPhone zooms the page to
 // a field as it is tapped.
-const attr = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const LOGIN_PAGE = (err) => `<!doctype html><html lang="en"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
@@ -165,7 +164,7 @@ const LOGIN_PAGE = (err) => `<!doctype html><html lang="en"><meta charset="utf-8
   <img class="icon" src="/apple-touch-icon.png" alt="">
   <h1>The Hexagon</h1><p class="sub">Paper trading desk</p>
   <div class="fields">
-    <label><span>User</span><input name="u" value="${attr(cfg.dashUser)}" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
+    <label><span>User</span><input name="u" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
     <label><span>Password</span><input name="p" type="password" autofocus autocomplete="current-password" placeholder="Required"></label>
   </div>
   <button type="submit">Sign In</button>
@@ -185,15 +184,22 @@ function readBody(req) {
 // arrives BEFORE the login check. One malformed request from anywhere on the internet was enough
 // to stop the desk and lose whatever the ledger had not saved. A throw is now a 500 (or a 400 for
 // the URL) with the stack in the log, and a rejected branch is caught the same way.
+const CSP = ["default-src 'self'", "script-src 'self'", "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com", "font-src 'self' https://fonts.gstatic.com",
+  "img-src 'self' data:", "connect-src 'self'", "object-src 'none'", "base-uri 'none'", "form-action 'self'", "frame-ancestors 'self'"].join('; ');
 function handle(req, res) {
   let url;
   try { url = new URL(req.url, 'http://localhost'); }
   catch { res.writeHead(400); return res.end('bad request'); }
   const p = url.pathname;
   // Nothing here is meant to be framed (the /pm page has paper Sell buttons), and no file is a script
-  // unless it says so.
-  res.setHeader('content-security-policy', "frame-ancestors 'self'");
+  // unless it says so. Since 2026-10-16 the pages may load script, data and images only from here (no page has
+  // an inline script or handler; style attributes and the login page's <style> need 'unsafe-inline', and /pm
+  // and the lookout still load Google Fonts), and a browser that has seen the site keeps to https for a year:
+  // the one-click ?k= link typed as http:// would otherwise cross the internet in the clear once.
+  res.setHeader('content-security-policy', CSP);
   res.setHeader('x-content-type-options', 'nosniff');
+  res.setHeader('referrer-policy', 'same-origin');
+  if ((req.headers['x-forwarded-proto'] || '').includes('https')) res.setHeader('strict-transport-security', 'max-age=31536000');
   const who = session.clientKey(req);
   const tooMany = () => {
     res.writeHead(429, { 'content-type': 'text/plain; charset=utf-8', 'retry-after': String(guard.retryAfterSec(who)) });
@@ -201,6 +207,8 @@ function handle(req, res) {
   };
   const secure = (req.headers['x-forwarded-proto'] || '').includes('https');
   if (cfg.dashPass && p === '/logout') {
+    // a link on another site cannot sign the desk out (the browser says where a request came from)
+    if (req.headers['sec-fetch-site'] === 'cross-site') { res.writeHead(302, { location: '/' }); return res.end(); }
     res.writeHead(302, { location: '/login', 'set-cookie': session.setCookie(COOKIE, '', secure) });
     return res.end();
   }
@@ -208,6 +216,9 @@ function handle(req, res) {
     if (req.method === 'POST') {
       if (guard.blocked(who)) return tooMany();
       return readBody(req).then((body) => {
+        // again, now the body is here: requests opened together all pass the first check before any is counted,
+        // and each would otherwise have its password tried (2026-10-16 audit)
+        if (guard.blocked(who)) return tooMany();
         const f = new URLSearchParams(body);
         if (timingEq(f.get('u') || '', cfg.dashUser) && timingEq(f.get('p') || '', cfg.dashPass)) {
           guard.ok(who);

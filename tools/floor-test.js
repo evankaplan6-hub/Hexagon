@@ -33,7 +33,7 @@ ok('the views follow the back button', /addEventListener\('hashchange', route\)/
 ok('a malformed hash cannot stop the floor: decodeURIComponent is only ever called inside a try', /try \{ raw = decodeURIComponent\(raw\); \} catch/.test(js) && [...js.matchAll(/decodeURIComponent\(/g)].length === 1);
 // The Home Screen app: iOS suspends the page and drops the stream's socket without an `error`, and there is no
 // reload button, so the page watches its own stream (a frame is due every two seconds) and opens a new one.
-ok('the page reopens a stream that has gone quiet, on a timer and the moment it is shown again', /const quiet = \(\) => Date\.now\(\) - Math\.max\(lastFrameAt, lastTry\) > STALE_MS/.test(js) && /setInterval\(\(\) => \{ if \(quiet\(\) && !retry\) connect\(\);/.test(js) && /document\.addEventListener\('visibilitychange', wake\)/.test(js) && /window\.addEventListener\('pageshow', wake\)/.test(js));
+ok('the page reopens a stream that has gone quiet, on a timer and the moment it is shown again', /const quiet = \(\) => Date\.now\(\) - Math\.max\(lastFrameAt, lastTry\) > STALE_MS/.test(js) && /setInterval\(\(\) => \{ if \(quiet\(\) && !retry && !paused\) connect\(\);/.test(js) && /document\.addEventListener\('visibilitychange', wake\)/.test(js) && /window\.addEventListener\('pageshow', wake\)/.test(js));
 ok('one stream at a time: a new one closes the old, and a closed one cannot schedule another', /if \(es\) es\.close\(\)/.test(js) && /if \(es !== mine\) return/.test(js) && /clearTimeout\(retry\)/.test(js));
 
 // ---- the six books, each in one group
@@ -102,6 +102,16 @@ ok('the switched-off books are a group of their own, last', /groups\.push\(\['Sw
 // (the phone's tab bar has 90px a tab at 375 wide: "Stocks & crypto" ran 2px over, so there it is "Desk", the view's own #desk)
 ok('the desk has one name: the tab, the headline, and "Desk" on a phone\'s tab bar, not "Markets"', /<span class="lg">Stocks &amp; crypto<\/span><span class="sh">Desk<\/span>/.test(html) && /<span class="label">Stocks &amp; crypto desk<\/span>/.test(js) && !/Stocks, crypto and options/.test(html + js));
 ok('the game bets show eight, the rest on asking, each with when its game is', /body = rowsTable\(k, HEAD\('Worth', 'P&amp;L'\), b\.rows, legRow, 8\)/.test(js) && /r\.startsAt > S\.now \? 'starts' : 'started'/.test(js));
+// ---- the audit (2026-10-16): a hidden page rests, a failed stream backs off, stale figures say so everywhere, the
+// page behind a dialog is inert, and the Predictions tab works after its desk drops out of a frame
+ok('a page hidden for a minute closes its stream, and opens it when shown', /paused = true; clearTimeout\(retry\); retry = null; if \(es\) \{ es\.close\(\); es = null; \}/.test(js) && /\} else if \(paused\) \{ paused = false; resumedAt = Date\.now\(\); fails = 0; connect\(\); \}/.test(js) && /\}, 60000\);/.test(js));
+ok('...and is not "No signal" while it rests', /const stale = \(\) => !paused && lastFrameAt && Date\.now\(\) - Math\.max\(lastFrameAt, resumedAt\) > STALE_MS/.test(js));
+ok('a failed stream waits 3s, then twice as long each time, at most a minute', /retry = setTimeout\(connect, Math\.min\(60000, 3000 \* 2 \*\* fails\+\+\)\)/.test(js));
+ok('when the stream goes quiet everything is drawn again, the open sheet with it, and the sheet says so', /if \(!!stale\(\) !== shownGone\) render\(\);/.test(js) && /class="shstale"/.test(js) && /body\.offline #sheetbody/.test(css));
+ok('the page behind a sheet or the large chart is inert', /el\.inert = on/.test(js) && (js.match(/behind\(\);/g) || []).length >= 4);
+ok('a frame without the prediction desk moves the address off #pm too', /history\.replaceState\(null, '', '#overview'\)/.test(js));
+ok('the small links are at least 24px tall', /\.seeall, \.pmold, \.rule summary \{ display: inline-flex; align-items: center; min-height: 24px; \}/.test(css));
+ok('a cent down is nothing lost, not "down 0.00%"', (js.match(/>= 0\.00005/g) || []).length >= 2);
 ok('"1 second ago", not "1 seconds ago"', /\$\{s\} second\$\{s === 1 \? '' : 's'\} ago/.test(js));
 ok('the health line says what the 5% is: a loss limit', /`Loss limit: \$\{down \?/.test(js));
 ok('a fill\'s sub-line no longer repeats its book, and a folded maker fill says its count', !/BOOK_NAME/.test(js) && /in \$\{f\.n\} fills/.test(js));

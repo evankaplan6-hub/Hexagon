@@ -186,10 +186,15 @@ function pmFloor(engine, cfg, now = Date.now()) {
   // The maker holds hundreds of markets: the frame carries the ones moving its book the most.
   const held = (M.markets || []).filter((m) => m.inv);
   const makerPnl = Number.isFinite(M.equity) && Number.isFinite(M.initial) ? r2(M.equity - M.initial) : 0;
+  // Banked is what the figure is less what is still open, so the card adds up. The maker's running `realized`
+  // has drifted $7.67 from its cash over 17,000 fills (the arithmetic before 2026-09-12; tools/ledger-check.js
+  // says the cash is exact), and the card read −$883.75 with "banked −$883.82" beside −$7.57 still open
+  // (2026-10-16 audit).
+  const makerOpen = sum(held, (m) => m.mark - m.cost);
   const maker = {
     key: 'maker', name: 'Maker', on: cfg.makerQuoting !== false && M.enabled !== false,
-    pnl: makerPnl, initial: M.initial ?? null, equity: M.equity ?? null, cash: M.cash ?? null, realized: r2(M.realized || 0),
-    open: sum(held, (m) => m.mark - m.cost),
+    pnl: makerPnl, initial: M.initial ?? null, equity: M.equity ?? null, cash: M.cash ?? null, realized: r2(makerPnl - makerOpen),
+    open: makerOpen,
     fills: M.fills || 0, quoting: M.quoting || 0, markets: held.length, contracts: M.inv || 0,
     halted: M.halted || null, lastFillAt: M.lastFill ? M.lastFill.at || null : null,
     rows: held.map((m) => ({ ticker: m.ticker, title: cap(question(m.title)), sub: String(m.sub || '').replace(/\*\*/g, ''), inv: m.inv, cost: r2(m.cost), worth: r2(Math.abs(m.mark)), pnl: r2(m.mark - m.cost) }))
