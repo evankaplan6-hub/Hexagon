@@ -84,7 +84,9 @@ group('the books add up to the desk, the way /pm counts it');
   ok('convergence: 1 of 5 made money, and it is off', conv.wins === 1 && conv.trades === 5 && conv.on === false, conv);
   ok('its rule says so', /Switched off on 2026-09-21 after losing on paper: 1 of 5 made money/.test(conv.rule), conv.rule);
   ok('the snipe never fired, and its rule says why', snipe.bought === 0 && snipe.pnl === 0 && /never fired/.test(snipe.rule), snipe);
-  ok('the maker: its equity less its paper', maker.pnl === -487.66 && maker.realized === -41.2, maker);
+  ok('the maker: its equity less its paper', maker.pnl === -487.66, maker);
+  // 2026-10-16 audit: banked is the figure less what is open, so the card adds up even where the running total drifted
+  ok('...and banked plus open is that figure, whatever the maker\'s running total says (-41.20 here)', maker.realized === r2(maker.pnl - maker.open) && r2(maker.realized + maker.open) === maker.pnl, [maker.realized, maker.open]);
   ok('the maker sends the six markets moving it most, of ten held', maker.rows.length === 6 && maker.markets === 10, maker.rows.length);
   ok('...biggest move first', maker.rows.every((r, i, a) => !i || Math.abs(a[i - 1].pnl) >= Math.abs(r.pnl)), maker.rows.map((r) => r.pnl));
   ok('the summary the PRED line reads is still there', /^trading in paper: 2 arbs, /.test(F.note) && F.lastCycleAt === T - 5000 && F.url === '/pm', [F.note, F.lastCycleAt]);

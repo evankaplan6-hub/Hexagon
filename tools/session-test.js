@@ -43,6 +43,11 @@ group('which address a login attempt is counted against');
   ok('off Fly, the typed header is ignored and the socket is used', session.clientKey(req('10.0.0.5', '9.9.9.9'), {}) === '10.0.0.5');
   ok('on Fly, the proxy\'s header is the client', session.clientKey(req('172.16.0.1', '9.9.9.9'), { FLY_MACHINE_ID: 'abc' }) === '9.9.9.9');
   ok('on Fly with no header, the socket', session.clientKey(req('172.16.0.1'), { FLY_MACHINE_ID: 'abc' }) === '172.16.0.1');
+  // 2026-10-16 audit: an IPv6 subscriber has a /64 of addresses, so the throttle counts the block
+  ok('two addresses in one IPv6 /64 are one client', session.clientKey(req('x', '2001:db8:abcd:12::1'), { FLY_MACHINE_ID: 'a' }) === session.clientKey(req('x', '2001:db8:abcd:12:ffff:1:2:3'), { FLY_MACHINE_ID: 'a' }));
+  ok('...written out in full or shortened', session.v6block('2001:0db8:abcd:0012:0:0:0:1') === '2001:db8:abcd:12::/64' && session.v6block('2001:db8:abcd:12::1') === '2001:db8:abcd:12::/64');
+  ok('another /64 is another client', session.v6block('2001:db8:abcd:13::1') !== session.v6block('2001:db8:abcd:12::1'));
+  ok('an IPv4 address mapped into IPv6 is that IPv4 address', session.v6block('::ffff:9.9.9.9') === '9.9.9.9' && session.v6block('9.9.9.9') === '9.9.9.9');
   ok('a request with nothing is an empty key, not a crash', session.clientKey({ headers: {} }, {}) === '');
 }
 

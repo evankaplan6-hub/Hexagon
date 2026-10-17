@@ -320,7 +320,15 @@ class Desk {
 
   // ---------------------------------------------------------------- valuation
   coinBid(id) { const c = this.mkt.coins[id]; return c && c.tick ? c.tick.bid : null; }
-  spyBid() { const q = this.mkt.spy.quote; return q ? (q.bid || q.last) : null; }
+  // SPY is marked at its bid while the market is open, what a sale would get. Outside the session Cboe's bid is an
+  // after-hours one, wide and thin: on the evening of 2026-10-16 it was $761.20 under a $763.25 last trade, and
+  // the stocks book read $26.71 below the price on its own row (2026-10-16 audit). Closed, it is marked at the
+  // last trade. Holding is marked the same way, so the comparison with it does not move.
+  spyBid() {
+    const q = this.mkt.spy.quote;
+    if (!q) return null;
+    return clock.isOpen(this.now()) ? (q.bid || q.last) : (q.last || q.bid);
+  }
   sleeveValue(sl, px) { return r2(sl.cash + (sl.qty > 0 && px > 0 ? sl.qty * px : sl.qty > 0 ? sl.cost : 0)); }
   lotBid(lot) {
     const ch = this.mkt.chain;
@@ -567,7 +575,9 @@ class Desk {
     // with the state. It used to lift the moment the day's figure came back inside the limit, and the desk bought again
     // at -4.5% on a day it had told itself to stop at -5.6% (audit 2026-10-07).
     if (live && this.state.haltDay !== e.day) { this.state.haltDay = e.day; this.state.haltWhy = live; this.dirty = true; }
-    const why = live || (this.state.haltDay === e.day ? this.state.haltWhy : null);
+    // The day's reason is the one saved when the limit was crossed, not the live figure: the page's banner reads it
+    // out to a screen reader whenever it changes, and the live percentage changed it every 0.1% (2026-10-16 audit).
+    const why = this.state.haltDay === e.day ? this.state.haltWhy : live;
     // said once, when it starts: the text carries the live percentage, so comparing it logged a line for every 0.1%
     if (why && !this.halt) this.log('TESS', 'HALT', null, why);
     if (!why && this.halt) this.log('TESS', 'OPS', null, 'new day: buying allowed again');

@@ -91,6 +91,10 @@ h1 { margin: 0; font: 600 var(--type-title)/1.2 var(--sans); letter-spacing: -.0
 main { flex: 1 1 auto; min-height: 0; transition: opacity .4s; }
 /* no signal: the last state received, dimmed, under the banner that says so */
 main.gone { opacity: .45; }
+/* a sheet and the large chart sit above the banner: dimmed with the page when its figures stop, and the sheet
+   says so in a line of its own (2026-10-16 audit) */
+body.offline #sheetbody > :not(.shstale), body.offline #chartbig-pnl { opacity: .45; }
+.shstale { margin: 0 0 var(--space-3); padding: 10px 12px; border-radius: 10px; background: var(--bad-wash); color: var(--ink-1); font-size: var(--type-small); }
 .view { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: var(--space-4); align-items: start; min-width: 0; }
 .card { min-width: 0; min-height: 0; padding: var(--space-4) var(--space-5); background: var(--bg-1); border-radius: var(--radius-lg); box-shadow: var(--shadow-card); }
 /* A view opens the way an app's tab does: at once. Until 2026-10-10 its cards rose into place on every switch
@@ -190,6 +194,9 @@ button.seeall { padding: 0; border: 0; background: none; cursor: pointer; color:
   font: 500 var(--type-small)/1.2 var(--sans); color: var(--ink-2); transition: background-color .15s; }
 .offchip .sw { width: 8px; height: 8px; }
 .seeall { font-size: var(--type-small); font-weight: 500; white-space: nowrap; }
+/* a link the size of its 15px text was 19px tall: 24 is the least a finger or a shaky pointer should have to hit
+   (WCAG 2.2, target size), reached without moving the text (2026-10-16 audit) */
+.seeall, .pmold, .rule summary { display: inline-flex; align-items: center; min-height: 24px; }
 .seeall::after { content: ''; display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-1px) rotate(-45deg); }
 .chev { flex: none; width: 7px; height: 7px; border-right: 1.5px solid var(--ink-3); border-bottom: 1.5px solid var(--ink-3); transform: rotate(-45deg); }
 
@@ -447,7 +454,9 @@ footer { max-width: 96ch; font-size: var(--type-label); line-height: 1.5; letter
   .bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "brand brand" "pill clock"; align-items: center;
     min-height: 0; gap: 0 var(--space-3); padding-bottom: 10px; }
   .brand { grid-area: brand; height: 52px; }
-  .top .pill { grid-area: pill; justify-self: start; margin-left: 0; }
+  /* the light may shrink and cut its words short rather than run under the clock: at 320 wide "Waiting on prices"
+     overlapped it by 11px (2026-10-16 audit) */
+  .top .pill { grid-area: pill; justify-self: start; margin-left: 0; min-width: 0; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .clock { grid-area: clock; }
   .appicon { width: 32px; height: 32px; border-radius: 7.5px; }
   .appicon svg { width: 23px; height: 23px; }

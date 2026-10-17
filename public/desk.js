@@ -152,7 +152,9 @@
   // ------------------------------------------------------------ the header: is it working, and what time is it
   let lastFrameAt = 0, shownGone = null;
   const STALE_MS = 12000;
-  const stale = () => lastFrameAt && Date.now() - lastFrameAt > STALE_MS;
+  // A page resting in the background (paused, below) is not stale: it closed its own stream. Shown again, it has
+  // the usual twelve seconds from then for a frame to come.
+  const stale = () => !paused && lastFrameAt && Date.now() - Math.max(lastFrameAt, resumedAt) > STALE_MS;
   // The desk's own heartbeat, the moment its last round finished. The server keeps streaming while a stuck
   // round holds the desk's loop, and then every price on the page stands still under a light that says
   // Working. Two minutes is twelve rounds, and longer than any round's calls can take.
@@ -174,8 +176,11 @@
     if (document.title !== title) document.title = title;
     // the prediction-market desk's view, while there is one to show
     $('pmtab').hidden = !S.legacy;
-    if (!S.legacy && view === 'pm') setView('overview', false);
+    // and the address goes with it: left at #pm, the tab was a link to where the page already was, so tapping it
+    // fired nothing once that desk came back (2026-10-16 audit)
+    if (!S.legacy && view === 'pm') { setView('overview', false); history.replaceState(null, '', '#overview'); }
     $('floor').classList.toggle('gone', gone || stuck);
+    document.body.classList.toggle('offline', gone || stuck);
     const msg = gone ? 'No signal from the desk: this page is showing the last state it received.'
       : stuck ? `The desk has finished no round since ${ET_HM.format(new Date(S.beat))} ET: every price and figure here stopped then.`
         : S.halt ? `${cap(S.halt)}. Selling still works.` : '';
@@ -205,13 +210,15 @@
   }
   const VS_HOLD = 'The books against simply holding what they hold, bought at each book’s first trade with the same fee the book pays to buy';
   function heroHtml() {
-    const { benchPnl, vs, fees, benchFees, holdFee, atWork, cash } = deskTotals();
+    const { benchPnl, vs, fees, benchFees, holdFee, atWork, cash } = deskTotals(), bench = (S.books || []).filter((b) => b.bench != null);
     const kpi = (label, html, title) => `<div${title ? ` title="${esc(title)}"` : ''}><dt>${label}</dt><dd>${html}</dd></div>`;
+    // "Fees paid" is every book's, the switched-off ones' too; the sentence under it, the books compared with
+    // holding. Both said only "fees", $126.91 beside $53.20 (2026-10-16 audit).
     // the one sentence that says why the books and holding differ
     let insight = '';
     if (benchPnl != null) {
       insight = `Simply holding what the books hold would be <b>${figure(benchPnl)}</b>${holdFee ? `, after its ${money(holdFee)} fee to buy in` : ''}; ` +
-        `they are <b>${figure(vs)}</b> against that${benchFees ? `, after ${money(benchFees)} in fees` : ''}.`;
+        `they are <b>${figure(vs)}</b> against that${benchFees ? `, after the ${money(benchFees)} in fees ${bench.length === 1 ? 'it' : 'they'} paid` : ''}.`;
       // Holding pays one fee, to buy in (since 2026-09-26: before, it paid none, and every book started that
       // fee behind it). The books pay one on every trade. When they trail holding and have paid more, the
       // difference is part of why, and when it is more than the whole gap, the books did better than holding
@@ -231,7 +238,7 @@
       `<div class="sub">on ${money(S.initial, 0)} of paper · marked ${esc(ET_HM.format(new Date(S.now)))} ET</div>` +
       `<dl class="kpis">${kpi('Today', S.today != null ? figure(S.today) : '—')}` +
       `${kpi('vs. just holding', vs != null ? figure(vs) : '—', VS_HOLD)}` +
-      `${kpi('Fees paid', money(fees))}${kpi('Invested', `${money(atWork, 0)}<small>${money(cash, 0)} in cash</small>`)}</dl>` +
+      `${kpi('Fees paid', money(fees), 'Every book’s fees since the start, the switched-off books’ too')}${kpi('Invested', `${money(atWork, 0)}<small>${money(cash, 0)} in cash</small>`)}</dl>` +
       (insight ? `<p class="insight">${insight}</p>` : '');
   }
 
@@ -360,7 +367,8 @@
     const M = marketBits(), C = S.cfg || {}, coins = (bookOf('crypto') || { rows: [] }).rows;
     const at = Math.max(0, ...coins.map((r) => r.at || 0));
     const ago = (t) => { const s = Math.max(0, Math.round((S.now - t) / 1000)); return s < 90 ? `${s} second${s === 1 ? '' : 's'} ago` : s < 5400 ? `${Math.round(s / 60)} minutes ago` : `at ${ET_HM.format(new Date(t))} ET`; };
-    const start = S.today != null ? S.equity - S.today : 0, down = start > 0 && S.today < 0 ? -S.today / start : 0;
+    // under half a hundredth of a percent is nothing lost: a cent read "down 0.00% today"
+    const start = S.today != null ? S.equity - S.today : 0, down = start > 0 && S.today < 0 && -S.today / start >= 0.00005 ? -S.today / start : 0;
     const sha = S.build && S.build.sha ? String(S.build.sha).slice(0, 7) : 'dev';
     return [
       { k: 'crypto', ok: M.cryptoOk ? 'ok' : 'warn', name: M.cryptoOk ? `Crypto prices live${at ? `, ${ago(at)}` : ''}` : 'Crypto prices stale', detail: `${coins.length} coins from Coinbase` },
@@ -478,7 +486,8 @@
       card('Trades', tradeList((S.fills || []).filter((f) => f.sym === sym && f.book === b.key), sym)) };
   }
   function healthSheet() {
-    const [state, cls] = deskState(), pm = S.legacy ? pmState(S.legacy) : null;
+    // the prediction desk's light is read from the last frame too, so with no signal it has none either
+    const [state, cls] = deskState(), pm = S.legacy ? (stale() ? ['No signal', 'bad'] : pmState(S.legacy)) : null;
     const line = (c) => rowHtml({ k: c.k, href: c.href, name: checkName(c), why: c.detail ? esc(c.detail) : '' });
     return { title: 'Health', html:
       card('', `<div class="shfig st-${cls}">${esc(state)}</div><p>The light in the bar turns amber when prices are stale or the desk is not buying, and red when the desk stops or this page loses its signal.</p>`) +
@@ -499,11 +508,17 @@
     const prev = sheetStack.length > 1 ? sheetOf(sheetStack[sheetStack.length - 2]) : null, back = $('sheetback');
     back.hidden = !prev;
     if (prev && back.textContent !== prev.title) back.textContent = prev.title;
-    morph($('sheetbody'), s.html);
+    // a sheet sits above the banner, so it says so itself when the figures under it have stopped
+    const note = stale() ? 'No signal from the desk: these are the last figures it sent.' : stalled() ? `The desk has finished no round since ${ET_HM.format(new Date(S.beat))} ET.` : '';
+    morph($('sheetbody'), (note ? `<p class="shstale" role="status">${esc(note)}</p>` : '') + s.html);
   }
+  // While a sheet or the large chart is open, the page behind it is inert. The Tab trap below listens on the
+  // dialog, and a click on a sheet's plain text put the focus on <body>, where Tab went on through the page under
+  // the dimming (2026-10-16 audit).
+  const behind = () => { const on = !$('sheet').hidden || !$('chartbig').hidden; for (const el of [$('top'), document.querySelector('.wrap')]) if (el) el.inert = on; };
   function openSheet(id, from) {
     if (!S || !sheetOf(id)) return;
-    if (sheet.hidden) { sheetOpener = from || document.activeElement; sheetStack = []; sheet.hidden = false; document.body.classList.add('sheeted'); }
+    if (sheet.hidden) { sheetOpener = from || document.activeElement; sheetStack = []; sheet.hidden = false; document.body.classList.add('sheeted'); behind(); }
     const at = sheetStack.indexOf(id);
     sheetStack = at >= 0 ? sheetStack.slice(0, at + 1) : [...sheetStack, id];
     $('sheetbody').textContent = '';     // a sheet opens at its top, not where the last one was scrolled
@@ -515,6 +530,7 @@
     sheet.hidden = true;
     sheetStack = [];
     document.body.classList.remove('sheeted');
+    behind();
     if (sheetOpener && document.contains(sheetOpener)) sheetOpener.focus({ preventScroll: true });
     sheetOpener = null;
   }
@@ -644,7 +660,7 @@
     // how much of the day's loss limit is used: TESS stops all new buying when it is. The meter stays plain
     // until half of it is gone, is amber to 80% and red past that.
     if (C.maxDailyDdPct && S.today != null && S.equity) {
-      const start = S.equity - S.today, down = start > 0 ? Math.max(0, -S.today / start) : 0, used = Math.min(1, down / C.maxDailyDdPct);
+      const start = S.equity - S.today, raw = start > 0 ? Math.max(0, -S.today / start) : 0, down = raw >= 0.00005 ? raw : 0, used = Math.min(1, down / C.maxDailyDdPct);
       const level = used >= 0.8 ? ' bad' : used >= 0.5 ? ' warn' : '';
       rows.push(['Loss limit', `${down ? `down ${(down * 100).toFixed(2)}%` : 'nothing lost'} today; buying stops at ${(C.maxDailyDdPct * 100).toFixed(0)}%` +
         `<span class="meter${level}" role="img" aria-label="${Math.round(used * 100)}% of the daily loss limit used"><i style="width:${(used * 100).toFixed(1)}%"></i></span>`]);
@@ -1175,12 +1191,13 @@
     const pts = chartSeries();
     const last = pts.length ? pts[pts.length - 1][1] : (S ? S.pnl : 0);
     const first = pts.length ? pts[0][1] : last;
-    // The figure is what changed over the range shown. Over all of it that is the desk's total, the headline's
-    // figure too; over 1h, 6h or 24h it is the move in that window, which nothing else on the page gives.
+    // The figure is what changed over the range shown: over all of it, crypto's and SPY's total since their start
+    // (the chart has been those two books against holding since 2026-10-12, so it is not the headline's figure,
+    // which counts the switched-off books too); over 1h, 6h or 24h, the move in that window.
     morph(el.querySelector('.cv'), figure(pts.length > 1 ? r2(last - first) : 0));
     const from = pts.length ? pts[0][0] : 0;
     el.querySelector('.cd').textContent = pts.length < 2 ? '' : chart.range !== 'All' ? `over the last ${chart.range}`
-      : `since ${dayKey(from) === dayKey(nowT()) ? `${ET_HM.format(new Date(from))} today` : ET_DAY.format(new Date(from))}`;
+      : `crypto and SPY since ${dayKey(from) === dayKey(nowT()) ? `${ET_HM.format(new Date(from))} today` : ET_DAY.format(new Date(from))}`;
     // holding over the same stretch, so the two figures compare: it gave holding's whole total beside the
     // desk's move over the last hour
     const firstHold = pts.find((x) => x[2] != null), lastHold = [...pts].reverse().find((x) => x[2] != null);
@@ -1248,11 +1265,13 @@
     opener = document.activeElement;
     bigChart.hidden = false;
     drawChart($('chartbig-pnl'));
+    behind();
     bigChart.querySelector('.cbback').focus();
   }
   function closeBigChart() {
     if (bigChart.hidden) return;
     bigChart.hidden = true;
+    behind();
     if (opener && document.contains(opener)) opener.focus();
     opener = null;
   }
@@ -1355,9 +1374,21 @@
     if (es) es.close();
     lastTry = Date.now();
     const mine = es = new EventSource('/api/desk/stream');
-    mine.onmessage = (ev) => { try { S = atCost(JSON.parse(ev.data)); S._rxPerf = performance.now(); lastFrameAt = Date.now(); render(); } catch (e) { console.error(e); } };
-    mine.onerror = () => { if (es !== mine) return; mine.close(); es = null; retry = setTimeout(connect, 3000); signedOut(); };
+    mine.onmessage = (ev) => { try { S = atCost(JSON.parse(ev.data)); S._rxPerf = performance.now(); lastFrameAt = Date.now(); fails = 0; render(); } catch (e) { console.error(e); } };
+    // 3 s, then twice as long after each failure in a row, at most a minute: every open tab tried twice every 3 s
+    // through an outage, for as long as it lasted (2026-10-16 audit)
+    mine.onerror = () => { if (es !== mine) return; mine.close(); es = null; retry = setTimeout(connect, Math.min(60000, 3000 * 2 ** fails++)); signedOut(); };
   }
+  // A frame is about 22 KB on the wire every two seconds, some 40 MB an hour, and a tab nobody is looking at went
+  // on taking them (2026-10-16 audit). A page hidden for a minute closes its stream; showing it opens it again,
+  // and the first frame brings everything up to date. (iOS stops a Home Screen app's page in the background anyway.)
+  let fails = 0, paused = false, resumedAt = 0, hideTimer = null;
+  document.addEventListener('visibilitychange', () => {
+    clearTimeout(hideTimer);
+    if (document.visibilityState === 'hidden') {
+      hideTimer = setTimeout(() => { if (document.visibilityState !== 'hidden') return; paused = true; clearTimeout(retry); retry = null; if (es) { es.close(); es = null; } }, 60000);
+    } else if (paused) { paused = false; resumedAt = Date.now(); fails = 0; connect(); }
+  });
   // no frame since the last one, or since the last try when none has come at all
   const quiet = () => Date.now() - Math.max(lastFrameAt, lastTry) > STALE_MS;
   const wake = () => { if (document.visibilityState === 'visible' && quiet() && !retry) connect(); };
@@ -1369,7 +1400,9 @@
   window.addEventListener('scroll', onScroll, { passive: true });
   onScroll();
   // Nothing redraws at rest: the clock ticks, and the page notices when the stream has gone quiet.
-  setInterval(() => { if (quiet() && !retry) connect(); if (!S) return; renderClock(); if (!!stale() !== shownGone) renderHeader(); }, 1000);
+  // When the stream goes quiet everything is drawn again, not just the bar: the overview's Health card and an open
+  // sheet went on saying "Working" and "Last round 3 seconds ago" under a banner that said No signal (2026-10-16 audit).
+  setInterval(() => { if (quiet() && !retry && !paused) connect(); if (!S) return; renderClock(); if (!!stale() !== shownGone) render(); }, 1000);
   route();
   morph($('ovhero'), '<span class="ovlab">Stocks &amp; crypto desk</span><span class="ovsub">Connecting to the desk…</span>');
   wireChart($('chart'), false);

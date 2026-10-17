@@ -42,9 +42,21 @@ function setCookie(name, token, secure) {
 // only thing that may be believed about that header: anywhere else (the Mac, a test) it is whatever the
 // caller typed, and trusting it let a guesser change address with every attempt. FLY_MACHINE_ID is set
 // in every Fly machine.
+// An IPv6 address counts by its /64, the block one subscriber is handed: per address, the login throttle's ten
+// tries were ten tries for each of 2^64 addresses (2026-10-16 audit). An IPv4 address, or one mapped into IPv6,
+// counts as itself.
+function v6block(ip) {
+  const a = String(ip).replace(/%.*$/, '').toLowerCase();
+  if (!a.includes(':')) return a;
+  const m4 = a.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (m4) return m4[1];
+  const [head, tail] = a.split('::'), h = head ? head.split(':') : [], t = tail ? tail.split(':') : [];
+  const all = tail === undefined ? h : [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill('0'), ...t];
+  return `${all.slice(0, 4).map((x) => x.replace(/^0+(?=.)/, '')).join(':')}::/64`;
+}
 function clientKey(req, env = process.env) {
   const fly = env.FLY_MACHINE_ID && req.headers && req.headers['fly-client-ip'];
-  return String(fly || (req.socket && req.socket.remoteAddress) || '');
+  return v6block(String(fly || (req.socket && req.socket.remoteAddress) || ''));
 }
 
-module.exports = { DAYS, timingEq, issue, valid, setCookie, clientKey };
+module.exports = { DAYS, timingEq, issue, valid, setCookie, clientKey, v6block };

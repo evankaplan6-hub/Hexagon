@@ -1072,6 +1072,21 @@ async function auditTests() {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 
+  // SPY's mark: the bid in the session, the last trade once it is over (2026-10-16 audit: an after-hours bid $2.05 under)
+  {
+    const dir = mkDir();
+    let T = atT('12:31');
+    const M = fakeMarket(() => T); M.setMinutes(12 * 60 + 30);
+    const desk = new Desk(deskConfig(dir), { feeds: M.feeds, now: () => T }); desk.quiet = true;
+    desk.mkt.spy.quote = { bid: 761.2, ask: 765, last: 763.25, at: T };
+    ok('in the session SPY is marked at its bid', desk.spyBid() === 761.2, desk.spyBid());
+    T = atT('20:30');
+    ok('after the close, at its last trade', desk.spyBid() === 763.25, desk.spyBid());
+    desk.mkt.spy.quote = { bid: 761.2, at: T };
+    ok('...or the bid when there is no last trade', desk.spyBid() === 761.2, desk.spyBid());
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
   // the network going down fails every feed in one round: one line, not one a coin (2026-10-16, six in a minute)
   {
     const dir = mkDir();
@@ -1109,8 +1124,10 @@ async function auditTests() {
     const desk = new Desk(deskConfig(dir), { feeds: M.feeds, now: () => T }); desk.quiet = true;
     await desk.step();                                    // crypto and SPY bought
     desk.state.dayStart = desk.equity() / 0.9;            // 10% down on the day from here
+    const texts = new Set();
     for (let i = 0; i < 20; i++) {
       T += 10000;
+      if (desk.halt) texts.add(desk.halt);
       const wob = 1 + 0.05 * Math.sin(i * 1.3);           // BTC wobbles, and the figure in the text with it
       M.W.ticks['BTC-USD'] = { bid: 84000 * wob, ask: 84000 * wob + 0.01, last: 84000 * wob, at: T };
       for (const id of ['ETH-USD', 'SOL-USD']) M.W.ticks[id].at = T;
@@ -1118,6 +1135,8 @@ async function auditTests() {
     }
     const lines = desk.state.log.filter((l) => l.kind === 'HALT').length;
     ok('twenty rounds of one halt, the price moving: one HALT line', !!desk.halt && lines === 1, lines);
+    // 2026-10-16 audit: the page's banner is a live region, so the reason it shows holds still for the day
+    ok('...and the reason the page shows is the one from when the limit was crossed, the same all twenty rounds', texts.size === 1, [...texts]);
     fs.rmSync(dir, { recursive: true, force: true });
   }
 
