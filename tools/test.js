@@ -59,6 +59,7 @@ const SUITES = [
   ['headline-lab', 'the headline lab: Eastern post times, one position at a time, no buying before the bot has the post, the fee both ways, a baseline from the same kind of day'],
   ['runner-lab', "the runner lab: 24-hour figures rebuilt from hourly candles, the book's own scan and exits, four slots, the cool-down, the fee"],
   ['spy-lab', "the SPY lab: minutes labelled by their end, the option model, and the scalp and dip books' days through their own code"],
+  ['crypto-note', "the crypto note: the book against holding since the start and over seven days, each coin's aim against the band, the day's trades, the next check"],
   ['team-model', 'the team model: ratings from margins and home field, no game rated with its own result, Kalshi games matched to scores (codes, college names, hyphenated codes), the sources parsed'],
   ['pick-lab', "the pick lab: a $100 bet's fee, the bar an hour before kickoff, exhibitions out, Elo from earlier games only, the opponent off the ticker"],
   ['week-report', 'the weekly report: Eastern weeks from Monday that add up to the run, counted from the starting cash, the prediction desk in the same weeks, one page with nothing fetched'],

@@ -29,9 +29,7 @@ const deskConfig = (dir) => ({
   desk: {
     on: true, cryptoUsd: 9000, stocksUsd: 10000, optionsUsd: 1000, scalpsUsd: 1000, dipsUsd: 1000, runnersUsd: 1000, coins: ['BTC-USD', 'ETH-USD', 'SOL-USD'],
     cryptoVolTarget: 0.4, cryptoLookback: 30, stockSym: 'SPY', stockVolTarget: 0.15, stockLookback: 20,
-    rebalBand: 0.1, cryptoFeeBps: 40, stockFeeBps: 0, optionFee: 0.03, options: true, scalps: true, dips: true, maxDailyDdPct: 0.05, everySec: 10,
-    runners: true, runnerFeeBps: 95, runnerEverySec: 180,
-    chainSkewSec: 120,
+    rebalBand: 0.1, cryptoFeeBps: 40, stockFeeBps: 0, optionFee: 0.03, maxDailyDdPct: 0.05, everySec: 10,
   },
 });
 
@@ -86,70 +84,4 @@ function fakeMarket(now) {
   return { W, feeds, setMinutes, call, put };
 }
 
-// The whole afternoon, round by round, on the options book's one-minute bars, for a test that only needs
-// the ledger it leaves behind: crypto and SPY bought at 12:31 (the 12:30 test passes); two 705 calls at
-// 12:32 on the 12:31 close, a new high; the first sold at its 2x target at 12:33; the runner at the bid at
-// 12:42, SPY having closed through VWAP at 12:41. Each round comes ten seconds after the minute it acts on
-// closed, as the stack's checks do (a second later each time, so that rounds a minute apart are more than
-// the minute the desk waits between reads of the minute bars), and each chain carries its own time, that
-// minute's close, as Cboe's does. `setNow(t)` moves the test's clock.
-async function playTrendDay(desk, M, setNow) {
-  setNow(at('12:31')); M.setMinutes(12 * 60 + 30); await desk.step();
-  setNow(at('12:32') + 10000); M.setMinutes(12 * 60 + 31);
-  M.W.chain = { expiry: DAY, spot: 703.62, at: at('12:31'), calls: [M.call(704, 0.3, 0.31, 0.5), M.call(705, 0.09, 0.1, 0.15), M.call(706, 0.04, 0.05, 0.1)], puts: [] };
-  await desk.step();
-  setNow(at('12:33') + 11000); M.setMinutes(12 * 60 + 32);
-  M.W.chain = { ...M.W.chain, spot: 703.64, at: at('12:32'), calls: [M.call(704, 0.5, 0.51, 0.6), M.call(705, 0.21, 0.22, 0.22), M.call(706, 0.08, 0.09, 0.1)] };
-  await desk.step();
-  setNow(at('12:42') + 12000); M.setMinutes(12 * 60 + 41, { 761: 701.5 });
-  M.W.chain = { ...M.W.chain, spot: 701.5, at: at('12:41'), calls: [M.call(704, 0.1, 0.11, 0.6), M.call(705, 0.05, 0.06, 0.22), M.call(706, 0.01, 0.02, 0.1)] };
-  await desk.step();
-}
-
-// A morning of the scalp book, round by round: the 10:00 bar breaks the opening range and buys the
-// 701 call at 1.00 (delta 0.45, the nearest 0.40); the 10:05 bar breaks again while it is held, and
-// nothing is added; the 10:10 bar the call is bid 1.51 and its 1.50 target fills, and the same bar,
-// another break, buys the 702 call at 0.91; the 10:15 bar closes back under the range it broke
-// (700.81) and the 702 goes at the bid, 0.70.
-async function playScalpMorning(desk, M, setNow) {
-  const { W, call } = M;
-  setNow(at('10:06')); M.setMinutes(10 * 60 + 5);
-  W.chain = { expiry: DAY, spot: 700.7, at: at('10:05'), calls: [call(700, 1.5, 1.51, 1.6, 0.58), call(701, 0.99, 1, 1.2, 0.45), call(702, 0.6, 0.61, 0.7, 0.33)], puts: [] };
-  await desk.step();
-  setNow(at('10:11')); M.setMinutes(10 * 60 + 10);
-  W.chain = { ...W.chain, spot: 700.8, at: at('10:10'), calls: [call(700, 1.7, 1.71, 1.75, 0.6), call(701, 1.2, 1.21, 1.25, 0.49), call(702, 0.75, 0.76, 0.8, 0.37)] };
-  await desk.step();
-  setNow(at('10:16')); M.setMinutes(10 * 60 + 15);
-  W.chain = { ...W.chain, spot: 700.9, at: at('10:15'), calls: [call(700, 2, 2.01, 2.1, 0.62), call(701, 1.51, 1.52, 1.55, 0.5), call(702, 0.9, 0.91, 0.95, 0.4)] };
-  await desk.step();
-  setNow(at('10:21')); M.setMinutes(10 * 60 + 20, { 616: 700.6 });
-  W.chain = { ...W.chain, spot: 700.68, at: at('10:20'), calls: [call(700, 1.4, 1.41, 2.1, 0.55), call(701, 1.05, 1.06, 1.55, 0.44), call(702, 0.7, 0.71, 0.95, 0.35)] };
-  await desk.step();
-}
-
-// A morning of the dip book, on one-minute bars, round by round. SPY opens at 700, climbs, and drops to
-// 698 at 9:58 (0.33 of its 6-point ATR under the open), then ticks up two cents a minute: each minute
-// closes over the one before it, but none may trigger before 10:05. The 10:05 minute (698.14, under the
-// open and VWAP, 6 minutes after the low) buys two 701 calls at 0.30. Nothing happens by 10:10; at 10:11
-// SPY jumps back over VWAP and the first sells at the bid, 0.55. The runner's bid is read five minutes on,
-// at 10:16: 0.95, more than double; at 10:21 it is 0.60, under the halfway mark back to its cost (0.625),
-// and it goes. No call carries a delta, so the scalp book, which needs one, passes on its breakout.
-const DIP_PATH = { 598: 698, 611: 700.2, 616: 701.5, 621: 701 };
-async function playDipMorning(desk, M, setNow) {
-  const { W, call } = M;
-  const calls = (b700, b701, b702) => [call(700, b700, +(b700 + 0.02).toFixed(2), 1.5), call(701, b701, +(b701 + 0.02).toFixed(2), 1), call(702, b702, +(b702 + 0.02).toFixed(2), 0.6)];
-  const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
-  // a round just over a minute after minute `to` closed, a second later each time so that two rounds a
-  // minute apart are more than the minute apart the desk waits between reads of the minute bars; the
-  // chain's own time is that close
-  let k = 0;
-  const round = async (to, spot, c) => { setNow(at(hhmm(to + 1)) + 5000 + 1000 * k++); M.setMinutes(to, DIP_PATH); W.chain = { expiry: DAY, spot, at: at(hhmm(to)), calls: c, puts: [] }; await desk.step(); };
-  await round(10 * 60 + 4, 698.12, calls(0.5, 0.2, 0.08));       // 10:04: turning, but before 10:05
-  await round(10 * 60 + 5, 698.14, calls(0.62, 0.28, 0.1));      // 10:05: buy two 701s at 0.30
-  await round(10 * 60 + 10, 698.24, calls(0.64, 0.29, 0.1));     // 10:10: still under VWAP, nothing read
-  await round(10 * 60 + 11, 700.2, calls(1.2, 0.55, 0.25));      // 10:11: back over VWAP, the first sells at 0.55
-  await round(10 * 60 + 16, 701.5, calls(1.9, 0.95, 0.5));       // 10:16: the runner's bid read, doubled and more
-  await round(10 * 60 + 21, 701, calls(1.5, 0.6, 0.3));          // 10:21: gave back over half: out at 0.60
-}
-
-module.exports = { DAY, at, upDay, deskConfig, fakeMarket, playTrendDay, playScalpMorning, playDipMorning };
+module.exports = { DAY, at, upDay, deskConfig, fakeMarket };

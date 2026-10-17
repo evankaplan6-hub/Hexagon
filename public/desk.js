@@ -60,10 +60,6 @@
   // only when it has one (an average over two fills); a $0.07 premium read "$0.070"
   const px = (p) => (!Number.isFinite(p) ? '—' : p >= 1 ? `$${p.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
     : `$${p.toFixed(Math.abs(p * 100 - Math.round(p * 100)) < 1e-6 ? 2 : 3)}`);
-  // an Eastern day ("2026-09-25") as its weekday, and a minute of the Eastern day as a time ("3:55 PM")
-  const WD = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short' });
-  const wd = (k) => WD.format(new Date(`${k}T12:00:00Z`));
-  const minTxt = (m) => `${((Math.floor(m / 60) + 11) % 12) + 1}:${String(m % 60).padStart(2, '0')} ${m >= 720 ? 'PM' : 'AM'}`;
   const coin = (sym) => String(sym).replace(/-USD$/, '');
   // a coin to the decimals its price needs: a thousandth of a bitcoin is $80, of a SOL twelve cents; DOGE
   // is sold in tenths
@@ -567,78 +563,6 @@
   const today = () => dayKey(nowT());
   // when the stock market next opens, in the desk's own words ("opens Mon 9:30 AM ET"): today, tomorrow or a weekday
   const nextOpenDay = () => { const m = String((S.market && S.market.says) || '').match(/^opens (\w+)/); return m ? m[1] : null; };
-  function optionsLine() {
-    const O = S.options || {}, d = O.day;
-    if (!O.enabled) return 'switched off';
-    const open = (bookOf('options') || { rows: [] }).rows.length;
-    if (open) return `holding ${open} contract${open === 1 ? '' : 's'}`;
-    // Friday's verdict is not Saturday's: a day that is over says when the next test is
-    if (!d || d.date !== today()) {
-      if (S.market && S.market.open) return 'waiting for today\'s 12:30 test';
-      const n = nextOpenDay();
-      return !n ? 'next 12:30 test on the next trading day' : `next 12:30 test ${n === 'today' || n === 'tomorrow' ? n : `on ${n}`}`;
-    }
-    const up = d.dir === 'up';
-    switch (d.status) {
-      case 'waiting': return 'waiting for the 12:30 test';
-      case 'armed': return `trend day ${d.dir} (${d.test ? d.test.moveAtr.toFixed(2) : '?'} ATR): watching for a new ${up ? 'high' : 'low'} until 2:45`;
-      case 'no-trade': return `no trade: ${d.why || 'not a trend day'}`;
-      case 'early-close': return 'no trade: a 1 PM close';
-      case 'done': return `done for today after ${d.entries} trade${d.entries === 1 ? '' : 's'}`;
-      default: return d.status;
-    }
-  }
-  // the scalp book's day, in one sentence
-  function scalpsLine() {
-    const X = S.scalps || {}, d = X.day;
-    if (!X.enabled) return 'switched off';
-    const lot = (bookOf('scalps') || { rows: [] }).rows[0];
-    if (lot) return `holding the ${lot.name.replace(/^SPY \S+ /, '')}: out at ${px(lot.target)}, on SPY back ${lot.dir === 'up' ? 'under' : 'over'} ${Number(lot.level).toFixed(2)}, or by ${minTxt(lot.until)}`;
-    if (!d || d.date !== today()) {
-      if (S.market && S.market.open) return 'watching from 10:05 for a break of the last 30 minutes';
-      const n = nextOpenDay();
-      return !n ? 'watching from 10:05 on the next trading day' : `watching from 10:05 ${n === 'today' || n === 'tomorrow' ? n : `on ${n}`}`;
-    }
-    const n = `${d.entries} of ${d.max || 4} trade${(d.max || 4) === 1 ? '' : 's'} today`;
-    switch (d.status) {
-      case 'waiting': return 'watching from 10:05 for a break of the last 30 minutes';
-      case 'watching': {
-        const mNow = X.range && X.range.day === d.date ? X.range.m + 5 : null;
-        if (d.pauseUntil != null && (mNow == null || mNow < d.pauseUntil)) return `after a loss, pausing until ${minTxt(d.pauseUntil)} · ${n}`;
-        return `watching for a close beyond the last 30 minutes${X.range ? ` (${X.range.lo.toFixed(2)} to ${X.range.hi.toFixed(2)})` : ''} · ${n}`;
-      }
-      case 'done': return `done for today: ${d.why || `${d.entries} trade${d.entries === 1 ? '' : 's'}`}`;
-      case 'early-close': return 'no scalps on a 1 PM close';
-      default: return d.status;
-    }
-  }
-  // the dip book's day, in one sentence
-  function dipsLine() {
-    const P = S.dips || {}, d = P.day;
-    if (!P.enabled) return 'switched off';
-    const rows = (bookOf('dips') || { rows: [] }).rows;
-    if (rows.length) {
-      const r = rows[0];
-      return rows.some((x) => x.role === 'first')
-        ? `holding ${rows.length} call${rows.length === 1 ? '' : 's'}: one sells when SPY closes back above VWAP; all out under ${Number(r.stop).toFixed(2)}, or with no reclaim by 12:30 PM`
-        : `riding the runner: out if SPY closes under ${Number(r.spy).toFixed(2)}, if it gives back half its gain once doubled, or at 3:15 PM`;
-    }
-    if (!d || d.date !== today()) {
-      if (S.market && S.market.open) return 'watching from 10:05 for a morning dip under VWAP';
-      const n = nextOpenDay();
-      return !n ? 'watching from 10:05 on the next trading day' : `watching from 10:05 ${n === 'today' || n === 'tomorrow' ? n : `on ${n}`}`;
-    }
-    const sp = P.spy;
-    switch (d.status) {
-      case 'waiting': return 'watching from 10:05 for a morning dip under VWAP';
-      case 'watching': return sp && sp.need != null
-        ? (sp.low <= sp.need ? `SPY has dipped to ${sp.low.toFixed(2)}: buying the first turn up under VWAP, until noon` : `waiting for SPY under ${sp.need.toFixed(2)} (low so far ${sp.low.toFixed(2)}), until noon`)
-        : 'watching for a morning dip under VWAP, until noon';
-      case 'done': return `done for today: ${d.why || `${d.entries} trade${d.entries === 1 ? '' : 's'}`}`;
-      case 'early-close': return 'no dip trades on a 1 PM close';
-      default: return d.status;
-    }
-  }
   // The options day used to have a row here too, word for word the Options card's last line.
   // the market and how fresh its prices are: the desk card's first two rows and the overview tile's last line
   function marketBits() {
@@ -711,23 +635,6 @@
   const SWINGS = 'How much it moves in a year, measured over the last 30 days (crypto) or 20 sessions (SPY)';
   const TARGET = 'How much of its slot the book wants to hold: less when it swings more';
   function holdRow(b, r) {
-    if (b.key === 'runners') {
-      return `<tr data-k="${esc(r.sym)}"><th><span class="tk">${esc(r.name)}</span><span class="mk">${coinPx(r.px)}</span>` +
-        `<small>${esc(`${runQty(r.qty)} held · bought at ${plain(coinPx(r.entry))} · out under ${plain(coinPx(r.stop))}`)}</small></th>` +
-        `<td class="v">${money(r.value || 0)}</td><td>${Number.isFinite(r.pnl) ? figure(r.pnl) : '—'}</td></tr>`;
-    }
-    if (b.key === 'dips') {
-      // no price target: the first sells on SPY's reclaim of VWAP, the runner on a trail
-      const plan = r.role === 'runner' ? (r.reclaimed ? `riding · best bid ${px(r.peak)}` : 'rides after the reclaim') : 'sells on the VWAP reclaim';
-      return `<tr data-k="${esc(r.sym)}-${esc(r.role)}"><th><span class="tk">${esc(r.name)}</span><small>${esc(cap(r.label))} · ${esc(plan)} · bid ${px(r.px)}</small></th>` +
-        `<td class="v">${money(r.value || 0)}</td><td>${Number.isFinite(r.pnl) ? figure(r.pnl) : '—'}</td></tr>`;
-    }
-    if (optBook(b.key)) {
-      // the price its target sells at, not just "2x", and what it is bid now
-      const mult = r.entry > 0 && r.target > 0 ? ` (${+(r.target / r.entry).toFixed(1)}x)` : '';
-      return `<tr data-k="${esc(r.sym)}"><th><span class="tk">${esc(r.name)}</span><small>${esc(cap(r.label))} · sells at ${px(r.target)}${mult} · bid ${px(r.px)}</small></th>` +
-        `<td class="v">${money(r.value || 0)}</td><td>${Number.isFinite(r.pnl) ? figure(r.pnl) : '—'}</td></tr>`;
-    }
     // the price and its move beside the name; under it, how much is held and what the rule wants. SPY's price
     // is its last trade (the book is valued at the bid, which after hours sat 65 cents above the close).
     const last = b.key === 'stocks' && S.spy && S.spy.last > 0 ? S.spy.last : r.px;
@@ -740,57 +647,15 @@
     return `<tr data-k="${esc(r.sym)}"><th><span class="tk">${esc(r.name)}</span><span class="mk">${b.key === 'crypto' ? coinPx(last) : px(last)}${chg == null ? '' : ` ${change(chg)}`}</span>` +
       `<small>${bits.join(' · ')}</small></th>${worth}</tr>`;
   }
-  // the options book with nothing open: how today's test went, and where SPY is
-  function optionsFacts() {
-    const O = S.options || {}, d = O.day, sp = O.spy, rows = [], td = today();
-    const on = (day) => (day && day !== td ? `${wd(day)} ` : '');
-    if (d && d.test && Number.isFinite(d.test.moveAtr)) rows.push([`${on(d.date)}12:30 test`, `${d.test.dir || d.dir || ''} ${d.test.moveAtr.toFixed(2)} ATR from the open${Number.isFinite(d.test.retr) ? `, gave back ${Math.round(d.test.retr * 100)}%` : ''}`]);
-    // the last one-minute bar, by the time it closed (the minute it is labelled by)
-    if (sp && Number.isFinite(sp.c)) rows.push([`SPY ${on(sp.day)}${Number.isFinite(sp.m) ? minTxt(sp.m) : ''}`, `${sp.c.toFixed(2)} · VWAP ${sp.vwap != null ? sp.vwap.toFixed(2) : '—'} · ATR ${sp.atr != null ? sp.atr.toFixed(2) : '—'}`]);
-    for (const t of (O.trades || []).slice(0, 3)) rows.push([t.date.slice(5).replace('-', '/'), `${t.qty} × ${t.strike}${t.right} at ${px(t.entry)}${t.open ? ' · open' : ` · ${t.pnl >= 0 ? 'made' : 'lost'} ${money(Math.abs(t.pnl))}`}`]);
-    return rows.length ? `<dl class="bkfacts">${rows.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>` : '<p class="bksub">No contracts open.</p>';
-  }
-  // the scalp book with nothing open: today's trades, the range the next bar has to break, the last few
-  function scalpFacts() {
-    const X = S.scalps || {}, d = X.day, rg = X.range, rows = [], td = today();
-    const on = (day) => (day && day !== td ? `${wd(day)} ` : '');
-    const done = (X.trades || []).filter((t) => t.date === (d && d.date) && !t.open);
-    if (d && d.entries) rows.push([d.date === td ? 'Today' : wd(d.date), `${d.entries} trade${d.entries === 1 ? '' : 's'}, ${done.filter((t) => t.pnl > 0).length} made money · ${plain(signed(r2(done.reduce((a, t) => a + t.pnl, 0))))}`]);
-    if (rg) rows.push([`SPY ${on(rg.day)}30 min to ${minTxt(rg.m + 5)}`, `${rg.lo.toFixed(2)} to ${rg.hi.toFixed(2)}`]);
-    for (const t of (X.trades || []).slice(0, 3)) rows.push([t.date.slice(5).replace('-', '/'), `${t.strike}${t.right} at ${px(t.entry)}${t.open ? ' · open' : ` · ${t.pnl >= 0 ? 'made' : 'lost'} ${money(Math.abs(t.pnl))}`}`]);
-    return rows.length ? `<dl class="bkfacts">${rows.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>` : '<p class="bksub">No contract open.</p>';
-  }
-  // the dip book with nothing open: today's trades, SPY against the dip it needs, the last few
-  function dipFacts() {
-    const P = S.dips || {}, d = P.day, sp = P.spy, rows = [], td = today();
-    const on = (day) => (day && day !== td ? `${wd(day)} ` : '');
-    const done = (P.trades || []).filter((t) => t.date === (d && d.date) && !t.open);
-    if (d && d.entries) rows.push([d.date === td ? 'Today' : wd(d.date), `${d.entries} trade${d.entries === 1 ? '' : 's'} · ${plain(signed(r2(done.reduce((a, t) => a + t.pnl, 0))))}`]);
-    if (sp) rows.push([`SPY ${on(sp.day)}${minTxt(sp.m)}`, `${sp.c.toFixed(2)} · open ${sp.open.toFixed(2)} · low ${sp.low.toFixed(2)}${sp.need != null ? ` · needs ${sp.need.toFixed(2)}` : ''}`]);
-    for (const t of (P.trades || []).slice(0, 3)) rows.push([t.date.slice(5).replace('-', '/'), `${t.qty} × ${t.strike}${t.right} at ${px(t.entry)}${t.open ? ' · open' : ` · ${t.pnl >= 0 ? 'made' : 'lost'} ${money(Math.abs(t.pnl))}`}`]);
-    return rows.length ? `<dl class="bkfacts">${rows.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>` : '<p class="bksub">No calls open.</p>';
-  }
-  // the runner book: the coins moving most at the last scan and what it made of each, then its last trades
-  function runnerFacts() {
-    const N = S.runners || {}, rows = [];
-    for (const r of (N.top || []).slice(0, 4)) rows.push([coin(r.id), `${r.move > 0 ? '+' : r.move < 0 ? MINUS : ''}${Math.abs(r.move * 100).toFixed(1)}% in 24h · ${r.status}`]);
-    for (const t of (N.trades || []).filter((x) => !x.open).slice(0, 3)) rows.push([`${wd(dayKey(t.closedAt))} ${coin(t.sym)}`, `${t.pnl >= 0 ? 'made' : 'lost'} ${money(Math.abs(t.pnl))} · ${t.why || 'sold'}`]);
-    return rows.length ? `<dl class="bkfacts">${rows.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>` : '<p class="bksub">No coin held.</p>';
-  }
   function nextLine(b) {
-    if (b.key === 'runners') {
-      const N = S.runners || {};
-      if (!N.enabled) return 'Switched off';
-      const every = Math.round((N.every || 180) / 60);
-      return N.scanAt ? `Scans every ${every} minutes: last at <b>${esc(ET_HM.format(new Date(N.scanAt)))} ET</b>, ${N.n} coins` : `Scans every ${every} minutes: the first scan is on its way`;
-    }
     if (b.key === 'crypto') return `Checks again after midnight UTC: <b>${esc(ET_HM.format(new Date(Math.floor(S.now / 864e5 + 1) * 864e5)))} ET</b>`;
     if (b.key === 'stocks') {
       const checked = b.rows.some((r) => r.checkDay === today());
       return S.market && S.market.open ? (checked ? 'Checked today; checks again after the next open' : 'Checks once a trading day, after the open')
         : `Checks at the next open: <b>${esc(String((S.market && S.market.says) || '').replace(/^opens /, ''))}</b>`;
     }
-    return esc(cap(b.key === 'scalps' ? scalpsLine() : b.key === 'dips' ? dipsLine() : optionsLine()));
+    // the options, scalp, dip and runner books, retired on 2026-10-17
+    return 'Switched off';
   }
   // A book that has never traded is its figure, its markets and its next check: no line that has never
   // moved. What it is doing now sits under its figure, in the book's colour: until 2026-10-02 it was the
@@ -811,9 +676,7 @@
       `just holding <b class="${tone(b.benchPnl)}">${signed(b.benchPnl)}</b></span>` : '';
     // the two figures on each row are named once, over them, when the book holds something
     const head = lotBook(b.key) || held ? '<thead><tr><th></th><th>Worth</th><th>P&amp;L</th></tr></thead>' : '';
-    const body = b.key === 'runners' ? (b.rows.length ? `<table class="hold-t">${head}<tbody>${b.rows.map((r) => holdRow(b, r)).join('')}</tbody></table>` : '') + runnerFacts()
-      : b.rows.length ? `<table class="hold-t">${head}<tbody>${b.rows.map((r) => holdRow(b, r)).join('')}</tbody></table>`
-      : b.key === 'options' ? optionsFacts() : b.key === 'scalps' ? scalpFacts() : b.key === 'dips' ? dipFacts() : '<p class="bksub">Nothing held yet.</p>';
+    const body = b.rows.length ? `<table class="hold-t">${head}<tbody>${b.rows.map((r) => holdRow(b, r)).join('')}</tbody></table>` : '<p class="bksub">Nothing held yet.</p>';
     return `<article class="card bk" data-k="${b.key}" style="--bk:${BOOK_COLOR[b.key]}" aria-label="${esc(b.name)} book">` +
       `<header><i class="sw"></i><h3>${esc(b.name)}</h3><span class="chip">${esc(bookChip(b))}</span></header>` +
       `<div class="figline"><span class="fig ${tone(b.pnl)}">${signed(b.pnl)}</span>${vs}</div>` +

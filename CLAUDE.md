@@ -5,12 +5,15 @@ until 2026-09-10; it was moved here with its full git history. There is no other
 checkout — if you find a reference to `~/claude/hexagon` anywhere, it is stale.
 
 **The Hexagon** is a paper trading desk for **stocks, crypto and options**, its main scope since
-2026-09-25: six bots run six paper books on free public prices -- crypto (BTC, ETH, SOL and, since 2026-09-30,
-XRP and DOGE, live from Coinbase), runners (since 2026-09-30: coins popping right now, scanned on Coinbase every
-3 minutes, at Robinhood's 0.95% fee), stocks (SPY), options (SPY same-day, trend days) and, since 2026-09-29, scalps (SPY same-day,
-held minutes) and dips (Evan's own morning dip under VWAP, as rules), the last four from Cboe about 15
-minutes late -- and stream
-them to a live trading floor at `/`. The code is `src/desk/`; README's first section explains it.
+2026-09-25: bots run paper books on free public prices -- crypto (BTC, ETH, SOL and, since 2026-09-30,
+XRP and DOGE, live from Coinbase) and stocks (SPY, Cboe about 15 minutes late), the two that trade -- and stream
+them to a live trading floor at `/`. The code is `src/desk/`; README's first section explains it. Four more
+books (options, scalps, dips, runners) were switched off 2026-10-08 after their labs and RETIRED 2026-10-17:
+their ledgers stay, their code is gone from the engine, their rules stay in src/desk/books.js for the labs
+(README "Retired books"). Since 2026-10-17 the plan (README "The plan from here", Evan: "Go") is three jobs: run
+the crypto rule and say what it does (tools/crypto-note.js), test any idea Evan brings the same way
+(README "Testing an idea"), keep collecting the tapes and re-test on fixed dates. No new books; no more
+free-data edge hunting.
 
 It began as a six-agent prediction-market desk that priced the same events on Polymarket and Kalshi and
 traded the disagreements. That desk still runs in the same process, in paper; since 2026-09-29 its books are on the floor at `/` too
@@ -87,13 +90,12 @@ npm run reset                                 # wipe the prediction-market paper
 ```
                   THE STOCKS, CRYPTO AND OPTIONS DESK (the main scope since 2026-09-25; paper only, no broker)
 src/desk/engine.js  the desk: six books' ledgers, the six bots' jobs (HOLT prices, ILSA volatility, TESS risk,
-                  RIGO marks and option exits, BRAM signals, KETT fills; PRED is the prediction-market desk,
+                  RIGO marks, BRAM signals, KETT fills; PRED is the prediction-market desk,
                   trading in paper beside it), data/desk/state.json + journal-YYYY-MM-DD.jsonl, the page's snapshot
-src/desk/books.js   the rules, pure: volatility targeting (crypto 40%/30 days, SPY 15%/20 sessions, 10-point band)
-                  and the SPY same-day options rules ported from the stack's trend_day_check.py, on ONE-MINUTE bars since
-                  2026-09-29 (the stack's move; five-minute before), plus chainSync:
-                  an option is bought only off a chain within DESK_CHAIN_SKEW_SEC of the trigger bar's close;
-                  DIP book OFF since 2026-10-08 too (no change to it held up out of sample); OPTIONS and SCALP books OFF since 2026-10-08 (tools/spy-lab.js: no edge over two years; DESK_OPTIONS/DESK_SCALPS=1 to restore);
+src/desk/books.js   the rules, pure: volatility targeting (crypto 40%/30 days, SPY 15%/20 sessions, 10-point band), the
+                  live books'; and the RETIRED books' rules (no engine code since 2026-10-17; tools/spy-lab.js and
+                  tools/runner-lab.js run them): the SPY same-day options rules ported from the stack's trend_day_check.py
+                  on one-minute bars, chainSync;
                   SCALP (2026-09-29): the stack's 0DTE scalp method (options §5) on a 30-minute breakout, one
                   contract near 0.40 delta, out at 1.5x / SPY back in the range / 15 min flat / 30 min / 3:15;
                   its FED list of 2 PM decisions ends 2026 (add 2027's when the stack has them);
@@ -104,8 +106,11 @@ src/desk/books.js   the rules, pure: volatility targeting (crypto 40%/30 days, S
                   RUNNER (2026-09-30, Evan's QNT; OFF since 2026-10-08, tools/runner-lab.js: it lost over four years): every 3 min, a coin Robinhood sells (RUNNER_COINS, a dated list)
                   up 8%+ in 24h, $2M+ traded, within 3% of its high and still climbing; 4 at once, a quarter each;
                   out 10% off its best or 48h not above cost; a coin sold waits 12h
-src/desk/feeds.js   Coinbase (live; /products/stats is every coin's 24h in one call) and Cboe (15 min late) parsers + fetches; Cboe's one-minute bars (options, dips), five-minute
-                  bars (scalps), VWAP, ATR14
+src/desk/feeds.js   Coinbase (live) and Cboe (15 min late) parsers + fetches; the engine reads only Coinbase's tickers,
+                  books and daily candles and Cboe's SPY quote and daily bars since 2026-10-17 (the minute bars, VWAP,
+                  ATR14 and the option chain stay here for tools/spy-lab.js)
+tools/crypto-note.js the crypto note (2026-10-17): the crypto rule against holding, each coin's aim and the next check, in
+                  a dozen lines, from the real engine on a copy of the box's state (--box); paper, not advice
 src/desk/broker.js  paper fills: crypto walks Coinbase's book + 0.40%, SPY at the touch, options at the touch + $0.03
 src/desk/clock.js   NYSE sessions, holidays and 1 PM closes through 2027 (TESS warns when the list runs out)
 public/desk.*     the floor at /: since 2026-10-02 four views, each a link (#overview, #desk, #pm, #activity; #desk/crypto
@@ -137,7 +142,9 @@ tools/desk-check.js step 8 of the daily check: the desk's loop alive, each book'
                   rebuilding state.json to the penny, each book against holding (--box copies /data/desk first);
 tools/week-report.js the weeks (2026-10-15): each Eastern week, crypto and SPY against holding, the off books, the PM books'
                   realised; from the daily check's copies, writes data/reports/weeks.html; read-only, no network
-                  tests: tools/desk-test.js, tools/crypto-lab-test.js, tools/runner-lab-test.js, tools/spy-lab-test.js, tools/headline-lab-test.js, tools/desk-check-test.js (tools/desk-fixture.js
+                  tools/fixtures/retired/: three days of the retired books, recorded by the engine as it was, which
+                  desk-check-test replays (the box's ledger still carries their fills)
+                  tests: tools/desk-test.js, tools/crypto-note-test.js, tools/crypto-lab-test.js, tools/runner-lab-test.js, tools/spy-lab-test.js, tools/headline-lab-test.js, tools/desk-check-test.js (tools/desk-fixture.js
                   is their shared fake market, not a suite)
                   THE PREDICTION-MARKET DESK (paper, not the main focus: arbs, maker and snipe on since 2026-09-27; its books on / since 2026-09-29, old page /pm)
 server.js         HTTP + SSE server for both desks, .env loader, live-mode gate; journals START/STOP/CRASH

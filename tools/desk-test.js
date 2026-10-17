@@ -12,7 +12,7 @@ const broker = require('../src/desk/broker');
 const B = require('../src/desk/books');
 const { Desk, logLevel, ROUTINE_KEEP } = require('../src/desk/engine');
 const DAYX = '2026-09-23';
-const { upDay, deskConfig, fakeMarket, playScalpMorning, playDipMorning, at: atDay } = require('./desk-fixture');
+const { upDay, deskConfig, fakeMarket, at: atDay } = require('./desk-fixture');
 
 let pass = 0, fail = 0;
 const ok = (name, cond, got) => {
@@ -373,7 +373,7 @@ async function engineTests() {
   const desk = new Desk(cfg, { feeds, now: () => T, legacy: () => ({ note: 'winding down: 3 held', lastCycleAt: T }) });
   desk.quiet = true;
 
-  // round 1: 12:31. Crypto rebalances to its targets, SPY buys, the options book passes its 12:30 test.
+  // round 1: 12:31. Crypto rebalances to its targets, SPY buys.
   await desk.step();
   const b = desk.state.books;
   const btc = b.crypto.sleeves['BTC-USD'];
@@ -393,11 +393,8 @@ async function engineTests() {
     near('its fee: 0.40% of what $9,000 bought', desk.benchFee('crypto'), 35.86, 0.001);
     eq('SPY holding paid nothing to buy in', desk.benchFee('stocks'), 0);
   }
-  eq('the options book is armed after the 12:30 test', b.options.day.status, 'armed');
-  eq('on an up day', b.options.day.dir, 'up');
   const journal = fs.readFileSync(path.join(dir, 'desk', 'journal-2026-09-23.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
   eq('every fill is journaled', journal.filter((j) => j.kind === 'FILL').length, 4);
-  ok('with the 12:30 verdict', journal.some((j) => j.kind === 'OPTIONS_DAY' && j.status === 'pass'));
   const eq1 = desk.equity();
   ok('the desk is worth what it paid, less spreads and fees', eq1 < 23000 && eq1 > 22900, eq1);
 
@@ -405,108 +402,6 @@ async function engineTests() {
   const fills1 = desk.state.fills.length;
   T += 10000; await desk.step();
   eq('a second round trades nothing', desk.state.fills.length, fills1);
-
-  // The options book on one-minute bars (since 2026-09-29): each round ten seconds after the minute it acts
-  // on closed, as the stack's checks run (a second later each time, so that rounds a minute apart are more
-  // than the minute the desk waits between reads of the minute bars), and each chain carrying that minute's
-  // close as its own time.
-  const min = (hhmm) => clock.etToUtc(`2026-09-23T${hhmm}:00`);
-  let k = 0;
-  const after = (hhmm) => min(hhmm) + 10000 + 1000 * k++;
-  let reads = 0;
-  const expiry = feeds.expiry;
-  feeds.expiry = async (...a) => { reads++; return expiry(...a); };
-
-  // round 3: 12:32. The minute that closed at 12:31 made a new high above VWAP: buy the 705 call at 0.10, two of them.
-  T = after('12:32');
-  setMinutes(12 * 60 + 31);
-  W.chain = { expiry: '2026-09-23', spot: 703.62, at: min('12:31'), calls: [call(704, 0.3, 0.31, 0.5), call(705, 0.09, 0.1, 0.15), call(706, 0.04, 0.05, 0.1)], puts: [] };
-  await desk.step();
-  const lots = b.options.lots;
-  eq('two contracts bought at the trigger', lots.map((l) => [l.strike, l.role, l.target]), [[705, 'first', 0.2], [705, 'runner', 0.3]]);
-  near('cash: $20 of premium and 6 cents of fees', b.options.cash, 979.94, 0.001);
-  eq('each contract names its role, and its target (the page writes the price it sells at)', desk.snapshot().books[2].rows.map((r) => [r.label, r.target]), [['first contract', 0.2], ['runner', 0.3]]);
-  ok('the floor names the minute that triggered', desk.state.log.some((l) => /^options: new high at 12:31, SPY 703\.62 · buy 2 705 call at \$0\.10/.test(l.text)), desk.state.log.map((l) => l.text));
-
-  // round 4: 12:33. The next minute is in, and the chain is read for it: the 705 call is bid 0.21, so the
-  // first contract's 2x target (0.20) fills. The runner stays.
-  T = after('12:33');
-  setMinutes(12 * 60 + 32);
-  W.chain = { ...W.chain, spot: 703.64, at: min('12:32'), calls: [call(704, 0.5, 0.51, 0.6), call(705, 0.21, 0.22, 0.22), call(706, 0.08, 0.09, 0.1)] };
-  reads = 0;
-  await desk.step();
-  eq('a minute later the chain is read for the targets', reads, 1);
-  eq('the first contract sold at its target', b.options.lots.map((l) => l.role), ['runner']);
-  near('made $9.94 on it', b.options.realized, 9.94, 0.001);
-  eq('the first exit hit its target: a re-entry is allowed', b.options.day.firstExitHit, true);
-
-  // round 5: 12:41. Still climbing, over VWAP: the runner is held.
-  T = after('12:41');
-  setMinutes(12 * 60 + 40);
-  W.chain = { ...W.chain, spot: 703.8, at: min('12:40'), calls: [call(704, 0.4, 0.41, 0.6), call(705, 0.15, 0.16, 0.22), call(706, 0.06, 0.07, 0.1)] };
-  await desk.step();
-  eq('12:40 closes over VWAP: the runner rides', b.options.lots.map((l) => l.role), ['runner']);
-
-  // round 6: 12:42. The minute that closed at 12:41 fell through VWAP: the runner goes at the bid, 0.05.
-  T = after('12:42');
-  setMinutes(12 * 60 + 41, { 761: 701.5 });
-  W.chain = { ...W.chain, spot: 701.5, at: min('12:41'), calls: [call(704, 0.1, 0.11, 0.6), call(705, 0.05, 0.06, 0.22), call(706, 0.01, 0.02, 0.1)] };
-  await desk.step();
-  eq('flat after a one-minute close through VWAP', b.options.lots.length, 0);
-  near('realised: +9.94 on the first, -5.06 on the runner', b.options.realized, 4.88, 0.001);
-  near('cash reconciles to the penny', b.options.cash, 1004.88, 0.001);
-  eq('one trade on the scorecard', b.options.trades.map((t) => [t.strike, t.qty, t.pnl, t.open]), [[705, 2, 4.88, 0]]);
-  ok('the floor names the minute that broke VWAP', desk.state.log.some((l) => /SPY closed below VWAP at 12:41 \(701\.50 vs 70\d\.\d\d\)/.test(l.text)), desk.state.log.map((l) => l.text));
-  {
-    const js = fs.readFileSync(path.join(dir, 'desk', 'journal-2026-09-23.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-    const opt = js.filter((j) => j.kind === 'FILL' && j.book === 'options');
-    eq("every option fill journals the minute's close, the chain's time and the gap between them", opt.map((j) => [j.side, j.barAt, j.chainAt, j.skewSec]), [
-      ['buy', '2026-09-23T16:31:00.000Z', '2026-09-23T16:31:00.000Z', 0],
-      ['sell', '2026-09-23T16:32:00.000Z', '2026-09-23T16:32:00.000Z', 0],
-      ['sell', '2026-09-23T16:41:00.000Z', '2026-09-23T16:41:00.000Z', 0],
-    ]);
-  }
-
-  // round 7: 12:51. SPY is back over the high it made before the trade ended (703.81, the 12:40 minute's)
-  // on the minute that closed 12:50: a fresh one-minute trigger, and the first exit hit its target, so
-  // the one re-entry, one contract.
-  T = after('12:50');
-  setMinutes(12 * 60 + 49, { 761: 701.5 });
-  await desk.step();
-  eq('SPY under the old high: no re-entry yet', [b.options.lots.length, b.options.day.entries], [0, 1]);
-  T = after('12:51');
-  setMinutes(12 * 60 + 50, { 761: 701.5, 770: 704 });
-  W.chain = { ...W.chain, spot: 704, at: min('12:50'), calls: [call(705, 0.09, 0.1, 0.12), call(706, 0.04, 0.05, 0.06)] };
-  await desk.step();
-  eq('the re-entry: one 705 call, on the minute that closed 12:50', [b.options.lots.map((l) => [l.strike, l.role, l.qty]), b.options.day.entries, b.options.day.entryBarM], [[[705, 'runner', 1]], 2, 770]);
-  ok('said as the one re-entry', desk.state.log.some((l) => /^options: new high at 12:50, SPY 704\.00 · buy 1 705 call at \$0\.10 \(the one re-entry\)/.test(l.text)), desk.state.log.map((l) => l.text));
-  eq('the page gets the newest minute the book read, labelled by its close, and the 9:30 open', [desk.snapshot().options.spy.m, desk.snapshot().options.spy.c, desk.snapshot().options.spy.open], [770, 704, 700]);
-  feeds.expiry = expiry;
-
-  // An option is not bought off a chain out of step with the bars (2026-09-26). The trigger is the minute
-  // that closed at 12:31; a chain whose prices are from 12:26 would sell the call at its price before the new high.
-  {
-    const sdir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-test-'));
-    let T2 = clock.etToUtc('2026-09-23T12:31:00');
-    const M2 = fakeMarket(() => T2);
-    M2.setMinutes(12 * 60 + 30);
-    const d5 = new Desk(deskConfig(sdir), { feeds: M2.feeds, now: () => T2 });
-    d5.quiet = true;
-    await d5.step();
-    T2 = after('12:32');
-    M2.setMinutes(12 * 60 + 31);
-    M2.W.chain = { expiry: '2026-09-23', spot: 703.62, at: min('12:26'), calls: [M2.call(705, 0.09, 0.1, 0.15)], puts: [] };
-    await d5.step();
-    eq('nothing is bought off a chain five minutes older than the trigger bar', d5.state.books.options.lots.length, 0);
-    const js = fs.readFileSync(path.join(sdir, 'desk', 'journal-2026-09-23.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-    const skip = js.find((j) => j.kind === 'OPTIONS_SKIP');
-    eq('the skip is journaled with both times', skip && [skip.bar, skip.barAt, skip.chainAt, skip.skewSec], ['12:31', '2026-09-23T16:31:00.000Z', '2026-09-23T16:26:00.000Z', -300]);
-    eq('and no option fill', js.filter((j) => j.kind === 'FILL' && j.book === 'options').length, 0);
-    ok('the floor says why', d5.state.log.some((l) => l.kind === 'PASS' && /not taken/.test(l.text) && /300s older/.test(l.text)), d5.state.log.map((l) => l.text));
-    eq('the book stays armed for a later trigger', d5.state.books.options.day.status, 'armed');
-    eq('and this one is spent: the scan has moved past its minute', d5.state.books.options.day.scanIdx, d5.mkt.spy.intra.bars.length - 1);
-    fs.rmSync(sdir, { recursive: true, force: true });
-  }
 
   // SPY is never bought off the tape once it has stopped: the 3:59 price at 4:30 is not a fill
   {
@@ -557,7 +452,7 @@ async function engineTests() {
     const signals = desk.state.log.filter((e) => e.kind === 'SIGNAL').length;
     for (let i = 0; i < 500; i++) desk.log(['HOLT', 'TESS', 'RIGO'][i % 3], ['SCAN', 'OPS', 'RESEARCH'][i % 3], null, ['3/3 coins live from Coinbase', 'all clear · crypto prices fresh', 'marked BTC, ETH, SOL'][i % 3]);
     eq('a day of routine rounds keeps only the newest of them', desk.state.log.filter((e) => logLevel(e) === 'quiet').length, ROUTINE_KEEP);
-    ok('and every fill the desk made is still in the ring', fillsLogged >= 7 && desk.state.log.filter((e) => e.kind === 'FILL').length === fillsLogged, fillsLogged);
+    ok('and every fill the desk made is still in the ring', fillsLogged >= 4 && desk.state.log.filter((e) => e.kind === 'FILL').length === fillsLogged, fillsLogged);
     eq('every signal too', desk.state.log.filter((e) => e.kind === 'SIGNAL').length, signals);
     eq('and in the frame the page reads', desk.snapshot().log.filter((e) => e.level === 'trade').length, fillsLogged);
     eq('a warning is not routine', logLevel({ agent: 'HOLT', kind: 'OPS', text: 'SPY quote did not load' }), 'warn');
@@ -601,152 +496,6 @@ async function engineTests() {
     const d6 = new Desk({ ...cfg, dataDir: oldDir }, { feeds, now: () => T });
     eq('and only once: loading it again changes nothing', d6.state.history.map((p) => p.bc), [9000, 9000, 9000.14]);
     fs.rmSync(oldDir, { recursive: true, force: true });
-  }
-
-  // A morning of scalps (2026-09-29): tools/desk-fixture.js playScalpMorning, round by round.
-  {
-    const sdir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-test-'));
-    let TS = atDay('10:06');
-    const M = fakeMarket(() => TS);
-    const ds = new Desk(deskConfig(sdir), { feeds: M.feeds, now: () => TS });
-    ds.quiet = true;
-    const x = ds.state.books.scalps;
-    const rounds = [];
-    const real = ds.step.bind(ds);
-    ds.step = async () => { await real(); rounds.push({ lots: x.lots.map((l) => [l.strike, l.entry, l.target, l.level, l.barM]), cash: x.cash, realized: x.realized, entries: x.day && x.day.entries, exitBarM: x.day && x.day.exitBarM }); };
-    await playScalpMorning(ds, M, (t) => { TS = t; });
-    eq('10:06: the opening-range break buys the 701 call, 1.5x target, stop at the range it broke', rounds[0].lots, [[701, 1, 1.5, 700.61, 600]]);
-    eq('$100 of premium and a 3-cent fee', rounds[0].cash, 899.97);
-    eq('10:11: another break while it is held adds nothing', [rounds[1].lots.length, rounds[1].entries], [1, 1]);
-    eq('10:16: the 1.50 target fills, and the new break buys the 702 at 0.91', rounds[2].lots, [[702, 0.91, 1.365, 700.81, 610]]);
-    eq('banked $49.94 on the first', rounds[2].realized, 49.94);
-    eq('a new scalp starts its exit scan at its own entry bar, not at the last trade\'s last handled bar', rounds[2].exitBarM, null);
-    eq('10:21: SPY closes back under 700.81, and the 702 goes at the bid', rounds[3].lots, []);
-    eq('realised: +49.94, then -21.06', x.realized, 28.88);
-    eq('cash reconciles to the penny', x.cash, 1028.88);
-    eq('the loss starts the 15-minute pause from the 10:20 close', [x.day.lossRun, x.day.pauseUntil], [1, 635]);
-    eq('two trades on its scorecard, newest first', x.trades.map((t) => [t.strike, t.dir, t.pnl, t.open]), [[702, 'up', -21.06, 0], [701, 'up', 49.94, 0]]);
-    const js = fs.readFileSync(path.join(sdir, 'desk', 'journal-2026-09-23.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-    const sf = js.filter((j) => j.kind === 'FILL' && j.book === 'scalps');
-    eq('every scalp fill is journaled, with its reason', sf.map((j) => [j.side, j.px, j.why.split(' (')[0]]), [
-      ['buy', 1, 'break above the last 30 minutes at 10:05'], ['sell', 1.5, '1.5x target hit'],
-      ['buy', 0.91, 'break above the last 30 minutes at 10:15'], ['sell', 0.7, 'SPY closed back under 700.81 at 10:20']]);
-    const b1 = sf[0];
-    eq("a buy journals what the stack's §8 asks: SPY, the level, the delta, the quote", [b1.dir, b1.spy, b1.level, b1.delta, b1.bid, b1.ask, b1.bidSz, b1.askSz, b1.skewSec], ['up', 700.7, 700.61, 0.45, 0.99, 1, 100, 100, 0]);
-    eq('the options book, waiting for 12:30, traded nothing', ds.state.books.options.lots.length + ds.state.books.options.trades.length, 0);
-    const snap = ds.snapshot();
-    eq('the page gets the scalp day', [snap.scalps.enabled, snap.scalps.day.entries, snap.scalps.day.lossRun, snap.scalps.day.pauseUntil], [true, 2, 1, 635]);
-    ok('and the range the next bar has to break', snap.scalps.range && snap.scalps.range.hi > snap.scalps.range.lo, snap.scalps.range);
-    near('the desk counts the scalp book in its worth', snap.equity, snap.books.reduce((a, b2) => a + b2.equity, 0), 0.02);
-    eq('its decisions are decisions, not routine', logLevel({ agent: 'BRAM', kind: 'PASS', text: 'scalps: SPY broke above 700.81 at 10:15 · not taken: pausing after a loss until 10:35' }), 'info');
-    // a second loss in a row ends the day
-    ds.scalpClosed(x.day, { pnl: -5 });
-    eq('two losses in a row: done for today', [x.day.status, x.day.why], ['done', '2 losses in a row']);
-    fs.rmSync(sdir, { recursive: true, force: true });
-  }
-
-  // The options book with no chain in hand when the VWAP break comes (a restart, then Cboe failing): the
-  // contracts are held and sold when the chain loads, not written off as unbid.
-  {
-    const odir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-test-'));
-    let TO = atDay('12:31');
-    const M = fakeMarket(() => TO), { W } = M;
-    const od = new Desk(deskConfig(odir), { feeds: M.feeds, now: () => TO });
-    od.quiet = true;
-    TO = atDay('12:31'); M.setMinutes(12 * 60 + 30); await od.step();
-    TO = atDay('12:32') + 10000; M.setMinutes(12 * 60 + 31);
-    W.chain = { expiry: DAYX, spot: 703.62, at: atDay('12:31'), calls: [M.call(704, 0.3, 0.31, 0.5), M.call(705, 0.09, 0.1, 0.15), M.call(706, 0.04, 0.05, 0.1)], puts: [] };
-    await od.step();
-    const ox = od.state.books.options, held = ox.lots.length;
-    TO = atDay('12:42') + 12000; M.setMinutes(12 * 60 + 41, { 761: 701.5 });
-    const chain = { ...W.chain, spot: 701.5, at: atDay('12:41'), calls: [M.call(704, 0.1, 0.11, 0.6), M.call(705, 0.05, 0.06, 0.22), M.call(706, 0.01, 0.02, 0.1)] };
-    od.mkt.chain = null; W.chain = null;
-    await od.step();
-    eq('no chain on the minute SPY closes through VWAP: both contracts are still held, none written off', [held, ox.lots.length, ox.realized], [2, 2, 0]);
-    TO += 61000; W.chain = chain;
-    await od.step();
-    eq('the next round, with the chain back, sells them at the bid', [ox.lots.length, ox.trades[0].open], [0, 0]);
-    ok('at a real price, not a write-off', ox.realized > -20, ox.realized);
-    fs.rmSync(odir, { recursive: true, force: true });
-  }
-
-  // An expired option settles against SPY's close on its expiry day, not whatever SPY is when the desk next runs.
-  {
-    const sdir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-test-'));
-    let TX = clock.etToUtc('2026-09-24T11:00:00');
-    const M = fakeMarket(() => TX);
-    const dx = new Desk(deskConfig(sdir2), { feeds: M.feeds, now: () => TX });
-    dx.quiet = true;
-    const ox = dx.state.books.options;
-    const lot = { id: 1, trade: 'T1', qty: 2, cost: 20, strike: 705, right: 'C', osi: 'SPY260923C00705000', expiry: DAYX, entry: 0.1, role: 'first', openedAt: 0 };
-    ox.lots.push(lot);
-    dx.mkt.spy.quote = { last: 712 };
-    dx.settleLot('options', lot);
-    eq('without that day\'s close the lot waits', ox.lots.length, 1);
-    dx.mkt.spy.daily = [{ day: DAYX, c: 700 }];
-    dx.settleLot('options', lot);
-    eq('with it, a 705 call that expired out of the money is worth nothing though SPY is 712 now', [ox.lots.length, ox.realized, ox.cash], [0, -20, 1000]);
-    fs.rmSync(sdir2, { recursive: true, force: true });
-  }
-
-  // A read that brings two new minute bars must not drop a dip trigger on the first.
-  {
-    const ddir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-test-'));
-    let TD = atDay('10:06');
-    const M = fakeMarket(() => TD);
-    const dd = new Desk(deskConfig(ddir), { feeds: M.feeds, now: () => TD });
-    dd.quiet = true;
-    const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
-    const calls = [M.call(700, 0.64, 0.66, 1.5), M.call(701, 0.28, 0.3, 1), M.call(702, 0.1, 0.12, 0.6)];
-    // 10:04 alone, then 10:05 and 10:06 in one read: the trigger is on 10:05
-    TD = atDay('10:05') + 5000; M.setMinutes(10 * 60 + 4, { 598: 698, 611: 700.2, 616: 701.5, 621: 701 }); M.W.chain = { expiry: DAYX, spot: 698.12, at: atDay('10:04'), calls, puts: [] };
-    await dd.step();
-    TD = atDay('10:07') + 5000; M.setMinutes(10 * 60 + 6, { 598: 698, 606: 697.9, 611: 700.2, 616: 701.5, 621: 701 }); M.W.chain = { expiry: DAYX, spot: 698.16, at: atDay('10:06'), calls, puts: [] };
-    await dd.step();
-    eq('two bars in one read: the dip bought on the first', dd.state.books.dips.lots.map((l) => l.strike), [701, 701]);
-    fs.rmSync(ddir, { recursive: true, force: true });
-  }
-
-  // A morning dip (2026-09-29): tools/desk-fixture.js playDipMorning, round by round, on one-minute bars.
-  {
-    const pdir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-test-'));
-    let TP = atDay('10:05');
-    const M = fakeMarket(() => TP);
-    const dp = new Desk(deskConfig(pdir), { feeds: M.feeds, now: () => TP });
-    dp.quiet = true;
-    const x = dp.state.books.dips;
-    const rounds = [];
-    const real = dp.step.bind(dp);
-    let reads = 0;
-    const expiry = M.feeds.expiry;
-    M.feeds.expiry = async (...a) => { reads++; return expiry(...a); };
-    dp.step = async () => { const r0 = reads; await real(); rounds.push({ lots: x.lots.map((l) => [l.strike, l.role, l.entry, l.stop, l.spy, l.reclaimM, l.peak]), cash: x.cash, realized: x.realized, reads: reads - r0 }); };
-    await playDipMorning(dp, M, (t) => { TP = t; });
-    eq('10:04: turning, but before 10:05: nothing bought', rounds[0].lots, []);
-    eq('10:05: two 701 calls at 0.30, stop 697.39, bought with SPY at 698.14', rounds[1].lots, [[701, 'first', 0.3, 697.39, 698.14, null, 0.3], [701, 'runner', 0.3, 697.39, 698.14, null, 0.3]]);
-    eq('$60 of premium and 6 cents of fees', rounds[1].cash, 939.94);
-    eq('10:10: SPY still under VWAP: held, and the 6 MB chain is not read', [rounds[2].lots.length, rounds[2].reads], [2, 0]);
-    eq('10:11: SPY back over VWAP: the first sells at 0.55, and the runner rides from that minute', rounds[3].lots, [[701, 'runner', 0.3, 697.39, 698.14, 611, 0.55]]);
-    eq('banked $24.94 on it', rounds[3].realized, 24.94);
-    eq("10:16: five minutes on, the runner's bid is read: 0.95, more than double, held", [rounds[4].lots.map((l) => l[6]), rounds[4].reads], [[0.95], 1]);
-    eq('10:21: bid 0.60, under halfway back to its cost: out', rounds[5].lots, []);
-    eq('realised: +24.94 and +29.94', x.realized, 54.88);
-    eq('cash reconciles to the penny', x.cash, 1054.88);
-    eq('one trade, two calls, closed', x.trades.map((t) => [t.strike, t.qty, t.pnl, t.open]), [[701, 2, 54.88, 0]]);
-    const js = fs.readFileSync(path.join(pdir, 'desk', 'journal-2026-09-23.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-    const df = js.filter((j) => j.kind === 'FILL' && j.book === 'dips');
-    eq('every dip fill is journaled with its reason', df.map((j) => [j.side, j.qty, j.px, j.why.split(' (')[0]]), [
-      ['buy', 2, 0.3, 'dip buy: SPY turned up off 697.99 at 10:05'], ['sell', 1, 0.55, 'SPY closed back above VWAP at 10:11'], ['sell', 1, 0.6, 'gave back half its gain from $0.95']]);
-    eq('a buy journals the dip it bought: SPY, the open, the low, the dip in ATRs, the stop', [df[0].spy, df[0].open, df[0].low, df[0].dipAtr, df[0].stop], [698.14, 700, 697.99, 0.335, 697.39]);
-    eq('and each fill the minute it acted on against the chain: in step', df.map((j) => j.skewSec), [0, 0, 0]);
-    eq('the scalp book passed on its breakout (no delta in this chain)', dp.state.books.scalps.lots.length + dp.state.books.scalps.trades.length, 0);
-    const snap = dp.snapshot();
-    eq('the page gets the dip day and where SPY stands against the dip', [snap.dips.enabled, snap.dips.day.entries, snap.dips.spy.open, snap.dips.spy.need, snap.dips.spy.m], [true, 1, 700, 698.5, 621]);
-    eq("its decisions are decisions, not routine", logLevel({ agent: 'BRAM', kind: 'PASS', text: 'dips: noon, done for today · no dip to buy by noon' }), 'info');
-    // a losing trade ends the day
-    dp.dipClosed(x.day, { pnl: -12 });
-    eq('a loss: done for today', [x.day.status, x.day.why], ['done', 'a trade lost $12.00']);
-    fs.rmSync(pdir, { recursive: true, force: true });
   }
 
   // A ledger from before the scalp and dip books (2026-09-29) and the runner book (2026-09-30) gets them as
@@ -838,117 +587,6 @@ async function engineTests() {
     near('and has paid no fee to buy in', pd.benchFee('crypto'), r2(fee * 2 / 3), 0.011);
   }
 
-  // The runner book, round by round: a first scan only looks, the next buys the runners still climbing (a
-  // quarter of the book each, Robinhood's 0.95%, in the coin's own step), the trail sells one 10% off its
-  // best, and a coin sold waits 12 hours. The journal rebuilds the book to the penny.
-  {
-    const rdir = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-test-'));
-    let t = T;
-    const rd = new Desk({ ...cfg, dataDir: rdir }, { feeds, now: () => t });
-    rd.quiet = true;
-    const saved = { stats: W.stats, books: { ...W.books } };
-    const run = (id, open, last, high, volume) => ({ [id]: { open, high: high ?? last, low: open, last, volume } });
-    W.stats = { ...run('QNT-USD', 250, 298, 300, 1e5), ...run('NEAR-USD', 5, 5.25, 5.3, 1e7), ...run('ENA-USD', 0.2, 0.23, 0.231, 1e8) };
-    const setBook = (id, px) => { W.books[id] = { bids: [{ price: px - px * 0.001, size: 1e9 }], asks: [{ price: px + px * 0.001, size: 1e9 }] }; };
-    setBook('QNT-USD', 298); setBook('ENA-USD', 0.23);
-    W.products['ENA-USD'] = 0.1;
-    const rb = rd.state.books.runners;
-    await rd.runnerBook();
-    eq('the first scan only looks: climbing needs a scan before it', [rb.lots.length, rb.scan.top.map((r) => r.status)], [0, ['first look: climbing is checked at the next scan', 'first look: climbing is checked at the next scan', 'needs 8%']]);
-    t += 60000; W.stats['QNT-USD'].last = 299;
-    await rd.runnerBook();
-    eq('a minute on, the book does not scan again', rb.scans, 1);
-    t += 120000; W.stats['QNT-USD'].last = 299; W.stats['ENA-USD'].last = 0.2305;
-    await rd.runnerBook();
-    eq('three minutes on, both runners still climbing are bought, strongest first', rb.lots.map((l) => l.sym), ['QNT-USD', 'ENA-USD']);
-    const [qnt, ena] = rb.lots;
-    ok('each for a quarter of the book, the fee inside it, to the coin\'s step', qnt.cost <= 250 && qnt.cost > 249.69 && ena.cost <= 250 && ena.cost > 248.5, rb.lots.map((l) => l.cost));
-    near("at Robinhood's 0.95%", ena.cost - ena.qty * ena.entry, ena.qty * ena.entry * 0.0095, 0.011);
-    ok('in the step Coinbase sells the coin in (QNT in thousandths)', Math.abs(qnt.qty * 1000 - Math.round(qnt.qty * 1000)) < 1e-6, qnt.qty);
-    eq('its best so far is the scan price it was bought at', [ena.peak, qnt.peak], [0.2305, 299]);
-    const jr = fs.readFileSync(path.join(rdir, 'desk', `journal-${clock.et(t).day}.jsonl`), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((j) => j.kind === 'FILL' && j.book === 'runners');
-    eq('each buy is journaled with the run it bought: the move, how far off the high, the dollars traded', [jr[1].sym, jr[1].move, jr[1].volUsd], ['ENA-USD', 0.1525, 23050000]);
-    ok('and said on the floor as a signal', rd.state.log.some((l) => l.agent === 'BRAM' && l.kind === 'SIGNAL' && /^runners: ENA is running: up 15\.3% in 24 hours/.test(l.text)));
-    // QNT climbs to 330, then falls back: 297 is exactly 10% under its best, and it goes
-    t += 180000; W.stats['QNT-USD'].last = 330; W.stats['QNT-USD'].high = 330;
-    await rd.runnerBook();
-    eq('a new high raises its best', qnt.peak, 330);
-    near('and marks the book at the scan', rd.bookValue('runners'), r2(rb.cash + ena.qty * 0.2305 + qnt.qty * 330), 0.011);
-    t += 180000; W.stats['QNT-USD'].last = 297; setBook('QNT-USD', 297);
-    await rd.runnerBook();
-    eq('10% under its best, it is sold', rb.lots.map((l) => l.sym), ['ENA-USD']);
-    const qt = rb.trades.find((x) => x.sym === 'QNT-USD');
-    eq('the trade is closed with why', [qt.open, qt.why], [false, 'fell 10% from its best since bought']);
-    near('its P&L is what the sale brought less what it cost', qt.pnl, rb.realized, 0.001);
-    ok('a coin sold waits 12 hours', rb.cool['QNT-USD'] === t);
-    t += 180000; W.stats['QNT-USD'].last = 320; W.stats['QNT-USD'].high = 320;
-    await rd.runnerBook();
-    eq('...even when it runs again', [rb.lots.map((l) => l.sym), rb.scan.top.find((r) => r.id === 'QNT-USD').status], [['ENA-USD'], 'sold in the last 12 hours']);
-    // the daily check replays the book from its journal
-    const dc = require('./desk-check');
-    const ev = dc.readDesk(path.join(rdir, 'desk'));
-    eq('the journal rebuilds the runner book to the penny', dc.compare(dc.rebuild(ev.events, rd.state), rd.state), []);
-    const snap = rd.snapshot(), rbk = snap.books.find((x) => x.key === 'runners');
-    eq('the floor gets the book, its coin, where it goes out, and the scan', [rbk.rows.map((r) => [r.name, r.stop]), snap.runners.n, snap.runners.slots],
-      [[['ENA', r6(0.2305 * 0.9)]], 3, 4]);
-    // past the day's loss limit it buys nothing, and says so
-    t += 180000; W.stats['NEAR-USD'] = run('NEAR-USD', 5, 5.6, 5.61, 1e7)['NEAR-USD']; rd.halt = 'down 6% today';
-    await rd.runnerBook();
-    t += 180000; W.stats['NEAR-USD'].last = 5.605;
-    await rd.runnerBook();
-    ok('halted, a runner is not bought', !rb.lots.some((l) => l.sym === 'NEAR-USD') && rd.state.log.some((l) => /^runners: NEAR is running.*not buying: down 6% today/.test(l.text)), rb.lots.map((l) => l.sym));
-    // Coinbase's product list failing (only buying needs it) or a held coin dropping out of the figures must
-    // not stop the book from selling what it holds
-    rd.halt = null; rb.lots.length = 0; rb.cool = {};
-    rb.lots.push({ id: 90, trade: 'R90', sym: 'ENA-USD', qty: 1000, cost: 230, entry: 0.23, peak: 0.2305, mark: 0.2305, openedAt: t });
-    rd.mkt.runners.steps = null; rd.mkt.runners.stepsAt = 0; rd.mkt.runners.failAt = 0;
-    const realProducts = feeds.coinProducts;
-    feeds.coinProducts = async () => { throw new Error('503'); };
-    t += 180000; W.stats['ENA-USD'].last = 0.2; setBook('ENA-USD', 0.2);
-    await rd.runnerBook();
-    eq('with the product list down, a coin 10% off its best is still sold', rb.lots.length, 0);
-    feeds.coinProducts = realProducts;
-    rb.lots.push({ id: 91, trade: 'R91', sym: 'ENA-USD', qty: 1000, cost: 230, entry: 0.23, peak: 0.2305, mark: 0.2305, openedAt: t - 49 * 3600000 });
-    delete W.stats['ENA-USD']; setBook('ENA-USD', 0.2);
-    t += 180000;
-    await rd.runnerBook();
-    eq('a coin gone from the 24-hour figures is sold once it has been held 48 hours', rb.lots.length, 0);
-    // Switched off (DESK_RUNNERS=0, the default since 2026-10-08): the next scan sells what it holds, at once and
-    // whatever its trail says, and buys nothing; flat, the round stops calling it and the daily check says it is off
-    W.stats['ENA-USD'] = run('ENA-USD', 0.2, 0.23, 0.231, 1e8)['ENA-USD']; setBook('ENA-USD', 0.23);
-    rb.lots.push({ id: 92, trade: 'R92', sym: 'ENA-USD', qty: 1000, cost: 230, entry: 0.23, peak: 0.23, mark: 0.23, openedAt: t });
-    rb.trades.unshift({ id: 'R92', sym: 'ENA-USD', qty: 1000, entry: 0.23, cost: 230, openedAt: t, open: true, pnl: 0 });
-    W.stats['NEAR-USD'] = run('NEAR-USD', 5, 5.6, 5.61, 1e7)['NEAR-USD']; setBook('NEAR-USD', 5.6); W.products['NEAR-USD'] = 0.1;
-    rd.D = { ...rd.D, runners: false };
-    t += 180000; W.stats['NEAR-USD'].last = 5.605;
-    await rd.bram();
-    eq('off, a coin still well inside its trail is sold at the next scan', [rb.lots.length, rb.trades[0].why], [0, 'the book is switched off']);
-    ok('and nothing is bought, however hard a coin runs', !rb.trades.some((x) => x.sym === 'NEAR-USD'), rb.trades.map((x) => x.sym));
-    eq('the book is marked off in the state', rb.off, true);
-    const scans = rb.scans;
-    t += 180000;
-    await rd.bram();
-    eq('flat and off, it scans no more', rb.scans, scans);
-    eq('the daily check says it is off, not stopped', [dc.health(rd.state, t + 3600000).problems.filter((x) => /runners/.test(x)), dc.health(rd.state, t + 3600000).lines.filter((x) => /runners/.test(x))],
-      [[], ['runners: switched off, holding nothing']]);
-    eq('the journal still rebuilds the book to the penny', dc.compare(dc.rebuild(dc.readDesk(path.join(rdir, 'desk')).events, rd.state), rd.state), []);
-    eq('the floor says switched off', rd.snapshot().runners.enabled, false);
-    // the options and scalp books off (the default since 2026-10-08): marked off in the state, and on a trading
-    // afternoon the daily check says so instead of calling a missing 12:30 verdict or a book not watching a problem
-    rd.D = { ...rd.D, options: false, scalps: false, dips: false };
-    t += 60000;
-    await rd.bram();
-    eq('off books are marked off', [rd.state.books.options.off, rd.state.books.scalps.off, rd.state.books.dips.off], [true, true, true]);
-    const thu = clock.atMin('2026-10-08', 13 * 60 + 30), st = { ...rd.state, startedAt: 0 };
-    const hh = dc.health(st, thu);
-    eq('the daily check: switched off, not a problem', [hh.problems.filter((x) => /^(options|scalps|dips)/.test(x)), hh.lines.filter((x) => /^(options|scalps|dips)/.test(x))],
-      [[], ['options: switched off', 'scalps: switched off', 'dips: switched off']]);
-    eq('the floor says switched off', [rd.snapshot().options.enabled, rd.snapshot().scalps.enabled], [false, false]);
-    rd.D = { ...rd.D, runners: true, options: true, scalps: true, dips: true };
-    W.stats = saved.stats; W.books = saved.books; delete W.products['ENA-USD']; delete W.products['NEAR-USD'];
-    fs.rmSync(rdir, { recursive: true, force: true });
-  }
-
   // the loss limit: no new buying, selling still allowed
   const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'desk-test-'));
   const d2 = new Desk({ ...cfg, dataDir: fresh }, { feeds, now: () => T });
@@ -1026,35 +664,6 @@ async function auditTests() {
     ok('a sub-cent coin keeps its price to 8 significant digits, not 6 decimals', f.avg > 0 && Math.abs(f.avg - 3.70e-6) < 1e-12, f);
     const g = broker.fill({ kind: 'crypto', side: 'buy', qty: 100 }, { bid: 99.6, ask: 99.666667 }, { cryptoBps: 40 });
     ok('...and an ordinary price is unchanged', g.avg === 99.666667, g);
-  }
-
-  // an option that expired today settled on whatever quote the desk held, however old
-  {
-    const dir = mkDir();
-    let T = atT('10:06');
-    const M = fakeMarket(() => T);
-    const desk = new Desk(deskConfig(dir), { feeds: M.feeds, now: () => T }); desk.quiet = true;
-    M.setMinutes(10 * 60 + 5);
-    M.W.chain = { expiry: D0, spot: 700.7, at: atT('10:05'), calls: [M.call(700, 1.5, 1.51, 1.6, 0.58), M.call(701, 0.99, 1, 1.2, 0.45), M.call(702, 0.6, 0.61, 0.7, 0.33)], puts: [] };
-    await desk.step();
-    const lot = desk.state.books.scalps.lots[0];
-    ok('a scalp lot is held to settle', !!lot);
-    lot.strike = 700.5;                                    // 0.60 in the money on the after-hours quote, worthless on the close
-    const dead = async () => { throw new Error('Cboe down'); };
-    const alive = { ...M.feeds };
-    Object.assign(M.feeds, { quote: dead, intraday: dead, expiry: dead, daily: dead });
-    T = atT('16:21'); await desk.step();
-    ok('Cboe down since 10:05: the lot waits for the close, not settles on a six-hour-old quote', desk.state.books.scalps.lots.length === 1 && !settles(dir).length, settles(dir));
-    // Cboe is back: the day's bars run to the 16:00 bar (700.20) while the quote has moved on after hours (701.10)
-    Object.assign(M.feeds, alive);
-    const bars = M.W.intra.bars.slice();
-    bars.push({ day: D0, m: 960, t: atT('16:00'), o: 700.2, h: 700.3, l: 700.1, c: 700.2, v: 1 });
-    M.W.intra = { day: D0, bars };
-    M.W.quote = { ...M.W.quote, last: 701.1, bid: 701.09, ask: 701.11, at: T - 60000 };
-    T += 60000; await desk.step();
-    const sl = settles(dir);
-    ok('with the 16:00 bar in hand it settles on the close (700.20), not the after-hours quote', sl.length === 1 && sl[0].spy === 700.2 && sl[0].value === 0, sl);
-    fs.rmSync(dir, { recursive: true, force: true });
   }
 
   // one coin's dead ticker used to freeze the whole crypto book
@@ -1140,23 +749,6 @@ async function auditTests() {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 
-  // a fill's bookmarks reach the disk with it: the entry bar the exit scan starts after
-  {
-    const dir = mkDir();
-    let T = atT('12:31');
-    const M = fakeMarket(() => T); M.setMinutes(12 * 60 + 30);
-    const desk = new Desk(deskConfig(dir), { feeds: M.feeds, now: () => T }); desk.quiet = true;
-    await desk.step();
-    T = atT('12:32') + 10000; M.setMinutes(12 * 60 + 31);
-    M.W.chain = { expiry: D0, spot: 703.62, at: atT('12:31'), calls: [M.call(704, 0.3, 0.31, 0.5), M.call(705, 0.09, 0.1, 0.15), M.call(706, 0.04, 0.05, 0.1)], puts: [] };
-    await desk.step();
-    const mem = desk.state.books.options.day;
-    const onDisk = JSON.parse(fs.readFileSync(path.join(dir, 'desk', 'state.json'), 'utf8')).books.options;
-    ok('the options book bought on the 12:31 bar', onDisk.lots.length > 0 && mem.entryBarM === 12 * 60 + 31, [onDisk.lots.length, mem.entryBarM]);
-    ok('...and the saved state already carries that entry bar: a hard kill must not lose which bar the exits start after', onDisk.day && onDisk.day.entryBarM === 12 * 60 + 31, onDisk.day);
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-
   // ---- audit 2026-10-07, the rules pass
   // the daily-loss halt holds for the rest of the Eastern day
   {
@@ -1176,24 +768,6 @@ async function auditTests() {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 
-  // a scalp's time exit with no bid on the contract must not throw
-  {
-    const dir = mkDir();
-    let T = atT('10:06');
-    const M = fakeMarket(() => T);
-    const desk = new Desk(deskConfig(dir), { feeds: M.feeds, now: () => T }); desk.quiet = true;
-    M.setMinutes(10 * 60 + 5);
-    M.W.chain = { expiry: D0, spot: 700.7, at: atT('10:05'), calls: [M.call(700, 1.5, 1.51, 1.6, 0.58), M.call(701, 0.99, 1, 1.2, 0.45), M.call(702, 0.6, 0.61, 0.7, 0.33)], puts: [] };
-    await desk.step();
-    ok('a scalp is held', desk.state.books.scalps.lots.length === 1);
-    T = atT('10:21'); M.setMinutes(10 * 60 + 20);
-    M.W.chain = { expiry: D0, spot: 700.8, at: atT('10:20'), calls: [M.call(700, 1.4, 1.41, 1.6, 0.55), M.call(701, null, 1.06, 1.2, 0.44), M.call(702, 0.7, 0.71, 0.95, 0.35)], puts: [] };
-    await desk.step();
-    ok('fifteen minutes in, the contract has no bid: the round does not fail', !desk.state.log.some((l) => /desk round failed/.test(l.text)), desk.state.log.slice(0, 3).map((l) => l.text));
-    ok('...and the time exit sells it, saying why', desk.state.books.scalps.lots.length === 0 && desk.state.fills.some((f) => f.book === 'scalps' && f.side === 'sell' && /no bid/.test(f.why || '')), desk.state.fills.slice(0, 2));
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-
   // the dip runner is not faded on a bar before the reclaim
   {
     const lot = { role: 'runner', stop: 697.5, spy: 698.14, entry: 0.3, reclaimM: 611 };     // handed over by the sibling that sold on the 10:11 reclaim
@@ -1205,35 +779,12 @@ async function auditTests() {
     ok('the same close after the reclaim is', after.exit && after.exit.kind === 'fade' && after.exit.bar.m === 612, after.exit);
   }
 
-  // the options book takes a trigger one bar late, when a single read brought two bars
-  {
-    const dir = mkDir();
-    let T = atT('12:31');
-    const M = fakeMarket(() => T); M.setMinutes(12 * 60 + 30);
-    const desk = new Desk(deskConfig(dir), { feeds: M.feeds, now: () => T }); desk.quiet = true;
-    await desk.step();
-    T = atT('12:33') + 10000; M.setMinutes(12 * 60 + 32);                 // the 12:32 round never ran: this read has the 12:31 trigger AND the 12:32 bar
-    M.W.chain = { expiry: D0, spot: 703.62, at: atT('12:31'), calls: [M.call(704, 0.3, 0.31, 0.5), M.call(705, 0.09, 0.1, 0.15), M.call(706, 0.04, 0.05, 0.1)], puts: [] };
-    await desk.step();
-    const o = desk.state.books.options;
-    ok('the 12:31 trigger is bought although the 12:32 bar is already in', o.lots.length > 0 && o.day.entryBarM === 12 * 60 + 31, { lots: o.lots.length, entry: o.day.entryBarM, log: desk.state.log.slice(0, 2).map((l) => l.text) });
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-
-  // the two hand-kept lists say when they have run out
+  // the two hand-kept lists say when they were read
   {
     ok('the runner list no longer holds coins Coinbase has no USD market for', !['CASHCAT', 'CC', 'GRAM', 'MEW', 'MNT', 'LIT'].some((c) => B.RUNNER_COINS.has(c)) && B.RUNNER_COINS.has('BONK'));
     ok('...and says when Robinhood\'s list was read', /^\d{4}-\d{2}-\d{2}$/.test(B.RUNNER_COINS_AS_OF) && B.RUNNER_COINS_STALE_DAYS > 0 && B.FED_LAST === '2026-12-09');
-    const dir = mkDir();
-    let T = atT('12:31');
-    const M = fakeMarket(() => T); M.setMinutes(12 * 60 + 30);
-    const desk = new Desk(deskConfig(dir), { feeds: M.feeds, now: () => T }); desk.quiet = true;
-    await desk.step();
-    ok('the runner scan names the list entries with no Coinbase figures', desk.state.log.some((l) => /have no Coinbase USD figures and cannot run/.test(l.text)));
-    T = clock.etToUtc('2026-12-01T12:00:00'); desk.tess();
-    const said = desk.state.log.map((l) => l.text);
-    ok('on 2026-12-01 TESS says the Fed days run out on 12-09 and the runner list is over 60 days old', said.some((t) => /Fed days.*end 2026-12-09/.test(t)) && said.some((t) => /runner coin list.*2026-09-30/.test(t)), said.slice(0, 4));
-    fs.rmSync(dir, { recursive: true, force: true });
+    // (the desk said so itself while the scalp and runner books traded; they were retired on 2026-10-17, and the
+    // lists stay for tools/spy-lab.js and tools/runner-lab.js)
   }
 
   // ---- audit 2026-10-07, follow-ups

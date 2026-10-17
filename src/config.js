@@ -690,11 +690,8 @@ module.exports = {
     scalpsUsd: num('DESK_SCALPS_USD', 1000),
     // the dip book (src/desk/books.js DIP): two calls of at most $0.45 at a time
     dipsUsd: num('DESK_DIPS_USD', 1000),
-    // the runner book (src/desk/books.js RUNNER, 2026-09-30): coins popping right now, four at most, a
-    // quarter of the book each, scanned every 3 minutes, at Robinhood's 0.95% a side (Evan's own fills)
+    // the runner book (2026-09-30 to 10-08, retired 10-17); tools/runner-lab.js keeps its own 0.95% fee
     runnersUsd: num('DESK_RUNNERS_USD', 1000),
-    runnerFeeBps: num('DESK_RUNNER_FEE_BPS', 95),
-    runnerEverySec: Math.max(60, num('DESK_RUNNER_EVERY_SEC', 180)),
     // XRP and DOGE since 2026-09-30 (Evan: BTC and ETH "barely move"); a coin added here joins a running
     // ledger with its own slot of cash (src/desk/engine.js addCoins), and one taken out keeps its slot
     coins: env('DESK_COINS', 'BTC-USD,ETH-USD,SOL-USD,XRP-USD,DOGE-USD').split(',').map((s) => s.trim()).filter(Boolean),
@@ -708,23 +705,11 @@ module.exports = {
     cryptoFeeBps: num('DESK_CRYPTO_FEE_BPS', 40),
     stockFeeBps: num('DESK_STOCK_FEE_BPS', 0),
     optionFee: num('DESK_OPTION_FEE', 0.03),
-    // the options and scalp books are off since 2026-10-08 (Evan: "go"), on tools/spy-lab.js: over two years SPY moved
-    // -0.02 and 0.00 points the trades' way after their triggers. Off, a book buys nothing; what it holds still
-    // leaves by its own exits (same-day contracts, all out by 3:15).
-    options: env('DESK_OPTIONS', '0') !== '0',
-    scalps: env('DESK_SCALPS', '0') !== '0',
-    // off since 2026-10-08 too (Evan: "fix that"): tools/spy-lab.js found +$2 a trade on 150 trades, and the one change
-    // chosen on 2024-25 (a 0.15 ATR dip) fell from +$7 to +$2 a trade on 2026, while the worst two on 2024-25 were the
-    // best two on 2026: noise, not a pattern to tune
-    dips: env('DESK_DIPS', '0') !== '0',
-    // off since 2026-10-08 (Evan: "off", after tools/runner-lab.js: the rule lost over four years, 3 of 20 quarters
-    // up, and lost even with no fee). Off, the book sells what it holds at its next scan and then buys nothing.
-    runners: env('DESK_RUNNERS', '0') !== '0',
+    // The options, scalp, dip and runner books were switched off on 2026-10-08 (tools/spy-lab.js, tools/runner-lab.js:
+    // no edge) and retired on 2026-10-17: DESK_OPTIONS, DESK_SCALPS, DESK_DIPS and DESK_RUNNERS no longer exist. Their
+    // cash settings above stay: a ledger started before them is given their books as cash (engine addBook).
     // no new buying for the rest of the Eastern day past this loss on the whole desk; selling is never blocked
     maxDailyDdPct: num('DESK_MAX_DAILY_DD', 0.05),
-    // an option is bought only off a chain whose own time is within this many seconds of the trigger
-    // bar's close (src/desk/books.js chainSync); sales are never held back, only flagged
-    chainSkewSec: Math.max(0, num('DESK_CHAIN_SKEW_SEC', 120)),
     everySec: Math.max(5, num('DESK_EVERY_SEC', 10)),
   },
 
