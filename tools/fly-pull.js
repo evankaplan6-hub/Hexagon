@@ -22,6 +22,8 @@
 // the same way, "td/td-YYYY-MM-DD.jsonl" into archive/td/: a file is named by its game's Eastern day
 // and written only on that day, so a closed day is a finished file. Its td.log and games.json are
 // not copied (the daily check reads them on the box); like journals, a td file is never deleted.
+// Since 2026-10-17 the odds tape (src/oddssched.js, /data/odds) comes down the same way, "odds/odds-YYYY-MM-DD.jsonl"
+// into archive/odds/, named by the Eastern day of the read; its odds.log, games.json and state.json stay on the box.
 //
 // The rules, all decided in planPull (pure, tested in tools/disk-test.js):
 //   - a file is copied only once its Eastern day is over (today's files are still being written);
@@ -51,7 +53,7 @@ const { execFileSync } = require('child_process');
 const { ET_DAY } = require('../src/recorder');
 
 // what is copied, by its path under /data: the dated files in /data, the desk's journals in /data/desk, the td tape in /data/td
-const DATED = /^(ticks|journal|whales|probes|desk\/journal|td\/td)-(\d{4}-\d{2}-\d{2})\.jsonl$/;
+const DATED = /^(ticks|journal|whales|probes|desk\/journal|td\/td|odds\/odds)-(\d{4}-\d{2}-\d{2})\.jsonl$/;
 // what --trim may delete from the box once the Mac has it: the tapes and the probe files in /data itself
 const TRIMMED = /^(ticks|probes)-(\d{4}-\d{2}-\d{2})\.jsonl$/;
 // a download that fails is tried this many times in all, each from an empty temp file: on 2026-09-23
@@ -151,7 +153,7 @@ function planPull(boxFiles, localFiles, { todayET, keep = 3, trim = false } = {}
 function listDir({ dir, todayET, only, nowMs }) {
   const fs = require('fs'), path = require('path'), crypto = require('crypto');
   // [a folder under `dir`, the names in it that are ours]
-  const AREAS = [['', /^(ticks|journal|whales|probes)-(\d{4}-\d{2}-\d{2})\.jsonl$/], ['desk', /^(journal)-(\d{4}-\d{2}-\d{2})\.jsonl$/], ['td', /^(td)-(\d{4}-\d{2}-\d{2})\.jsonl$/]];
+  const AREAS = [['', /^(ticks|journal|whales|probes)-(\d{4}-\d{2}-\d{2})\.jsonl$/], ['desk', /^(journal)-(\d{4}-\d{2}-\d{2})\.jsonl$/], ['td', /^(td)-(\d{4}-\d{2}-\d{2})\.jsonl$/], ['odds', /^(odds)-(\d{4}-\d{2}-\d{2})\.jsonl$/]];
   const own = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' })
     .format(new Date(nowMs == null ? Date.now() : nowMs));
   const today = todayET && todayET < own ? todayET : own;
@@ -439,7 +441,7 @@ function run(argv, { now = () => new Date(), fly = findFly(), cwd = process.cwd(
       for (const dir of new Set(plan.copy.map((f) => path.dirname(path.join(dest, f.name))))) {
         fs.mkdirSync(dir, { recursive: true });
         for (const n of fs.readdirSync(dir)) {
-          if (/^\.(ticks|journal|whales|probes|td)-\d{4}-\d{2}-\d{2}\.jsonl\.\d+\.part$/.test(n)) { try { fs.unlinkSync(path.join(dir, n)); } catch { /* next run */ } }
+          if (/^\.(ticks|journal|whales|probes|td|odds)-\d{4}-\d{2}-\d{2}\.jsonl\.\d+\.part$/.test(n)) { try { fs.unlinkSync(path.join(dir, n)); } catch { /* next run */ } }
         }
       }
     } catch (e) { prepFailed = true; problem(`could not prepare ${shown}: ${e.message}`); }

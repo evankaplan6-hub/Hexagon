@@ -448,6 +448,8 @@ if (desk) desk.start().catch((e) => { console.error('desk failed to start:', e);
 if (cfg.chains) require('./src/chainsched').start({ dataDir: cfg.dataDir, keepDays: cfg.chainsKeepDays });
 // The anytime-touchdown tape (TD_TAPE=1: the box, which never sleeps through a kickoff; src/tdsched.js).
 if (cfg.tdTape) require('./src/tdsched').start({ dataDir: cfg.dataDir });
+// The odds tape (ODDS_TAPE=1 and ODDS_API_KEY: the box; src/oddssched.js), log only.
+if (cfg.oddsTape) require('./src/oddssched').start({ dataDir: cfg.dataDir });
 
 // A deploy stops the desk with SIGTERM, so STOP is what tells a deploy's restart from a crash's.
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { lifecycle('STOP', { signal: sig }); engine.save(); if (desk) desk.save(); console.log('\nstate saved, bye'); process.exit(0); });

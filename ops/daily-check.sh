@@ -36,6 +36,8 @@
 #      options desk well?                 book did today's check (crypto after midnight UTC, SPY after the
 #                                         open, the options book's 12:30 verdict), its journal rebuilds
 #                                         state.json to the penny, and each book against simply holding
+#  10. is the odds tape reading?         tools/odds-tape.js --check on the box (since 2026-10-17): the last odds.log line,
+#                                         the credits left, and any NFL game that kicked off with no read
 #   9. did the touchdown tape miss        tools/td-tape.js --check on the box (since 2026-10-16), read-only: the last td.log line,
 #      a game?                            how long ago it was (a day without a run is a PROBLEM), and each NFL
 #                                         game that kicked off in the last 48h with no tape line in the 2h
@@ -132,6 +134,12 @@ printf '%s\n' "$td" | grep -v '^Connecting to'
 if [ -f "$HEXDIR/data/td/td.log" ]; then
   printf 'the Mac'"'"'s spare tape (not counted): %s\n' "$(node tools/td-tape.js --check 2>&1 | head -1)"
 fi
+
+say "10. the odds tape on the box: the last run, the credits left, and every NFL game that kicked off with no read"
+# Read-only (tools/odds-tape.js --check, on the box against /data/odds): odds.log, games.json (The Odds API's free
+# /events listing) and the day files. Since 2026-10-17 (src/oddssched.js, ODDS_TAPE=1, the ODDS_API_KEY secret).
+odds="$("$FLY" ssh console -q -a "$APP" -C "node /app/tools/odds-tape.js --check --dir /data/odds" 2>&1)" || bad=$((bad + 1))
+printf '%s\n' "$odds" | grep -v '^Connecting to'
 
 printf '\n%s\n' "$([ "$bad" = 0 ] && echo 'every step answered, nothing flagged' || echo "$bad step(s) flagged a problem: read up")"
 exit "$bad"
