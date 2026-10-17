@@ -757,6 +757,19 @@ many games, and that is the yardstick to read it against. Paper only: `decide.be
 in live mode, and KETT refuses one there too. `BETS=1` in fly.toml turns it on; it has its own card on
 the floor ("Every game"). Code: `decide.betSignal`, BRAM finds, KETT buys.
 
+**Is every game bet? (2026-10-17.)** Not always, and until that Saturday nothing said so. Evan asked "cfb ready?":
+Kalshi listed 71 college games dated 10-17 and the box had paired 69. Kansas v Kansas State was one of the two:
+Kalshi's "Kansas" begins Polymarket's "Kansas State", so the first side to match took both names and the game
+read as a team playing itself (fixed, PR #220: the side naming more of the name wins). Counting game by game then
+found 31 more: Kalshi had listed that Saturday's games on 10-03 dated the Friday ("the Florida vs Texas college
+football game originally scheduled for Oct 16") and never re-dated them, and the matcher wanted the two venues'
+dates equal (fixed, PR #221: college looks one day back, as tennis did; the noon games were bet mid-game, as the
+rule allows). The coverage alarm (src/agents.js) fires only when a whole league pairs nothing on a day, so it saw
+neither. `node tools/bet-coverage.js` now counts the morning after (daily check step 11): every game Kalshi settled
+that day, BET, OVER THE CAP (its favourite over `BET_MAX_PX` an hour before the start), or MISSED, named. It dates a
+game by when Kalshi settled it, not by its ticker, which is the date that was wrong. A miss is a game Polymarket did
+not list, one the matcher did not pair, or one a veto stopped; the line says which game, and a person looks.
+
 ## Picking the winner (2026-10-16)
 
 Evan, after the book's first college Saturdays lost: "u should be trying to pick the winner not just a

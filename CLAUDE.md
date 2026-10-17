@@ -113,6 +113,9 @@ tools/odds-tape.js  the odds tape (2026-10-17, The Odds API free tier, Evan's ac
                   Pinnacle + US books' NFL moneylines beside Kalshi's books in the 2h before each kickoff, every 8 min on the
                   box (src/oddssched.js, ODDS_TAPE=1) → /data/odds, pulled to data/fly/archive/odds/; --grade: does Kalshi
                   trail the sharp book by more than its fee? log only; ~90 of 500 credits a week; README "The odds tape"
+tools/bet-coverage.js the game bets' coverage (2026-10-17, daily check step 11): every game Kalshi settled in BET_SERIES on a day
+                  (dated by its settlement, not its ticker: Kalshi dated Saturday 10-17's college games the Friday) against
+                  the journal's bets: bet, over the 90c cap, or MISSED, named; read-only; README "Is every game bet?"
 tools/crypto-note.js the crypto note (2026-10-17): the crypto rule against holding, each coin's aim and the next check, in
                   a dozen lines, from the real engine on a copy of the box's state (--box); paper, not advice
 src/desk/broker.js  paper fills: crypto walks Coinbase's book + 0.40%, SPY at the touch, options at the touch + $0.03
@@ -236,7 +239,8 @@ ops/              Fly deploy, launchd desk autostart (not installed), the tape p
                   + fillcheck, restarts (tools/restarts.js), CPU steal/pressure + disk + probe files, the chain tape (chain-record --check),
                   whether the encrypted secrets image is older than .env or the key, (step 8) the stocks, crypto and
                   options desk (tools/desk-check.js --box), and (step 9, since 2026-10-15) the anytime-touchdown tape
-                  (tools/td-tape.js --check on the box since 10-16: names each game whose window passed untaped, from games.json).
+                  (tools/td-tape.js --check on the box since 10-16: names each game whose window passed untaped, from games.json),
+                  (step 10) the odds tape, and (step 11, since 10-17) the game bets' coverage (tools/bet-coverage.js).
                   The box also has a disk brake (TAPE_MIN_FREE_MB) that trims its oldest tapes if the pull stops
 data/             gitignored: state.json, journal-*.jsonl, ticks-*.jsonl, desk.log (the prediction-market desk)
 data/desk/        gitignored: the stocks, crypto and options desk's state.json and journal-*.jsonl. From the box's
