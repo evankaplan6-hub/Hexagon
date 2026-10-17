@@ -192,6 +192,9 @@ tools/            edge-scan, replay, maker-replay, maker-rank, pm-maker-scan, ma
                   option-history (daily bars + open interest of EXPIRED option contracts from ChartExchange, the six chain-tape ETFs, monthly
                   expiries from 2021-07, strikes ±10% of the 70-day close range → data/options/history/<SYM>/; resumable, --repair for
                   contracts the source refused; one SPY expiry on disk, irreplaceable now that the key is gone, backed up with the pull),
+                  pick-fetch + pick-lab (2026-10-16, "pick the winner": every settled Kalshi game in BET_SERIES priced an
+                  hour and a day before the start → data/lab/picks/; no picker beat the favourite, but betting it an hour out
+                  beat a day out in MLB, so BET_AHEAD_HOURS is 1; README "Picking the winner"),
                   weather-fetch + weather-lab (Kalshi daily-high-temperature markets vs the public forecast; no edge, out of sample),
                   favorites-check (one preset rule on older settled markets from lab-fetch --historical; the non-Sports favourite lead did not replicate),
                   pnl-report (one-screen realised P&L per book from data/fly/archive + data/fly/box-now, every arb leg counted;
