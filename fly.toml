@@ -184,6 +184,13 @@ primary_region = "iad"          # Ashburn, Virginia — close to the exchange, a
 # to 12.5% for about $0.72 a month more. That Gamma listing is read every 120s since #109 (and
 # Kalshi's fast listing since #111); steal read 0% on 2026-09-24. If the box is held back again, look
 # there before turning off WHALE_WATCH or RECORD_MAKER (~5% between them).
+#
+# 1 GB since 2026-10-18 (Evan: "go"), 512 MB until then. The process's peak (VmHWM) read 363 MB of the 470 the
+# machine has free to give it on 2026-10-17 and 350 MB on 10-18, and the one restart no deploy explains
+# (2026-10-16 21:44Z, 21 minutes down, same commit) fits an out-of-memory kill: the game listings since
+# 2026-10-11 (~350 game pairs on a football weekend, each with its books) and the four tapes the box now
+# writes all grew into the same 512 MB. About $2.50 a month more. If it is ever cut back, read VmHWM first
+# (grep VmHWM /proc/<pid>/status) and keep 100 MB clear of it.
 [[vm]]
   size = "shared-cpu-2x"
-  memory = "512mb"              # the tick recorder and journals are the only real consumers
+  memory = "1gb"                # the game pairs' books, the tick recorder, the tapes and journals
