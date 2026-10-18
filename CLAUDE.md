@@ -110,9 +110,9 @@ src/desk/feeds.js   Coinbase (live) and Cboe (15 min late) parsers + fetches; th
                   books and daily candles and Cboe's SPY quote and daily bars since 2026-10-17 (the minute bars, VWAP,
                   ATR14 and the option chain stay here for tools/spy-lab.js)
 tools/odds-tape.js  the odds tape (2026-10-17, The Odds API free tier, Evan's account; ODDS_API_KEY a Fly secret, never logged):
-                  Pinnacle + US books' NFL moneylines beside Kalshi's books in the 2h before each kickoff, every 8 min on the
+                  Pinnacle + US books' NFL moneylines beside Kalshi's books in the 2h before each kickoff, every 10 min on the
                   box (src/oddssched.js, ODDS_TAPE=1) → /data/odds, pulled to data/fly/archive/odds/; --grade: does Kalshi
-                  trail the sharp book by more than its fee? log only; ~90 of 500 credits a week; README "The odds tape"
+                  trail the sharp book by more than its fee? log only; ~60-90 of 500 credits a week; README "The odds tape"
 tools/bet-record.js the game bets' record against their prices (2026-10-17): settled bets by week and league, wins vs the
                   prices' expected wins with chance's exact sd, --flips last week's picks no longer the favourite an hour
                   before the start; --box reads the box's state.json; the Monday check runs it; README "Is the book unlucky?"
