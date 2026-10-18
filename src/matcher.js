@@ -340,10 +340,16 @@ function matchPairs(pmList, ksList) {
       // College football too: Kalshi listed a week of games on 2026-10-03 before their days were set, dated the
       // Friday ("KXNCAAFGAME-26OCT16FLATEX", "the Florida vs Texas college football game originally scheduled for
       // Oct 16") and never re-dated, so 31 of Saturday 10-17's games never paired and went unbet. A college team
-      // plays once a week, so the day before cannot be another game of the same two teams; the name guards hold.
+      // plays once a week, so the day before cannot be another game of the same two teams.
+      // But a college ticker has no start time, so a lone candidate pairs on its names alone (pickByStart), and the
+      // prefix walk lets Kalshi's "Washington" be Polymarket's "Washington State": Kalshi's Friday-dated Washington v
+      // Oregon would pair with Saturday's Washington State v Oregon State once its own game had closed, and the
+      // settlement snipe could buy on a game not yet played (audit 2026-10-17, a constructed case; all 223 real day-
+      // back pairs that weekend named both teams word for word). So a college event from the day before pairs only
+      // when each Kalshi name is as many words as Polymarket's: the same name, not a prefix of a longer one.
       const days = (sport === 'tennis' || sport === 'college') && d ? [d, prevDay(d)] : [d];
       const found = [];
-      for (const ms of days.flatMap((x) => byDate.get(x) || [])) {
+      for (const [ms, dayBack] of days.flatMap((x) => (byDate.get(x) || []).map((e) => [e, x !== d]))) {
         const ser = series(ms[0].ticker);
         if (!allowed.includes(ser)) continue;
         // An event with a Tie leg is a three-way market, and a two-outcome Polymarket moneyline is not
@@ -365,7 +371,8 @@ function matchPairs(pmList, ksList) {
         // here Kalshi's first word must also begin Polymarket's first word. Not for players, whom Kalshi
         // may name by surname alone, and not for path 3's soccer clubs ("FK Bodø/Glimt" against "Bodoe/Glimt").
         const leads = (k, p) => people || (toks(k)[0] !== undefined && (toks(p)[0] || '').startsWith(toks(k)[0]));
-        const same = (x, p) => nameMatch(ksName(x), p, people) && leads(ksName(x), p);
+        const whole = (k, p) => !(dayBack && sport === 'college') || toks(k).length === toks(p).length;
+        const same = (x, p) => nameMatch(ksName(x), p, people) && leads(ksName(x), p) && whole(ksName(x), p);
         // Kalshi's "Kansas" is a prefix of Polymarket's "Kansas State" as well as of "Kansas", so the first
         // side that matched claimed both names and Kansas v Kansas State never paired (2026-10-17, the
         // favourite went unbet). When both of Kalshi's sides match a name, the one naming more of it wins.
@@ -453,7 +460,10 @@ function matchPairs(pmList, ksList) {
       // When the Kalshi market stops trading, and when its answer is expected (decide.liveWindow,
       // the close-guard exit, and the arb's lock-up all read these)
       closesAt: startMs(hit.ks.closeTime),
-      settlesAt: startMs(hit.ks.expectedExpiration) ?? startMs(hit.ks.closeTime),
+      // A game's answer cannot come before the game: Kalshi's Friday-dated college events carry a placeholder
+      // expiration of 11 PM Friday for a Saturday game (audit 2026-10-17), so a game settles no earlier than its start
+      settlesAt: (() => { const e = startMs(hit.ks.expectedExpiration) ?? startMs(hit.ks.closeTime), st = hit.kind === 'game' ? startMs(m.gameStart) : null;
+        return st != null && (e == null || e < st) ? st + 3 * 3600e3 : e; })(),
       pm: { id: m.id, tokenIndex: hit.tokenIndex, tokenId: m.tokenIds[hit.tokenIndex], question: m.question, url: m.url },
       ks: { ticker: hit.ks.ticker, title: hit.ks.title, eventTicker: hit.ks.eventTicker, url: hit.ks.url },
       // Tennis is watched, never traded. The two venues settle a match that never starts differently:

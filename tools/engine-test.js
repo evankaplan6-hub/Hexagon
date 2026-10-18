@@ -1090,6 +1090,20 @@ const position = (over = {}) => ({
     ok('KETT buys it: strategy bet, NO, about $100 all in', pos && pos.side === 'no' && pos.cost <= 100 && pos.cost > 95, pos);
     ok('the arb is still there', E.state.positions.some((p) => p.strategy === 'arb'));
     ok('its fill line names the team and the payout', said.some((l) => l.kind === 'FILL' && /game bet on Yankees, the favourite/.test(l.text) && /if the Yankees win/.test(l.text)), said);
+    // audit 2026-10-17: the listing chose the side up to 90s ago; if the live book has swung (a score, the final), the
+    // side is no longer the favourite and KETT passes rather than buy the long shot
+    {
+      const F = engine({ bets: true, betSeries: ['KXMLBGAME'], betUsd: 100, betMaxPx: 0.9 });
+      F.halt = null;
+      const fsaid = [];
+      F.log = (agent, kind, pnl, text) => fsaid.push({ agent, kind, text });
+      F.pairs = [game()];
+      BRAM(F);
+      F.book = async () => ({ asks: [{ price: 0.05, size: 5000 }], yesBid: 0.94, yesAsk: 0.95 });
+      F.quotes.pm.set('pmB', { tokenIds: ['tBOS', 'tNYY'] });
+      await KETT(F);
+      ok('the live book has the pick at 5c: no bet, and KETT says it is no longer the favourite', !F.state.positions.some((p) => p.strategy === 'bet') && fsaid.some((l) => l.agent === 'KETT' && /no longer the favourite/.test(l.text)), fsaid);
+    }
     BRAM(E);
     ok('the next cycle: no second bet on the same game', !E.signals.some((x) => x.type === 'bet'));
     // it settles, and the pair is still listed: still not bet again

@@ -155,7 +155,8 @@ function pmFloor(engine, cfg, now = Date.now()) {
   // a game's start, from the pair the matcher keeps while both venues list it: two bets on the Rays over the
   // Guardians on 2026-10-16 were two games of a series, and read as one game bet twice
   const startOf = new Map((engine.pairs || []).filter((x) => Number.isFinite(x.startsAt)).map((x) => [x.id, x.startsAt]));
-  const posRow = (p) => ({ id: p.id, label: unellipsis(p.label), game: gameOf(p), venue: VENUE[p.venue] || p.venue, side: p.side, qty: p.qty, entry: p.entry, mark: p.mark ?? null,
+  // pairId: a game's tile and sheet follow the game from "up next" (keyed by its pair) to the bet on it
+  const posRow = (p) => ({ id: p.id, pairId: p.pairId || null, label: unellipsis(p.label), game: gameOf(p), venue: VENUE[p.venue] || p.venue, side: p.side, qty: p.qty, entry: p.entry, mark: p.mark ?? null,
     cost: r2(p.cost), worth: r2(p.qty * (p.mark ?? p.entry)), pnl: r2(p.qty * (p.mark ?? p.entry) - p.cost), settlesAt: Number.isFinite(p.settlesAt) ? p.settlesAt : null,
     startsAt: startOf.get(p.pairId) ?? null });
 
@@ -325,26 +326,36 @@ function gameBoard(engine, cfg, betOpen, betShut, now) {
     seen.add(k);
     // the favourite as decide.betSignal reads it: the two venues' mids, averaged
     const q = p.q, mid = q && Number.isFinite(q.pmMid) && Number.isFinite(q.ksMid) ? (q.pmMid + q.ksMid) / 2 : null;
-    const pick = mid == null ? null : betPick(p.label, mid >= 0.5 ? 'yes' : 'no');
+    // a label whose YES side names neither team ("NCAAF A v B · C") gives betPick "not C": no pick, then
+    const pick0 = mid == null ? null : betPick(p.label, mid >= 0.5 ? 'yes' : 'no'), pick = pick0 === m[2] || pick0 === m[3] ? pick0 : null;
     const px = mid == null ? null : r3(Math.max(mid, 1 - mid));
-    upcoming.push({ id: p.id, league: m[1], a: m[2], b: m[3], startsAt: p.startsAt, pick, px, over: px != null && px > maxPx });
+    // `fav` says which side the favourite is ('a' or 'b'), not its name again: the board rides in every frame
+    upcoming.push({ id: p.id, league: m[1], a: m[2], b: m[3], startsAt: p.startsAt, fav: pick == null ? null : pick === m[2] ? 'a' : 'b', px, over: px != null && px > maxPx });
   }
   upcoming.sort((a, b) => a.startsAt - b.startsAt || a.a.localeCompare(b.a));
-  // settled in the last day and a half, newest first: the board's finals
-  const finals = betShut.filter((c) => Number.isFinite(c.exitAt) && now - c.exitAt < 36 * 3600e3).sort((a, b) => b.exitAt - a.exitAt).slice(0, 150).map((c) => {
+  // settled in the last thirty hours (today's games and last night's), newest first: the board's finals. Thirty hours
+  // and eighty, not a day and a half and 150 (audit 2026-10-17): the board rides in every frame to every page, on a box
+  // whose memory has peaked at three quarters of its 470 MB.
+  const finals = betShut.filter((c) => Number.isFinite(c.exitAt) && now - c.exitAt < 30 * 3600e3).sort((a, b) => b.exitAt - a.exitAt).slice(0, 80).map((c) => {
     const g = gameOf(c);
-    return { id: c.id, league: g ? g.league : leagueOf(c.label), pick: g ? g.pick : unellipsis(c.label), foe: g ? g.foe : '', venue: VENUE[c.venue] || c.venue,
+    // keyed by its pair (the page follows a game by it); the position's own id only when there is no pair
+    return { id: c.pairId || c.id, league: g ? g.league : leagueOf(c.label), pick: g ? g.pick : unellipsis(c.label), foe: g ? g.foe : '', venue: VENUE[c.venue] || c.venue,
       qty: c.qty, entry: c.entry, cost: r2(c.cost), pnl: r2(c.pnl), at: c.exitAt, openedAt: c.openedAt ?? null };
   });
+  // The record since the start comes from the engine's running tally (src/engine.js tallyBet): state.closed keeps only
+  // the newest 2,000 legs. Only a ledger without a tally is counted from its closed legs.
+  const tally = engine.state && engine.state.stats && engine.state.stats.bets;
+  const fromTally = (t) => ({ bets: t.bets, won: t.won, expected: r2(t.expected), staked: r2(t.staked), pnl: r2(t.pnl) });
   const leagues = {};
   for (const c of betShut) (leagues[leagueOf(c.label)] = leagues[leagueOf(c.label)] || []).push(c);
-  // today's record is the games played today: a game is dated by its settlement less four hours (Kalshi settles
-  // minutes after the final, and a game ending after midnight belongs to the evening it started)
-  const today = etDay(now);
+  // Today's record is the games played today: a game is dated by its settlement less four hours (Kalshi settles
+  // minutes after the final, and a game ending after midnight belongs to the evening it started), and so is "today":
+  // until 4 AM it is still the evening before, or a game ending at 1 AM counted on no day at all (audit 2026-10-17).
+  const today = etDay(now - 4 * 3600e3);
   return {
-    upcoming: upcoming.slice(0, 160), finals,
-    record: { ...record(betShut), today: record(betShut.filter((c) => Number.isFinite(c.exitAt) && etDay(c.exitAt - 4 * 3600e3) === today)),
-      leagues: Object.fromEntries(Object.entries(leagues).map(([k, cs]) => [k, record(cs)])) },
+    upcoming: upcoming.slice(0, 100), finals,
+    record: { ...(tally ? fromTally(tally) : record(betShut)), today: record(betShut.filter((c) => Number.isFinite(c.exitAt) && etDay(c.exitAt - 4 * 3600e3) === today)),
+      leagues: tally ? Object.fromEntries(Object.entries(tally.leagues || {}).map(([k, t]) => [k, fromTally(t)])) : Object.fromEntries(Object.entries(leagues).map(([k, cs]) => [k, record(cs)])) },
     on: !!cfg.bets, aheadH: cfg.betAheadHours ?? 1, maxPx, stake: cfg.betUsd,
     leaguesOn: [...series].map((x) => ({ KXMLBGAME: 'MLB', KXNFLGAME: 'NFL', KXNBAGAME: 'NBA', KXNCAAFGAME: 'NCAAF' }[x] || x)),
   };

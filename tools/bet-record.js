@@ -6,11 +6,18 @@
 // Games view showed 69 won of 123 where the prices said 81 and the January re-test was the next look: "boooo".
 // So this is the look between: the Monday check runs it (scheduled task hexagon-weekly-pnl).
 //
-//   node tools/bet-record.js                  data/fly/box-now/state.json (ledger-check --box, daily check step 2)
-//   node tools/bet-record.js --box            the box's state.json, copied to a temp file (read-only on the box)
-//   node tools/bet-record.js --file F         any prediction-market desk state.json
+//   node tools/bet-record.js                  the journals: data/fly/archive (the hourly pull) and data/fly/box-now (the
+//                                             daily check's copy of the box's unarchived days)
+//   node tools/bet-record.js --box            the archive and the box's own unarchived journals, copied to a temp folder
+//                                             (read-only on the box)
+//   node tools/bet-record.js --state F        a desk state.json's closed legs instead (it keeps only the newest 2,000)
 //   node tools/bet-record.js --flips          also: of last week's bets placed over an hour before the start, the
-//                                             ones no longer the favourite an hour before it (Kalshi's public candles)
+//                                             ones no longer the favourite an hour before it (Kalshi's public candles);
+//                                             exit 1 if Kalshi could not be asked about some of them
+//
+// From the journals since the audit of 2026-10-17: the state's closed legs are capped at the newest 2,000, about ten
+// weeks of the book, and the record would have begun dropping its oldest games around the January re-test. A bet's
+// SETTLE line carries its label, side, venue, price, size and money; its OPEN line its cost.
 //
 // Read-only: the ledger, and with --flips Kalshi's public API. What it found on 2026-10-17 (README, "Is the book
 // unlucky?"): no bug, prices did not drift against the picks, and every Kalshi favourite in those weeks fell short
@@ -41,6 +48,36 @@ function settled(state) {
     side: c.side, venue: c.venue, p: c.entry, cost: c.cost, pnl: c.pnl, won: c.pnl > 0, opened: c.openedAt, at: c.exitAt, day: playedDay(c.exitAt),
   })).sort((a, b) => a.at - b.at);
 }
+// The same, from journal lines: each SETTLE of strategy "bet", its cost from its OPEN (the state's closed leg keeps
+// both). The lines the 10-15 disk-full holes swallowed are restored beside them (tools/journal-gaps.js).
+function settledFromJournal(lines) {
+  const opens = new Map(), out = [], seen = new Set();
+  for (const e of lines) if (e && e.kind === 'OPEN' && e.strategy === 'bet') opens.set(e.id, e);
+  for (const e of lines) {
+    if (!e || e.kind !== 'SETTLE' || e.strategy !== 'bet' || seen.has(e.id) || !Number.isFinite(e.entry)) continue;
+    seen.add(e.id);
+    const o = opens.get(e.id) || {}, at = Date.parse(e.t);
+    out.push({ id: e.id, ticker: String(e.pairId || o.pairId || '').split('|')[1] || null, label: e.label || o.label, league: String(e.label || o.label || '').split(' ')[0],
+      side: e.side, venue: e.venue, p: e.entry, cost: Number.isFinite(o.cost) ? o.cost : r2(e.qty * e.entry + (o.fee || 0)), pnl: e.pnl, won: e.pnl > 0,
+      opened: Number.isFinite(e.heldMs) ? at - e.heldMs : (o.t ? Date.parse(o.t) : null), at, day: playedDay(at) });
+  }
+  return out.sort((a, b) => a.at - b.at);
+}
+function readJournals(dirs) {
+  const lines = [], seen = new Set();
+  for (const dir of dirs) {
+    if (!dir || !fs.existsSync(dir)) continue;
+    for (const f of fs.readdirSync(dir).filter((x) => /^journal-\d{4}-\d{2}-\d{2}\.jsonl$/.test(x)).sort()) {
+      for (const l of fs.readFileSync(path.join(dir, f), 'utf8').split('\n')) {
+        if (!l) continue;
+        let j; try { j = JSON.parse(l); } catch { continue; }
+        const k = `${j.t}|${j.id || ''}|${j.kind}`;
+        if (!seen.has(k)) { seen.add(k); lines.push(j); }
+      }
+    }
+  }
+  return [...lines, ...require('./journal-gaps').restoredEvents(lines)];
+}
 // a record: bets, wins, the wins the prices expected, chance's spread (one sd), how many sds the wins are off, the money
 function record(xs) {
   const won = xs.filter((x) => x.won).length, expected = xs.reduce((a, x) => a + x.p, 0), v = xs.reduce((a, x) => a + x.p * (1 - x.p), 0);
@@ -50,9 +87,10 @@ function record(xs) {
 const verdict = (r) => (!r.bets ? 'no bet settled' : Math.abs(r.z) < 2 ? 'within luck' : r.z < 0 ? 'more short than luck usually gives' : 'more ahead than luck usually gives');
 const groupBy = (xs, f) => { const g = new Map(); for (const x of xs) { const k = f(x); if (!g.has(k)) g.set(k, []); g.get(k).push(x); } return g; };
 
-// the report, as lines a person reads. `now` picks "last week": the last whole Eastern week before today's.
-function report(state, now = Date.now()) {
-  const xs = settled(state), all = record(xs);
+// the report, as lines a person reads: `input` is the settled bets, or a state to read them from. `now` picks "last
+// week": the last whole Eastern week before today's.
+function report(input, now = Date.now()) {
+  const xs = Array.isArray(input) ? input : settled(input), all = record(xs);
   const thisWeek = weekOf(etDay(now)), lastWeek = weekOf(new Date(Date.parse(`${thisWeek}T12:00:00Z`) - 7 * 864e5).toISOString().slice(0, 10));
   const fmt = (r) => `${r.won}–${r.bets - r.won}, the prices said ${r.expected.toFixed(1)} (${r.won - r.expected >= 0 ? '+' : '−'}${Math.abs(r.won - r.expected).toFixed(1)}, ${Math.abs(r.z).toFixed(1)} sd${r.z ? (r.z < 0 ? ' short' : ' ahead') : ''}) · ${usd(r.pnl)}`;
   const L = [];
@@ -73,52 +111,73 @@ function report(state, now = Date.now()) {
 }
 
 // --flips: of the bets settled last week that were placed over an hour before the start, the ones Kalshi no longer
-// had as the favourite an hour before it (the pick lab's "an hour out beats a day out", live)
-async function flips(xs, sinceMs) {
+// had as the favourite an hour before it (the pick lab's "an hour out beats a day out", live). Each is named by the
+// team bet on (a NO leg is the other team). A bet Kalshi could not be asked about is counted, not passed over: "no
+// flips" with Kalshi down was a false all-clear (audit 2026-10-17).
+async function flips(xs, week) {
   const B = 'https://api.elections.kalshi.com/trade-api/v2', sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const get = async (u) => { for (let i = 0; i < 4; i++) { try { const r = await fetch(u, { headers: { 'user-agent': 'the-hexagon/1.0' } }); if (r.status === 404) return null; if (r.ok) return r.json(); } catch { /* retry */ } await sleep(600 * 2 ** i); } return null; };
+  const { gameOf } = require('../src/pmfloor');
+  let unreached = 0;
+  const get = async (u) => {
+    for (let i = 0; i < 4; i++) { try { const r = await fetch(u, { headers: { 'user-agent': 'the-hexagon/1.0' } }); if (r.status === 404) return null; if (r.ok) return r.json(); } catch { /* retry */ } await sleep(600 * 2 ** i); }
+    throw new Error('unreached');
+  };
   const out = [];
-  for (const x of xs.filter((y) => y.at >= sinceMs && y.ticker)) {
-    const series = x.ticker.split('-')[0];
-    const m = ((await get(`${B}/markets/${x.ticker}`)) || {}).market || {};
-    const occ = Date.parse(m.occurrence_datetime || ''), close = Date.parse(m.close_time || '');
-    let start = Number.isFinite(occ) ? occ - 3 * 3600e3 : null;
-    if (!(start != null && start < close && close - start < 6 * 3600e3) && Number.isFinite(close)) start = close - 3.5 * 3600e3;
-    if (!(start - x.opened > 65 * 60e3)) continue;
-    const ts = Math.floor((start - 3600e3) / 1000);
-    const d = await get(`${B}/series/${series}/markets/${x.ticker}/candlesticks?start_ts=${ts - 4 * 3600}&end_ts=${ts}&period_interval=60`);
-    const ks = ((d && d.candlesticks) || []).filter((k) => k.end_period_ts <= ts + 60);
-    const k = ks[ks.length - 1], b = k && parseFloat(k.yes_bid && (k.yes_bid.close_dollars ?? k.yes_bid.close / 100)), a = k && parseFloat(k.yes_ask && (k.yes_ask.close_dollars ?? k.yes_ask.close / 100));
-    if (!(b > 0 && a > 0)) continue;
-    const pick = x.side === 'yes' ? (a + b) / 2 : 1 - (a + b) / 2;
-    // under 49.5c: 49.6c is a game the market had even, not a favourite turned round
-    if (pick < 0.495) out.push({ ...x, then: Math.round(pick * 1000) / 1000 });
+  for (const x of xs.filter((y) => weekOf(y.day) === week && y.ticker)) {
+    try {
+      const series = x.ticker.split('-')[0];
+      const m = ((await get(`${B}/markets/${x.ticker}`)) || {}).market || {};
+      const occ = Date.parse(m.occurrence_datetime || ''), close = Date.parse(m.close_time || '');
+      let start = Number.isFinite(occ) ? occ - 3 * 3600e3 : null;
+      if (!(start != null && start < close && close - start < 6 * 3600e3) && Number.isFinite(close)) start = close - 3.5 * 3600e3;
+      if (!(start - x.opened > 65 * 60e3)) continue;
+      const ts = Math.floor((start - 3600e3) / 1000);
+      const d = await get(`${B}/series/${series}/markets/${x.ticker}/candlesticks?start_ts=${ts - 4 * 3600}&end_ts=${ts}&period_interval=60`);
+      const ks = ((d && d.candlesticks) || []).filter((k) => k.end_period_ts <= ts + 60);
+      const k = ks[ks.length - 1], b = k && parseFloat(k.yes_bid && (k.yes_bid.close_dollars ?? k.yes_bid.close / 100)), a = k && parseFloat(k.yes_ask && (k.yes_ask.close_dollars ?? k.yes_ask.close / 100));
+      if (!(b > 0 && a > 0)) continue;
+      const pick = x.side === 'yes' ? (a + b) / 2 : 1 - (a + b) / 2;
+      // under 49.5c: 49.6c is a game the market had even, not a favourite turned round
+      const g = gameOf({ strategy: 'bet', label: x.label, side: x.side });
+      if (pick < 0.495) out.push({ ...x, then: Math.round(pick * 1000) / 1000, name: g ? `${g.pick} over ${g.foe}` : x.label });
+    } catch { unreached++; }
     await sleep(100);
   }
-  return out;
+  return { flipped: out, unreached };
 }
 
-function boxState() {
+// --box: the box's journals the archive does not have yet (today's, and any the hourly pull has not copied),
+// fetched to a temp folder; read-only on the box
+function boxJournals(archive) {
   const { execFileSync } = require('child_process');
   const fly = process.env.FLY_BIN || (fs.existsSync(path.join(os.homedir(), '.fly', 'bin', 'fly')) ? path.join(os.homedir(), '.fly', 'bin', 'fly') : 'fly');
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bet-record-')), to = path.join(dir, 'state.json');
-  try {
-    execFileSync(fly, ['ssh', 'sftp', 'get', '-q', '-a', 'hexagon-desk', '/data/state.json', to], { stdio: 'ignore', timeout: 300000 });
-    return JSON.parse(fs.readFileSync(to, 'utf8'));
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  const have = new Set(fs.existsSync(archive) ? fs.readdirSync(archive) : []);
+  const names = execFileSync(fly, ['ssh', 'console', '-q', '-a', 'hexagon-desk', '-C', 'ls /data'], { encoding: 'utf8', timeout: 120000 })
+    .split(/\s+/).filter((n) => /^journal-\d{4}-\d{2}-\d{2}\.jsonl$/.test(n) && !have.has(n));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bet-record-'));
+  for (const n of names) execFileSync(fly, ['ssh', 'sftp', 'get', '-q', '-a', 'hexagon-desk', `/data/${n}`, path.join(dir, n)], { stdio: 'ignore', timeout: 300000 });
+  return dir;
 }
 
 if (require.main === module) (async () => {
   const argv = process.argv.slice(2), at = (n) => { const i = argv.indexOf(`--${n}`); return i >= 0 ? argv[i + 1] : null; };
-  const state = argv.includes('--box') ? boxState() : JSON.parse(fs.readFileSync(at('file') || path.join(__dirname, '..', 'data', 'fly', 'box-now', 'state.json'), 'utf8'));
-  const r = report(state);
+  const root = path.join(__dirname, '..'), archive = path.join(root, 'data', 'fly', 'archive');
+  let xs, tmp = null;
+  if (at('state')) xs = settled(JSON.parse(fs.readFileSync(at('state'), 'utf8')));
+  else {
+    if (argv.includes('--box')) tmp = boxJournals(archive);
+    try { xs = settledFromJournal(readJournals([archive, tmp || path.join(root, 'data', 'fly', 'box-now')])); }
+    finally { if (tmp) fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+  const r = report(xs);
   for (const l of r.lines) console.log(l);
   if (argv.includes('--flips')) {
-    const since = Date.parse(`${r.weeks.lastWeek}T04:00:00Z`);
-    const f = await flips(r.xs, since);
-    console.log(f.length ? `\nBet over an hour ahead and no longer the favourite an hour before the start (since ${r.weeks.lastWeek}): ${f.length}, ${f.filter((x) => x.won).length} won` : `\nSince ${r.weeks.lastWeek}, no pick bet over an hour ahead had stopped being the favourite an hour before the start.`);
-    for (const x of f) console.log(`  ${x.label} · bet at ${Math.round(x.p * 100)}c, ${Math.round(x.then * 100)}c an hour before · ${x.won ? 'won' : 'lost'}`);
+    const { flipped, unreached } = await flips(r.xs, r.weeks.lastWeek);
+    console.log(flipped.length ? `\nLast week, bet over an hour ahead and no longer the favourite an hour before the start: ${flipped.length}, ${flipped.filter((x) => x.won).length} won`
+      : `\nLast week, no pick bet over an hour ahead had stopped being the favourite an hour before the start${unreached ? ', of those Kalshi answered about' : ''}.`);
+    for (const x of flipped) console.log(`  ${x.name} · bet at ${Math.round(x.p * 100)}c, ${Math.round(x.then * 100)}c an hour before · ${x.won ? 'won' : 'lost'}`);
+    if (unreached) { console.log(`PROBLEM Kalshi could not be asked about ${unreached} of last week's bets: the flip list is incomplete`); process.exitCode = 1; }
   }
 })().catch((e) => { console.error(e.stack || e.message); process.exit(1); });
 
-module.exports = { settled, record, report, verdict, weekOf, playedDay };
+module.exports = { settled, settledFromJournal, readJournals, record, report, verdict, weekOf, playedDay, flips };

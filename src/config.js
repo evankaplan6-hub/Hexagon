@@ -433,6 +433,10 @@ module.exports = {
   betSeries: env('BET_SERIES', 'KXNBAGAME,KXNFLGAME,KXNCAAFGAME,KXMLBGAME').split(',').map((s) => s.trim()).filter(Boolean),
   betUsd: num('BET_USD', 100),
   betMaxPx: num('BET_MAX_PX', 0.9),     // a favourite dearer than this is a game all but decided: left alone
+  // ...and the live book must still have it as the favourite. The bet is chosen off a listing up to 90s old and bought
+  // off the book fetched just after; with only the 90c cap, a game that swung in between (a score in the game, the
+  // final) could buy the side that is now the long shot at 3c (audit 2026-10-17). Under this, KETT passes.
+  betMinPx: num('BET_MIN_PX', 0.45),
   // A game is bet within this many hours of kickoff, not before. Since 2026-10-11 the league listings
   // (PM_GAME_TAGS) pair a whole week's games the day they are listed, ~100 on a football week against
   // a $5k paper book: bet on listing, next Sunday's games would take the cash this Sunday's need, at

@@ -27,6 +27,8 @@ const NOW = Date.parse('2026-10-17T18:40:00Z');
   put('big.log', `${'2026-01-01T00:00:00Z ok x: old\n'.repeat(5000)}2026-10-17T18:21:32.484Z ok td-tape: 301 open 1+ markets\n`);
   ok('a long log is read from its end only', L.tail(path.join(dir, 'big.log')).length <= 4096 && L.lastRun(path.join(dir, 'big.log')).text === '301 open 1+ markets');
   ok('no log: no run', L.lastRun(path.join(dir, 'nothing.log')) === null);
+  put('long.log', `2026-10-17T18:00:00Z ok x: ${'y'.repeat(6000)}\n`);
+  ok('a last line longer than 4 KB is still read (a wider tail)', (L.lastRun(path.join(dir, 'long.log')) || {}).state === 'ok');
 }
 
 // ---- the next kickoff

@@ -628,8 +628,10 @@ async function KETT(E) {
     if (s.type === 'bet') {
       // bought off the live book just fetched; the listing only chose the side and the venue
       const top = books[0] && books[0].asks && books[0].asks[0];
-      if (!top || top.price > E.cfg.betMaxPx) {
-        if (E.due(`bet-book-${s.pair.id}`, 300)) E.log('KETT', 'PASS', null, `${s.pair.label}: game bet on ${s.pick}, but ${VEN[s.legs[0].venue]}'s live book ${top ? `asks ${top.price.toFixed(2)}, over the ${(E.cfg.betMaxPx * 100).toFixed(0)}c limit` : 'has nothing offered'}`);
+      const low = E.cfg.betMinPx ?? 0.45;
+      if (!top || top.price > E.cfg.betMaxPx || top.price < low) {
+        if (E.due(`bet-book-${s.pair.id}`, 300)) E.log('KETT', 'PASS', null, `${s.pair.label}: game bet on ${s.pick}, but ${VEN[s.legs[0].venue]}'s live book ${!top ? 'has nothing offered'
+          : top.price > E.cfg.betMaxPx ? `asks ${top.price.toFixed(2)}, over the ${(E.cfg.betMaxPx * 100).toFixed(0)}c limit` : `asks ${top.price.toFixed(2)}: no longer the favourite`}`);
         passFor(); continue;
       }
       s.legs[0].px = top.price;

@@ -34,6 +34,25 @@ const AGENTS = [
   { key: 'MAKR', n: '07', role: 'MAKING', color: '#a855f7' },
 ];
 const r2 = (x) => Math.round(x * 100) / 100;
+// The every-game book's record as a running tally (audit 2026-10-17). state.closed keeps only its newest 2,000 legs,
+// about ten weeks of the book at some 170 bets a week, so the floor's record "since the start" would have begun losing
+// its oldest games without a word around the end of 2026. The tally counts each bet as it settles: how many, how many
+// won, the wins its prices expected (the prices added up), what it staked and made, by league. A ledger without one
+// is backfilled from its closed legs on load (complete on 2026-10-17: 349 legs, none trimmed yet).
+const emptyRecord = () => ({ bets: 0, won: 0, expected: 0, staked: 0, pnl: 0 });
+function tallyBet(t, c) {
+  const lg = String(c.label || '').split(' ')[0] || '?';
+  t.leagues = t.leagues || {};
+  for (const x of [t, (t.leagues[lg] = t.leagues[lg] || emptyRecord())]) {
+    x.bets++;
+    if (c.pnl > 0) x.won++;
+    x.expected = Math.round((x.expected + (Number(c.entry) || 0)) * 1e4) / 1e4;
+    x.staked = r2(x.staked + (Number(c.cost) || 0));
+    x.pnl = r2(x.pnl + (Number(c.pnl) || 0));
+  }
+  return t;
+}
+const betTally = (closed) => (closed || []).filter((c) => c.strategy === 'bet').reduce(tallyBet, { ...emptyRecord(), leagues: {} });
 const r3 = (x) => Math.round(x * 1000) / 1000;
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 // A POST whose response was lost is neither a failed order nor a safe retry. The live broker
@@ -158,6 +177,7 @@ class Engine {
       // so retain them and derive their scorecard from the open legs instead of treating a
       // restart as an accounting error.
       if (!s.arbGroups) s.arbGroups = {};
+      if (s.stats && !s.stats.bets) s.stats.bets = betTally(s.closed);
       return s;
     }
     return {
@@ -166,7 +186,7 @@ class Engine {
       positions: [], closed: [], balanceHistory: [], log: [],
       arbGroups: {},
       dayKey: null, dayStartEquity: this.cfg.initialBalance,
-      stats: { wins: 0, losses: 0, realized: 0, fees: 0, groupsClosed: 0 },
+      stats: { wins: 0, losses: 0, realized: 0, fees: 0, groupsClosed: 0, bets: { ...emptyRecord(), leagues: {} } },
       // the MAKER desk keeps its own cash and inventory. Separate on purpose: mixing a taker book
       // and a maker book into one equity number makes it impossible to tell which one is working.
       maker: { cash: this.cfg.initialBalance, equity: this.cfg.initialBalance, markets: {}, fills: 0 },
@@ -720,6 +740,7 @@ class Engine {
     const pnl = r2(partialPnl + exitPnl);
     const closed = { ...pos, exit: fill.avg, exitAt: Date.now(), pnl, exitPnl, partialPnl, reason };
     this.state.closed.push(closed);
+    if (closed.strategy === 'bet') tallyBet(this.state.stats.bets || (this.state.stats.bets = { ...emptyRecord(), leagues: {} }), closed);
     if (this.state.closed.length > 2000) this.state.closed.splice(0, this.state.closed.length - 2000);
     this.state.stats.realized = r2(this.state.stats.realized + exitPnl);
     // score a group (arb = 2 legs, converge = 1 leg) once its last leg closes
@@ -1322,4 +1343,4 @@ function thinHistory(h) {
   return h.filter((_, i) => i % k === 0 || i === h.length - 1);
 }
 
-module.exports = { Engine, AGENTS };
+module.exports = { betTally, tallyBet, Engine, AGENTS };
