@@ -6,7 +6,7 @@
 // makes one free /events call and writes an idle line. One run at a time: the next is armed once the last ends.
 const path = require('path');
 
-const EVERY_MIN = 8;        // the tape's own step: a read at most every eight minutes inside a game's window
+const EVERY_MIN = 10;       // the tape's own step: a read at most every ten minutes inside a game's window (eight until 2026-10-17)
 const FIRST_SEC = 90;       // after the desks' own startup reads, and after the touchdown tape's first run
 
 function start({ dataDir, everyMin = EVERY_MIN, firstSec = FIRST_SEC, log = console.log, setTimer = setTimeout, record = null } = {}) {
