@@ -62,9 +62,11 @@ before tuning `KALSHI_GAP_MS` or the retry code. Do not allocate a second one. A
 new egress IP in the new region, and the old one released with `fly ips release-egress`, so it is
 not billed twice.
 
-Roughly $8–9/month: a shared-cpu-2x with a 1GB volume ($4–5) plus the static egress IP (~$3.60). It
-was a shared-cpu-1x until 2026-09-22, when the desk was found pinned at that size's CPU cap (6.25%
-of a core); `fly.toml` has the numbers.
+Roughly $10–11/month: a shared-cpu-2x with 1 GB of memory and a 1GB volume ($6–7) plus the static egress
+IP (~$3.60). It was a shared-cpu-1x until 2026-09-22, when the desk was found pinned at that size's CPU cap
+(6.25% of a core), and had 512 MB of memory until 2026-10-18, when its peak reached 363 MB of the 470 it
+could use; `fly.toml` has the numbers. The memory is set in `fly.toml` (`[[vm]] memory`), so every deploy
+applies it: a `fly scale memory` by hand is undone by the next merge unless `fly.toml` says the same.
 
 ### Auto-deploy
 
