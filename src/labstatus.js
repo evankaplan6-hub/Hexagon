@@ -31,7 +31,10 @@ function tail(file, bytes = 4096) {
 
 // "2026-10-17T18:26:16.145Z idle odds-tape: no game within the window" → { at, state: 'idle', text: 'no game within the window' }
 function lastRun(file) {
-  const lines = tail(file).split('\n').map((l) => l.trim()).filter(Boolean);
+  // the last 4 KB holds the last run's line; if a line is longer than that (none is yet: 210 bytes at most), the
+  // last 64 KB (audit 2026-10-17: the tail began mid-line and the tape read "not running")
+  let lines = tail(file).split('\n').map((l) => l.trim()).filter(Boolean);
+  if (!lines.some((l) => /^\d{4}-\d\d-\d\dT[\d:.]+Z\s/.test(l))) lines = tail(file, 65536).split('\n').map((l) => l.trim()).filter(Boolean);
   for (let i = lines.length - 1; i >= 0; i--) {
     const m = lines[i].match(/^(\d{4}-\d\d-\d\dT[\d:.]+Z)\s+(\S+)\s+(.*)$/);
     if (!m) continue;

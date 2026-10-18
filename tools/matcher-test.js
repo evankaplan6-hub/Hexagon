@@ -695,6 +695,18 @@ group('matchPairs: a college game Kalshi dated the day before still pairs (2026-
   const nfl = matchPairs([pm({ id: 'n', slug: 'nfl-sea-den-2026-10-18', question: 'Seahawks vs. Broncos', sport: 'moneyline', outcomes: ['Seattle Seahawks', 'Denver Broncos'], gameStart: '2026-10-18 17:00:00+00' })],
     [['SEA', 'Seattle'], ['DEN', 'Denver']].map(([l, n]) => ks({ ticker: `KXNFLGAME-26OCT17SEADEN-${l}`, eventTicker: 'KXNFLGAME-26OCT17SEADEN', subTitle: n, title: `${n} wins` })));
   ok('an NFL game a day off does not pair', nfl.pairs.length === 0, nfl.pairs.map((p) => p.ks.ticker));
+  // audit 2026-10-17: from the day before, the names must be whole. Kalshi's Friday-dated Washington v Oregon is not
+  // Saturday's Washington State v Oregon State, though "Washington" begins "Washington State"
+  const uw = [['UW', 'Washington'], ['ORE', 'Oregon']].map(([l, n]) => ks({ ticker: `KXNCAAFGAME-26OCT16UWORE-${l}`, eventTicker: 'KXNCAAFGAME-26OCT16UWORE', subTitle: n, title: `${n} wins` }));
+  const wsu = pm({ id: 'wsu', slug: 'cfb-wsu-orst-2026-10-17', question: 'Washington State vs. Oregon State', sport: 'moneyline', outcomes: ['Washington State', 'Oregon State'], gameStart: '2026-10-17 23:00:00+00' });
+  ok('a day-back event pairs only on whole names: Washington is not Washington State', matchPairs([wsu], uw).pairs.length === 0, matchPairs([wsu], uw).pairs.map((p) => p.ks.ticker));
+  ok('...while "Kansas St." is still "Kansas State", word for word', matchPairs([pm({ id: 'k', slug: 'cfb-ku-kst-2026-10-17', question: 'Kansas vs. Kansas State', sport: 'moneyline', outcomes: ['Kansas', 'Kansas State'], gameStart: '2026-10-17 16:00:00+00' })],
+    [['KU', 'Kansas'], ['KSU', 'Kansas St.']].map(([l, n]) => ks({ ticker: `KXNCAAFGAME-26OCT16KUKSU-${l}`, eventTicker: 'KXNCAAFGAME-26OCT16KUKSU', subTitle: n, title: `${n} wins` }))).pairs.length === 1);
+  const sameDay = matchPairs([pm({ ...wsu, gameStart: '2026-10-16 23:00:00+00' })], uw);
+  ok('the same-day rule is as it was (the prefix walk, which the price and start guards back)', sameDay.pairs.length === 1, sameDay.pairs.map((p) => p.ks.ticker));
+  // and a Friday-dated game's settle time is after its game, not Kalshi's 11 PM Friday placeholder
+  const ft = matchPairs([pmGame], kss.map((k) => ({ ...k, expectedExpiration: '2026-10-17T03:00:00Z' })));
+  ok('a game settles no earlier than its start: Kalshi\'s placeholder expiration before kickoff gives way to start + 3h', ft.pairs[0].settlesAt === Date.parse('2026-10-17T19:00:00Z'), ft.pairs.map((p) => new Date(p.settlesAt).toISOString()));
 }
 
 group('matchPairs: a two-outcome moneyline never pairs with a three-way event (audit 2026-10-15)');

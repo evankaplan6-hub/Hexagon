@@ -249,19 +249,26 @@
     if (!g) return null;
     const bets = pmBook('bets'), now = S.now, ahead = (g.aheadH ?? 1) * 3600e3;
     // A bet whose game has no start on record is one the listing has dropped: finished, or nearly, and waiting on
-    // the result ('wait'), not a game still to come.
+    // the result ('wait'), not a game still to come. A tile is keyed by its game's pair, so the tile and an open sheet
+    // stay the same one when the game goes from up next (a pair) to bet (a position): keyed by the position, the sheet
+    // closed itself and the focus fell to the page the moment the bet went in (audit 2026-10-17).
     const open = (bets ? bets.rows : []).map((r) => {
       const x = r.game || {}, known = Number.isFinite(r.startsAt), started = !known || r.startsAt <= now;
-      return { k: r.id, stage: !known ? 'wait' : started ? 'live' : 'bet', league: x.league || '', start: r.startsAt, pick: x.pick || r.label, foe: x.foe || '', px: r.mark ?? r.entry,
+      return { k: r.pairId || r.id, stage: !known ? 'wait' : started ? 'live' : 'bet', league: x.league || '', start: r.startsAt, pick: x.pick || r.label, foe: x.foe || '', px: r.mark ?? r.entry,
         status: started ? `Bet ${money(r.cost, 0)} · worth ${money(r.worth, 0)} now` : `Bet ${money(r.cost, 0)} · pays ${money(r.qty, 0)}`, fig: started ? r.pnl : null };
     });
-    // a game that has started and was left alone is not on the board: it is counted (`skipped`)
+    // A game that has started and was left alone (its favourite over the cap) is not on the board: it is counted
+    // (`skipped`). One that has started and is not bet for another reason (no price on one venue, a stale quote, the
+    // venues apart) is 'late': under way, in progress, never "up next" or "Bets this round" (audit 2026-10-17).
     const next = [], skipped = [];
     for (const u of g.upcoming) {
-      const foe = u.pick ? (u.pick === u.a ? u.b : u.a) : u.b, opens = u.startsAt - ahead;
-      if (u.over && u.startsAt <= now) { skipped.push(u); continue; }
-      next.push({ k: u.id, stage: u.over ? 'skip' : 'next', league: u.league, start: u.startsAt, pick: u.pick || u.a, foe, px: u.px,
-        status: !g.on ? 'Not bet: the game bets are switched off' : u.over ? `Left alone: the favourite is ${wholeCents(u.px)}` : opens <= now ? 'Bets this round' : `Bets at ${ET_HM.format(new Date(opens))}` });
+      // the favourite is named by side ('a' or 'b'); with no price there is none, and the first team leads
+      u.pick = u.fav === 'a' ? u.a : u.fav === 'b' ? u.b : null;
+      const foe = u.pick ? (u.pick === u.a ? u.b : u.a) : u.b, opens = u.startsAt - ahead, begun = u.startsAt <= now;
+      if (u.over && begun) { skipped.push(u); continue; }
+      next.push({ k: u.id, stage: begun ? 'late' : u.over ? 'skip' : 'next', league: u.league, start: u.startsAt, pick: u.pick || u.a, foe, px: u.px,
+        status: !g.on ? 'Not bet: the game bets are switched off' : begun ? (u.px == null ? 'Under way, not bet: no price on both venues' : 'Under way, not bet yet')
+          : u.over ? `Left alone: the favourite is ${wholeCents(u.px)}` : opens <= now ? 'Bets this round' : `Bets at ${ET_HM.format(new Date(opens))}` });
     }
     const fin = g.finals.map((f) => ({ k: f.id, stage: f.pnl > 0 ? 'won' : 'lost', league: f.league, start: f.at, day: playedDay(f.at), pick: f.pick, foe: f.foe, px: f.entry,
       status: f.pnl > 0 ? `Won${f.foe ? `: ${f.pick} beat ${f.foe}` : ''}` : `Lost${f.foe ? `: ${f.foe} won` : ''}`, fig: f.pnl }));
@@ -269,7 +276,7 @@
   }
   function tileHtml(t) {
     const fin = t.stage === 'won' || t.stage === 'lost';
-    const when = t.stage === 'live' ? '<span class="gtlive">Live</span>' : t.stage === 'wait' ? 'Waiting on the result' : fin ? esc(ET_HM.format(new Date(t.start))) : t.start ? esc(whenTxt(t.start)) : '';
+    const when = t.stage === 'live' ? '<span class="gtlive">Live</span>' : t.stage === 'wait' ? 'Waiting on the result' : t.stage === 'late' ? 'Under way' : fin ? esc(ET_HM.format(new Date(t.start))) : t.start ? esc(whenTxt(t.start)) : '';
     const badge = t.stage === 'won' ? '<span class="gtb pos">Won</span>' : t.stage === 'lost' ? '<span class="gtb neg">Lost</span>' : t.stage === 'skip' ? '<span class="gtb">Skip</span>' : '';
     return `<li data-k="${esc(t.k)}"><button type="button" class="gt st-${t.stage}" data-sheet="game:${esc(t.k)}">` +
       `<span class="gth"><span class="gtl">${esc(leagueName(t.league))}</span><span class="gtw">${when}</span>${badge}</span>` +
@@ -287,6 +294,8 @@
     return [...m.entries()].sort((a, b) => a[0] - b[0]);
   }
   function groupStatus(ts, B) {
+    // switched off, a group bets nothing, whatever the clock says (its tiles said so and its heading did not)
+    if (!B.g.on) return 'not bet: the game bets are switched off';
     const toBet = ts.filter((t) => t.stage === 'next').length, bet = ts.filter((t) => t.stage === 'bet').length, skip = ts.filter((t) => t.stage === 'skip').length;
     const opens = ts[0].start - B.ahead;
     const parts2 = [];
@@ -299,7 +308,8 @@
   function tdGamesHtml() {
     const B = board();
     if (!B) return '<p class="ovp">The game bets run on the prediction-market desk, and this frame does not carry it.</p>';
-    const R = B.g.record.today, td = today();
+    // today's finals are the games played today, and until 4 AM "today" is still the evening before (playedDay)
+    const R = B.g.record.today, td = playedDay(S.now);
     const live = B.open.filter((t) => t.stage === 'live').sort(byStart);
     const soon = [...B.open.filter((t) => t.stage === 'bet'), ...B.next.filter((t) => t.stage === 'next')].sort(byStart);
     const finals = B.fin.filter((t) => t.day === td);
@@ -588,9 +598,9 @@
     const opts = [['all', 'All'], ...present.map((l) => [l, leagueName(l)])];
     morph($('gleague'), opts.map(([k, name]) => `<button type="button" data-league="${esc(k)}" class="${k === games.league ? 'on' : ''}" aria-pressed="${k === games.league}">${esc(name)}</button>`).join(''));
     const mine = (t) => games.league === 'all' || t.league === games.league;
-    const live = [...B.open.filter((t) => t.stage === 'live' && mine(t)).sort(byStart), ...B.open.filter((t) => t.stage === 'wait' && mine(t))];
+    const live = [...B.open.filter((t) => t.stage === 'live' && mine(t)).sort(byStart), ...B.next.filter((t) => t.stage === 'late' && mine(t)), ...B.open.filter((t) => t.stage === 'wait' && mine(t))];
     morph($('glive'), gsecHtml('In progress', nOf(live.length, 'game'), live.length ? tiles(live) : ''));
-    const soon = [...B.open.filter((t) => t.stage === 'bet'), ...B.next].filter(mine).sort(byStart);
+    const soon = [...B.open.filter((t) => t.stage === 'bet'), ...B.next.filter((t) => t.stage !== 'late')].filter(mine).sort(byStart);
     morph($('gnext'), gsecHtml('Up next', soon.length ? nOf(soon.length, 'game') : '', startGroups(soon).map(([st, ts]) =>
       `<div class="ggrp" data-k="g-${st}"><h3><span>${esc(st ? whenTxt(st) : 'Start not on record')}</span><span class="gsn">${nOf(ts.length, 'game')} · ${esc(groupStatus(ts, B))}</span></h3>${tiles(ts)}</div>`).join('')) ||
       (live.length ? '' : `<div class="gsh"><h2 class="sect">Up next</h2></div><p class="ovp">No game on the board in the next thirty hours${games.league === 'all' ? '' : ` in ${esc(leagueName(games.league))}`}.</p>`));
@@ -598,7 +608,7 @@
     for (const t of fin) { const k = t.day; if (!byDay.has(k)) byDay.set(k, []); byDay.get(k).push(t); }
     morph($('gfinal'), gsecHtml('Final', '', [...byDay.entries()].map(([k, ts]) => {
       const won = ts.filter((t) => t.stage === 'won').length, pnl = r2(ts.reduce((a, t) => a + t.fig, 0));
-      return `<div class="ggrp" data-k="f-${k}"><h3><span>${esc(k === today() ? 'Today' : dayName(Date.parse(`${k}T16:00:00Z`), today()))}</span><span class="gsn">${won}–${ts.length - won} · ${figure(pnl)}</span></h3>${tiles(ts)}</div>`;
+      return `<div class="ggrp" data-k="f-${k}"><h3><span>${esc(k === playedDay(S.now) ? 'Today' : dayName(Date.parse(`${k}T16:00:00Z`), playedDay(S.now)))}</span><span class="gsn">${won}–${ts.length - won} · ${figure(pnl)}</span></h3>${tiles(ts)}</div>`;
     }).join('')));
   }
   $('gleague').addEventListener('click', (ev) => {
@@ -685,7 +695,7 @@
     const g = G(), bets = pmBook('bets');
     if (!g) return null;
     const rule = card('The rule', `<p>${esc((bets && bets.rule) || '')}</p>`) + '<p class="shlink"><a href="#games">Every game</a></p>';
-    const r = bets && bets.rows.find((x) => x.id === id);
+    const r = bets && bets.rows.find((x) => x.id === id || x.pairId === id);
     if (r) {
       const x = r.game || {}, started = Number.isFinite(r.startsAt) && r.startsAt <= S.now;
       return { title: x.pick ? `${x.pick} over ${x.foe}` : r.label, html:

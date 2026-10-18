@@ -799,6 +799,21 @@ the next look was January: "boooo". So `node tools/bet-record.js --box --flips` 
 weekly check): by week and league against the prices, with chance's spread, and last week's picks that stopped
 being the favourite; and the game picks are re-tested on Dec 7, on the college regular season.
 
+**The audit of that evening (2026-10-17).** Three reviews of the day's work and the daily check. On the bets:
+a game bet chosen off a listing up to 90 seconds old was bought off the live book with only the 90c cap, so a game
+that swung in between could buy the side that had become the long shot; KETT now passes under `BET_MIN_PX` (45c):
+"no longer the favourite". The day-back college rule (PR #221) pairs an event from the day before only on whole
+names, so Kalshi's Friday-dated "Washington v Oregon" cannot pair with Saturday's "Washington State v Oregon State"
+(a constructed case; every real pair that weekend named both teams word for word), and a game's settle time is no
+earlier than its start (Kalshi's placeholder for those events is 11 PM Friday). The ledger keeps only its newest
+2,000 closed legs, about ten weeks of the book, so the record since the start is now a running tally kept as each
+bet settles (`stats.bets`, backfilled from the closed legs, which were complete), and `tools/bet-record.js` reads the
+journals; the two agree to the cent (206 bets that night). The floor's game board is lighter (the next hundred games
+and the last thirty hours' eighty finals, the favourite named by side), a game's sheet stays open when its game is
+bet, a game under way and not bet is "under way" rather than "bets this round", and until 4 AM "today" is still the
+evening before. The box's memory has peaked at 363 MB of 470 since its last restart, and Friday's unexplained
+21-minute outage fits an out-of-memory kill; a 1 GB machine is Evan's call.
+
 **Is every game bet? (2026-10-17.)** Not always, and until that Saturday nothing said so. Evan asked "cfb ready?":
 Kalshi listed 71 college games dated 10-17 and the box had paired 69. Kansas v Kansas State was one of the two:
 Kalshi's "Kansas" begins Polymarket's "Kansas State", so the first side to match took both names and the game

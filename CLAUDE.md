@@ -114,8 +114,9 @@ tools/odds-tape.js  the odds tape (2026-10-17, The Odds API free tier, Evan's ac
                   box (src/oddssched.js, ODDS_TAPE=1) → /data/odds, pulled to data/fly/archive/odds/; --grade: does Kalshi
                   trail the sharp book by more than its fee? log only; ~60-90 of 500 credits a week; README "The odds tape"
 tools/bet-record.js the game bets' record against their prices (2026-10-17): settled bets by week and league, wins vs the
-                  prices' expected wins with chance's exact sd, --flips last week's picks no longer the favourite an hour
-                  before the start; --box reads the box's state.json; the Monday check runs it; README "Is the book unlucky?"
+                  prices' expected wins with chance's exact sd, from the journals (the state keeps only 2,000 closed legs;
+                  the floor's record is the engine's running tally, state.stats.bets); --flips last week's picks no longer
+                  the favourite an hour before the start; --box adds the box's unarchived journals; the Monday check runs it
 tools/bet-coverage.js the game bets' coverage (2026-10-17, daily check step 11): every game Kalshi settled in BET_SERIES on a day
                   (dated by its settlement, not its ticker: Kalshi dated Saturday 10-17's college games the Friday) against
                   the journal's bets: bet, over the 90c cap, or MISSED, named; read-only; README "Is every game bet?"

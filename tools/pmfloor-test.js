@@ -8,7 +8,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { Engine } = require('../src/engine');
+const { Engine, betTally } = require('../src/engine');
 const { pmFloor, pmLine, kindOf, gameOf } = require('../src/pmfloor');
 const base = require('../src/config');
 
@@ -185,6 +185,16 @@ group('a box-sized desk fits the frame');
   const bytes = Buffer.byteLength(JSON.stringify(F));
   ok('the whole of it is under 60 KB before gzip', bytes < 60000, bytes);
   ok('the books still add up', r2(F.books.reduce((a, b) => a + b.pnl, 0)) === F.pnl, [F.books.map((b) => b.pnl), F.pnl]);
+  // audit 2026-10-17: the game board rides in the same frame. A college Saturday at the board's caps (120 games still
+  // to bet, finals in the last thirty hours, long names) keeps it, and the frame, inside a budget
+  const { E: E2, cfg: cfg2 } = engine({ bets: true, betSeries: ['KXNCAAFGAME'] }); boxLike(E2, { markets: 420 });
+  E2.pairs = Array.from({ length: 160 }, (_, i) => ({ id: `${5300000 + i}:0|KXNCAAFGAME-26OCT17TEAM${i}OPP${i}-TEAM${i}`, kind: 'game', series: 'KXNCAAFGAME',
+    label: `NCAAF Central Connecticut State ${i} v Southeast Missouri State ${i} · Central Connecticut State ${i}`, startsAt: T + (i % 12) * 1800e3, q: { pmMid: 0.6, ksMid: 0.62 } }));
+  E2.state.closed.push(...Array.from({ length: 140 }, (_, i) => ({ ...leg({ id: `fb${i}`, group: `gfb${i}`, pairId: `${5200000 + i}:0|KXNCAAFGAME-26OCT17X${i}-X${i}`, strategy: 'bet',
+    label: `NCAAF Stephen F. Austin ${i} v Northwestern State ${i} · Stephen F. Austin ${i}`, side: i % 2 ? 'yes' : 'no', qty: 160, entry: 0.62, cost: 99.5 }), exit: i % 3 ? 1 : 0, exitAt: T - i * 600e3, pnl: i % 3 ? 60 : -99.5, reason: 'resolved' })));
+  const G2 = pmFloor(E2, cfg2, T), board = Buffer.byteLength(JSON.stringify(G2.games)), all2 = Buffer.byteLength(JSON.stringify(G2));
+  ok('at its caps the board is a hundred games still to bet and eighty finals', G2.games.upcoming.length === 100 && G2.games.finals.length === 80, [G2.games.upcoming.length, G2.games.finals.length]);
+  ok('...under 45 KB before gzip, and the frame with it under 110 KB', board < 45000 && all2 < 110000, { board, all2 });
 }
 
 group('switched off and winding down');
@@ -266,6 +276,7 @@ group('the game board (2026-10-17): the games still to bet, the finals, and the 
     { ...leg({ id: 'o1', group: 'go1', pairId: 'p-o1', label: 'MLB Rays v Guardians · Rays', side: 'yes', qty: 198, entry: 0.5, cost: 100, strategy: 'bet' }), exit: 1, exitAt: T - 5 * 864e5, pnl: 98, reason: 'resolved YES' },
     { ...leg({ id: 'ax', group: 'gax', strategy: 'arb', label: 'Fed OCT 26 · Cut 25bps' }), exit: 1, exitAt: T - 3600e3, pnl: 5, reason: 'resolved YES' },
   ];
+  s.stats.bets = betTally(s.closed);   // as the engine keeps it (tallyBet at each settlement; backfilled from closed on load)
   const H = 3600e3, pair = (id, series, label, startsAt, q) => ({ id, kind: 'game', series, label, startsAt, q });
   E.pairs = [
     pair('u1', 'KXNFLGAME', 'NFL Seahawks v Broncos · Seahawks', T + 3 * H, { pmMid: 0.40, ksMid: 0.42 }),
@@ -282,10 +293,10 @@ group('the game board (2026-10-17): the games still to bet, the finals, and the 
   ok('the games still to bet: paired, in the book\'s series, from four hours ago to thirty hours on, each game once, soonest first',
     G.upcoming.map((u) => u.id).join() === 'u7,u1,u3', G.upcoming.map((u) => u.id));
   const u1 = G.upcoming.find((u) => u.id === 'u1');
-  ok('the favourite as the bets read it: the two venues\' mids averaged, Broncos at 59c', u1.pick === 'Broncos' && u1.px === 0.59 && u1.over === false && u1.league === 'NFL' && u1.a === 'Seahawks' && u1.b === 'Broncos', u1);
+  ok('the favourite as the bets read it: the two venues\' mids averaged, Broncos at 59c', u1.fav === 'b' && u1.px === 0.59 && u1.over === false && u1.league === 'NFL' && u1.a === 'Seahawks' && u1.b === 'Broncos', u1);
   ok('a favourite over the cap is marked so', G.upcoming.find((u) => u.id === 'u3').over === true);
-  ok('a game with no price yet has no pick', G.upcoming.find((u) => u.id === 'u7').pick === null && G.upcoming.find((u) => u.id === 'u7').px === null);
-  ok('the finals: the last day and a half, newest first, by the team bet on', G.finals.map((f) => f.id).join() === 'w1,l1'
+  ok('a game with no price yet has no pick', G.upcoming.find((u) => u.id === 'u7').fav === null && G.upcoming.find((u) => u.id === 'u7').px === null);
+  ok('the finals: the last thirty hours, newest first, by the team bet on, each keyed by its game\'s pair', G.finals.map((f) => f.id).join() === 'p-w1,p-l1'
     && G.finals[0].pick === 'Vikings' && G.finals[0].foe === 'Bears' && G.finals[1].pick === 'Magic' && G.finals[1].foe === 'Heat' && G.finals[1].pnl === -99, G.finals);
   ok('the record: every settled bet, the wins the prices expected (their prices added up), the money', G.record.bets === 3 && G.record.won === 2 && G.record.expected === 1.65 && G.record.pnl === 59 && G.record.staked === 289, G.record);
   ok('today\'s record is the games played today: one that settled at 1:30 AM was last night\'s', G.record.today.bets === 1 && G.record.today.won === 1 && G.record.today.pnl === 60, G.record.today);
@@ -293,8 +304,39 @@ group('the game board (2026-10-17): the games still to bet, the finals, and the 
   ok('with the book\'s settings: on, an hour ahead, the cap, the stake, the leagues', G.on === true && G.aheadH === 1 && G.maxPx === 0.9 && G.stake === 100 && G.leaguesOn.join() === 'NFL,NCAAF,NBA,MLB', G);
   const off = pmFloor(E, { ...cfg, bets: false }, T).games;
   ok('switched off, the board says so and still lists the games', off.on === false && off.upcoming.length === 3);
+  // audit 2026-10-17: the ledger keeps only its newest 2,000 closed legs; the record comes from the running tally
+  const keep = s.closed;
+  s.closed = s.closed.filter((c) => c.id !== 'o1');   // the oldest bet trimmed away
+  const trimmed = pmFloor(E, cfg, T).games.record;
+  ok('a bet trimmed from the closed legs stays in the record since the start, and its league', trimmed.bets === 3 && trimmed.won === 2 && trimmed.leagues.MLB && trimmed.leagues.MLB.pnl === 98, trimmed);
+  s.closed = keep;
+  ok('a bet carries its pair, so its tile and sheet follow the game from up next to the bet', pmFloor(E, cfg, T).books.find((b) => b.key === 'bets').rows[0].pairId === 'p-open' );
+  E.pairs.push(pair('u9', 'KXNFLGAME', 'NFL Jets v Dolphins · Patriots', T + 2 * H, { pmMid: 0.6, ksMid: 0.6 }));
+  ok('a label whose YES side names neither team gives no pick, not "not Patriots"', pmFloor(E, cfg, T).games.upcoming.find((u) => u.id === 'u9').fav === null);
+  E.pairs.pop();
+  // 1:30 AM ET Wednesday: a game that ended at 1:10 AM is Tuesday night's, and so is "today" until 4 AM
+  const late = { ...leg({ id: 'n1', group: 'gn1', pairId: 'p-n1', label: 'NBA Suns v Jazz · Suns', side: 'yes', qty: 160, entry: 0.62, cost: 99, strategy: 'bet' }), exit: 0, exitAt: Date.parse('2026-09-30T05:10:00Z'), pnl: -99, reason: 'resolved NO' };
+  s.closed.push(late);
+  const night = pmFloor(E, cfg, Date.parse('2026-09-30T05:30:00Z')).games.record.today;
+  ok('after midnight, today is still the evening before: the 1:10 AM final counts', night.bets === 2 && night.won === 1, night);
+  s.closed.pop();
 }
 
-for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
-console.log(`\n${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+group('the engine keeps the bets\' tally as each settles, and backfills a ledger without one');
+const tallyRun = (async () => {
+  const { E } = engine({ bets: true });
+  const s = E.state;
+  ok('a new ledger starts with an empty tally', s.stats.bets && s.stats.bets.bets === 0);
+  s.positions = [leg({ id: 'tb', group: 'gtb', pairId: 'p-tb', label: 'NFL Vikings v Bears · Vikings', venue: 'KS', side: 'yes', qty: 150, entry: 0.6, mark: 0.6, cost: 90, strategy: 'bet' })];
+  s.cash = r2(s.cash - 90);
+  await E.close(s.positions[0], 1, 'resolved YES', true);
+  ok('a bet that settles is counted: won, its price expected, its stake and its money, by league', s.stats.bets.bets === 1 && s.stats.bets.won === 1 && s.stats.bets.expected === 0.6 && s.stats.bets.staked === 90 && s.stats.bets.pnl === 60 && s.stats.bets.leagues.NFL.won === 1, s.stats.bets);
+  const back = betTally([{ strategy: 'bet', label: 'NBA Heat v Magic · Heat', entry: 0.55, cost: 99, pnl: -99 }, { strategy: 'arb', label: 'x', entry: 0.4, cost: 40, pnl: 5 }]);
+  ok('the backfill counts the bets among the closed legs and nothing else', back.bets === 1 && back.won === 0 && back.leagues.NBA.pnl === -99, back);
+})();
+
+tallyRun.catch((e) => { fail++; console.log(`  FAIL  the tally run threw: ${e.stack || e.message}`); }).then(() => {
+  for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+  console.log(`\n${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+});

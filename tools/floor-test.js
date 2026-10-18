@@ -77,8 +77,13 @@ ok('the lab counts the ideas tested and kept from one list, and one on test says
 ok('a tape that has gone quiet says so, by how often it runs', /const TAPE_QUIET_H = \{ odds: 0\.5, td: 1, chains: 80 \}/.test(js) && /word: 'Quiet'/.test(js));
 
 // ---- the games: every game a tile, at whatever stage
-ok('a tile is up next, bet, live, waiting on the result, left alone, won or lost', ['next', 'bet', 'live', 'wait', 'skip', 'won', 'lost'].every((st) => new RegExp(`'${st}'`).test(js)));
+ok('a tile is up next, bet, live, under way unbet, waiting on the result, left alone, won or lost', ['next', 'bet', 'live', 'late', 'wait', 'skip', 'won', 'lost'].every((st) => new RegExp(`'${st}'`).test(js)));
 ok('a bet whose game has no start on record waits on its result, not "up next"', /stage: !known \? 'wait' : started \? 'live' : 'bet'/.test(js));
+// the audit of 2026-10-17
+ok('a tile and its sheet follow a game from up next to the bet and the final: keyed by its pair, found by it', /return \{ k: r\.pairId \|\| r\.id, stage:/.test(js) && /const fin = g\.finals\.map\(\(f\) => \(\{ k: f\.id, stage:/.test(js) && /x\.id === id \|\| x\.pairId === id/.test(js));
+ok('a game under way and not bet is "late", in progress, never up next or "Bets this round"', /stage: begun \? 'late' :/.test(js) && /B\.next\.filter\(\(t\) => t\.stage !== 'late'\)/.test(js));
+ok('switched off, a group of games says so in its heading too', /if \(!B\.g\.on\) return 'not bet: the game bets are switched off'/.test(js));
+ok('until 4 AM "today" is still the evening before, for the finals as for the games', /td = playedDay\(S\.now\)/.test(js) && /k === playedDay\(S\.now\) \? 'Today'/.test(js));
 ok('every tile opens its game', /class="gt st-\$\{t\.stage\}" data-sheet="game:\$\{esc\(t\.k\)\}"/.test(js) && /kind === 'game' \? gameSheet\(arg\)/.test(js));
 ok('a sheet\'s id splits at its first colon only: a game pair\'s id has colons of its own', /const s = String\(id\), i = s\.indexOf\(':'\)/.test(js));
 ok('the pick is marked by more than its colour', /<span class="sr">, the pick<\/span>/.test(js));
