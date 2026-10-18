@@ -710,8 +710,9 @@ function pmReadsSettled(q, cfg) {
 // whichever venue sells it cheaper after its fee, and held to the final. No edge is claimed: bought at
 // the market's own price, a book like this should lose about the fee over many games; it is paper, and
 // it is the bet Evan asked for. A game is bet once (`done`: the pair ids the book already holds or has
-// settled). It is bet the first cycle it can be, before or during the game, unless it is all but decided
-// (the favourite over BET_MAX_PX) or Polymarket reads it settled. Never in live mode.
+// settled). It is bet the first cycle it can be in the BET_AHEAD_HOURS before its start, and not once it
+// has started (2026-10-18), unless it is all but decided (the favourite over BET_MAX_PX) or Polymarket reads
+// it settled. Never in live mode.
 function betPrices(pair, side, cfg) {
   const q = pair.q, ref = pair.ks && pair.ks.ticker, rate = pmRate(q, cfg);
   const pmPx = side === 'yes' ? q.pmAsk : 1 - q.pmBid, ksPx = side === 'yes' ? q.ksAsk : 1 - q.ksBid;
@@ -728,6 +729,12 @@ function betSignal(pair, cfg, now, done) {
   // Not yet: a game more than BET_AHEAD_HOURS out waits, quietly (no veto: nothing is wrong with it).
   // The league listings pair a week of games at once (2026-10-11); a game with no start time is bet as before.
   if (Number.isFinite(pair.startsAt) && pair.startsAt - now > (cfg.betAheadHours ?? 1) * 3600e3) return null;
+  // Too late: a game that has started is not bet (Evan, 2026-10-18: "stop betting games already under way").
+  // The rule was tested on the price before the start (tools/pick-lab.js); in play the price follows the score,
+  // which nothing here tested, and until then a game paired late, or one the box was down for in the hour
+  // before, was bought at it. Said once (`late`), so a person can see which game it was; tools/bet-coverage.js
+  // names it MISSED. A game with no start on record is bet as before: nothing says it has begun.
+  if (Number.isFinite(pair.startsAt) && now >= pair.startsAt) return { veto: 'it had started, and a game is bet only before its start', late: true };
   const q = pair.q;
   if (pmReadsSettled(q, cfg)) return null;
   if (!Number.isFinite(q.t) || now - q.t > cfg.maxDataAgeSec * 1000) return { veto: 'quote stale' };

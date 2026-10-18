@@ -259,7 +259,8 @@
     });
     // A game that has started and was left alone (its favourite over the cap) is not on the board: it is counted
     // (`skipped`). One that has started and is not bet for another reason (no price on one venue, a stale quote, the
-    // venues apart) is 'late': under way, in progress, never "up next" or "Bets this round" (audit 2026-10-17).
+    // venues apart, a pairing that came late) is 'late': under way, in progress, never "up next" or "Bets this round"
+    // (audit 2026-10-17), and since 2026-10-18 never bet at all: a game is bet only before its start.
     const next = [], skipped = [];
     for (const u of g.upcoming) {
       // the favourite is named by side ('a' or 'b'); with no price there is none, and the first team leads
@@ -267,7 +268,7 @@
       const foe = u.pick ? (u.pick === u.a ? u.b : u.a) : u.b, opens = u.startsAt - ahead, begun = u.startsAt <= now;
       if (u.over && begun) { skipped.push(u); continue; }
       next.push({ k: u.id, stage: begun ? 'late' : u.over ? 'skip' : 'next', league: u.league, start: u.startsAt, pick: u.pick || u.a, foe, px: u.px,
-        status: !g.on ? 'Not bet: the game bets are switched off' : begun ? (u.px == null ? 'Under way, not bet: no price on both venues' : 'Under way, not bet yet')
+        status: !g.on ? 'Not bet: the game bets are switched off' : begun ? (u.px == null ? 'Under way, not bet: no price on both venues' : 'Under way, too late to bet')
           : u.over ? `Left alone: the favourite is ${wholeCents(u.px)}` : opens <= now ? 'Bets this round' : `Bets at ${ET_HM.format(new Date(opens))}` });
     }
     const fin = g.finals.map((f) => ({ k: f.id, stage: f.pnl > 0 ? 'won' : 'lost', league: f.league, start: f.at, day: playedDay(f.at), pick: f.pick, foe: f.foe, px: f.entry,
