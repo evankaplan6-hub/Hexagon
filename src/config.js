@@ -444,7 +444,8 @@ module.exports = {
   // pick the winner"): on 8,068 settled Kalshi games (tools/pick-lab.js) the favourite an hour before
   // the start beat the favourite a day before by $3.18 a $100 bet in MLB (±2.29, 2,493 games; lineups and
   // starting pitchers come out in between: where the favourite changed, the late one won 136 of 224) and
-  // by $1.32 (±1.19) over all four leagues. No other picker beat the favourite.
+  // by $1.32 (±1.19) over all four leagues. No other picker beat the favourite. Never once the game has started
+  // (2026-10-18, Evan: "stop betting games already under way"): the lab priced the hour before, not the game.
   betAheadHours: num('BET_AHEAD_HOURS', 1),
   exitGap: num('EXIT_GAP', 0.01),
   stopLoss: num('STOP_LOSS', 0.06),

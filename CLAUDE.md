@@ -67,7 +67,8 @@ npm run reset                                 # wipe the prediction-market paper
 - The **prediction-market** desk keeps trading **in paper** even though it is no longer the main focus
   (Evan, 2026-09-27: "doesn't mean you shouldn't be still running them in simulation"). fly.toml has
   `ARBS=1`, `MAKER_QUOTE=1`, `SNIPE=1`; `CONVERGE=0` stays off (its own verdict, 2026-09-21). Since 2026-09-30 `BETS=1` too: "every game should be bet" (Evan, Wild Card night), one $100
-  paper bet on the favourite of every game in `BET_SERIES`, held to the final: MLB until 2026-10-10, NBA, NFL
+  paper bet on the favourite of every game in `BET_SERIES`, in the hour before its start and never once it is
+  under way (since 2026-10-18), held to the final: MLB until 2026-10-10, NBA, NFL
   and college football since (Evan: "baseball is over switch it to NBA NFL CFB"), and MLB again since 10-13 for the
   rest of the postseason (Evan: "mlb tonight"); README "Every game". All four
   were off 2026-09-25 to 09-27 after every book lost on paper. Do not switch a book off, or

@@ -11,8 +11,10 @@
 //
 // A game is counted on the day Kalshi settled it (not its ticker's date: see games()). It is BET (an OPEN line of strategy "bet" names its Kalshi event), OVER THE CAP (no bet, and an hour before the
 // start Kalshi's favourite cost more than BET_MAX_PX, so the book leaves it alone by design) or MISSED: no bet with
-// the favourite under the cap. A miss is a game Polymarket did not list, one the matcher did not pair, or one a
-// veto stopped (venues 30c apart, a stale quote); the line names it and a person looks. Exit 1 on a miss.
+// the favourite under the cap. A miss is a game Polymarket did not list, one the matcher did not pair, one a
+// veto stopped (venues 30c apart, a stale quote), or, since 2026-10-18, one not bet before its start (paired late,
+// or the box down through the hour before: a game is never bet once under way); the line names it and a person
+// looks. Exit 1 on a miss.
 // Read-only: Kalshi's public API (listing, and candles for the unbet games only) and the journals on disk.
 const fs = require('fs');
 const path = require('path');

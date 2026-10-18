@@ -363,7 +363,8 @@ function BRAM(E) {
     for (const p of E.pairs) {
       const s = decide.betSignal(p, E.cfg, now, done);
       if (!s) continue;
-      if (s.veto) { if (E.due(`bet-veto-${p.id}`, 1800)) E.log('BRAM', 'RESEARCH', null, `${p.label}: no game bet yet, ${s.veto}`); continue; }
+      // a game that started unbet is said once (it will not be bet now); any other veto every half hour, until it clears
+      if (s.veto) { if (s.late ? E.due(`bet-late-${p.id}`, 6 * 3600) : E.due(`bet-veto-${p.id}`, 1800)) E.log('BRAM', 'RESEARCH', null, `${p.label}: ${s.late ? 'not bet' : 'no game bet yet'}, ${s.veto}`); continue; }
       bets.push(s);
     }
   }

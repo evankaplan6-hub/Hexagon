@@ -764,8 +764,9 @@ Evan, on the MLB Wild Card's second night: "every game should be bet". So each g
 `KXNBAGAME,KXNFLGAME,KXNCAAFGAME,KXMLBGAME`, below) gets one bet: `BET_USD` ($100) on the favourite, the side the two venues' mids, averaged, make likelier. It is
 bought at whichever venue sells that side cheaper after its own fee (Kalshi charges MLB half its usual
 rate, Polymarket 5% of p(1-p)), off the live book, and held to the final: no stop, no early exit. A game
-is bet the first cycle it can be, before first pitch or during the game, and never twice (the book's
-own open and settled positions say which games are done, so a restart does not double up). A favourite
+is bet the first cycle it can be in the hour before it starts (below), never once it has started (since
+2026-10-18), and never twice (the book's own open and settled positions say which games are done, so a
+restart does not double up). A favourite
 already over `BET_MAX_PX` (90c) is a game all but decided and is left alone, and so is a game
 Polymarket reads settled. It sits beside an arb on the same game rather than waiting for it.
 
@@ -869,8 +870,13 @@ Baseball's lineups and starting pitchers come out in that last day; in the 224 M
 favourite changed between the two, the late favourite won 136. So since 2026-10-16 `BET_AHEAD_HOURS` is
 1, not 24: each game is bet in the hour before it starts, on the side the latest price favours. It is
 still the market's favourite, still no edge over the price (the book should still lose about the fee),
-and the gain is a few dollars a bet in baseball and nothing anywhere else. A game the desk cannot price
-in that hour (a restart, a pairing that comes late) is bet once it can be, during the game, as before.
+and the gain is a few dollars a bet in baseball and nothing anywhere else. Until 2026-10-18 a game the desk
+could not price in that hour (a restart, a pairing that came late) was bet once it could be, during the game.
+Since then it is not bet at all (Evan: "stop betting games already under way"): the rule was tested on the
+price before the start, and in play the price follows the score, which nothing here tested. The desk says so
+once in its activity ("not bet, it had started"), the floor's tile reads "Under way, too late to bet", and
+`tools/bet-coverage.js` names the game MISSED, so a late pairing is still found and fixed. A game with no start
+time on record is bet as before, since nothing says it has begun.
 The book's college football loss to date (56 bets, favourites bought at 71c on average that won 63%) is
 inside the luck of 56 games: over 725 holdout college games the favourite lost $2.45 a bet.
 
