@@ -157,13 +157,16 @@ ever informs his own trades.
 ### The odds tape (2026-10-17)
 
 The one edge hunt the plan keeps (above): does Kalshi's price for an NFL game trail the sharp sportsbook's after news?
-Evan opened The Odds API's free tier (500 credits a month), and `tools/odds-tape.js --record` runs on the box every 8
+Evan opened The Odds API's free tier (500 credits a month), and `tools/odds-tape.js --record` runs on the box every 10
 minutes (`src/oddssched.js`, `ODDS_TAPE=1`, the `ODDS_API_KEY` Fly secret). In the two hours before each NFL kickoff it
 makes one read of every game's moneyline from Pinnacle, DraftKings, FanDuel, BetMGM and Betfair's exchange (1 credit:
 five books named cost one region), each with the time that book last moved, and in the same run reads Kalshi's NFL game
 books; one line a read, in `data/odds/odds-YYYY-MM-DD.jsonl` (the pull copies each day to `data/fly/archive/odds/`).
-Outside those windows it reads only the free list of games. That is about 15 credits a kickoff slot, 75-90 a week, and
-below 20 left it stops until the 1st. Log only: no bet, nothing in the desk reads it.
+Outside those windows it reads only the free list of games. That is about 12 credits a kickoff slot, 60-90 a week, and
+below 20 left it stops until the 1st. (Every 8 minutes until the audit of 2026-10-17, which simulated November at about
+445 of the 481 usable credits; at 10 it is about 360. The same audit put Kalshi's free read before the paid one, so a
+Kalshi outage spends nothing, and made `games.json` keep each game a week, so the morning check can see a Sunday game
+that went untaped; the check also says when the tape has not run for half an hour or a run went wrong in the last day.) Log only: no bet, nothing in the desk reads it.
 
 `node tools/odds-tape.js --grade` takes Pinnacle's chance with its margin taken out against Kalshi's mid at every read,
 reports how far apart they run, and grades the buy a lag would call for: Kalshi's ask under Pinnacle's chance by more
