@@ -719,7 +719,16 @@ group('every game: one bet a game, on the favourite, at the cheaper venue');
   const kick = d.betSignal(pair(q, { startsAt: now }), cfg, now, new Set());
   ok('at the start itself it is too late; a second before, it is bet', kick && kick.late && (d.betSignal(pair(q, { startsAt: now + 1000 }), cfg, now, new Set()) || {}).type === 'bet', kick);
   const overCap = d.betSignal(pair({ pmBid: 0.93, pmAsk: 0.94, ksBid: 0.93, ksAsk: 0.94 }, { startsAt: now - 60e3 }), cfg, now, new Set());
-  ok('a started game is not bet whatever its price', overCap && overCap.late && !overCap.legs, overCap);
+  ok('a started game over the cap is left alone quietly, as before its start: not said to be "late" (audit 2026-10-20)', overCap === null, overCap);
+  ok('...nor one Polymarket reads settled', d.betSignal(pair({ pmBid: 0.99, pmAsk: 1, ksBid: 0.98, ksAsk: 0.99 }, { startsAt: now - H }), cfg, now, new Set()) === null);
+  // one bet a game, by its Kalshi game as well as its pair (audit 2026-10-20: a postponed game's Polymarket market
+  // re-paired with the next day's Kalshi game, already bet through the other market: two bets on one game)
+  ok('the Kalshi game of a pair, a pair id, or a ticker-less id', d.betGame('5557832:0|KXMLBGAME-26OCT172000TBCLE-TB') === 'game:KXMLBGAME-26OCT172000TBCLE'
+    && d.betGame(pair(q)) === 'game:KXMLBGAME-26SEP302000BOSNYY' && d.betGame('pmonly') === null && d.betGame(null) === null);
+  const done = d.betDone([{ strategy: 'bet', pairId: 'pmOTHER:0|KXMLBGAME-26SEP302000BOSNYY-BOS' }, { strategy: 'arb', pairId: 'pmARB:0|KXMLBGAME-26OCT01X-Y' }]);
+  ok('a game bet through another Polymarket market is done: not bet again under its new pair', d.betSignal(pair(q, { startsAt: now + 30 * 60e3 }), cfg, now, done) === null && done.has('game:KXMLBGAME-26SEP302000BOSNYY') && !done.has('game:KXMLBGAME-26OCT01X'));
+  ok('...nor through the other team\'s Kalshi market of the same game', d.betSignal(pair(q, { startsAt: now + 30 * 60e3 }), cfg, now, d.betDone([{ strategy: 'bet', pairId: 'pmZ:1|KXMLBGAME-26SEP302000BOSNYY-NYY' }])) === null);
+  ok('a different game is still bet', (d.betSignal(pair(q, { startsAt: now + 30 * 60e3 }), cfg, now, d.betDone([{ strategy: 'bet', pairId: 'pmZ:1|KXMLBGAME-26SEP292000BOSNYY-NYY' }])) || {}).type === 'bet');
   ok('and a started game already bet is simply done: no word about it', d.betSignal(pair(q, { startsAt: now - H }), cfg, now, new Set([pair(q).id])) === null);
   ok('BET_AHEAD_HOURS is the window: 48 takes the 25-hour game', d.betSignal(pair(q, { startsAt: now + 25 * H }), { ...cfg, betAheadHours: 48 }, now, new Set()) !== null);
   ok('the default window is the last hour before the start (tools/pick-lab.js, 2026-10-16)', require('../src/config').betAheadHours === 1);

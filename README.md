@@ -813,7 +813,20 @@ journals; the two agree to the cent (206 bets that night). The floor's game boar
 and the last thirty hours' eighty finals, the favourite named by side), a game's sheet stays open when its game is
 bet, a game under way and not bet is "under way" rather than "bets this round", and until 4 AM "today" is still the
 evening before. The box's memory has peaked at 363 MB of 470 since its last restart, and Friday's unexplained
-21-minute outage fits an out-of-memory kill; a 1 GB machine is Evan's call.
+21-minute outage fits an out-of-memory kill; a 1 GB machine is Evan's call (since 2026-10-18 it has 1 GB).
+
+**The audit of 2026-10-20.** One game was bet twice. "Already bet" was kept by pair, and on 10-17 Polymarket's
+market for a postponed Rays-Guardians game re-paired with the next day's Kalshi game, which the book had bet through
+the other Polymarket market: two bets, $199, on one game, so the record read 150-89 over 239 bets for 238 games
+(149-89 is the truth). A game is now bet once by its Kalshi game as well as its pair (`decide.betGame`, `betDone`),
+on the floor too. The four-hour re-entry pause after any exit no longer holds a bet off: an arb on the same game
+unwound within four hours of the start would have kept the bet out of its whole hour, and since 10-18 a game is never
+bet once started. A bet the book can fill for less than half its stake (`BET_MIN_FILL`) waits for depth, a minute at
+a time, until ten minutes before the start (`BET_LAST_CALL_MIN`), then takes what there is: 13 of the first 239 bets
+cost under $50, one $2.91, each counted as a whole game. KETT checks the start again after reading the books, a game
+over the cap that starts unbet is left alone quietly rather than called "late", and the floor keeps each game's price
+from before its start (a missed game whose favourite passed 90c in play read as "left alone"). Today's games card
+counts today's games only.
 
 **Is every game bet? (2026-10-17.)** Not always, and until that Saturday nothing said so. Evan asked "cfb ready?":
 Kalshi listed 71 college games dated 10-17 and the box had paired 69. Kansas v Kansas State was one of the two:

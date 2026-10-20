@@ -58,7 +58,7 @@ const pair = (event, a, b, o = {}) => [mkt(`${event}-${a[0]}`, a[1], o), mkt(`${
   ok('Saturday: four games settled that day (the Friday-dated one included, Friday night\'s and Sunday\'s not)', r.played === 4, r);
   ok('two bet, one over the cap (99c), one missed', r.bet === 2 && r.over === 1 && r.missed.length === 1 && r.missed[0].event === 'KXNCAAFGAME-26OCT16FLATEX', r);
   ok('the head line counts them by league', /Kalshi settled 4 games in the book's series \(NCAAF 4\); bet 2, over the 90c cap 1, missed 1/.test(r.lines[0]), r.lines[0]);
-  ok('the miss is named, with its price and the three reasons a person checks', /MISSED NCAAF Florida v Texas \(12:11 PM ET\): favourite 62c an hour before, under the cap/.test(r.lines[1]) && /did not list it, the matcher did not pair it, or a veto/.test(r.lines[1]), r.lines[1]);
+  ok('the miss is named, with its price and the three reasons a person checks', /MISSED NCAAF Florida v Texas \(12:11 PM ET\): favourite 62c an hour before, under the cap/.test(r.lines[1]) && /did not list it, the matcher did not pair it until it had started .*, or a veto/.test(r.lines[1]), r.lines[1]);
   const noq = T.report(day, all, bets, new Map([['KXNCAAFGAME-26OCT17CITTXAM', 0.99]]), { cap: 0.9 });
   ok('no Kalshi quote an hour before: a miss, said so (not passed off as over the cap)', noq.missed.length === 1 && /no Kalshi quote an hour before/.test(noq.lines[1]), noq.lines);
   ok('exactly at the cap is under it: the book bets a 90c favourite', T.report(day, all, bets, new Map([['KXNCAAFGAME-26OCT17CITTXAM', 0.9], ['KXNCAAFGAME-26OCT16FLATEX', 0.6]]), { cap: 0.9 }).missed.length === 2);

@@ -722,10 +722,31 @@ function betPrices(pair, side, cfg) {
     KS: ok(ksPx) ? { px: ksPx, cost: ksPx + ks.fee(1, ksPx, cfg.ksFeeRate, ref) } : null,
   };
 }
+// The Kalshi game a pair is on: its event, the market's ticker less the team ("KXMLBGAME-26OCT172000TBCLE-TB" is
+// "KXMLBGAME-26OCT172000TBCLE"), from a pair or a pair id ("<pm>:<i>|<ticker>"). A game is bet once by its pair AND by
+// this (audit 2026-10-20): on 2026-10-17 Polymarket's market for a postponed Rays-Guardians game re-paired with the next
+// day's Kalshi game, already bet through the other Polymarket market, and the new pair id read as a game not yet bet:
+// two bets, $199, on one game.
+function betGame(x) {
+  const t = x && typeof x === 'object' ? (x.ks && x.ks.ticker) || String(x.id || '').split('|')[1] : String(x || '').split('|')[1];
+  const parts = String(t || '').split('-');
+  return parts.length > 2 ? `game:${parts.slice(0, -1).join('-')}` : null;
+}
+// What the book has bet, for betSignal's `done`: each bet's pair id and its Kalshi game, from its open and settled positions
+function betDone(positions) {
+  const done = new Set();
+  for (const p of positions || []) {
+    if (p.strategy !== 'bet' || !p.pairId) continue;
+    done.add(p.pairId);
+    const g = betGame(p.pairId);
+    if (g) done.add(g);
+  }
+  return done;
+}
 function betSignal(pair, cfg, now, done) {
   if (!cfg.bets || cfg.mode === 'live' || !pair || pair.kind !== 'game' || !pair.q || pair.pmGone || pair.watchOnly) return null;
   if (!(cfg.betSeries || []).includes(pair.series)) return null;
-  if (done && done.has(pair.id)) return null;
+  if (done && (done.has(pair.id) || done.has(betGame(pair)))) return null;
   // Not yet: a game more than BET_AHEAD_HOURS out waits, quietly (no veto: nothing is wrong with it).
   // The league listings pair a week of games at once (2026-10-11); a game with no start time is bet as before.
   if (Number.isFinite(pair.startsAt) && pair.startsAt - now > (cfg.betAheadHours ?? 1) * 3600e3) return null;
@@ -733,10 +754,16 @@ function betSignal(pair, cfg, now, done) {
   // The rule was tested on the price before the start (tools/pick-lab.js); in play the price follows the score,
   // which nothing here tested, and until then a game paired late, or one the box was down for in the hour
   // before, was bought at it. Said once (`late`), so a person can see which game it was; tools/bet-coverage.js
-  // names it MISSED. A game with no start on record is bet as before: nothing says it has begun.
-  if (Number.isFinite(pair.startsAt) && now >= pair.startsAt) return { veto: 'it had started, and a game is bet only before its start', late: true };
+  // names it MISSED. A game with no start on record is bet as before: nothing says it has begun. One whose favourite
+  // is over the cap, or that Polymarket reads settled, is left alone quietly, as it was before the start: "it had
+  // started" was said of every game over the cap at its kickoff (audit 2026-10-20).
   const q = pair.q;
   if (pmReadsSettled(q, cfg)) return null;
+  if (Number.isFinite(pair.startsAt) && now >= pair.startsAt) {
+    const mid = (q.pmMid + q.ksMid) / 2;
+    if (Number.isFinite(mid) && Math.max(mid, 1 - mid) > cfg.betMaxPx + 1e-9) return null;
+    return { veto: 'it started before it could be bet, and a game is bet only before its start', late: true };
+  }
   if (!Number.isFinite(q.t) || now - q.t > cfg.maxDataAgeSec * 1000) return { veto: 'quote stale' };
   if (![q.pmMid, q.ksMid].every(Number.isFinite)) return { veto: 'one venue has no price' };
   if (Math.max(q.ksBid - q.pmAsk, q.pmBid - q.ksAsk) > MAX_VENUE_DISAGREE + 1e-9) return { veto: 'venues disagree 30c+: likely different games' };
@@ -757,4 +784,4 @@ function betPick(label, side) {
   return side === 'yes' ? yes : yes === a ? b : yes === b ? a : `not ${yes}`;
 }
 
-module.exports = { betSignal, betPrices, betPick, fairValue, quoteFault, snipeEdge, snipeSignal, keepClosedGamePairs, pmReadsSettled, pmRecordSays, convEdge, pairSignals, scan, liveWindow, exitIntent, gainLockIntent, arbUnwind, arbUnwindLive, arbReturn, arbEdgeLive, riskState, biasFor, standingGap, gapUnseen, bookFull, persistFilter, sizePlan, rankSignals, pmRate, arbEdgeAtQty, arbQtyForEdge };
+module.exports = { betSignal, betGame, betDone, betPrices, betPick, fairValue, quoteFault, snipeEdge, snipeSignal, keepClosedGamePairs, pmReadsSettled, pmRecordSays, convEdge, pairSignals, scan, liveWindow, exitIntent, gainLockIntent, arbUnwind, arbUnwindLive, arbReturn, arbEdgeLive, riskState, biasFor, standingGap, gapUnseen, bookFull, persistFilter, sizePlan, rankSignals, pmRate, arbEdgeAtQty, arbQtyForEdge };

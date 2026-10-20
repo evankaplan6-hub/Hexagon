@@ -314,6 +314,24 @@ group('the game board (2026-10-17): the games still to bet, the finals, and the 
   E.pairs.push(pair('u9', 'KXNFLGAME', 'NFL Jets v Dolphins · Patriots', T + 2 * H, { pmMid: 0.6, ksMid: 0.6 }));
   ok('a label whose YES side names neither team gives no pick, not "not Patriots"', pmFloor(E, cfg, T).games.upcoming.find((u) => u.id === 'u9').fav === null);
   E.pairs.pop();
+  // audit 2026-10-20: a game under way keeps the price it had before its start; the live one follows the score
+  {
+    const g = pair('u10', 'KXNBAGAME', 'NBA Lakers v Suns · Lakers', T + 1800e3, { pmMid: 0.6, ksMid: 0.6 });
+    E.pairs.push(g);
+    pmFloor(E, cfg, T);   // seen before its start, at 60c
+    g.q = { pmMid: 0.97, ksMid: 0.97 };   // in play, the Lakers far ahead
+    const u10 = pmFloor(E, cfg, T + 2400e3).games.upcoming.find((u) => u.id === 'u10');
+    ok('a game under way keeps the price it had before its start: 60c, not left alone at 97c in play', u10 && u10.px === 0.6 && u10.over === false && u10.fav === 'a', u10);
+    E.pairs.push(pair('u11', 'KXNBAGAME', 'NBA Kings v Jazz · Kings', T - 600e3, { pmMid: 0.95, ksMid: 0.95 }));
+    const u11 = pmFloor(E, cfg, T).games.upcoming.find((u) => u.id === 'u11');
+    ok('one first seen under way has no price before its start: not counted as left alone', u11 && u11.px === null && u11.over === false, u11);
+    E.pairs.splice(-2);
+    // a game bet through another Polymarket market on the same Kalshi game is bet: not on the list still to bet
+    s.positions.push(leg({ id: 'rb', group: 'grb', pairId: 'pmX:0|KXNFLGAME-26SEP29SEADEN-SEA', label: 'NFL Seahawks v Broncos · Seahawks', side: 'no', entry: 0.6, cost: 99, strategy: 'bet' }));
+    E.pairs.push(pair('pmY:0|KXNFLGAME-26SEP29SEADEN-DEN', 'KXNFLGAME', 'NFL Broncos v Seahawks · Broncos', T + 3 * H, { pmMid: 0.6, ksMid: 0.6 }));
+    ok('a game bet through another Polymarket market is not "still to bet" (decide.betGame)', !pmFloor(E, cfg, T).games.upcoming.some((u) => u.id.startsWith('pmY')));
+    E.pairs.pop(); s.positions.pop();
+  }
   // 1:30 AM ET Wednesday: a game that ended at 1:10 AM is Tuesday night's, and so is "today" until 4 AM
   const late = { ...leg({ id: 'n1', group: 'gn1', pairId: 'p-n1', label: 'NBA Suns v Jazz · Suns', side: 'yes', qty: 160, entry: 0.62, cost: 99, strategy: 'bet' }), exit: 0, exitAt: Date.parse('2026-09-30T05:10:00Z'), pnl: -99, reason: 'resolved NO' };
   s.closed.push(late);

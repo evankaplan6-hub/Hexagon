@@ -354,17 +354,19 @@ function BRAM(E) {
       if (E.due(`snipe-seen-${p.id}`, 300)) E.log('BRAM', 'RESEARCH', null, `${p.label}: Polymarket has settled ${s.won.toUpperCase()} · Kalshi still offers it at ${(s.legs[0].px * 100).toFixed(0)}c${s.size ? ` (${s.size} at the touch)` : ''} · ${c(s.edge)} net`);
     }
   }
-  // Every game (decide.betSignal): one bet a game, found the first cycle it can be. `done` is every pair
-  // the book already holds or has settled, from the ledger itself, so a restart does not bet a game twice.
+  // Every game (decide.betSignal): one bet a game, found the first cycle it can be. `done` is every pair, and every
+  // Kalshi game, the book already holds or has settled, from the ledger itself, so a restart or a re-pairing does not
+  // bet a game twice (decide.betDone).
   const bets = [];
   if (E.cfg.bets && E.cfg.mode !== 'live') {
     const now = Date.now();
-    const done = new Set([...E.state.positions, ...(E.state.closed || [])].filter((p) => p.strategy === 'bet').map((p) => p.pairId));
+    const done = decide.betDone([...E.state.positions, ...(E.state.closed || [])]);
     for (const p of E.pairs) {
       const s = decide.betSignal(p, E.cfg, now, done);
       if (!s) continue;
-      // a game that started unbet is said once (it will not be bet now); any other veto every half hour, until it clears
-      if (s.veto) { if (s.late ? E.due(`bet-late-${p.id}`, 6 * 3600) : E.due(`bet-veto-${p.id}`, 1800)) E.log('BRAM', 'RESEARCH', null, `${p.label}: ${s.late ? 'not bet' : 'no game bet yet'}, ${s.veto}`); continue; }
+      // A game that started unbet is said once, in its first two hours (it will not be bet now; a restart later in the
+      // game does not say it again); any other veto every half hour, until it clears
+      if (s.veto) { if (s.late ? now - p.startsAt < 2 * 3600e3 && E.due(`bet-late-${p.id}`, 6 * 3600) : E.due(`bet-veto-${p.id}`, 1800)) E.log('BRAM', 'RESEARCH', null, `${p.label}: ${s.late ? 'not bet' : 'no game bet yet'}, ${s.veto}`); continue; }
       bets.push(s);
     }
   }
@@ -529,8 +531,12 @@ async function KETT(E) {
     // stops only another bet, and anything else held stops only the other books, so a bet placed before the
     // game neither starves its arb nor blocks the settlement snipe at the final.
     if (E.state.positions.some((p) => p.pairId === s.pair.id && ((s.type === 'bet') === (p.strategy === 'bet')))) continue;
+    // ...and a bet is held by its Kalshi game too: another Polymarket market on the same game is the same game
+    if (s.type === 'bet' && E.state.positions.some((p) => p.strategy === 'bet' && decide.betGame(p.pairId) === decide.betGame(s.pair))) continue;
     if (s.type === 'bet' && live) continue; // paper only (decide.betSignal makes none in live mode either)
-    if (Date.now() - (E.cooldown.get(s.pair.id) || 0) < E.cfg.reentryCooldownMs) continue; // no churn after an exit
+    // No churn after an exit. Not for a bet (audit 2026-10-20): it is once a game anyway, and an arb on the same game
+    // unwound within four hours of the start held the bet off through its whole hour, after which it is never made.
+    if (s.type !== 'bet' && Date.now() - (E.cooldown.get(s.pair.id) || 0) < E.cfg.reentryCooldownMs) continue;
     if (s.type !== 'snipe' && E.passUntil && (E.passUntil.get(`${s.type}|${s.pair.id}`) || 0) > Date.now()) continue;   // a signal that just failed its live check is looked at again in a minute, not every cycle
     const passFor = () => (E.passUntil || (E.passUntil = new Map())).set(`${s.type}|${s.pair.id}`, Date.now() + 60000);
     if (live && s.legs.some((l) => l.venue !== 'KS')) continue; // live mode trades Kalshi legs only
@@ -627,6 +633,11 @@ async function KETT(E) {
       s.edge = liveEdge; s.legs[0].px = top.price;
     }
     if (s.type === 'bet') {
+      // The books can take a while (six fetches, each up to 15s): a game that started meanwhile is not bought
+      if (Number.isFinite(s.pair.startsAt) && Date.now() >= s.pair.startsAt) {
+        E.log('KETT', 'PASS', null, `${s.pair.label}: game bet on ${s.pick}, but the game started while the books were read`);
+        continue;
+      }
       // bought off the live book just fetched; the listing only chose the side and the venue
       const top = books[0] && books[0].asks && books[0].asks[0];
       const low = E.cfg.betMinPx ?? 0.45;
@@ -668,7 +679,17 @@ async function KETT(E) {
       }
       s.edge = edgeLive; s.fair = fairLive; s.gap = liveQ.ksMid - liveQ.pmMid; leg.px = pxLive;
     }
-    let { qty, capped } = decide.sizePlan(s, { budget: s.type === 'bet' ? Math.min(E.cfg.betUsd, budget) : budget, sizeMult, books, cfg: E.cfg });
+    let { qty, capped, unitCost } = decide.sizePlan(s, { budget: s.type === 'bet' ? Math.min(E.cfg.betUsd, budget) : budget, sizeMult, books, cfg: E.cfg });
+    // A bet the book can fill for less than half its stake waits for depth, a minute at a time, until the last ten
+    // minutes before the start, and then takes what there is (audit 2026-10-20: 13 of the first 239 bets cost under
+    // $50, one $2.91, each counted as a whole game in the record). Every game is still bet.
+    if (s.type === 'bet') {
+      const stake = Math.min(E.cfg.betUsd, budget), left = Number.isFinite(s.pair.startsAt) ? s.pair.startsAt - Date.now() : 0;
+      if (qty * unitCost < stake * (E.cfg.betMinFill ?? 0.5) && left > (E.cfg.betLastCallMin ?? 10) * 60e3) {
+        if (E.due(`bet-thin-${s.pair.id}`, 600)) E.log('KETT', 'PASS', null, `${s.pair.label}: game bet on ${s.pick}, but ${VEN[s.legs[0].venue]}'s book holds only $${(qty * unitCost).toFixed(2)} of it inside the limit · waiting for depth until ${Math.round(E.cfg.betLastCallMin ?? 10)} minutes before the start`);
+        passFor(); continue;
+      }
+    }
     if (s.type === 'snipe') qty = Math.min(qty, E.cfg.snipeMaxQty);   // a settlement is a one-shot, sized like one
     if (s.type === 'arb' && qty >= 5) qty = decide.arbQtyForEdge(s, books, qty, E.cfg);   // walked, not just the touch
     // Say so when the risk limit -- not depth, not cash -- is what set the size. Silently clipping
