@@ -36,7 +36,10 @@
 #   8. is the stocks, crypto and          tools/desk-check.js --box: its loop recorded a minute lately, each
 #      options desk well?                 book did today's check (crypto after midnight UTC, SPY after the
 #                                         open, the options book's 12:30 verdict), its journal rebuilds
-#                                         state.json to the penny, and each book against simply holding
+#                                         state.json to the penny, and each book against simply holding;
+#                                         then tools/week-report.js (8b, since 2026-10-20): the weeks page, and
+#                                         each finished week kept in data/reports/desk-weeks.json before the
+#                                         desk's ~21 days of minutes drop it
 #  10. is the odds tape reading?         tools/odds-tape.js --check on the box (since 2026-10-17): the last odds.log line,
 #                                         the credits left, and any NFL game that kicked off with no read
 #   9. did the touchdown tape miss        tools/td-tape.js --check on the box (since 2026-10-16), read-only: the last td.log line,
@@ -52,7 +55,8 @@
 # Nothing on the box is changed. What it writes on the Mac: step 2 copies the box's state.json and
 # the journals the archive lacks into data/fly/box-now, replacing the copies from the previous run
 # (ledger-check --box), step 3b appends one line to data/fly/archive/fillcheck.jsonl, and step 8
-# copies /data/desk (the new desk's state.json and journals) into data/fly/desk-now, replacing the last. Steps 3
+# copies /data/desk (the new desk's state.json and journals) into data/fly/desk-now, replacing the last; step 8b
+# writes data/reports/weeks.html and adds the finished weeks to data/reports/desk-weeks.json. Steps 3
 # and 4 read data/fly/box-now next to the archive, so "today" is today's journal and not the tail
 # of yesterday's. It reads no secret and cannot place an order. The pull itself stays with its own
 # job (ops/install-pull.sh); this only says whether that job is alive.
@@ -68,6 +72,10 @@ if [ -z "$FLY" ] || [ ! -x "$FLY" ]; then echo "fly is not installed (looked in 
 
 bad=0
 say() { printf '\n== %s\n' "$1"; }
+# One call to the box, given two minutes and then stopped (audit 2026-10-20: a hung `fly ssh console` had nothing to
+# stop it and would hold the whole routine). macOS has no timeout(1); perl's alarm does the same, and the exit status
+# of a call that ran out of time is not 0, so the step counts it as a problem.
+boxcall() { perl -e 'alarm shift; exec @ARGV or die "exec: $!"' 120 "$FLY" "$@"; }
 
 say "1. the pull"
 LOG="$HEXDIR/data/fly/archive/pull.log"
@@ -94,7 +102,7 @@ node tools/restarts.js || bad=$((bad + 1))
 
 say "5. the box: CPU pressure, commit, disk, probe files"
 # one ssh session for all of it, and nothing heavier than du: the box has one shared CPU.
-"$FLY" ssh console -a "$APP" -C "sh -c 'echo commit \$GIT_SHA; set -- \$(head -1 /proc/stat); t=\$((\$2+\$3+\$4+\$5+\$6+\$7+\$8+\$9)); echo \"cpu since boot: desk \$(((\$2+\$4)*100/t))%, held back by Fly (steal) \$((\$9*100/t))%\"; cat /proc/pressure/cpu; df -m /data | tail -1; echo \"probe files on the box: \$(ls /data/probes-*.jsonl 2>/dev/null | wc -l) files, \$(du -cm /data/probes-*.jsonl 2>/dev/null | tail -1 | cut -f1) MB\"'" 2>&1 | grep -v '^Connecting to' || bad=$((bad + 1))
+boxcall ssh console -a "$APP" -C "sh -c 'echo commit \$GIT_SHA; set -- \$(head -1 /proc/stat); t=\$((\$2+\$3+\$4+\$5+\$6+\$7+\$8+\$9)); echo \"cpu since boot: desk \$(((\$2+\$4)*100/t))%, held back by Fly (steal) \$((\$9*100/t))%\"; cat /proc/pressure/cpu; df -m /data | tail -1; echo \"probe files on the box: \$(ls /data/probes-*.jsonl 2>/dev/null | wc -l) files, \$(du -cm /data/probes-*.jsonl 2>/dev/null | tail -1 | cut -f1) MB\"'" 2>&1 | grep -v '^Connecting to' || bad=$((bad + 1))
 
 say "6. the option-chain tape on this Mac: the last run, the newest Cboe stamp per symbol, the last finished weekday"
 # Read-only (tools/chain-record.js --check). Added 2026-09-24: Cboe's feed froze from the 09-22
@@ -128,13 +136,16 @@ fi
 say "8. the stocks, crypto and options desk: alive, today's checks, the ledger against its journal, each book against holding"
 # Read-only on the box (tools/desk-check.js --box): lists /data/desk and copies it down, nothing else.
 node tools/desk-check.js --box || bad=$((bad + 1))
+# 8b. the weeks, from the copy step 8 just made: data/reports/weeks.html, and each finished week kept before the
+# desk's history drops its minutes (tools/week-report.js measuredWeeks). Only its last lines here: the page has the rest.
+node tools/week-report.js | tail -n 8 || bad=$((bad + 1))
 
 say "9. the anytime-touchdown tape on the box: the last run, and every game whose window passed with no tape"
 # Read-only (tools/td-tape.js --check, run on the box against /data/td): td.log, games.json (the games each
 # --record run has seen listed, with kickoffs) and the day files. Added 2026-10-15, after the Thursday game
 # went unrecorded with the Mac asleep; on the box since 2026-10-16 (src/tdsched.js, TD_TAPE=1), which never
 # sleeps. The Mac's launchd job, while it is installed, keeps a spare tape in data/td: shown, not counted.
-td="$("$FLY" ssh console -q -a "$APP" -C "node /app/tools/td-tape.js --check --dir /data/td" 2>&1)" || bad=$((bad + 1))
+td="$(boxcall ssh console -q -a "$APP" -C "node /app/tools/td-tape.js --check --dir /data/td" 2>&1)" || bad=$((bad + 1))
 printf '%s\n' "$td" | grep -v '^Connecting to'
 if [ -f "$HEXDIR/data/td/td.log" ]; then
   printf 'the Mac'"'"'s spare tape (not counted): %s\n' "$(node tools/td-tape.js --check 2>&1 | head -1)"
@@ -143,7 +154,7 @@ fi
 say "10. the odds tape on the box: the last run, the credits left, and every NFL game that kicked off with no read"
 # Read-only (tools/odds-tape.js --check, on the box against /data/odds): odds.log, games.json (The Odds API's free
 # /events listing) and the day files. Since 2026-10-17 (src/oddssched.js, ODDS_TAPE=1, the ODDS_API_KEY secret).
-odds="$("$FLY" ssh console -q -a "$APP" -C "node /app/tools/odds-tape.js --check --dir /data/odds" 2>&1)" || bad=$((bad + 1))
+odds="$(boxcall ssh console -q -a "$APP" -C "node /app/tools/odds-tape.js --check --dir /data/odds" 2>&1)" || bad=$((bad + 1))
 printf '%s\n' "$odds" | grep -v '^Connecting to'
 
 say "11. the game bets: every game Kalshi settled yesterday (Friday to Sunday on a Monday), bet, over the cap, or missed"

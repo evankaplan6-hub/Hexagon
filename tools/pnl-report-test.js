@@ -2,7 +2,7 @@
 // The P&L report: journal events in, realised money out. No network; the disk only in a temp folder.
 //
 //   node tools/pnl-report-test.js
-const { summarize, render, load } = require('./pnl-report');
+const { summarize, render, load, dayOf } = require('./pnl-report');
 
 let pass = 0, fail = 0;
 const ok = (name, cond, got) => {
@@ -181,7 +181,9 @@ group('load: the archive first, box-now only for the days the archive lacks');
   ok('the archive wins a day both have: no shorter copy shadows it, and nothing twice', both.length === 3 && both.filter((e) => e.pnl === -1).length === 1, both);
   ok('a torn last line is skipped', both.every((e) => e.kind === 'MAKER_SETTLE'));
   const s = summarize(both);
-  ok("the day's maker row is the whole day so far", Math.abs(s.days.get('2026-09-24').maker - -102) < 1e-9 && s.lastT === '2026-09-24T17:58:36.000Z', [...s.days]);
+  ok("the day's maker row is the whole day so far", Math.abs(s.days.get('2026-09-24').maker - -100) < 1e-9 && s.lastT === '2026-09-24T17:58:36.000Z', [...s.days]);
+  // since 2026-10-20 a day is Eastern and ends at 4 AM: 03:56Z on the 24th is 11:56 PM on the 23rd
+  ok('a close at 11:56 PM ET counts on that evening, not the next UTC day (audit 2026-10-20)', Math.abs(s.days.get('2026-09-23').maker - -3) < 1e-9 && dayOf('2026-10-20T03:30:00Z') === '2026-10-19' && dayOf('2026-10-20T12:00:00Z') === '2026-10-20', [...s.days]);
   ok('one folder still works on its own', load(archive).length === 2);
   ok('a missing box-now is not an error', load([archive, path.join(tmp, 'nope')]).length === 2);
   fs.rmSync(tmp, { recursive: true, force: true });

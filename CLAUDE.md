@@ -211,7 +211,9 @@ tools/            edge-scan, replay, maker-replay, maker-rank, pm-maker-scan, ma
                   read-only, no broker -- full historical chains are sold, not free (Alpha Vantage premium from $49.99/mo;
                   DoltHub's free set has only SPY and DIA, thinly; checked 2026-09-24), so the history is collected daily;
                   ops/install-chains.sh schedules it on the Mac; on the box src/chainsched.js runs it inside the desk
-                  (CHAINS=1 in fly.toml) and keeps only the newest 14 days there -- the Mac's tape is the archive),
+                  (CHAINS=1 in fly.toml) and keeps only the newest 14 days there -- the Mac's tape is the archive; since
+                  2026-10-20 the hourly pull also copies the box's days into data/fly/archive/chains/, for slots the Mac
+                  missed while off),
                   option-history (daily bars + open interest of EXPIRED option contracts from ChartExchange, the six chain-tape ETFs, monthly
                   expiries from 2021-07, strikes ±10% of the 70-day close range → data/options/history/<SYM>/; resumable, --repair for
                   contracts the source refused; one SPY expiry on disk, irreplaceable now that the key is gone, backed up with the pull),

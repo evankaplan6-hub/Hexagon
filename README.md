@@ -1909,6 +1909,22 @@ Since the start is counted from the starting cash, so it agrees with step 8 to t
 2026-10-15, three weeks in: crypto -$1,136.13 against holding's -$1,678.50 (ahead $542.37), SPY level with
 holding, the game bets -$616.40.
 
+**The audit of 2026-10-20, on the checks.** The desk keeps only its newest 30,000 minutes, about 21 days, and by
+10-20 the report's first week read +$0.00 beside its three fills while the next took the whole move since the start.
+Now each finished week is kept once it is measured (`data/reports/desk-weeks.json`), the report runs as step 8b of the
+daily check so none is missed, and a stretch the minutes no longer cover is one row, "Weeks of Sep 21 – Oct 4,
+together", from the start. `tools/pnl-report.js` (and so the weekly report's prediction rows) dates a close by the
+Eastern day ending at 4 AM, as the floor and `tools/bet-record.js` date a game, not by the UTC day: the two weekly
+reports' "last week" for the game bets had been $224.79 apart. Step 2's venue check asked about every settlement
+since 09-10 on every run (418, nine minutes, growing by up to a hundred a day); a settlement the venue has agreed with
+is now remembered (`data/fly/venue-checked.json`, `--recheck` to ask again), each lookup gives up after 20 seconds and
+is tried twice, and one that still fails is a PROBLEM (it used to pass, having checked nothing). Step 8 copied every
+desk journal down, one Fly connection each, on every run (two timeouts that morning); it now copies the state first
+and only the days the archive lacks, and takes the rest from `data/fly/archive/desk`, about a minute instead of six.
+The three other calls to the box are stopped after two minutes. And the Mac was off from 3:04 to 12:26 that morning,
+so its chain tape lost the 9:45 slot for good; the box had taken it, but kept it only 14 days, so the hourly pull now
+copies the box's chain days too, into `data/fly/archive/chains/` (the Mac's `data/chains/` stays the tape of record).
+
 ### The pull and the backup
 
 `ops/install-pull.sh` installs a LaunchAgent that runs `ops/run-pull.sh` **every hour at :30**

@@ -292,8 +292,14 @@ function bookLines(S) {
 }
 
 // ---------------------------------------------------------------- the box
-// Copies /data/desk/state.json and every journal there into `dest`, replacing the last run's copies.
-// The desk's journals are a few kilobytes a day, so all of them come down every time.
+// Copies /data/desk/state.json and the journals into `dest`, replacing the last run's copies. Until 2026-10-20 every
+// journal came down every run, one Fly connection each (~24 s apiece, 15 files that morning, one more every day the
+// desk trades), and one connection timing out failed the step: twice that morning. Now a journal the hourly pull has
+// already archived (data/fly/archive/desk, sha256-checked, a finished Eastern day that no longer changes) is copied
+// from there, and only the state and the days the archive lacks (normally today's) come from the box, each tried
+// twice. The state comes FIRST: the check replays the journal only up to the state's own time, so a journal line
+// written after the state was copied is ignored, while a fill landing between a journal copied first and the state
+// read as a ledger problem (audit 2026-10-20).
 // The one console call lists /data/desk and reads /data's free space with it (df -P: one line per disk, the
 // fourth field free 1 MB blocks), so the check sees a full disk without a second round trip.
 function parseListing(out) {
@@ -302,15 +308,26 @@ function parseListing(out) {
   const df = rows.map((r) => r.split(/\s+/)).find((f) => f.length >= 6 && f[f.length - 1] === '/data' && /^\d+$/.test(f[3]));
   return { names, freeMb: df ? Number(df[3]) : null };
 }
-function pullDesk(app, dest, log) {
+// Which files come from where: the state first, then every journal the archive lacks, from the box; the rest from the archive
+function copyPlan(boxNames, archived) {
+  const have = new Set(archived || []);
+  const journals = (boxNames || []).filter((n) => JOURNAL.test(n)).sort();
+  return { fromBox: [...(boxNames || []).includes('state.json') ? ['state.json'] : [], ...journals.filter((n) => !have.has(n))], fromArchive: journals.filter((n) => have.has(n)) };
+}
+function pullDesk(app, dest, log, { archive = path.join(__dirname, '..', 'data', 'fly', 'archive', 'desk') } = {}) {
   const fly = process.env.FLY_BIN || (fs.existsSync(path.join(process.env.HOME || '', '.fly', 'bin', 'fly')) ? path.join(process.env.HOME, '.fly', 'bin', 'fly') : 'fly');
-  const listing = execFileSync(fly, ['ssh', 'console', '-q', '-a', app, '-C', "sh -c 'ls /data/desk; df -Pm /data'"], { encoding: 'utf8', timeout: 120000 });
+  const twice = (args, opts) => { try { return execFileSync(fly, args, opts); } catch { return execFileSync(fly, args, opts); } };
+  const listing = twice(['ssh', 'console', '-q', '-a', app, '-C', "sh -c 'ls /data/desk; df -Pm /data'"], { encoding: 'utf8', timeout: 120000 });
   const { names: want, freeMb } = parseListing(listing);
   if (!want.includes('state.json')) throw new Error('the box has no /data/desk/state.json: is DESK on in fly.toml?');
+  let archived = [];
+  try { archived = fs.readdirSync(archive).filter((n) => JOURNAL.test(n)); } catch { /* no archive yet: everything from the box */ }
+  const plan = copyPlan(want, archived);
   fs.mkdirSync(dest, { recursive: true });
   for (const n of fs.readdirSync(dest)) if (n === 'state.json' || JOURNAL.test(n)) fs.unlinkSync(path.join(dest, n));
-  for (const name of want) execFileSync(fly, ['ssh', 'sftp', 'get', '-q', '-a', app, `/data/desk/${name}`, path.join(dest, name)], { stdio: 'ignore', timeout: 300000 });
-  log(`box     copied /data/desk: state.json and ${want.length - 1} journal(s) into ${path.relative(path.join(__dirname, '..'), dest)}`);
+  for (const name of plan.fromBox) twice(['ssh', 'sftp', 'get', '-q', '-a', app, `/data/desk/${name}`, path.join(dest, name)], { stdio: 'ignore', timeout: 300000 });
+  for (const name of plan.fromArchive) fs.copyFileSync(path.join(archive, name), path.join(dest, name));
+  log(`box     copied /data/desk: state.json and ${plan.fromBox.length - 1} journal(s) from the box, ${plan.fromArchive.length} already archived from data/fly/archive/desk, into ${path.relative(path.join(__dirname, '..'), dest)}`);
   return { dir: dest, freeMb };
 }
 
@@ -343,6 +360,6 @@ function run(argv, { log = console.log, now = Date.now() } = {}) {
   return ledger.length || hl.problems.length ? 1 : 0;
 }
 
-module.exports = { readDesk, stateTime, journalTime, parseListing, rebuild, compare, health, bookLines, skips, run, LOW_DISK_MB };
+module.exports = { readDesk, stateTime, journalTime, parseListing, copyPlan, rebuild, compare, health, bookLines, skips, run, LOW_DISK_MB };
 
 if (require.main === module) process.exitCode = run(process.argv.slice(2));

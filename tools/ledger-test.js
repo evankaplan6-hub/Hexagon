@@ -6,7 +6,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { rebuild, compare, stateTime, readJournals, pruneBoxNow, firstBalance } = require('./ledger-check');
+const { rebuild, compare, stateTime, readJournals, pruneBoxNow, firstBalance, checkVenues } = require('./ledger-check');
 
 let pass = 0, fail = 0;
 const ok = (name, cond, got) => {
@@ -158,5 +158,40 @@ group('box-now holds only what the archive lacks');
   fs.rmSync(root, { recursive: true, force: true });
 }
 
-console.log(`\n${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+group('the venue check asks about each settlement once, and fails when it could not ask (audit 2026-10-20)');
+(async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hexagon-venues-'));
+  const file = path.join(dir, 'venue-checked.json');
+  const ev = [
+    { kind: 'SETTLE', t: T(1), id: 'a-KSy', venue: 'KS', side: 'yes', exit: 1, pairId: 'pm1:0|KXT-A', label: 'game A' },
+    { kind: 'SETTLE', t: T(2), id: 'b-PMy', venue: 'PM', side: 'yes', exit: 0, pairId: 'pm2:0|KXT-B', label: 'game B' },
+    { kind: 'MAKER_SETTLE', t: T(3), ticker: 'KXM-1', yesPx: 1, qty: 10 },
+  ];
+  let calls = [];
+  const venue = async (url) => {
+    calls.push(url);
+    if (url.includes('/markets/KXT-A')) return { market: { result: 'yes' } };
+    if (url.includes('/markets/KXM-1')) return { market: { result: 'yes' } };
+    if (url.includes('/markets/pm2')) return { id: 'pm2', closed: true, umaResolutionStatus: 'resolved', outcomePrices: '["0","1"]' };
+    throw new Error('no such market');
+  };
+  const quiet = () => {};
+  const one = await checkVenues(ev, quiet, { checked: file, fetchJson: venue, pause: 0 });
+  ok('the first run asks the venues about all three and all agree', one.checked === 3 && one.agree === 3 && one.earlier === 0 && calls.length === 3 && one.failed.length === 0, one);
+  calls = [];
+  const two = await checkVenues([...ev, { kind: 'SETTLE', t: T(4), id: 'c-KSy', venue: 'KS', side: 'no', exit: 0, pairId: 'pm3:0|KXT-A', label: 'game A again' }], quiet, { checked: file, fetchJson: venue, pause: 0 });
+  ok('the next run asks only about the new line: the three agreed before are not looked up again', two.checked === 4 && two.earlier === 3 && calls.length === 1 && calls[0].includes('KXT-A'), [two, calls]);
+  calls = [];
+  const again = await checkVenues(ev, quiet, { checked: file, fetchJson: venue, pause: 0, recheck: true });
+  ok('--recheck asks about every line again', again.earlier === 0 && calls.length === 3, calls);
+  let tries = 0;
+  const down = async () => { tries++; throw new Error('timed out'); };
+  const lines = [];
+  const bad = await checkVenues([{ kind: 'SETTLE', t: T(9), id: 'z-KSy', venue: 'KS', side: 'yes', exit: 1, pairId: 'pm9:0|KXT-Z', label: 'game Z' }], (l) => lines.push(l), { checked: null, fetchJson: down, pause: 0 });
+  ok('a venue that does not answer is tried twice, then the line has failed: a PROBLEM, not "could not be checked" and a pass', tries === 2 && bad.failed.length === 1 && lines.some((l) => /PROBLEM 1 settlement/.test(l)), [tries, bad, lines]);
+  const wrong = await checkVenues([{ ...ev[0], exit: 0, t: T(10) }], quiet, { checked: file, fetchJson: venue, pause: 0 });
+  ok('a line the venue disagrees with is not remembered as checked', wrong.differ.length === 1 && !JSON.parse(fs.readFileSync(file, 'utf8')).agreed.some((k) => k.includes(T(10))), wrong);
+  fs.rmSync(dir, { recursive: true, force: true });
+  console.log(`\n${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+})();

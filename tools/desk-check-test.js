@@ -84,6 +84,11 @@ async function main() {
     const box = C.parseListing('state.json\njournal-2026-10-14.jsonl\njournal-2026-10-15.jsonl\nstate.json.tmp\nFilesystem     1048576-blocks  Used Available Capacity Mounted on\n/dev/vdc                  976   941        35      97% /data\n');
     eq('the listing and the free space come from one call', box, { names: ['state.json', 'journal-2026-10-14.jsonl', 'journal-2026-10-15.jsonl'], freeMb: 35 });
     eq('no df line: free space unknown, not zero', C.parseListing('state.json\n').freeMb, null);
+    // audit 2026-10-20: the state first, then only the days the archive lacks come from the box
+    const plan = C.copyPlan(['journal-2026-10-15.jsonl', 'state.json', 'journal-2026-10-18.jsonl', 'journal-2026-10-20.jsonl'], ['journal-2026-10-15.jsonl', 'journal-2026-10-18.jsonl']);
+    eq('the state comes from the box first, then the journal the archive lacks (today\'s)', plan.fromBox.join(), 'state.json,journal-2026-10-20.jsonl');
+    eq('the archived days are copied from the archive, not the box', plan.fromArchive.join(), 'journal-2026-10-15.jsonl,journal-2026-10-18.jsonl');
+    eq('with no archive, everything from the box, the state first', C.copyPlan(['journal-2026-10-15.jsonl', 'state.json'], []).fromBox.join(), 'state.json,journal-2026-10-15.jsonl');
   }
 
   // today's checks, across the week (the state's history moved along so the loop reads alive)

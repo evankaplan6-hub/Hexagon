@@ -24,6 +24,10 @@
 // not copied (the daily check reads them on the box); like journals, a td file is never deleted.
 // Since 2026-10-17 the odds tape (src/oddssched.js, /data/odds) comes down the same way, "odds/odds-YYYY-MM-DD.jsonl"
 // into archive/odds/, named by the Eastern day of the read; its odds.log, games.json and state.json stay on the box.
+// Since 2026-10-20 the box's option-chain tape (src/chainsched.js, /data/chains) comes down too, "chains/chains-YYYY-MM-DD.jsonl"
+// into archive/chains/: the Mac's own tape (data/chains) is the tape of record, but a Mac that is off at 9:45 misses that
+// slot for good (it was off 03:04-12:26 ET on 10-20), and the box keeps its copy only 14 days. Never deleted from the box
+// by this (the box trims its own); its chains.log and .seen.json files stay there.
 //
 // The rules, all decided in planPull (pure, tested in tools/disk-test.js):
 //   - a file is copied only once its Eastern day is over (today's files are still being written);
@@ -53,7 +57,7 @@ const { execFileSync } = require('child_process');
 const { ET_DAY } = require('../src/recorder');
 
 // what is copied, by its path under /data: the dated files in /data, the desk's journals in /data/desk, the td tape in /data/td
-const DATED = /^(ticks|journal|whales|probes|desk\/journal|td\/td|odds\/odds)-(\d{4}-\d{2}-\d{2})\.jsonl$/;
+const DATED = /^(ticks|journal|whales|probes|desk\/journal|td\/td|odds\/odds|chains\/chains)-(\d{4}-\d{2}-\d{2})\.jsonl$/;
 // what --trim may delete from the box once the Mac has it: the tapes and the probe files in /data itself
 const TRIMMED = /^(ticks|probes)-(\d{4}-\d{2}-\d{2})\.jsonl$/;
 // a download that fails is tried this many times in all, each from an empty temp file: on 2026-09-23
@@ -153,7 +157,7 @@ function planPull(boxFiles, localFiles, { todayET, keep = 3, trim = false } = {}
 function listDir({ dir, todayET, only, nowMs }) {
   const fs = require('fs'), path = require('path'), crypto = require('crypto');
   // [a folder under `dir`, the names in it that are ours]
-  const AREAS = [['', /^(ticks|journal|whales|probes)-(\d{4}-\d{2}-\d{2})\.jsonl$/], ['desk', /^(journal)-(\d{4}-\d{2}-\d{2})\.jsonl$/], ['td', /^(td)-(\d{4}-\d{2}-\d{2})\.jsonl$/], ['odds', /^(odds)-(\d{4}-\d{2}-\d{2})\.jsonl$/]];
+  const AREAS = [['', /^(ticks|journal|whales|probes)-(\d{4}-\d{2}-\d{2})\.jsonl$/], ['desk', /^(journal)-(\d{4}-\d{2}-\d{2})\.jsonl$/], ['td', /^(td)-(\d{4}-\d{2}-\d{2})\.jsonl$/], ['odds', /^(odds)-(\d{4}-\d{2}-\d{2})\.jsonl$/], ['chains', /^(chains)-(\d{4}-\d{2}-\d{2})\.jsonl$/]];
   const own = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' })
     .format(new Date(nowMs == null ? Date.now() : nowMs));
   const today = todayET && todayET < own ? todayET : own;

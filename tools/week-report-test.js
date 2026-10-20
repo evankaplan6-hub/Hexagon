@@ -45,6 +45,27 @@ group('deskWeeks: each week from the minute before it, so the weeks add up to th
   ok('an empty history is no weeks and no run', W.deskWeeks([]).length === 0 && W.wholeRun([]) === null);
 }
 
+group('measuredWeeks: once the desk\'s minutes no longer reach back to the start (audit 2026-10-20)');
+{
+  const p = (iso, c, e) => ({ t: T(iso), c, bc: c, s: 500, bs: 500, e });
+  const start = { t: T('2026-09-25T21:30:00Z'), c: 1000, bc: 1000, s: 500, bs: 500, e: 1500 };
+  const full = [p('2026-09-25T21:35:00Z', 996, 1496), p('2026-09-28T03:00:00Z', 1010, 1510), p('2026-10-02T20:00:00Z', 980, 1480), p('2026-10-09T20:00:00Z', 990, 1490)];
+  const all = W.measuredWeeks(full, { start });
+  ok('with every minute, the same weeks as before, one each', all.length === 3 && all.every((w) => w.weeksIn.length === 1) && close(all[0].crypto, 10) && close(all[1].crypto, -30), all.map((w) => [w.week, w.crypto]));
+  // the first week's minutes and the second week's Monday are gone: the history now starts on Wednesday of week two
+  const cut = full.slice(2);
+  const ws = W.measuredWeeks(cut, { start });
+  ok('the stretch the history lost is one row from the start, not "+$0.00" and then the whole move', ws.length === 2 && ws[0].weeksIn.join() === '2026-09-21,2026-09-28' && close(ws[0].crypto, -20) && ws[0].week === '2026-09-21' && ws[0].end === '2026-10-04', ws);
+  ok('...and the weeks after it are measured as always', close(ws[1].crypto, 10) && ws[1].weeksIn.join() === '2026-10-05', ws[1]);
+  // an earlier run kept both early weeks: the same cut history then gives each week its own row
+  const saved = Object.fromEntries(all.slice(0, 2).map((w) => [w.week, w]));
+  const kept = W.measuredWeeks(cut, { start, saved });
+  ok('a week an earlier run measured comes back from the file, and the week the history only partly holds is measured from its end', kept.length === 3 && kept[0].saved && !kept[1].saved && kept[1].weeksIn.length === 1 && close(kept[0].crypto, 10) && close(kept[1].crypto, -30) && close(kept[2].crypto, 10) && kept[2].weeksIn.length === 1, kept.map((w) => [w.week, w.crypto, w.weeksIn]));
+  ok('...and they still add up to the run', close(kept.reduce((a, w) => a + w.crypto, 0), 990 - 1000));
+  const txt = W.renderText({ weeks: ws, whole: null, trades: new Map([['2026-09-21', { fills: 2, fees: 3, byBook: { crypto: 2 } }], ['2026-09-28', { fills: 1, fees: 1, byBook: { crypto: 1 } }]]), pm: new Map([['2026-09-21', { arb: 1, maker: 0, snipe: 0, bets: 0, conv: 0, total: 1 }], ['2026-09-28', { arb: 2, maker: 0, snipe: 0, bets: 0, conv: 0, total: 2 }]]), asOf: cut[1].t });
+  ok('the page names the stretch as weeks together, with both weeks\' trades and money', /Weeks of Sep 21 – Oct 4, together/.test(txt) && /3 fills \(crypto 3\) · fees \$4\.00/.test(txt) && /predictions realised \+\$3\.00/.test(txt), txt);
+}
+
 group('startPoint: the run counts the first day\'s fees, as desk-check does');
 {
   const S = { startedAt: T('2026-09-25T21:30:00Z'), books: { crypto: { initial: 16666.65 }, stocks: { initial: 10000 }, options: { initial: 1000 }, scalps: { initial: 1000 } } };
