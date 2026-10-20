@@ -68,5 +68,12 @@ const pair = (event, a, b, o = {}) => [mkt(`${event}-${a[0]}`, a[1], o), mkt(`${
   ok('Friday: Columbia v Penn, ending after midnight, is Friday\'s, and unbet with no quote it is a miss', fri.played === 1 && fri.missed.length === 1 && /Columbia v Penn/.test(fri.lines[1]), fri.lines);
 }
 
+// ---- which journals: a week and more before the day (10-18's NFL bets were journalled 10-12 to 10-14)
+{
+  const f = T.journalFiles(['2026-10-16', '2026-10-17', '2026-10-18']);
+  ok('Monday\'s three days read the journals from nine days before the first to the day after the last', f[0] === '2026-10-07' && f[f.length - 1] === '2026-10-19' && f.length === 13, f);
+  ok('so a bet made six days before its game is found', T.journalFiles(['2026-10-18']).includes('2026-10-12'));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -140,6 +140,13 @@ async function favouriteAsk(g) {
   return best;
 }
 
+// The journal files to read for these days. A bet can be journalled up to a week before its game: until
+// 2026-10-14 the book bet a game the cycle it was listed, and the league listings pair a week of games at
+// once, so Sunday 10-18's Jaguars, Bears, Panthers and Rams bets went in 10-12 to 10-14 and read as MISSED on
+// 10-19 when this read two days back (BET_AHEAD_HOURS was 24 until 10-16, 1 since). A journal file is named by
+// its UTC day, so the files from nine days before the first day to the day after the last.
+const journalFiles = (days) => Array.from({ length: days.length + 10 }, (_, i) => addDays(days[0], i - 9));
+
 function readJournals(dirs, days) {
   const want = new Set(days), lines = [], seen = new Set();
   for (const dir of dirs) {
@@ -166,9 +173,7 @@ async function run(argv, { log = console.log } = {}) {
   const last = at('day') || etDay(Date.now() - 864e5);
   const n = Math.max(1, +(at('days') || 1));
   const days = Array.from({ length: n }, (_, i) => addDays(last, i - n + 1));
-  // a bet can be journalled up to a day before its game (BET_AHEAD_HOURS was 24 until 2026-10-16), and a journal
-  // file is named by its UTC day, so the files from two days before the first to the day after the last
-  const files = Array.from({ length: n + 3 }, (_, i) => addDays(days[0], i - 2));
+  const files = journalFiles(days);
   // with the lines the 10-15 disk-full holes swallowed, restored beside the journal (tools/journal-gaps.js): three of
   // that night's bets are only there
   const lines = readJournals(dirs.length ? dirs : [path.join(root, 'data/fly/archive'), path.join(root, 'data/fly/box-now')], files);
@@ -191,4 +196,4 @@ if (require.main === module) {
   run(process.argv.slice(2)).then((m) => process.exit(m ? 1 : 0)).catch((e) => { console.error(e.stack || e.message); process.exit(2); });
 }
 
-module.exports = { betEvents, games, report, eventOf, run };
+module.exports = { betEvents, games, report, eventOf, journalFiles, run };
