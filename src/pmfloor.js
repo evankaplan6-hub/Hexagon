@@ -33,7 +33,7 @@ const kindOf = (p) => (p.strategy === 'arb' || p.strategy === 'snipe' || p.strat
 // Missouri · Texas A&M"), so a NO leg is a bet on the other team, and until 2026-10-10 every line about it
 // read "No on ... · Texas A&M" and left the reader to turn it round. decide.betPick is the one reading of
 // that label (the engine's own log line says "game bet on Missouri" from it); the opponent is the other name.
-const { betPick } = require('./decide');
+const { betPick, betGame } = require('./decide');
 function gameOf(p) {
   if (kindOf(p) !== 'bet') return null;
   const m = String(p.label || '').match(/^(\S+)\s+(.+?) v (.+?) · (.+)$/);
@@ -238,7 +238,8 @@ function pmFloor(engine, cfg, now = Date.now()) {
     games: betShut.length + betOpen.length, settled: betShut.length, wins: betShut.filter((c) => c.pnl > 0).length, stake: cfg.betUsd,
     // soonest game first; a game the listing has dropped (finished, waiting to settle) after them
     rows: betOpen.map(posRow).sort((a, b) => (a.startsAt ?? Infinity) - (b.startsAt ?? Infinity)),
-    rule: `Bets every ${league} game once: $${cfg.betUsd} on the favourite, bought at whichever venue sells it cheaper after its fee, and held to the final. ` +
+    rule: `Bets every ${league} game once: $${cfg.betUsd} on the favourite, in the ${(cfg.betAheadHours ?? 1) === 1 ? 'hour' : `${cfg.betAheadHours} hours`} before it starts and never once it has started, ` +
+      `bought at whichever venue sells it cheaper after its fee, and held to the final. ` +
       `A game already all but decided (the favourite over ${Math.round((cfg.betMaxPx || 0.9) * 100)}¢) is left alone. It claims no edge: bought at the market's own price, ` +
       'it should lose about the fee over many games. Evan, on the Wild Card\'s second night: "every game should be bet".',
   };
@@ -311,13 +312,22 @@ function record(cs) {
   return { bets: cs.length, won: cs.filter((c) => c.pnl > 0).length, expected: r2(cs.reduce((a, c) => a + (Number(c.entry) || 0), 0)),
     staked: sum(cs, (c) => c.cost), pnl: sum(cs, (c) => c.pnl) };
 }
+// A game's favourite and price as they stood before its start, by engine and pair: once a game is under way its live
+// price follows the score, and a missed game whose favourite passed 90c in play, or any finished one at 99c, was
+// counted as "left alone: the favourite was over 90c", hiding the miss (audit 2026-10-20)
+const preStart = new WeakMap();
 function gameBoard(engine, cfg, betOpen, betShut, now) {
   const series = new Set(cfg.betSeries || []), maxPx = cfg.betMaxPx || 0.9;
-  // a game the book has bet, open or settled, by its pair: not on the list of games still to bet
-  const bet = new Set([...betOpen, ...betShut].map((p) => p.pairId).filter(Boolean));
+  // a game the book has bet, open or settled, by its pair or its Kalshi game (decide.betGame): not on the list of
+  // games still to bet, even when another Polymarket market on it pairs anew
+  const bet = new Set();
+  for (const p of [...betOpen, ...betShut]) if (p.pairId) { bet.add(p.pairId); const g = betGame(p.pairId); if (g) bet.add(g); }
+  if (!preStart.has(engine)) preStart.set(engine, new Map());
+  const before = preStart.get(engine);
+  for (const [id, x] of before) if (now - x.startsAt > 6 * 3600e3) before.delete(id);
   const seen = new Set(), upcoming = [];
   for (const p of engine.pairs || []) {
-    if (p.kind !== 'game' || !series.has(p.series) || !Number.isFinite(p.startsAt) || bet.has(p.id)) continue;
+    if (p.kind !== 'game' || !series.has(p.series) || !Number.isFinite(p.startsAt) || bet.has(p.id) || bet.has(betGame(p))) continue;
     if (p.startsAt < now - 4 * 3600e3 || p.startsAt > now + 30 * 3600e3) continue;
     const m = String(p.label || '').match(/^(\S+)\s+(.+?) v (.+?) · (.+)$/);
     if (!m) continue;
@@ -328,9 +338,12 @@ function gameBoard(engine, cfg, betOpen, betShut, now) {
     const q = p.q, mid = q && Number.isFinite(q.pmMid) && Number.isFinite(q.ksMid) ? (q.pmMid + q.ksMid) / 2 : null;
     // a label whose YES side names neither team ("NCAAF A v B · C") gives betPick "not C": no pick, then
     const pick0 = mid == null ? null : betPick(p.label, mid >= 0.5 ? 'yes' : 'no'), pick = pick0 === m[2] || pick0 === m[3] ? pick0 : null;
-    const px = mid == null ? null : r3(Math.max(mid, 1 - mid));
+    let px = mid == null ? null : r3(Math.max(mid, 1 - mid)), fav = pick == null ? null : pick === m[2] ? 'a' : 'b';
+    // before the start, kept; after it, the price it had then (none if it was paired only once under way)
+    if (p.startsAt > now) { if (px != null) before.set(p.id, { px, fav, startsAt: p.startsAt }); }
+    else { const b = before.get(p.id); px = b ? b.px : null; fav = b ? b.fav : null; }
     // `fav` says which side the favourite is ('a' or 'b'), not its name again: the board rides in every frame
-    upcoming.push({ id: p.id, league: m[1], a: m[2], b: m[3], startsAt: p.startsAt, fav: pick == null ? null : pick === m[2] ? 'a' : 'b', px, over: px != null && px > maxPx });
+    upcoming.push({ id: p.id, league: m[1], a: m[2], b: m[3], startsAt: p.startsAt, fav, px, over: px != null && px > maxPx });
   }
   upcoming.sort((a, b) => a.startsAt - b.startsAt || a.a.localeCompare(b.a));
   // settled in the last thirty hours (today's games and last night's), newest first: the board's finals. Thirty hours

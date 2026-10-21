@@ -83,6 +83,7 @@ ok('a bet whose game has no start on record waits on its result, not "up next"',
 ok('a tile and its sheet follow a game from up next to the bet and the final: keyed by its pair, found by it', /return \{ k: r\.pairId \|\| r\.id, stage:/.test(js) && /const fin = g\.finals\.map\(\(f\) => \(\{ k: f\.id, stage:/.test(js) && /x\.id === id \|\| x\.pairId === id/.test(js));
 ok('a game under way and not bet is "late", in progress, never up next or "Bets this round"', /stage: begun \? 'late' :/.test(js) && /B\.next\.filter\(\(t\) => t\.stage !== 'late'\)/.test(js));
 ok('a game under way and not bet says it is too late: since 2026-10-18 a game is bet only before its start, never "not bet yet"', /'Under way, too late to bet'/.test(js) && !/'Under way, not bet yet'/.test(js));
+ok('Today\'s games card counts only today\'s games to come; its foot still names the next group, today\'s or not (audit 2026-10-20)', /const soon = coming\.filter\(\(t\) => dayKey\(t\.start\) === td\)/.test(js) && /startGroups\(coming\)/.test(js));
 ok('switched off, a group of games says so in its heading too', /if \(!B\.g\.on\) return 'not bet: the game bets are switched off'/.test(js));
 ok('until 4 AM "today" is still the evening before, for the finals as for the games', /td = playedDay\(S\.now\)/.test(js) && /k === playedDay\(S\.now\) \? 'Today'/.test(js));
 ok('every tile opens its game', /class="gt st-\$\{t\.stage\}" data-sheet="game:\$\{esc\(t\.k\)\}"/.test(js) && /kind === 'game' \? gameSheet\(arg\)/.test(js));

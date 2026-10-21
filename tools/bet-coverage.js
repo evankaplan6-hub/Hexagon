@@ -90,7 +90,7 @@ function report(day, all, bets, fav, { cap = 0.9 } = {}) {
   for (const g of rows.missed) {
     lines.push(`  MISSED ${TAG[g.series] || g.series} ${g.name}${g.start ? ` (${etTime(g.start)} ET)` : ''}: ` +
       (g.px == null ? 'no Kalshi quote an hour before; ' : `favourite ${Math.round(g.px * 100)}c an hour before, under the cap; `) +
-      'not bet: Polymarket did not list it, the matcher did not pair it, or a veto stopped it');
+      'not bet: Polymarket did not list it, the matcher did not pair it until it had started (a game is bet only before its start), or a veto stopped it');
   }
   return { lines, missed: rows.missed, bet: rows.bet.length, over: rows.over.length, played: played.length };
 }
