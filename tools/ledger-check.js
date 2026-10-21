@@ -16,7 +16,8 @@
 //   node tools/ledger-check.js --box                   the Fly box: its state.json and its unarchived
 //                                                      journals are copied down first (fly ssh sftp),
 //                                                      then checked with data/fly/archive
-//   node tools/ledger-check.js --venues                also check the settlements against the venues
+//   node tools/ledger-check.js --venues                also check the settlements against the venues (each line once:
+//                                                      data/fly/venue-checked.json keeps those that agreed; --recheck asks again)
 //   node tools/ledger-check.js --journals DIR --state FILE
 //
 // The maker's realised total is allowed to differ from the replay by the cents the pre-2026-09-12
@@ -181,23 +182,49 @@ function compare(built, state) {
 }
 
 // ---------------------------------------------------------------- the venues (network)
+// Each lookup gives up after 20 seconds (audit 2026-10-20: none had a timeout, so one stalled connection held the
+// daily check for minutes), and is tried twice before it counts as failed
 const get = async (url) => {
-  const r = await fetch(url, { headers: { accept: 'application/json', 'user-agent': 'the-hexagon/ledger-check' } });
+  const r = await fetch(url, { headers: { accept: 'application/json', 'user-agent': 'the-hexagon/ledger-check' }, signal: AbortSignal.timeout(20000) });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// A settlement line the venue has agreed with once is not looked up again: a settled result does not change, and
+// re-asking for every settlement since 09-10 took nine minutes of the daily check on 2026-10-20 (418 of them) and
+// grew by up to a hundred a day. The file holds only lines that agreed (data/fly/venue-checked.json, gitignored);
+// --recheck asks the venues about every line again.
+const settleKey = (e) => `${e.kind}|${e.t}|${e.id || e.ticker || ''}|${e.kind === 'MAKER_SETTLE' ? e.yesPx : e.exit}`;
+function loadChecked(file) {
+  if (!file) return new Set();
+  try { return new Set(JSON.parse(fs.readFileSync(file, 'utf8')).agreed || []); } catch { return new Set(); }
+}
+function saveChecked(file, set) {
+  if (!file) return;
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify({ note: 'settlement lines the venues agreed with (tools/ledger-check.js --venues); delete to re-check them all', agreed: [...set].sort() }));
+  fs.renameSync(tmp, file);
+}
 const ksYes = (m) => (m.result === 'yes' ? 1 : m.result === 'no' ? 0 : m.settlement_value_dollars != null ? +m.settlement_value_dollars : null);
 
 // Every settlement against the venue. A Kalshi leg is looked up by ticker; a Polymarket leg by
 // its market id (from the pair id on the settlement, or on its OPEN line for older journals).
-async function checkVenues(events, log) {
+// `checked` is a file of the lines agreed with before (null: none kept); `fetchJson` and `pause` are for the tests.
+// A line that cannot be looked up (a timeout, an error, twice) is `failed`, and fails the check: a venue check that
+// could not ask the venues has checked nothing (until 2026-10-20 it passed). One the venue has not settled yet is
+// `unknown`, as before, and is asked again next time.
+async function checkVenues(events, log, { checked = null, fetchJson = get, pause = 120, recheck = false } = {}) {
   const opens = new Map(events.filter((e) => e.kind === 'OPEN').map((e) => [e.id, e]));
   const ks = new Map(), pm = new Map();
-  const ksMarket = async (t) => { if (!ks.has(t)) { ks.set(t, (await get(`https://api.elections.kalshi.com/trade-api/v2/markets/${t}`)).market); await sleep(120); } return ks.get(t); };
-  const pmMarket = async (id) => { if (!pm.has(id)) { pm.set(id, await get(`https://gamma-api.polymarket.com/markets/${id}`)); await sleep(120); } return pm.get(id); };
-  const out = { checked: 0, agree: 0, differ: [], unknown: [] };
+  const agreed = recheck ? new Set() : loadChecked(checked), before = agreed.size;
+  const ask = async (url) => { try { return await fetchJson(url); } catch { await sleep(pause * 10); return fetchJson(url); } };
+  const ksMarket = async (t) => { if (!ks.has(t)) { ks.set(t, (await ask(`https://api.elections.kalshi.com/trade-api/v2/markets/${t}`)).market); await sleep(pause); } return ks.get(t); };
+  const pmMarket = async (id) => { if (!pm.has(id)) { pm.set(id, await ask(`https://gamma-api.polymarket.com/markets/${id}`)); await sleep(pause); } return pm.get(id); };
+  const out = { checked: 0, agree: 0, earlier: 0, differ: [], unknown: [], failed: [] };
+  const seen = (e) => { if (!agreed.has(settleKey(e))) return false; out.checked++; out.agree++; out.earlier++; return true; };
+  const agree = (e) => { out.agree++; agreed.add(settleKey(e)); };
   for (const e of events.filter((x) => x.kind === 'SETTLE')) {
+    if (seen(e)) continue;
     const o = opens.get(e.id) || {};
     const pairId = e.pairId || o.pairId || '';
     const [pmPart, ticker] = String(pairId).split('|');
@@ -216,7 +243,7 @@ async function checkVenues(events, log) {
         let m, expectOf;
         if (pmId) { m = await pmMarket(pmId); expectOf = (prices) => (e.side === 'yes' ? prices[+tok || 0] : 1 - prices[+tok || 0]); }
         else if (o.ref) {
-          const list = await get(`https://gamma-api.polymarket.com/markets?clob_token_ids=${o.ref}&closed=true`); await sleep(120);
+          const list = await ask(`https://gamma-api.polymarket.com/markets?clob_token_ids=${o.ref}&closed=true`); await sleep(pause);
           m = Array.isArray(list) ? list[0] : null;
           if (m) { const held = Math.max(0, JSON.parse(m.clobTokenIds || '[]').indexOf(String(o.ref))); expectOf = (prices) => prices[held]; }
         }
@@ -225,22 +252,25 @@ async function checkVenues(events, log) {
         expect = expectOf(JSON.parse(m.outcomePrices || '[]').map(Number));
       }
       out.checked++;
-      if (Math.abs(expect - e.exit) <= 0.0011) out.agree++;
+      if (Math.abs(expect - e.exit) <= 0.0011) agree(e);
       else out.differ.push(`${e.t.slice(0, 16)} ${e.venue} ${e.side.toUpperCase()} ${e.label}: booked ${e.exit}, the venue says ${expect}`);
-    } catch (err) { out.unknown.push(`${e.label}: ${err.message}`); }
+    } catch (err) { out.failed.push(`${e.label}: ${err.message}`); }
   }
   for (const e of events.filter((x) => x.kind === 'MAKER_SETTLE')) {
+    if (seen(e)) continue;
     try {
       const yes = ksYes(await ksMarket(e.ticker));
       if (yes == null) { out.unknown.push(`maker ${e.ticker}: Kalshi has not settled it`); continue; }
       out.checked++;
-      if (Math.abs(yes - e.yesPx) <= 0.0011) out.agree++;
+      if (Math.abs(yes - e.yesPx) <= 0.0011) agree(e);
       else out.differ.push(`${e.t.slice(0, 16)} maker ${e.ticker}: booked ${e.yesPx}, the venue says ${yes} (${e.qty} contracts)`);
-    } catch (err) { out.unknown.push(`maker ${e.ticker}: ${err.message}`); }
+    } catch (err) { out.failed.push(`maker ${e.ticker}: ${err.message}`); }
   }
-  log(`VENUES  ${out.checked} settlements checked · ${out.agree} agree · ${out.differ.length} differ · ${out.unknown.length} could not be checked`);
+  if (agreed.size !== before || recheck) saveChecked(checked, agreed);
+  log(`VENUES  ${out.checked} settlements checked (${out.checked - out.earlier} asked now, ${out.earlier} agreed on an earlier run) · ${out.agree} agree · ${out.differ.length} differ · ${out.unknown.length} not settled yet${out.failed.length ? ` · ${out.failed.length} could not be looked up` : ''}`);
   for (const d of out.differ) log(`  DIFFER  ${d}`);
   for (const u of out.unknown.slice(0, 6)) log(`  ?       ${u}`);
+  if (out.failed.length) { log(`  PROBLEM ${out.failed.length} settlement(s) could not be looked up, so they are not checked:`); for (const f of out.failed.slice(0, 6)) log(`  !       ${f}`); }
   return out;
 }
 
@@ -309,8 +339,8 @@ function run(argv, { log = console.log } = {}) {
   log(`MAKER   cash ${money(built.maker.cash)} · ${built.maker.fills} fills · realised ${money(built.maker.realized)} by replay, ${money((S.maker || {}).realized || 0)} in the state (${Math.abs(makerRealizedSkew) < 0.005 ? 'agree' : `${money(makerRealizedSkew)} apart: the pre-2026-09-12 arithmetic, cash is exact${restored.length ? '; and the lost fills\' prices, see GAPS' : ''}`})`);
   if (problems.length) { log(`\n${problems.length} PROBLEM(S): the state does not match the journal`); for (const p of problems) log(`  ${p}`); }
   else log('OK      every number in the state is what the journal says it should be');
-  const done = argv.includes('--venues') ? checkVenues(events, log) : Promise.resolve(null);
-  return done.then((v) => (problems.length || (v && v.differ.length) ? 1 : 0));
+  const done = argv.includes('--venues') ? checkVenues(events, log, { checked: path.join(root, 'data', 'fly', 'venue-checked.json'), recheck: argv.includes('--recheck') }) : Promise.resolve(null);
+  return done.then((v) => (problems.length || (v && (v.differ.length || v.failed.length)) ? 1 : 0));
 }
 
 module.exports = { readJournals, rebuild, firstBalance, compare, stateTime, checkVenues, pruneBoxNow, run };

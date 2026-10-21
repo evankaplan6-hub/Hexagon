@@ -3,7 +3,11 @@
 //
 //   node tools/pnl-report.js                    every day in data/fly/archive (the daily pull fills it),
 //                                               plus data/fly/box-now for the days the archive lacks yet
-//   node tools/pnl-report.js --since 2026-09-16 from that Eastern-agnostic UTC day on
+//   node tools/pnl-report.js --since 2026-09-16 from that day on
+//
+// A day is an Eastern day that ends at 4 AM, the floor's and tools/bet-record.js's (since 2026-10-20; the UTC day
+// until then): a game that ends after midnight is the evening's, and Monday night's games are Monday's, not
+// Tuesday's. The weekly report folds these days into its weeks, so its "last week" now agrees with bet-record's.
 //   node tools/pnl-report.js --marks            also mark the maker's open inventory at Kalshi's current
 //                                               prices (public API, read-only, the one network call)
 //   node tools/pnl-report.js path/to/journals   a different folder
@@ -15,6 +19,9 @@ const fs = require('fs');
 const path = require('path');
 const maker = require('../src/maker');
 const gaps = require('./journal-gaps');
+const { ET_DAY } = require('../src/recorder');
+// the Eastern day a moment counts on, ending at 4 AM (see the header)
+const dayOf = (t) => ET_DAY.format(new Date(Date.parse(t) - 4 * 3600e3));
 
 const usd = (x) => `${x < 0 ? '-' : '+'}$${Math.abs(x).toFixed(2)}`;
 const r2 = (x) => Math.round(x * 100) / 100;
@@ -41,12 +48,12 @@ function load(dir, since) {
     }
   }
   // the journal's known holes (tools/journal-gaps.js): the lost lines restored beside it, before `since` cuts
-  return gaps.withGaps(ev.sort((a, b) => Date.parse(a.t) - Date.parse(b.t))).events.filter((e) => !since || e.t.slice(0, 10) >= since);
+  return gaps.withGaps(ev.sort((a, b) => Date.parse(a.t) - Date.parse(b.t))).events.filter((e) => !since || dayOf(e.t) >= since);
 }
 
 // Pure: journal events in, numbers out. `pos` is returned so --marks can price what is still held.
 function summarize(events) {
-  const day = (e) => e.t.slice(0, 10);
+  const day = (e) => dayOf(e.t);
   const days = new Map();
   const D = (k) => days.get(k) || days.set(k, { conv: { n: 0, w: 0, pnl: 0 }, arb: 0, snipe: 0, bets: 0, maker: 0, makerFills: 0, makerQty: 0, runQty: 0 }).get(k);
   const opens = new Map();
@@ -167,12 +174,12 @@ function render(s, unreal) {
   L.push('');
   L.push(`ALL-IN REALIZED ${usd(r2(total))}${unreal == null ? '' : ` · with marks ${usd(r2(total + unreal))}`}`);
   L.push('');
-  L.push('BY DAY            converge      arb    snipe     bets    maker   maker run-over');
+  L.push('BY DAY (Eastern, to 4 AM)  converge      arb    snipe     bets    maker   maker run-over');
   const rows = [...s.days.entries()].sort();
   rows.forEach(([k, d], i) => {
     const ro = d.makerQty ? `${Math.round((d.runQty / d.makerQty) * 100)}%` : '-';
     // the newest day is whatever the journals hold so far, not a whole day: say up to when
-    const upTo = i === rows.length - 1 && s.lastT && s.lastT.slice(0, 10) === k ? `   so far, through ${s.lastT.slice(11, 16)}Z` : '';
+    const upTo = i === rows.length - 1 && s.lastT && dayOf(s.lastT) === k ? `   so far, through ${s.lastT.slice(11, 16)}Z` : '';
     L.push(`  ${k}  ${`${d.conv.n} · ${usd(r2(d.conv.pnl))}`.padStart(14)} ${usd(r2(d.arb)).padStart(8)} ${usd(r2(d.snipe || 0)).padStart(8)} ${usd(r2(d.bets || 0)).padStart(8)} ${usd(r2(d.maker)).padStart(8)}   ${ro.padStart(6)}${upTo}`);
   });
   return L.join('\n');
@@ -199,4 +206,4 @@ async function main(argv) {
 }
 
 if (require.main === module) main(process.argv).catch((e) => { console.error(e.message); process.exit(1); });
-module.exports = { summarize, render, load };
+module.exports = { dayOf, summarize, render, load };

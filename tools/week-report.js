@@ -12,6 +12,7 @@
 //                                        data/reports/weeks.html, one page to read on a phone
 //   node tools/week-report.js --desk D   a different desk folder (state.json + journal-*.jsonl)
 //   node tools/week-report.js --no-html  print only
+//   node tools/week-report.js --no-save  do not add this run's finished weeks to data/reports/desk-weeks.json
 //
 // Read-only: no network, no box, nothing written but the page. Where the numbers come from:
 //
@@ -26,7 +27,8 @@
 //   OFF BOOKS           options, scalps, dips and runners, off since 2026-10-08: the desk's change less
 //                       the two books', so the rows add up to the desk.
 //   PREDICTION MARKETS  REALISED money per book from the journals, through tools/pnl-report.js's own
-//                       summarize, by the UTC day each close landed on (that report's days). The maker's
+//                       summarize, by the day each close landed on (that report's days: Eastern, ending at 4 AM, as
+//                       the floor and tools/bet-record.js date a game; the UTC day until 2026-10-20). The maker's
 //                       open inventory is not marked here; pnl-report --marks does that.
 const fs = require('fs');
 const path = require('path');
@@ -46,9 +48,8 @@ function mondayOf(day) {
 }
 const sundayOf = (monday) => { const d = new Date(`${monday}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + 6); return d.toISOString().slice(0, 10); };
 
-// Pure: the desk's minute history in, one row per Eastern week out, oldest first. Each figure is the
-// change from the last minute before the week (or the week's first, for the first week) to its last.
-function deskWeeks(history) {
+// The minutes grouped by Eastern week, each with the minute before it (or its own first, for the first week) and its last
+function weekGroups(history) {
   const h = (history || []).filter((p) => p && Number.isFinite(p.t)).sort((a, b) => a.t - b.t);
   const weeks = [];
   let prev = null, cur = null;
@@ -62,7 +63,39 @@ function deskWeeks(history) {
     prev = p;
   }
   if (cur) weeks.push(cur);
-  return weeks.map(({ week, from, to }) => row(week, from, to));
+  return weeks;
+}
+// Pure: the desk's minute history in, one row per Eastern week out, oldest first. Each figure is the
+// change from the last minute before the week (or the week's first, for the first week) to its last.
+function deskWeeks(history) {
+  return weekGroups(history).map(({ week, from, to }) => row(week, from, to));
+}
+const addWeek = (monday, n) => { const d = new Date(`${monday}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + 7 * n); return d.toISOString().slice(0, 10); };
+const point = (p) => ({ t: p.t, c: p.c, bc: p.bc, s: p.s, bs: p.bs, e: p.e });
+
+// The weeks once the history no longer reaches back to the start (audit 2026-10-20). The desk keeps only its newest
+// 30,000 minutes, about 21 days (src/desk/engine.js), and the report used to put the starting cash just before
+// whatever minute came first: by 10-20 the first week (Sep 21-27) read +$0.00 beside its three fills, and the next
+// took the whole move since the start. Now a week the history covers is measured as always; a week it no longer
+// covers comes from `saved`, the rows earlier runs measured while they could (data/reports/desk-weeks.json); and a
+// stretch neither covers is ONE row (`weeksIn` its weeks), from the last value known (a saved week's end, or the
+// start) to the end of the history's first week. Each row carries its last minute (`to`) for the runs after.
+function measuredWeeks(history, { start = null, saved = {} } = {}) {
+  const h = (history || []).filter((p) => p && Number.isFinite(p.t) && (!start || p.t > start.t)).sort((a, b) => a.t - b.t);
+  if (!h.length) return [];
+  const firstWeek = mondayOf(clock.et(h[0].t).day);
+  const kept = Object.values(saved || {}).filter((r) => r && r.week < firstWeek && r.to && Number.isFinite(r.to.t)).sort((a, b) => (a.week < b.week ? -1 : 1));
+  const last = kept[kept.length - 1] || null;
+  const from0 = last ? last.to : start || h[0];
+  const fromWeek = last ? addWeek(last.week, 1) : mondayOf(clock.et(from0.t).day);
+  const groups = weekGroups([from0, ...h]).filter((g) => g.week >= firstWeek);
+  const rows = groups.map((g, i) => {
+    const weeksIn = [];
+    if (i === 0) for (let w = fromWeek; w <= g.week; w = addWeek(w, 1)) weeksIn.push(w);
+    else weeksIn.push(g.week);
+    return { ...row(weeksIn[0], g.from, g.to), end: sundayOf(g.week), weeksIn, to: point(g.to) };
+  });
+  return [...kept.map((r) => ({ ...r, weeksIn: r.weeksIn || [r.week], saved: true })), ...rows];
 }
 
 function row(week, a, b) {
@@ -130,8 +163,20 @@ function pmWeeks(days) {
 
 // The prediction-market books over the weeks the report shows. That desk ran from 2026-09-10, two weeks
 // before this one began; its earlier weeks are pnl-report's, not this page's.
+// a row's weeks: one, or the several a stretch the history no longer covers holds (measuredWeeks)
+const weeksOf = (w) => w.weeksIn || [w.week];
+// the trades, or the prediction desk's money, over a row's weeks
+function overWeeks(map, w, zero, add) {
+  const got = weeksOf(w).map((k) => map.get(k)).filter(Boolean);
+  return got.length ? got.reduce(add, zero()) : null;
+}
+const tradesOver = (trades, w) => overWeeks(trades, w, () => ({ fills: 0, fees: 0, byBook: {} }), (a, t) => {
+  a.fills += t.fills; a.fees = r2(a.fees + t.fees); for (const [b, n] of Object.entries(t.byBook)) a.byBook[b] = (a.byBook[b] || 0) + n; return a; });
+const pmOver = (pm, w) => overWeeks(pm, w, () => ({ arb: 0, maker: 0, snipe: 0, bets: 0, conv: 0, total: 0 }), (a, p) => {
+  for (const [k] of PM_BOOKS) a[k] = r2(a[k] + p[k]); a.total = r2(a.total + p.total); return a; });
+const title = (w) => (weeksOf(w).length > 1 ? `Weeks of ${fmtDay(w.week)} – ${fmtDay(w.end)}, together (the desk's minutes for them are gone; measured from ${weeksOf(w)[0] === w.week ? 'the start' : 'the last week kept'})` : `Week of ${fmtDay(w.week)} – ${fmtDay(w.end)}`);
 function pmTotal(pm, weeks) {
-  const shown = weeks.map((w) => pm.get(w.week)).filter(Boolean);
+  const shown = weeks.flatMap(weeksOf).map((k) => pm.get(k)).filter(Boolean);
   if (!shown.length) return null;
   return shown.reduce((a, p) => { for (const [k] of PM_BOOKS) a[k] = r2(a[k] + p[k]); a.total = r2(a.total + p.total); return a; },
     { arb: 0, maker: 0, snipe: 0, bets: 0, conv: 0, total: 0 });
@@ -166,10 +211,10 @@ function renderText({ weeks, whole, trades, pm, asOf }) {
     if (w.desk != null) L.push(`  desk     ${signed(w.desk).padStart(11)} ${w.deskPct != null ? `(${pct(w.deskPct)})` : ''}`);
   };
   for (const w of [...weeks].reverse()) {
-    one(w, `Week of ${fmtDay(w.week)} – ${fmtDay(w.end)}`);
-    const t = trades.get(w.week);
+    one(w, title(w));
+    const t = tradesOver(trades, w);
     L.push(`  trades   ${t ? `${t.fills} fill${t.fills === 1 ? '' : 's'} (${Object.entries(t.byBook).map(([b, n]) => `${b} ${n}`).join(', ')}) · fees $${t.fees.toFixed(2)}` : 'none'}`);
-    const p = pm.get(w.week);
+    const p = pmOver(pm, w);
     if (p) L.push(`  predictions realised ${signed(p.total)}: ${PM_BOOKS.filter(([k]) => Math.abs(p[k]) >= 0.005).map(([k, n]) => `${n.toLowerCase()} ${signed(p[k])}`).join(', ') || 'nothing closed'}`);
     L.push('');
   }
@@ -199,7 +244,7 @@ function renderHtml({ weeks, whole, trades, pm, asOf }) {
 ${t !== undefined ? `<p class="note">${t ? `${t.fills} trade${t.fills === 1 ? '' : 's'} · fees $${t.fees.toFixed(2)}` : 'No trades'}</p>` : ''}
 <h3>Prediction markets, realised</h3><table class="pm"><tbody>${pmRows(p)}</tbody></table></section>`;
   const total = pmTotal(pm, weeks);
-  const body = [...weeks].reverse().map((w) => section(`Week of ${fmtDay(w.week)} – ${fmtDay(w.end)}`, w, trades.get(w.week) || null, pm.get(w.week))).join('\n')
+  const body = [...weeks].reverse().map((w) => section(title(w), w, tradesOver(trades, w), pmOver(pm, w))).join('\n')
     + (whole ? section('Since the start', whole, undefined, total) : '');
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The Weeks</title><style>
@@ -229,8 +274,19 @@ function main(argv) {
   catch (e) { console.error(`no desk state in ${deskDir} (${e.code || e.message}): run ops/daily-check.sh (or node tools/desk-check.js --box) first`); return 1; }
   const start = startPoint(S);
   const history = start ? [start, ...(S.history || []).filter((p) => p.t > start.t)] : S.history;
-  const weeks = deskWeeks(history);
+  // the weeks earlier runs measured, for the weeks the desk's history no longer reaches (measuredWeeks)
+  const keptFile = path.join('data', 'reports', 'desk-weeks.json');
+  let saved = {};
+  try { saved = JSON.parse(fs.readFileSync(keptFile, 'utf8')).weeks || {}; } catch { /* the first run */ }
+  const weeks = measuredWeeks(S.history, { start, saved });
   const whole = wholeRun(history);
+  // a week is kept once it is over and was measured on its own, from the minute before it to its last
+  const today = clock.et(Date.now()).day;
+  for (const w of weeks) if (!w.saved && weeksOf(w).length === 1 && w.end < today) saved[w.week] = w;
+  if (!has('--no-save')) {
+    fs.mkdirSync(path.dirname(keptFile), { recursive: true });
+    fs.writeFileSync(keptFile, JSON.stringify({ note: 'each finished week as tools/week-report.js measured it; the desk keeps only ~21 days of minutes', weeks: saved }, null, 1));
+  }
   const trades = deskTrades(readJournals(deskDir));
   const pm = pmWeeks(pnl.summarize(pnl.load([path.join('data', 'fly', 'archive'), path.join('data', 'fly', 'box-now')])).days);
   const last = (S.history || []).reduce((m, p) => Math.max(m, p.t || 0), 0);
@@ -246,4 +302,4 @@ function main(argv) {
 }
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2));
-module.exports = { mondayOf, deskWeeks, wholeRun, startPoint, deskTrades, pmWeeks, pmTotal, renderText, renderHtml };
+module.exports = { mondayOf, deskWeeks, measuredWeeks, wholeRun, startPoint, deskTrades, pmWeeks, pmTotal, renderText, renderHtml };

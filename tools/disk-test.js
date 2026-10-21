@@ -270,6 +270,26 @@ group('the anytime-touchdown tape the box records (/data/td, 2026-10-16): day fi
   ok('listDir names the td tape td/td-..., with its sha256, and nothing else in td/', JSON.stringify(r.files.map((f) => [f.name, f.sha256])) === JSON.stringify([['td/td-2026-09-12.jsonl', sha('board\n')]]), r.files);
 }
 
+group('the option-chain tape the box records (/data/chains, 2026-10-20): day files copied, never deleted by the pull');
+{
+  const box = [
+    { name: 'chains/chains-2026-09-12.jsonl', size: 70, sha256: H('a') },
+    { name: `chains/chains-${TODAY}.jsonl`, size: 8, sha256: null },
+    { name: 'chains/chains.log', size: 50, sha256: H('b') },
+    { name: 'chains/chains-2026-09-12.seen.json', size: 30, sha256: H('c') },
+  ];
+  const plan = planPull(box, [], { todayET: TODAY, keep: 1, trim: true });
+  ok('a closed chains day is copied under its chains/ name (the Mac off at 9:45 lost its own slot for good)', JSON.stringify(names(plan.copy)) === '["chains/chains-2026-09-12.jsonl"]', names(plan.copy));
+  ok("today's chains file is open; chains.log and the .seen.json files are not the pull's", JSON.stringify(plan.open) === JSON.stringify([`chains/chains-${TODAY}.jsonl`]) && plan.copy.length + plan.open.length + plan.errors.length === 2, plan);
+  ok('a chains file is never deleted from the box by the pull (the box trims its own after 14 days)', plan.deleteAfterCopy.length === 0 && plan.delete.length === 0, plan);
+  const dir = path.join(tmpRoot, 'list-chains');
+  fs.mkdirSync(path.join(dir, 'chains'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'chains', 'chains-2026-09-12.jsonl'), 'chain\n');
+  fs.writeFileSync(path.join(dir, 'chains', 'chains.log'), 'ok\n');
+  const r = eval(`(${listDir.toString()})`)({ dir, todayET: TODAY, nowMs: NOW });
+  ok('listDir names the box\'s chain tape chains/chains-..., and nothing else in chains/', JSON.stringify(r.files.map((f) => [f.name, f.sha256])) === JSON.stringify([['chains/chains-2026-09-12.jsonl', sha('chain\n')]]), r.files);
+}
+
 group('isBytePrefix');
 {
   const f = (n, s) => { const p = path.join(tmpRoot, n); fs.writeFileSync(p, s); return p; };
