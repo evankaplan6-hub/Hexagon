@@ -268,7 +268,7 @@
       const foe = u.pick ? (u.pick === u.a ? u.b : u.a) : u.b, opens = u.startsAt - ahead, begun = u.startsAt <= now;
       if (u.over && begun) { skipped.push(u); continue; }
       next.push({ k: u.id, stage: begun ? 'late' : u.over ? 'skip' : 'next', league: u.league, start: u.startsAt, pick: u.pick || u.a, foe, px: u.px,
-        status: !g.on ? 'Not bet: the game bets are switched off' : begun ? (u.px == null ? 'Under way, not bet: no price on both venues' : 'Under way, too late to bet')
+        status: !g.on ? 'Not bet: the game bets are switched off' : begun ? 'Under way, too late to bet'
           : u.over ? `Left alone: the favourite is ${wholeCents(u.px)}` : opens <= now ? 'Bets this round' : `Bets at ${ET_HM.format(new Date(opens))}` });
     }
     const fin = g.finals.map((f) => ({ k: f.id, stage: f.pnl > 0 ? 'won' : 'lost', league: f.league, start: f.at, day: playedDay(f.at), pick: f.pick, foe: f.foe, px: f.entry,
@@ -312,7 +312,10 @@
     // today's finals are the games played today, and until 4 AM "today" is still the evening before (playedDay)
     const R = B.g.record.today, td = playedDay(S.now);
     const live = B.open.filter((t) => t.stage === 'live').sort(byStart);
-    const soon = [...B.open.filter((t) => t.stage === 'bet'), ...B.next.filter((t) => t.stage === 'next')].sort(byStart);
+    // still to come TODAY: the board runs thirty hours on, and "8 games to come" counted tomorrow's two (audit 2026-10-20);
+    // the foot's "Next" still names the next group, today's or not
+    const coming = [...B.open.filter((t) => t.stage === 'bet'), ...B.next.filter((t) => t.stage === 'next')].sort(byStart);
+    const soon = coming.filter((t) => dayKey(t.start) === td);
     const finals = B.fin.filter((t) => t.day === td);
     const head = R.bets
       ? `<div class="verdict"><span class="rec">${R.won}–${R.bets - R.won}</span> <span class="vfig ${tone(R.pnl)}">${signed(R.pnl)}</span></div>` +
@@ -321,7 +324,7 @@
         `<p class="ovp">No game has finished today yet.${live.length && soon.length ? ` ${soon.length} more to come.` : ''}</p>`;
     const show = [...live, ...soon].slice(0, 6);
     if (show.length < 6) show.push(...finals.slice(0, 6 - show.length));
-    const grp = startGroups(soon).find(([st]) => st > S.now);
+    const grp = startGroups(coming).find(([st]) => st > S.now);
     const foot = grp ? `<p class="ovnote">Next: ${nOf(grp[1].length, 'game')} at ${esc(whenTxt(grp[0]))} · ${esc(groupStatus(grp[1], B))}.` +
       `${B.skipped.length ? ` ${nOf(B.skipped.length, 'game')} left alone today: the favourite was over ${Math.round((B.g.maxPx || 0.9) * 100)}¢.` : ''}</p>` : '';
     return head + (show.length ? tiles(show) : '') + foot;

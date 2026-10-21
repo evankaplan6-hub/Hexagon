@@ -1104,6 +1104,32 @@ const position = (over = {}) => ({
       await KETT(F);
       ok('the live book has the pick at 5c: no bet, and KETT says it is no longer the favourite', !F.state.positions.some((p) => p.strategy === 'bet') && fsaid.some((l) => l.agent === 'KETT' && /no longer the favourite/.test(l.text)), fsaid);
     }
+    // audit 2026-10-20
+    {
+      const mk = (over = {}) => { const X = engine({ bets: true, betSeries: ['KXMLBGAME'], betUsd: 100, betMaxPx: 0.9, ...over }); X.halt = null; X.said = []; X.log = (agent, kind, pnl, text) => X.said.push({ agent, kind, text }); X.quotes.pm.set('pmB', { tokenIds: ['tBOS', 'tNYY'] }); return X; };
+      const deep = async () => ({ asks: [{ price: 0.56, size: 5000 }], yesBid: 0.44, yesAsk: 0.45 });
+      // an arb on the same game closed an hour ago: its re-entry pause does not hold the bet off
+      const G = mk(); G.pairs = [game()]; G.cooldown.set(game().id, Date.now() - 3600e3); G.book = deep;
+      BRAM(G); await KETT(G);
+      ok('a re-entry pause on the game (an arb unwound) does not hold its bet off', G.state.positions.some((p) => p.strategy === 'bet'), G.said);
+      // the same Kalshi game, already bet through another Polymarket market: BRAM makes no bet
+      const H = mk(); H.pairs = [game()]; H.state.closed.push({ id: 'old-KSy', strategy: 'bet', pairId: 'pmOTHER:0|KXMLBGAME-26SEP302000BOSNYY-NYY', label: 'MLB Yankees v Red Sox · Yankees', exitAt: now, pnl: 5 });
+      BRAM(H);
+      ok('a game already bet through another Polymarket market (a re-pairing) is not bet again', !H.signals.some((x) => x.type === 'bet'));
+      // a thin book: ten contracts at 56c is $5.60 of a $100 bet: wait while the start is more than ten minutes off
+      const T = mk(); T.pairs = [game()]; T.book = async () => ({ asks: [{ price: 0.56, size: 10 }], yesBid: 0.44, yesAsk: 0.45 });
+      BRAM(T); await KETT(T);
+      ok('a book with $5.60 of a $100 bet, an hour out: no bet yet, and KETT says it waits for depth', !T.state.positions.some((p) => p.strategy === 'bet') && T.said.some((l) => l.agent === 'KETT' && /waiting for depth/.test(l.text)), T.said);
+      const T2 = mk(); T2.pairs = [{ ...game(), startsAt: now + 5 * 60e3 }]; T2.book = async () => ({ asks: [{ price: 0.56, size: 10 }], yesBid: 0.44, yesAsk: 0.45 });
+      BRAM(T2); await KETT(T2);
+      const tp = T2.state.positions.find((p) => p.strategy === 'bet');
+      ok('...five minutes out it takes what there is: every game is still bet', tp && tp.qty === 10, T2.said);
+      // the game starts while KETT reads the books: not bought
+      const S2 = mk(); S2.pairs = [game()];
+      S2.book = async (venue, pair) => { pair.startsAt = Date.now() - 1000; return deep(); };
+      BRAM(S2); await KETT(S2);
+      ok('a game that starts while the books are read is not bought, and KETT says so', !S2.state.positions.some((p) => p.strategy === 'bet') && S2.said.some((l) => /started while the books were read/.test(l.text)), S2.said);
+    }
     BRAM(E);
     ok('the next cycle: no second bet on the same game', !E.signals.some((x) => x.type === 'bet'));
     // it settles, and the pair is still listed: still not bet again

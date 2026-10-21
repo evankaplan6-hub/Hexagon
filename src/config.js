@@ -437,6 +437,11 @@ module.exports = {
   // off the book fetched just after; with only the 90c cap, a game that swung in between (a score in the game, the
   // final) could buy the side that is now the long shot at 3c (audit 2026-10-17). Under this, KETT passes.
   betMinPx: num('BET_MIN_PX', 0.45),
+  // ...and a book that holds less than this share of the stake inside the limit is waited on, a minute at a time,
+  // until BET_LAST_CALL_MIN before the start; then the bet takes what there is (audit 2026-10-20: 13 of 239 bets
+  // cost under $50, filled off one thin level)
+  betMinFill: num('BET_MIN_FILL', 0.5),
+  betLastCallMin: num('BET_LAST_CALL_MIN', 10),
   // A game is bet within this many hours of kickoff, not before. Since 2026-10-11 the league listings
   // (PM_GAME_TAGS) pair a whole week's games the day they are listed, ~100 on a football week against
   // a $5k paper book: bet on listing, next Sunday's games would take the cash this Sunday's need, at
