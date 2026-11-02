@@ -1301,9 +1301,9 @@
     const first = pts.length ? pts[0][1] : last;
     // The figure is what changed over the range shown: over all of it, crypto's and SPY's total since their start
     // (not the headline's figure, which counts the retired books too); over 1h, 6h or 24h, the move in that window.
-    morph(el.querySelector('.cv'), figure(pts.length > 1 ? r2(last - first) : 0));
+    morph(el.querySelector('.cv'), pts.length > 1 ? figure(r2(last - first)) : '—');
     const from = pts.length ? pts[0][0] : 0;
-    el.querySelector('.cd').textContent = pts.length < 2 ? '' : chart.range !== 'All' ? `over the last ${chart.range}`
+    el.querySelector('.cd').textContent = pts.length < 2 ? (hist.loaded ? 'No history yet' : 'Loading the history') : chart.range !== 'All' ? `over the last ${chart.range}`
       : `crypto and SPY since ${dayKey(from) === dayKey(nowT()) ? `${ET_HM.format(new Date(from))} today` : ET_DAY.format(new Date(from))}`;
     // holding over the same stretch, so the two figures compare: it gave holding's whole total beside the
     // desk's move over the last hour
