@@ -412,7 +412,7 @@ button.row, a.row { cursor: pointer; transition: background-color .15s; }
   background: var(--scrim); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
 .shbox { display: flex; flex-direction: column; width: min(640px, 100%); max-height: min(820px, 100%); overflow: hidden;
   border-radius: var(--radius-xl); background: var(--bg-0); box-shadow: var(--shadow-dialog), 0 0 0 .5px var(--rule-2); }
-.shh { flex: none; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--space-2); padding: var(--space-3) var(--space-5); border-bottom: 1px solid var(--line-1); }
+.shh { flex: none; display: grid; grid-template-columns: minmax(44px, auto) minmax(0, 1fr) minmax(44px, auto); align-items: center; gap: var(--space-2); padding: var(--space-3) var(--space-5); border-bottom: 1px solid var(--line-1); }
 .shh h2 { grid-column: 2; margin: 0; max-width: 100%; overflow-wrap: anywhere; text-align: center; font: 600 var(--type-title)/1.25 var(--sans); letter-spacing: -.02em; }
 .shback, .shdone { padding: 6px 0; border: 0; background: none; cursor: pointer; font: 400 var(--type-title)/1.2 var(--sans); color: var(--accent); }
 .shback { grid-column: 1; justify-self: start; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
