@@ -205,7 +205,6 @@ button.row, a.row { cursor: pointer; transition: background-color .15s; }
 .gtlive { color: var(--ink-1); }
 .gtlive::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: var(--part-games); vertical-align: 1px; }
 .gtb { padding: 1px 7px; border-radius: var(--radius-pill); background: var(--fill-1); font: 600 var(--type-label)/1.4 var(--sans); color: var(--ink-3); }
-.gtb.pos, .gtb.neg { background: none; padding-left: 0; padding-right: 0; }
 .gtr { grid-column: 1 / -1; display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; align-items: baseline; gap: var(--space-2); }
 .gtd { align-self: center; }
 /* a team's whole name, on two lines if it needs them: cut short, three in four of a phone's college names read "Central C…" */
