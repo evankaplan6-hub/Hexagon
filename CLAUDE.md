@@ -291,3 +291,8 @@ the fast working copy.
   `data/`, `.env`, and `*.pem` are gitignored. Since 2026-09-24 the pull job copies `data/chains`,
   `data/options` and `data/fly/archive` to iCloud Drive/Hexagon-backup; `.env` and the `.pem` go
   there only inside `ops/backup-secrets.sh`'s encrypted image; the rest of `data/` exists only here.
+
+## Design notes
+
+- **Standing rule for any UI change (2026-11-01):** read `PRODUCT.md` and `DESIGN.md` first, review against `docs/design/web-interface-guidelines.md`, match `docs/design/references/`, and run `node tools/phone-audit.mjs` on the demo. Impeccable's `critique`, `audit`, `polish`, `quieter` and `distill` are allowed. `bolder`, `colorize`, `overdrive` and `delight` are banned, because the design system is locked. This file beats every skill.
+- 2026-11-01, the free design stack. `PRODUCT.md` and `DESIGN.md` at the root record who the floor is for and what is locked (`public/tokens.css` is the source of truth). `docs/design/web-interface-guidelines.md` is Vercel's checklist, MIT licensed, with the rules that do not apply here and the ones this repo overrides. `docs/design/references/` is where Evan drops screenshots to match, Apple's Stocks first. `tools/phone-audit.mjs` (Node 22 or newer, no packages) loads the floor in headless Chrome at a phone's width and reports script errors, sideways scroll, text under 12px, controls under 44px, text cut off by its own box and page length. Routes are in `tools/phone-audit-urls.txt`. No ellipses: Hexagon has no written rule, so new copy follows Evan's. Nothing in the floor itself changed.

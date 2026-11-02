@@ -1,0 +1,14 @@
+# Routes for tools/phone-audit.mjs: one a line, a path and its hash. A trailing sheet=ID opens that sheet first and checks it.
+# Views (public/desk.js VIEWS), then a card by link, then the sheets (desk, book:<key>, mkt:<sym>, lab, health).
+# A book or market sheet opens only once that book holds something (desk.js bookSheet, mktSheet): on a quiet demo
+# book:stocks and mkt:SPY report SHEET-NOT-OPEN, which is the page's answer, not a fault in the audit.
+/#today
+/#games
+/#markets
+/#activity
+/#markets/crypto
+/#markets/side
+/#today sheet=desk
+/#today sheet=book:crypto
+/#today sheet=lab
+/#today sheet=health
