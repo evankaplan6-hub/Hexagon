@@ -58,7 +58,8 @@ h1 { margin: 0; font: 600 var(--type-title)/1.2 var(--sans); letter-spacing: -.0
 /* the desk's light: a dot in the state's colour, the words in the ink, and a wash behind them when the
    state wants a look */
 .pill { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 12px 0 11px; border-radius: var(--radius-pill);
-  font: 600 var(--type-small)/1 var(--sans); white-space: nowrap; background: var(--fill-1); color: var(--ink-1); }
+  font: 600 var(--type-small)/1 var(--sans); white-space: nowrap; background: var(--fill-1); color: var(--ink-1); border: 0; }
+button.pill { cursor: pointer; }
 .pill i { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-3); flex: none; }
 .pill.good i { background: var(--ok); }
 .pill.warn { background: var(--warn-wash); } .pill.warn i { background: var(--warn); }
@@ -197,12 +198,12 @@ button.row, a.row { cursor: pointer; transition: background-color .15s; }
 .tiles { list-style: none; margin: var(--space-3) 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: var(--space-2); }
 .gt { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto auto 1fr; gap: 3px var(--space-2); width: 100%; height: 100%; padding: 10px 12px 11px; border: 1px solid var(--line-1);
   border-radius: 16px; background: var(--bg-1); color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background-color .15s, border-color .15s; }
-.gth { grid-column: 1 / -1; display: flex; align-items: center; gap: var(--space-2); font: 600 var(--type-label)/1.3 var(--sans); letter-spacing: 0; color: var(--ink-3); }
-.gth .gtw { margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gth { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 2px var(--space-2); font: 600 var(--type-label)/1.3 var(--sans); letter-spacing: 0; color: var(--ink-3); }
+.gth .gtw { margin-left: auto; min-width: 0; flex: 0 0 auto; overflow: visible; text-overflow: clip; white-space: nowrap; }
 .gth .gtl { flex: none; }
 .gtb { flex: none; }
-.gtlive { color: var(--part-games); }
-.gtlive::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: currentColor; vertical-align: 1px; }
+.gtlive { color: var(--ink-1); }
+.gtlive::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: var(--part-games); vertical-align: 1px; }
 .gtb { padding: 1px 7px; border-radius: var(--radius-pill); background: var(--fill-1); font: 600 var(--type-label)/1.4 var(--sans); color: var(--ink-3); }
 .gtr { grid-column: 1 / -1; display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; align-items: baseline; gap: var(--space-2); }
 .gtd { align-self: center; }
@@ -227,7 +228,7 @@ button.row, a.row { cursor: pointer; transition: background-color .15s; }
   margin: 0 calc(-1 * var(--space-3)); padding: 10px var(--space-3); border: 0; border-radius: var(--radius-md); background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background-color .15s; }
 .tlt { font: 600 var(--type-small)/1.25 var(--sans); color: var(--ink-1); white-space: nowrap; }
 .tld { display: block; font: 500 var(--type-label)/1.3 var(--sans); letter-spacing: 0; color: var(--ink-3); }
-.tlnow .tld { color: var(--part-games); font-weight: 600; }
+.tlnow .tld { color: var(--ink-1); font-weight: 600; }
 .tlx { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; color: var(--ink-2); }
 .tlx .sw { width: 8px; height: 8px; transform: translateY(-1px); }
 /* the lab's summary: how many ideas, how many kept, what is on test */
@@ -237,7 +238,7 @@ button.row, a.row { cursor: pointer; transition: background-color .15s; }
 .labsum > span { grid-column: 1; }
 .labsum .chev { grid-column: 2; grid-row: 1 / span 2; }
 .lsn { font: 600 var(--type-title)/1.3 var(--sans); color: var(--ink-1); }
-.lsn b { font-weight: 700; color: var(--bk); }
+.lsn b { font-weight: 700; }
 .lsw { font-size: var(--type-small); color: var(--ink-3); }
 
 /* ---- Games: the record across the top, then a tile per game in sections ------------------------------- */
@@ -385,6 +386,7 @@ button.row, a.row { cursor: pointer; transition: background-color .15s; }
   font: 600 var(--type-label)/1 var(--sans); letter-spacing: 0; color: var(--ink-2); white-space: nowrap; transition: background-color .2s, box-shadow .2s, color .2s; }
 .seg button.on { background: var(--seg-on); color: var(--ink-1); box-shadow: var(--shadow-seg); }
 .seg button span { margin-left: 5px; font-weight: 500; color: var(--ink-3); }
+.seg button.on span { color: var(--ink-1); }
 .gbar .seg button { padding: 7px 16px; font-size: var(--type-small); }
 
 /* the chart opened large: a sheet over the page, which blurs behind it */
@@ -410,8 +412,8 @@ button.row, a.row { cursor: pointer; transition: background-color .15s; }
   background: var(--scrim); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
 .shbox { display: flex; flex-direction: column; width: min(640px, 100%); max-height: min(820px, 100%); overflow: hidden;
   border-radius: var(--radius-xl); background: var(--bg-0); box-shadow: var(--shadow-dialog), 0 0 0 .5px var(--rule-2); }
-.shh { flex: none; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: var(--space-2); padding: var(--space-3) var(--space-5); border-bottom: 1px solid var(--line-1); }
-.shh h2 { grid-column: 2; margin: 0; max-width: 18em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; font: 600 var(--type-title)/1.25 var(--sans); letter-spacing: -.02em; }
+.shh { flex: none; display: grid; grid-template-columns: minmax(44px, auto) minmax(0, 1fr) minmax(44px, auto); align-items: center; gap: var(--space-2); padding: var(--space-3) var(--space-5); border-bottom: 1px solid var(--line-1); }
+.shh h2 { grid-column: 2; margin: 0; max-width: 100%; overflow-wrap: anywhere; text-align: center; font: 600 var(--type-title)/1.25 var(--sans); letter-spacing: -.02em; }
 .shback, .shdone { padding: 6px 0; border: 0; background: none; cursor: pointer; font: 400 var(--type-title)/1.2 var(--sans); color: var(--accent); }
 .shback { grid-column: 1; justify-self: start; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .shback::before { content: ''; display: inline-block; width: 9px; height: 9px; margin: 0 4px 0 3px; border-left: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: translateY(-1px) rotate(45deg); }
@@ -423,11 +425,12 @@ button.row, a.row { cursor: pointer; transition: background-color .15s; }
 .shlab { margin: 0 0 var(--space-1); font: 600 var(--type-small)/1.3 var(--sans); color: var(--ink-3); }
 .shfig { font: 700 34px/1.1 var(--sans); letter-spacing: -.025em; }
 .shfig.st-good { color: var(--ok); } .shfig.st-warn { color: var(--warn); } .shfig.st-bad { color: var(--bad); }
-.kv { display: grid; grid-template-columns: minmax(0, 1fr) auto; margin: var(--space-3) 0 0; }
+.kv { display: grid; grid-template-columns: auto minmax(0, 1fr); margin: var(--space-3) 0 0; }
 .kv dt, .kv dd { padding: 8px 0; border-top: 1px solid var(--line-1); font-size: var(--type-small); }
-.kv dt { color: var(--ink-3); }
-.kv dd { margin: 0; padding-left: var(--space-4); text-align: right; font-weight: 600; color: var(--ink-1); }
+.kv dt { color: var(--ink-3); white-space: nowrap; }
+.kv dd { margin: 0; padding-left: var(--space-4); text-align: right; font-weight: 600; color: var(--ink-1); overflow-wrap: anywhere; }
 .shlink { margin: 0; text-align: center; font-size: var(--type-small); }
+.shlink a { display: inline-flex; align-items: center; min-height: 24px; }
 body.sheeted { overflow: hidden; }
 @media (prefers-reduced-motion: no-preference) {
   #sheet:not([hidden]) { animation: fadein .2s ease-out; }
@@ -467,12 +470,14 @@ footer { max-width: 96ch; font-size: var(--type-label); line-height: 1.5; letter
   .part:hover { box-shadow: var(--shadow-card), 0 0 0 1px var(--line-2); }
   .gt:hover { border-color: var(--line-2); background: var(--fill-1); }
   .views a:not([aria-current]):hover, .seg button:not(.on):hover { background: var(--fill-2); }
+  .seg button:not(.on):hover span { color: var(--ink-2); }
   .rowsmore:hover, #chartbig .cbback:hover, .rule summary:hover, button.seeall:hover, .shback:hover, .shdone:hover { text-decoration: underline; }
 }
 /* a finger: controls at least 32px tall, text buttons 44 */
 @media (pointer: coarse) {
   .seg button { min-height: 32px; }
   .rowsmore { min-height: 44px; }
+  .shdone, .shback, #chartbig .cbback { min-height: 44px; min-width: 44px; }
 }
 
 /* ---- narrower windows ------------------------------------------------------------------------- */
@@ -506,7 +511,7 @@ footer { max-width: 96ch; font-size: var(--type-label); line-height: 1.5; letter
    time, which stay; the views in a tab bar along the foot of the screen, over the home indicator, and
    everything in one column */
 @media (max-width: 640px) {
-  html { scroll-padding-top: 60px; }
+  html { scroll-padding-top: 60px; scroll-padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
   .top { top: -52px; padding-left: max(var(--space-4), env(safe-area-inset-left)); padding-right: max(var(--space-4), env(safe-area-inset-right)); }
   .bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "brand brand" "pill clock"; align-items: center;
     min-height: 0; gap: 0 var(--space-3); padding-bottom: 10px; }
@@ -579,4 +584,11 @@ footer { max-width: 96ch; font-size: var(--type-label); line-height: 1.5; letter
 /* the narrowest phones (320 wide): one tile to a row */
 @media (max-width: 359px) {
   .tiles { grid-template-columns: minmax(0, 1fr); }
+  .lg-t th, .lg-t td { padding-left: 6px; }
+  .lg-t td small { display: none; }
+  .hold-t td { padding-left: var(--space-2); }
+  .hold-t .mk { white-space: normal; }
+  .filters .seg button { white-space: normal; line-height: 1.15; }
 }
+/* figures stay one width everywhere: a font shorthand resets font-variant-numeric, so body's tabular-nums never reached the figures that tick (DESIGN.md, the One Width Rule) */
+*, *::before, *::after { font-variant-numeric: tabular-nums !important; }
