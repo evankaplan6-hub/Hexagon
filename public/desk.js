@@ -1256,7 +1256,7 @@
   // The chart sits under its question, and in the large sheet under that sheet's own title, so it carries no title
   // of its own; the card's "Large chart" opens it large
   function chartSkeleton() {
-    const seg = `<span class="seg">${RANGES.map(([r]) => `<button type="button" data-range="${r}" class="${chart.range === r ? 'on' : ''}">${r}</button>`).join('')}</span>`;
+    const seg = `<span class="seg" role="group" aria-label="Range">${RANGES.map(([r]) => `<button type="button" data-range="${r}" class="${chart.range === r ? 'on' : ''}" aria-pressed="${chart.range === r}">${r}</button>`).join('')}</span>`;
     return `<div class="chead"><span class="cv"></span><span class="cd"></span></div><div class="cplot"></div><div class="cb">${seg}<span class="cr"></span></div>`;
   }
   function makePlot(el, big) {
@@ -1361,7 +1361,7 @@
       if (b.dataset.range) {
         chart.range = b.dataset.range;
         try { localStorage.setItem('desk-chart', JSON.stringify(chart)); } catch { /* private window */ }
-        for (const [e2] of plots) { e2.querySelectorAll('[data-range]').forEach((x) => x.classList.toggle('on', x.dataset.range === chart.range)); drawChart(e2); }
+        for (const [e2] of plots) { e2.querySelectorAll('[data-range]').forEach((x) => { x.classList.toggle('on', x.dataset.range === chart.range); x.setAttribute('aria-pressed', x.dataset.range === chart.range); }); drawChart(e2); }
       }
     });
   }
@@ -1516,10 +1516,23 @@
   // Nothing redraws at rest: the clock ticks, and the page notices when the stream has gone quiet.
   // When the stream goes quiet everything is drawn again, not just the bar: the Health card and an open sheet went
   // on saying "Working" and "Last round 3 seconds ago" under a banner that said No signal (2026-10-16 audit).
-  setInterval(() => { if (quiet() && !retry && !paused) connect(); if (!S) return; renderClock(); if (!!stale() !== shownGone) render(); }, 1000);
+  // A first frame that never lands: stale() needs a frame to have come, so without this the pill stays blank and
+  // the page says Connecting for good. After STALE_MS from the page's start it says No signal, in the pill and banner.
+  const pageStart = Date.now();
+  const noFirstFrame = () => {
+    if (S || paused || Date.now() - pageStart <= STALE_MS) return;
+    const pill = $('deskstate');
+    pill.className = 'pill bad';
+    morph(pill, '<i></i>No signal<span class="mode">Paper</span>');
+    const banner = $('banner'), msg = 'No signal from the desk: this page has not received its first state.';
+    banner.hidden = false;
+    banner.classList.remove('warn');
+    if (banner.textContent !== msg) banner.textContent = msg;
+  };
+  setInterval(() => { if (quiet() && !retry && !paused) connect(); if (!S) { noFirstFrame(); return; } renderClock(); if (!!stale() !== shownGone) render(); }, 1000);
   route();
-  morph($('tdhero'), `<p class="tddate">${esc(ET_LONG.format(new Date()))}</p><span class="tdlab">Connecting to the desk…</span>`);
-  morph($('ghero'), '<p class="ovp">Connecting to the desk…</p>');
+  morph($('tdhero'), `<p class="tddate">${esc(ET_LONG.format(new Date()))}</p><span class="tdlab">Connecting to the desk</span>`);
+  morph($('ghero'), '<p class="ovp">Connecting to the desk</p>');
   wireChart($('chart'), false);
   wireChart($('chart2'), false);
   wireChart($('chartbig-pnl'), true);
