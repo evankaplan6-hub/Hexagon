@@ -238,3 +238,7 @@ The Impeccable skill (`~/.claude/skills/impeccable`) may be used by hand: read i
 **Banned:** `bolder`, `colorize`, `overdrive`, `delight`. They add expression, and the system is locked.
 
 Other design skills installed for Evan (`apple-design`, `break-ui`, `mobile-native`, `prototype`) may inform a review. Where a skill and `CLAUDE.md` conflict, `CLAUDE.md` wins.
+
+**unslop** (`~/.claude/skills/unslop`) runs as audit and polish only. Its own tokens do not apply here (its fonts, its 400 to 600 weight cap, its tracking rules, its semantic colors), and neither do its rule that hierarchy comes from size rather than weight (here weight carries it) or its rule against capsules (`rounded.pill` is part of the system). No hero, generated image, new visual or story video. Its checks on spacing, alignment, copy, number formats and which chart leads are welcome.
+
+**frontend-design** is not used on this repo's pages. It sets out to give a page a new, distinctive look, which a locked system forbids.
