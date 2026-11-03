@@ -32,6 +32,15 @@ the prediction-market desk's record, including the fee math and why the venue ga
 `ops/DEPLOY.md` covers cloud deployment (Fly app `hexagon-desk`, which runs both desks). Merging to `main` auto-deploys
 to Fly once tests pass (paper only; see ops/DEPLOY.md → Auto-deploy).
 
+## Ethos (from Evan, 2026-11-03)
+
+As perfect as Linear's website or Apple Notes: simple purpose, simple architecture, simple design, simple implementation.
+
+- Cut taglines, helper text and secondary labels. If a screen needs them to make sense, fix the layout.
+- Every decision should elevate the user experience (UX), developer experience (DX) and agent experience (AX) at once, without breaking anything.
+
+"Without breaking anything" keeps the safety rules below. A figure's as-of date, the paper or sample label, and the text or sign that says a state without color are not secondary labels, so they stay. The master copy is `~/design/ETHOS.md`.
+
 ## UI changes (read first)
 
 Before any UI change read `PRODUCT.md` and `DESIGN.md`, review against `docs/design/web-interface-guidelines.md`, match
