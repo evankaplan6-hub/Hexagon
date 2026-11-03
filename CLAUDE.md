@@ -38,8 +38,9 @@ As perfect as Linear's website or Apple Notes: simple purpose, simple architectu
 
 - Cut taglines, helper text and secondary labels. If a screen needs them to make sense, fix the layout.
 - Every decision should elevate the user experience (UX), developer experience (DX) and agent experience (AX) at once, without breaking anything.
+- True before pretty: every figure is dated, a missing number looks missing, and paper says it's paper.
 
-"Without breaking anything" keeps the safety rules below. A figure's as-of date, the paper or sample label, and the text or sign that says a state without color are not secondary labels, so they stay. The master copy is `~/design/ETHOS.md`.
+The master copy is `~/design/ETHOS.md`.
 
 ## UI changes (read first)
 
