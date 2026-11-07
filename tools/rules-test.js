@@ -196,6 +196,19 @@ group('the Claude check: cached, budgeted, one call per pair of rules texts, nev
   const off = rules.makeRulesJudge({ ...cfg, rulesCheck: false }, { post, now: () => T });
   ok('RULES_CHECK off asks nothing', off.request(changed) === false);
 
+  const logged = fs.readFileSync(path.join(dataDir, 'rules-verdicts.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  ok('each verdict records the prompt version that produced it', logged.length === 1 && logged[0].prompt === rules.PROMPT_VERSION, logged);
+
+  const oldDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hexagon-rules-'));
+  fs.writeFileSync(path.join(oldDir, 'rules-verdicts.jsonl'), [
+    JSON.stringify({ rulesKey: FIX.unknown.rulesKey, verdict: 'different', reasons: ['old prompt'], model: 'claude-opus-5', at: T, costUsd: 0.4 }),
+    JSON.stringify({ rulesKey: 'other:key', verdict: 'same', reasons: ['new prompt'], model: 'claude-opus-5-5', prompt: rules.PROMPT_VERSION, at: T, costUsd: 0.3 }),
+  ].join('\n') + '\n');
+  const upgraded = rules.makeRulesJudge({ ...cfg, dataDir: oldDir }, { post: async () => ({ content: [], usage: {} }), now: () => T });
+  ok('a verdict from an older prompt is not reused, so the pair is asked again', upgraded.verdictFor(FIX.unknown) === null);
+  ok('...but one from the current prompt is', upgraded.verdictFor({ rulesKey: 'other:key' }) && upgraded.verdictFor({ rulesKey: 'other:key' }).verdict === 'same');
+  ok('...and the older call still counts against the day\'s spend', upgraded.snapshot().spentTodayUsd === 0.7, upgraded.snapshot());
+
   reply = 'I think these look similar but I am not sure.';
   const odd = rules.makeRulesJudge({ ...cfg, dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'hexagon-rules-')) }, { post: async () => ({ content: [{ type: 'text', text: reply }], usage: {} }), now: () => T });
   odd.request(changed);

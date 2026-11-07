@@ -657,7 +657,7 @@ module.exports = {
   // is cached in DATA_DIR/rules-verdicts.jsonl, keyed by both texts). Nothing is asked without
   // ANTHROPIC_API_KEY; a Claude "same" never overrides a conflict the deterministic check found.
   rulesCheck: env('RULES_CHECK', '1') !== '0',
-  rulesModel: env('RULES_MODEL', 'claude-opus-5'),
+  rulesModel: env('RULES_MODEL', 'claude-opus-5-5'),
   rulesEffort: env('RULES_EFFORT', 'medium'),
   rulesDailyUsd: num('RULES_DAILY_USD', 1),
   rulesTimeoutMs: num('RULES_TIMEOUT_MS', 120000),

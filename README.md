@@ -544,6 +544,12 @@ An `unclear` pair that shows an edge can be put to Claude once per pair of rules
 (`RULES_CHECK`, `RULES_DAILY_USD` $1), cached in `DATA_DIR/rules-verdicts.jsonl`. A Claude `same`
 never overrides a conflict the deterministic check found, and nothing is asked without
 `ANTHROPIC_API_KEY`.
+Since 2026-11-07 the judge is Opus 5.5 (`RULES_MODEL`) on prompt version 2, which asks for "same" unless a
+realistic outcome splits the pair (remote tails such as a winner dying before the swearing-in do not count;
+a cancelled game paying differently does). On 62 real pairs with answers Evan signed off it scored 95% on
+held-out cases with no wrong `same`, against 67% for the old prompt on Opus 5 (the eval and its record:
+`.claude/hillclimb/rules-check/narrative.md`, local only). Verdicts carry their prompt version; an older
+one is asked again, so the first days after a change spend up to the daily $1.
 
 **Long-dated arbs are a different trade.** Outside games most arbs settle months or years out:
 J.D. Vance for the 2028 nomination crossed 2.46c after fees on 2026-09-15 and settles in 785 days,

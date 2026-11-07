@@ -165,16 +165,38 @@ function staticVerdict(c) {
 
 // ---------------------------------------------------------------- 4. the lazy Claude check
 const API_URL = 'https://api.anthropic.com/v1/messages';
-const PRICE = { 'claude-opus-5': { input: 5 / 1e6, output: 25 / 1e6 }, 'claude-sonnet-5': { input: 2 / 1e6, output: 10 / 1e6 } };
+const PRICE = {
+  'claude-opus-5-5': { input: 4 / 1e6, output: 20 / 1e6 },
+  'claude-opus-5': { input: 5 / 1e6, output: 25 / 1e6 },
+  'claude-sonnet-5-5': { input: 2 / 1e6, output: 10 / 1e6 },
+  'claude-sonnet-5': { input: 2 / 1e6, output: 10 / 1e6 },
+  'claude-haiku-5-5': { input: 0.1 / 1e6, output: 0.5 / 1e6 },
+};
 const priceOf = (m) => PRICE[m] || PRICE['claude-opus-5'];
 const { ET_DAY } = require('./recorder');   // the Eastern day, one definition for every file that names one
 const MAX_TOKENS = 2000;
 
-const SYSTEM = `You compare the resolution rules of two prediction-market contracts, one on Polymarket and one on Kalshi, that a matcher believes are the same outcome. A trading desk will buy YES on one and NO on the other as a "locked" arbitrage, which only works if EVERY possible real-world outcome settles both contracts the same way.
+// The prompt is held to an eval: .claude/hillclimb/rules-check (62 real pairs, answers signed off by
+// Evan 2026-11-07 under the practical standard). Version 2 took held-out accuracy from 67% to 95% with
+// no wrong `same`. Changing it bumps PROMPT_VERSION, so every pair is asked again under the new text.
+const PROMPT_VERSION = 2;
+const SYSTEM = `You compare the resolution rules of two prediction-market contracts, one on Polymarket and one on Kalshi, that a matcher believes are the same outcome. A trading desk will buy YES on one and NO on the other as a "locked" arbitrage, which works when both contracts settle the same way in every outcome that could realistically happen.
 
-Answer "same" only if you are confident that every resolvable outcome -- including edge cases -- settles both identically. Answer "different" if any of these differ in a way that could split them: the data source or measuring station, the time or timezone of a snapshot, the start or end of the window, inclusive vs strict thresholds, what triggers resolution (announcement vs actual event, agreement vs completion), how death, acting or interim holders, ties, joint winners, cancellations, delays or "Other" are handled, or which office, entity or chart is meant. Answer "unclear" if the texts do not say enough to decide.
+Answer "same" when every realistic outcome settles both contracts identically. Two texts that say the same thing in different words are "same". Do not let remote tails that no trader prices turn a pair "different": a named person dying, being disqualified or becoming incapacitated in the gap between one venue's trigger and the other's (for example an election call versus the swearing-in or inauguration); a long-established publisher or official body (Spotify, TIME, the Academy, a government agency) missing a date written into one venue's rules; an office or institution being abolished or redefined mid-window.
+
+Answer "different" if anything that can plausibly happen would split them: a different data source, measuring station, chart, ranking or office; a different snapshot time, window or timezone where the value can move in between; inclusive versus strict thresholds where the value can land on the line; a game or event being postponed, suspended, cancelled or moved when the venues pay differently for it (this happens routinely); ties, joint winners or "Other" handled differently where they are possible; announcement versus completion where completion often slips; a different scope (a party versus a named candidate, caucus membership, a different set of qualifying people).
 
 What a cancelled, unplayed or voided event pays is a settlement outcome like any other. "Resolves to a fair price" (Kalshi: the last traded price) is NOT the same as "resolves 50-50" (Polymarket: half a dollar), and neither is the same as a void or refund; two contracts that pay differently when the event does not happen are "different".
+
+When one venue spells out a case and the other says nothing about it (a deadline fallback, a cancellation or postponement payout, a tie-break, a no-result rule), the silent venue is not unknown. Read its main rule literally: "Yes if X happens" pays Yes once X has happened and No in every case where X has not. First check whether X can already be true when the spelled-out case fires:
+- If X is the event's own result (a winner, a score, a final value, an election win), a cancelled event or a result that never arrives means X did not happen, so the silent venue pays No.
+- If X is a step completed before the event is played (qualifying for it, being named to its field, roster or lineup), a later cancellation or postponement of the event leaves X true, so the silent venue pays Yes even where the other venue's cancellation rule pays No or Other. A fallback that fires only while X is still undecided (no field, nominees or result announced by a date) pays No on both.
+Then compare what each venue pays in that case:
+- Same payout (for example "No" or "Other" on one side when there is no winner, and the other side's Yes condition simply not met): the clause does not split the pair.
+- Different payout: ask whether the case is realistic. A game, match, tournament or event being postponed, cancelled or abandoned is realistic, so 50-50, a fair price, or Yes on one side against No on the other is "different". A deadline that falls well after the scheduled result (days after a tournament's scheduled finish, weeks or months after an election or announcement) only matters if the result is badly late, which is a remote tail, so it does not stop "same"; a cancellation listed in the same clause is still realistic and is judged on its own.
+Close times and how fast each venue settles do not split a pair when the payout is the same.
+
+Answer "unclear" only when a realistic case cannot be settled even after reading both texts literally, for example when it is ambiguous which event or outcome a contract refers to. One venue being silent on a case, or pointing to full rules that were not provided, is not by itself a reason for "unclear": decide from the text you have.
 
 Reply with JSON only, no prose and no code fences: {"verdict":"same"|"different"|"unclear","reasons":["short reason", ...]}`;
 
@@ -202,7 +224,8 @@ function makeRulesJudge(cfg, { post = null, now = Date.now, readFile = (f) => fs
       if (!line.trim()) continue;
       try {
         const r = JSON.parse(line);
-        if (r.rulesKey && r.verdict) cache.set(r.rulesKey, { verdict: r.verdict, reasons: r.reasons || [] });
+        // a verdict from an older prompt is not reused (lines before version 2 carry no `prompt`); its spend still counts
+        if (r.rulesKey && r.verdict && (r.prompt || 1) === PROMPT_VERSION) cache.set(r.rulesKey, { verdict: r.verdict, reasons: r.reasons || [] });
         if (Number.isFinite(r.costUsd) && r.at) { const d = ET_DAY.format(new Date(r.at)); spend.set(d, (spend.get(d) || 0) + r.costUsd); }
       } catch { /* a torn last line is skipped */ }
     }
@@ -246,7 +269,7 @@ function makeRulesJudge(cfg, { post = null, now = Date.now, readFile = (f) => fs
       spend.set(d, (spend.get(d) || 0) + cost);
       const v = parseVerdict(text) || { verdict: 'unclear', reasons: ['the reply could not be read'] };
       cache.set(c.rulesKey, v);
-      try { appendFile(file, JSON.stringify({ rulesKey: c.rulesKey, pair: c.id, verdict: v.verdict, reasons: v.reasons, model: cfg.rulesModel, at: now(), costUsd: Math.round(cost * 1e6) / 1e6 }) + '\n'); } catch { /* cached in memory regardless */ }
+      try { appendFile(file, JSON.stringify({ rulesKey: c.rulesKey, pair: c.id, verdict: v.verdict, reasons: v.reasons, model: cfg.rulesModel, prompt: PROMPT_VERSION, at: now(), costUsd: Math.round(cost * 1e6) / 1e6 }) + '\n'); } catch { /* cached in memory regardless */ }
     }).catch(() => { failed++; }).finally(() => inflight.delete(c.rulesKey));
     return true;
   }
@@ -271,4 +294,4 @@ function finalVerdict(c, judge) {
   return { verdict: j.verdict, source: 'claude', reason: (j.reasons || []).join('; ').slice(0, 240) || `Claude: ${j.verdict}` };
 }
 
-module.exports = { ruleFeatures, featureConflicts, staticVerdict, finalVerdict, makeRulesJudge, parseVerdict, DENY, ALLOW };
+module.exports = { PROMPT_VERSION, ruleFeatures, featureConflicts, staticVerdict, finalVerdict, makeRulesJudge, parseVerdict, DENY, ALLOW };
