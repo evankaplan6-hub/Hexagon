@@ -167,8 +167,10 @@ group('the Claude check: cached, budgeted, one call per pair of rules texts, nev
   const post = async (body) => {
     calls++;
     ok('the request carries both full rules texts', /NASA officially confirms/.test(body.messages[0].content) && /before Jan 1, 2027/.test(body.messages[0].content));
+    ok('the fixed prompt is sent as a cached block', Array.isArray(body.system) && body.system.length === 1 && body.system[0].text === rules.SYSTEM
+      && body.system[0].cache_control && body.system[0].cache_control.type === 'ephemeral', body.system);
     await new Promise((r) => { release = r; });
-    return { content: [{ type: 'text', text: reply }], usage: { input_tokens: 1000, output_tokens: 200 } };
+    return { content: [{ type: 'text', text: reply }], usage: { input_tokens: 1000, output_tokens: 200, cache_creation_input_tokens: 1200 } };
   };
   const judge = rules.makeRulesJudge(cfg, { post, now: () => T });
   ok('nothing cached for a fresh pair', judge.verdictFor(FIX.unknown) === null);
@@ -185,6 +187,8 @@ group('the Claude check: cached, budgeted, one call per pair of rules texts, nev
   ok('a Claude answer never moves a pair the static gate already decided', rules.finalVerdict(FIX.btc, judge).verdict === 'different');
   const snap = judge.snapshot();
   ok('the spend is metered from usage', snap.spentTodayUsd >= 0 && snap.cached === 1 && snap.asked === 1, snap);
+  const first = JSON.parse(fs.readFileSync(path.join(dataDir, 'rules-verdicts.jsonl'), 'utf8').trim().split('\n')[0]);
+  ok('...cache writes included: 1,000 in + 200 out + 1,200 written on Opus 5 is $0.0175', first.costUsd === 0.0175, first);
 
   const again = rules.makeRulesJudge(cfg, { post: async () => { calls++; return {}; }, now: () => T });
   ok('a restart reads the cache instead of asking again', again.verdictFor(FIX.unknown) && again.verdictFor(FIX.unknown).verdict === 'same' && again.request(FIX.unknown) === false && calls === 1);

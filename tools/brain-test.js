@@ -230,6 +230,14 @@ group('cost metering');
   ok('1M cached input tokens adds only $0.50', b.stats.usd === 30.5, b.stats.usd);
   ok('it is attributed to the desk that spent it', b.perAgent.get('ILSA').usd === 30.5, b.perAgent.get('ILSA'));
   ok('a missing usage block is ignored', (b._meter('ILSA', 'claude-opus-5', null), b.stats.usd === 30.5), b.stats.usd);
+  // The 5.5 models (platform.claude.com pricing, 2026-11-07): cache reads are a twentieth of input on
+  // Opus and Sonnet, a tenth on Haiku. Without these rows they would bill as Opus 5.
+  const M = 1e6, u = { input_tokens: M, output_tokens: M, cache_read_input_tokens: M, cache_creation_input_tokens: M };
+  const bill = (m) => { const x = new Brain(cfg); x._meter('RIGO', m, u); return x.stats.usd; };
+  ok('Opus 5.5: $4 in, $20 out, $0.20 read, $5 written', bill('claude-opus-5-5') === 29.2, bill('claude-opus-5-5'));
+  ok('Sonnet 5.5: $2 in, $10 out, $0.10 read, $2.50 written', bill('claude-sonnet-5-5') === 14.6, bill('claude-sonnet-5-5'));
+  ok('Haiku 5.5: $0.10 in, $0.50 out, $0.01 read, $0.125 written', bill('claude-haiku-5-5') === 0.735, bill('claude-haiku-5-5'));
+  ok('an unknown model bills as Opus 5, the dearest known', bill('claude-unknown') === 36.75, bill('claude-unknown'));
 }
 
 group('failure backs off rather than propagating');

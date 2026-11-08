@@ -418,7 +418,9 @@ function rigoView(E) {
     signature,
     system: RIGO_PERSONA,
     schema: RIGO_SCHEMA,
-    maxTokens: 1500,
+    // Room for adaptive thinking and the JSON after it. At 1500, Sonnet 5 cut 2 of 46 answers short
+    // and Haiku 5.5 spent all of it thinking a third of the time (.claude/hillclimb/brain-rigo).
+    maxTokens: 4000,
     user: `Open convergence positions (${rows.length}). Stop loss ${c(cfg.stopLoss)} or ${(cfg.paperStopLossPct * 100).toFixed(0)}% from entry, max hold ${cfg.maxHoldMin}m; those fire without you.\n\n${lines.join('\n')}\n\nFor each, hold or exit.`,
   };
 }
