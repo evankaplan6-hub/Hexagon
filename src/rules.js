@@ -165,14 +165,7 @@ function staticVerdict(c) {
 
 // ---------------------------------------------------------------- 4. the lazy Claude check
 const API_URL = 'https://api.anthropic.com/v1/messages';
-const PRICE = {
-  'claude-opus-5-5': { input: 4 / 1e6, output: 20 / 1e6 },
-  'claude-opus-5': { input: 5 / 1e6, output: 25 / 1e6 },
-  'claude-sonnet-5-5': { input: 2 / 1e6, output: 10 / 1e6 },
-  'claude-sonnet-5': { input: 2 / 1e6, output: 10 / 1e6 },
-  'claude-haiku-5-5': { input: 0.1 / 1e6, output: 0.5 / 1e6 },
-};
-const priceOf = (m) => PRICE[m] || PRICE['claude-opus-5'];
+const { priceFor: priceOf } = require('./brain');   // one price table for every caller
 const { ET_DAY } = require('./recorder');   // the Eastern day, one definition for every file that names one
 const MAX_TOKENS = 2000;
 
@@ -210,6 +203,10 @@ function parseVerdict(text) {
     return { verdict: j.verdict, reasons: (Array.isArray(j.reasons) ? j.reasons : []).map((r) => String(r).slice(0, 200)).slice(0, 5) };
   } catch { return null; }
 }
+
+// The prompt is the same for every pair, so it is cached: after the first check of a busy hour the
+// rest read it at a tenth of input or less (it clears the 512-token minimum on the 5.5 models).
+const SYSTEM_BLOCKS = [{ type: 'text', text: SYSTEM, cache_control: { type: 'ephemeral' } }];
 
 // `post(body)` is the Messages API call (injected for tests); `appendFile`/`readFile` the cache's I/O.
 function makeRulesJudge(cfg, { post = null, now = Date.now, readFile = (f) => fs.readFileSync(f, 'utf8'), appendFile = (f, s) => fs.appendFileSync(f, s) } = {}) {
@@ -256,15 +253,16 @@ function makeRulesJudge(cfg, { post = null, now = Date.now, readFile = (f) => fs
     });
     // The most this call can cost, held against the day's allowance before it is made.
     const p = priceOf(cfg.rulesModel);
-    const worst = ((SYSTEM.length + user.length) / 3) * p.input + MAX_TOKENS * p.output;
+    const worst = (SYSTEM.length / 3) * p.cacheWrite + (user.length / 3) * p.input + MAX_TOKENS * p.output;
     if ((spend.get(today()) || 0) + worst > cfg.rulesDailyUsd) return false;
     inflight.add(c.rulesKey);
     asked++;
-    const body = { model: cfg.rulesModel, max_tokens: MAX_TOKENS, output_config: { effort: cfg.rulesEffort || 'medium' }, system: SYSTEM, messages: [{ role: 'user', content: user }] };
+    const body = { model: cfg.rulesModel, max_tokens: MAX_TOKENS, output_config: { effort: cfg.rulesEffort || 'medium' }, system: SYSTEM_BLOCKS, messages: [{ role: 'user', content: user }] };
     Promise.resolve().then(() => doPost(body)).then((res) => {
       const text = (res && Array.isArray(res.content) ? res.content : []).filter((b) => b.type === 'text').map((b) => b.text).join('');
       const u = (res && res.usage) || {};
-      const cost = (u.input_tokens || 0) * p.input + (u.output_tokens || 0) * p.output;
+      const cost = (u.input_tokens || 0) * p.input + (u.output_tokens || 0) * p.output
+        + (u.cache_read_input_tokens || 0) * p.cacheRead + (u.cache_creation_input_tokens || 0) * p.cacheWrite;
       const d = today();
       spend.set(d, (spend.get(d) || 0) + cost);
       const v = parseVerdict(text) || { verdict: 'unclear', reasons: ['the reply could not be read'] };
@@ -294,4 +292,4 @@ function finalVerdict(c, judge) {
   return { verdict: j.verdict, source: 'claude', reason: (j.reasons || []).join('; ').slice(0, 240) || `Claude: ${j.verdict}` };
 }
 
-module.exports = { PROMPT_VERSION, ruleFeatures, featureConflicts, staticVerdict, finalVerdict, makeRulesJudge, parseVerdict, DENY, ALLOW };
+module.exports = { PROMPT_VERSION, SYSTEM, ruleFeatures, featureConflicts, staticVerdict, finalVerdict, makeRulesJudge, parseVerdict, DENY, ALLOW };

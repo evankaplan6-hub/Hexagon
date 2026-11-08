@@ -48,10 +48,14 @@
 const API_URL = 'https://api.anthropic.com/v1/messages';
 const API_VERSION = '2023-06-01';
 
-// Per-MTok list prices converted to per-token, so a running total is just a sum. Cache reads bill
-// at a tenth of input and cache writes at 1.25x, which is the whole argument for the stable-prefix
-// layout in src/minds.js: a persona that never changes is nearly free to resend.
+// Per-MTok list prices converted to per-token, so a running total is just a sum. Cache writes bill
+// at 1.25x input and reads at a tenth (a twentieth on Opus and Sonnet 5.5), which is the whole
+// argument for the stable-prefix layout in src/minds.js: a persona that never changes is nearly free
+// to resend. One table for every caller (rules, research, Ask). platform.claude.com pricing, 2026-11-07.
 const PRICES = {
+  'claude-opus-5-5': { input: 4 / 1e6, output: 20 / 1e6, cacheRead: 0.2 / 1e6, cacheWrite: 5 / 1e6 },
+  'claude-sonnet-5-5': { input: 2 / 1e6, output: 10 / 1e6, cacheRead: 0.1 / 1e6, cacheWrite: 2.5 / 1e6 },
+  'claude-haiku-5-5': { input: 0.1 / 1e6, output: 0.5 / 1e6, cacheRead: 0.01 / 1e6, cacheWrite: 0.125 / 1e6 },
   'claude-opus-5': { input: 5 / 1e6, output: 25 / 1e6, cacheRead: 0.5 / 1e6, cacheWrite: 6.25 / 1e6 },
   'claude-sonnet-5': { input: 2 / 1e6, output: 10 / 1e6, cacheRead: 0.2 / 1e6, cacheWrite: 2.5 / 1e6 },
   'claude-haiku-4-5': { input: 1 / 1e6, output: 5 / 1e6, cacheRead: 0.1 / 1e6, cacheWrite: 1.25 / 1e6 },

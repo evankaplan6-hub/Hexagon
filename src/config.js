@@ -516,7 +516,11 @@ module.exports = {
   // settlement and making are summarising and noticing, which the cheaper model does well.
   //
   // Measured on a realistic 12-pair board: Opus ~$0.04-0.067/turn, Sonnet ~$0.013-0.030.
-  brainModelDeep: env('BRAIN_MODEL_DEEP', 'claude-opus-5'),
+  // FAST stays Sonnet 5, held to an eval (.claude/hillclimb/brain-rigo, 2026-11-07: 23 real RIGO turns
+  // 09-11..09-21, gold from the real exits): no 5.5 model beat it. Opus 5.5 tied at 2.5x the cost with
+  // more needless exits; Sonnet 5.5 held through the one exit worth $84; Haiku 5.5 made needless exits.
+  // DEEP has no mind behind it today (BRAM and KETT have none); Opus 5.5 is the current Opus.
+  brainModelDeep: env('BRAIN_MODEL_DEEP', 'claude-opus-5-5'),
   brainModelFast: env('BRAIN_MODEL_FAST', 'claude-sonnet-5'),
   brainDeepAgents: env('BRAIN_DEEP_AGENTS', 'BRAM,KETT').split(',').map((s) => s.trim()).filter(Boolean),
   // low | medium | high | xhigh | max.
@@ -542,9 +546,11 @@ module.exports = {
   // Operator research (src/research.js): one deep dive when a person clicks "Research" on an
   // alert. Separate from the desks' paced budget because it only ever runs on a click, and a
   // person deciding whether to sell should not be told the desks spent the day's allowance.
-  // Opus 5 with web search runs roughly $0.10-0.50 a report.
+  // Haiku 5.5 since 2026-11-07, held to an eval (.claude/hillclimb/research: 11 real alerts, gold from
+  // how each really settled): it matched Opus 5 (91%) at about a twentieth of the cost, about $0.005 a
+  // report with search; Opus 5.5 and Sonnet 5.5 sold a locked pair twice more (82%).
   researchEnabled: env('RESEARCH', '1') !== '0',
-  researchModel: env('RESEARCH_MODEL', 'claude-opus-5'),
+  researchModel: env('RESEARCH_MODEL', 'claude-haiku-5-5'),
   researchDailyUsd: num('RESEARCH_DAILY_USD', 3),
   researchTimeoutMs: num('RESEARCH_TIMEOUT_MS', 240000),
   // The Ask panel (src/ask.js): the operator types a question about the desk and Claude answers
@@ -552,9 +558,13 @@ module.exports = {
   // settings and the docs. It can never trade or change anything. On by default, but it does
   // nothing without ANTHROPIC_API_KEY, and it only spends when someone asks.
   askEnabled: env('ASK', '1') !== '0',
-  askModel: env('ASK_MODEL', 'claude-opus-5'),
+  // Opus 5.5 since 2026-11-07, with the 80-word rule in src/ask.js's prompt, held to an eval
+  // (.claude/hillclimb/ask: 12 questions on a snapshot of the box, gold computed from it): every fact
+  // right and every action refused, 71% inside the length cap, $0.041 a question. Opus 5 on the old
+  // prompt: 92%, 50%, $0.048. Opus 5.5 on the old prompt was right but ran ~150 words.
+  askModel: env('ASK_MODEL', 'claude-opus-5-5'),
   // low | medium | high | xhigh | max. Medium: the questions are lookups and short explanations,
-  // and on Opus 5 medium is strong at a fraction of high's thinking.
+  // and on Opus medium is strong at a fraction of high's thinking.
   askEffort: env('ASK_EFFORT', 'medium'),
   // Its own cap per Eastern day, separate from the desks' and Research's, because it only runs
   // when a person asks. A ceiling: the most each call could cost is held before it goes out, a call
