@@ -112,7 +112,11 @@ function deadline(promise, ms, { abort = null, what = '' } = {}) {
   return Promise.race([promise, late]).finally(() => clearTimeout(timer));
 }
 
-async function getJSON(url, { timeout = 15000, priority = false, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+// `count: false` keeps a call's failures out of TESS's API-error halt (recentErrors). That rail is about the
+// venues the desk trades on; a feed that only informs (whale watch) must not stop trading when it breaks. It did:
+// Polymarket retired Data API v1 on 2026-11-02, whale watch re-read seven dead leaderboards every 15 seconds, and
+// the 410s held TESS's halt shut for nine days. Every game bet and arb in that time was never placed.
+async function getJSON(url, { timeout = 15000, priority = false, count = true, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
   for (let attempt = 0; ; attempt++) {
     const call = { url, since: Date.now(), phase: 'queue' };
     calls.add(call);
@@ -144,7 +148,7 @@ async function getJSON(url, { timeout = 15000, priority = false, sleep = (ms) =>
         return j;
       }
     } catch (e) {
-      noteError(e);
+      if (count) noteError(e);
       throw e;
     } finally {
       calls.delete(call);

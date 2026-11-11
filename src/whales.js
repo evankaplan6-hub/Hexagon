@@ -195,7 +195,7 @@ function makeWhaleWatch(cfg) {
   // minutes of bets again.
   const announced = new Map();
   const recent = [];                // newest first, for the snapshot
-  let order = [], cursor = 0, boardAt = 0, running = false, lastError = '', polls = 0, restored = false;
+  let order = [], cursor = 0, boardAt = 0, boardTriedAt = 0, running = false, lastError = '', polls = 0, restored = false;
   const keepSec = () => 2 * cfg.whaleWindowMin * 60;
   const remember = (entry) => { recent.unshift(entry); if (recent.length > 20) recent.length = 20; };
   // Bought at WHALE_MAX_PX or dearer, and on average too (poll explains why). An old record line
@@ -333,7 +333,14 @@ function makeWhaleWatch(cfg) {
         restored = true;
         try { restore(); } catch { /* an unreadable record means a restart may repeat itself, never a desk that stops */ }
       }
-      if (!wallets.size || Date.now() - boardAt > cfg.whaleBoardMin * 60000) await loadBoard(E);
+      // A board load that fails is not tried again on the next 15-second step: from 2026-11-02 seven dead
+      // leaderboards were re-read every step, about 28 refusals a minute. With no wallets it waits
+      // WHALE_BOARD_RETRY_MIN (5); a failed refresh keeps the wallets it has for another WHALE_BOARD_MIN.
+      if (Date.now() - boardTriedAt > (wallets.size ? cfg.whaleBoardMin : cfg.whaleBoardRetryMin ?? 5) * 60000) {
+        boardTriedAt = Date.now();
+        await loadBoard(E);
+      }
+      if (!wallets.size) return;
       const batch = [];
       for (let i = 0; i < Math.min(cfg.whalePerPoll, order.length); i++) batch.push(order[(cursor + i) % order.length]);
       cursor = (cursor + batch.length) % Math.max(1, order.length);

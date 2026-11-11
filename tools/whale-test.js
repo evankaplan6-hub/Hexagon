@@ -492,8 +492,72 @@ async function fetchTests() {
   } finally { http.getJSON = real; }
 }
 
+// ---------------------------------------------------------------- Data API v2, and a dead feed that must not halt the desk
+// 2026-11-02: Polymarket retired Data API v1 (410). Whale watch re-read seven dead leaderboards every 15 seconds,
+// every refusal counted toward TESS's API-error halt, and no game bet or arb was placed for nine days. These hold:
+// the v2 shapes are read, whale watch's failures stay out of the halt's count, and a failed load is not retried
+// on the next step.
+async function v2Tests() {
+  const http = require('../src/http');
+  const realGet = http.getJSON, realFetch = global.fetch;
+  const realLb = pm.fetchLeaderboard;
+  const urls = [];
+  try {
+    http.getJSON = async (url, opts = {}) => {
+      urls.push({ url, count: opts.count });
+      if (/\/v2\/leaderboard/.test(url)) {
+        const page = /cursor=/.test(url) ? 2 : 1;
+        return { data: [{ rank: page, user_id: page === 1 ? '0xAAA' : '0xBBB', user_name: `w${page}`, pnl: 1000 * page, volume: 9 }], pagination: { has_more: page === 1, next_cursor: page === 1 ? 'c+1/=' : null } };
+      }
+      if (/\/v2\/activity/.test(url)) return { data: [{ proxy_wallet: '0xAAA', timestamp: 1794000000, condition_id: 'C9', type: 'TRADE', size: 10, usdc_size: 6.3, transaction_hash: '0xt', price: 0.63, side: 'BUY', outcome_index: 1, title: 'T', slug: 's', event_slug: 'e', outcome: 'Gane', name: 'BreakTheBank' }], pagination: { has_more: false } };
+      throw new Error(`unexpected ${url}`);
+    };
+    const lb = await pm.fetchLeaderboard({ category: 'SPORTS', limit: 25 });
+    ok('v2 leaderboard rows are read: user_id, user_name, pnl, volume', lb.length === 1 && lb[0].wallet === '0xaaa' && lb[0].name === 'w1' && lb[0].pnl === 1000 && lb[0].vol === 9, lb);
+    ok('...from /v2/leaderboard, with no offset, and not counted toward the halt', /\/v2\/leaderboard\?/.test(urls[0].url) && !/offset=/.test(urls[0].url) && urls[0].count === false, urls[0]);
+    const second = await pm.fetchLeaderboard({ category: 'SPORTS', limit: 50, offset: 50 });
+    ok('a page past the first follows next_cursor, encoded', second.length === 1 && second[0].wallet === '0xbbb' && urls.some((u) => /cursor=c%2B1%2F%3D/.test(u.url)), urls.map((u) => u.url));
+    ok('past the last page is empty', (await pm.fetchLeaderboard({ offset: 100, limit: 50 })).length === 0);
+    const act = await pm.fetchActivityPage('0xAAA', { limit: 500, start: 1 });
+    const f = act.fills[0];
+    ok('v2 activity rows are read: snake_case fields become the fill', act.rows === 1 && f && f.wallet === '0xaaa' && f.conditionId === 'C9' && f.outcomeIndex === 1 && f.usd === 6.3 && f.tx === '0xt' && f.eventSlug === 'e', f);
+    const au = urls.find((u) => /activity/.test(u.url));
+    ok('...from /v2/activity, by start, no offset, not counted toward the halt', /\/v2\/activity\?user=0xAAA&type=TRADE&limit=500&start=1$/.test(au.url) && au.count === false, au);
+    ok('v1 camelCase rows still read (the lab cache, the record)', pm.normalizeFill({ proxyWallet: '0xA', conditionId: 'C', outcomeIndex: 0, price: 0.5, size: 2, usdcSize: 1, timestamp: 5 }).usd === 1);
+
+    // the real getJSON: a refusal with count false is not one of TESS's API errors; the default still is
+    http.getJSON = realGet;
+    global.fetch = async () => ({ ok: false, status: 410, headers: { get: () => null }, body: null });
+    const before = http.recentErrors();
+    await http.getJSON('https://data-api.polymarket.com/v2/x', { count: false }).catch(() => {});
+    ok('an uncounted refusal leaves the halt count alone', http.recentErrors() === before, [before, http.recentErrors()]);
+    await http.getJSON('https://data-api.polymarket.com/v2/x').catch(() => {});
+    ok('a counted one still counts', http.recentErrors() === before + 1, [before, http.recentErrors()]);
+    global.fetch = realFetch;
+
+    // a dead feed: every board refused. The next step does not ask again; five minutes later it does.
+    let asked = 0;
+    pm.fetchLeaderboard = async () => { asked++; throw new Error('HTTP 410'); };
+    const cfg = { dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'hexagon-whale-')), record: false, whaleCategories: ['SPORTS', 'POLITICS'], whaleTop: 25, whaleTopOther: 10, whalePeriod: 'MONTH', whaleMinUsd: 10000, whaleMinUsdOther: 5000, whaleWindowMin: 360, whaleFreshMin: 20, whalePerPoll: 5, whaleBoardMin: 30, whaleBoardRetryMin: 5 };
+    const E = { logs: [], log(agent, kind, pnl, text) { this.logs.push({ agent, kind, text }); }, due: () => true, quotes: { pm: new Map() }, pairs: [] };
+    const w = makeWhaleWatch(cfg);
+    const realNow = Date.now;
+    let t = realNow();
+    Date.now = () => t;
+    try {
+      await w.step(E);
+      ok('a dead feed is named', asked === 2 && /every leaderboard failed/.test(w.snapshot().lastError), [asked, w.snapshot().lastError]);
+      t += 15e3; await w.step(E); t += 15e3; await w.step(E);
+      ok('...and not asked again on the next steps', asked === 2, asked);
+      t += 5 * 60e3; await w.step(E);
+      ok('...until five minutes have passed', asked === 4, asked);
+    } finally { Date.now = realNow; fs.rmSync(cfg.dataDir, { recursive: true, force: true }); }
+  } finally { http.getJSON = realGet; global.fetch = realFetch; pm.fetchLeaderboard = realLb; }
+}
+
 watchTests()
   .then(fetchTests)
+  .then(v2Tests)
   .catch((e) => { fail++; console.log(`  FAIL  threw: ${e.stack}`); })
   .finally(() => {
     console.log(`${pass} passed, ${fail} failed`);

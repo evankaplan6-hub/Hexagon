@@ -198,12 +198,24 @@ async function fetchPrices(tokenIds) {
 const DATA = 'https://data-api.polymarket.com';
 
 // One leaderboard page. category SPORTS|OVERALL|..., period DAY|WEEK|MONTH|ALL, orderBy PNL|VOL.
-// The API serves at most 50 rows a call.
+// The API serves at most 50 rows a call. Data API v2 since 2026-11-02, when v1 started answering 410
+// "Data API v1 has been retired": the rows are { data: [{ rank, user_id, user_name, pnl, volume }] } and the
+// pages are cursor-only (an `offset` is refused), so a page past the first is reached by following
+// next_cursor from the top. Whale watch reads one page a board; only tools/whale-fetch.js reads deeper.
+// Neither call counts toward TESS's API-error halt (http.getJSON's `count`): whale watch never trades.
 async function fetchLeaderboard({ category = 'SPORTS', period = 'MONTH', orderBy = 'PNL', limit = 50, offset = 0 } = {}) {
-  const rows = await http.getJSON(`${DATA}/v1/leaderboard?category=${category}&timePeriod=${period}&orderBy=${orderBy}&limit=${Math.min(50, limit)}&offset=${offset}`);
-  return (Array.isArray(rows) ? rows : []).map((r) => ({
-    wallet: String(r.proxyWallet || '').toLowerCase(), name: r.userName || '', rank: +r.rank || null,
-    pnl: num(r.pnl) || 0, vol: num(r.vol) || 0,
+  const per = Math.min(50, limit);
+  let url = `${DATA}/v2/leaderboard?category=${category}&timePeriod=${period}&orderBy=${orderBy}&limit=${per}`;
+  let got = await http.getJSON(url, { count: false });
+  for (let skipped = 0; skipped < offset && got; skipped += per) {
+    const next = got.pagination && got.pagination.next_cursor;
+    if (!next || !got.pagination.has_more) return [];
+    got = await http.getJSON(`${url}&cursor=${encodeURIComponent(next)}`, { count: false });
+  }
+  const rows = Array.isArray(got) ? got : got && Array.isArray(got.data) ? got.data : [];
+  return rows.map((r) => ({
+    wallet: String(r.user_id || r.proxyWallet || '').toLowerCase(), name: r.user_name || r.userName || '', rank: +r.rank || null,
+    pnl: num(r.pnl) || 0, vol: num(r.volume ?? r.vol) || 0,
   })).filter((r) => r.wallet);
 }
 
@@ -212,12 +224,14 @@ async function fetchLeaderboard({ category = 'SPORTS', period = 'MONTH', orderBy
 // fills. normalizeFill drops a row the feed has not indexed yet, and those sit on the newest page of
 // exactly the busiest wallets, so a full page of 500 comes back as 497 fills; reading that as the
 // last page stored Flaznorp's newest fourteen minutes as its whole history, marked complete.
-async function fetchActivityPage(wallet, { limit = 100, offset = 0, start, end } = {}) {
-  let url = `${DATA}/activity?user=${wallet}&type=TRADE&limit=${limit}&offset=${offset}`;
+// v2 since 2026-11-02 (v1's /activity answers 410): the same rows under `data`, snake_case, paged by start/end
+// as before (no offset; nothing here used one).
+async function fetchActivityPage(wallet, { limit = 100, start, end } = {}) {
+  let url = `${DATA}/v2/activity?user=${wallet}&type=TRADE&limit=${limit}`;
   if (start) url += `&start=${start}`;
   if (end) url += `&end=${end}`;
-  const got = await http.getJSON(url);
-  const rows = Array.isArray(got) ? got : [];
+  const got = await http.getJSON(url, { count: false });
+  const rows = Array.isArray(got) ? got : got && Array.isArray(got.data) ? got.data : [];
   const ts = rows.map((r) => (r ? +r.timestamp : NaN)).filter(Number.isFinite);
   return { fills: rows.map(normalizeFill).filter(Boolean), rows: rows.length, oldestTs: ts.length ? Math.min(...ts) : null };
 }
@@ -244,15 +258,18 @@ function outcomeIndex(x) {
 // name would need the market's outcome list, which the feed does not carry, and the half-indexed
 // row is missing its eventSlug as well. Dropping it costs one visit: the corrected copy arrives on
 // the next read of that wallet and counts then, whole.
+// v2 rows are snake_case (proxy_wallet, condition_id, outcome_index, usdc_size, transaction_hash, event_slug);
+// v1's camelCase is still read, for the lab's cached fills and the whale record.
 function normalizeFill(t) {
-  const price = num(t.price), size = num(t.size), oi = outcomeIndex(t.outcomeIndex);
-  if (!t.conditionId || price == null || size == null || oi == null) return null;
+  const conditionId = t.condition_id || t.conditionId;
+  const price = num(t.price), size = num(t.size), oi = outcomeIndex(t.outcome_index ?? t.outcomeIndex);
+  if (!conditionId || price == null || size == null || oi == null) return null;
   return {
-    wallet: String(t.proxyWallet || '').toLowerCase(), name: t.name || t.pseudonym || '',
-    tx: t.transactionHash || '', ts: +t.timestamp, side: t.side === 'SELL' ? 'SELL' : 'BUY',
-    conditionId: t.conditionId, outcomeIndex: oi, outcome: t.outcome || '',
-    price, size, usd: num(t.usdcSize) ?? price * size,
-    title: t.title || '', slug: t.slug || '', eventSlug: t.eventSlug || '',
+    wallet: String(t.proxy_wallet || t.proxyWallet || '').toLowerCase(), name: t.name || t.pseudonym || '',
+    tx: t.transaction_hash || t.transactionHash || '', ts: +t.timestamp, side: t.side === 'SELL' ? 'SELL' : 'BUY',
+    conditionId, outcomeIndex: oi, outcome: t.outcome || '',
+    price, size, usd: num(t.usdc_size ?? t.usdcSize) ?? price * size,
+    title: t.title || '', slug: t.slug || '', eventSlug: t.event_slug || t.eventSlug || '',
   };
 }
 
