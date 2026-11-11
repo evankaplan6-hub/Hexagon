@@ -602,6 +602,7 @@ module.exports = {
   whaleRereadMin: Math.max(1, num('WHALE_REREAD_MIN', 20)), // each visit re-reads this far back past the last one; older fills are kept from before (src/whales.js)
   whalePerPoll: Math.max(1, Math.round(num('WHALE_PER_POLL', 5))),  // wallets read per poll: 25 wallets every 75s
   whaleBoardMin: num('WHALE_BOARD_MIN', 30),      // leaderboard refresh
+  whaleBoardRetryMin: num('WHALE_BOARD_RETRY_MIN', 5), // after a board load found no wallet at all
 
   // fees
   // Polymarket's taker fee is read PER MARKET from its feeSchedule (src/venues/polymarket.js
