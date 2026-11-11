@@ -87,6 +87,14 @@ if [ -f "$LOG" ]; then
 else
   echo "PROBLEM: no $LOG -- the pull has never run here (bash ops/install-pull.sh)"; bad=$((bad + 1))
 fi
+# Is each Mac job still loaded? On 2026-10-30 at 16:32 every user LaunchAgent on this Mac was removed, by
+# nothing on record; for ten days this step only said the log was old. A missing job is named here, the day it goes.
+jobs="$(launchctl list 2>/dev/null)"
+for j in pull:install-pull.sh chains:install-chains.sh tdtape:install-td-tape.sh; do
+  if ! printf '%s\n' "$jobs" | awk -v l="com.hexagon.${j%%:*}" '$3 == l { f = 1 } END { exit !f }'; then
+    echo "PROBLEM: com.hexagon.${j%%:*} is not loaded in launchd (bash ops/${j#*:})"; bad=$((bad + 1))
+  fi
+done
 
 say "2. the ledger, against the journal and the venues"
 node tools/ledger-check.js --box --venues || bad=$((bad + 1))
