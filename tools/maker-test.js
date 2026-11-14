@@ -309,6 +309,47 @@ group('the event date of a series whose tickers name none');
     && maker.eventDateDays('KXGOVBAL', base.makerEventDates) === null);
 }
 
+group('event patterns: the 2028 markets after the midterms');
+{
+  const at = (iso) => Date.parse(iso);
+  const now = at('2026-11-14T00:00:00Z');
+  const D = base.makerEventDates;
+  const ev = (series, event) => maker.eventDateDays(series, D, now, event);
+  const to2028 = (Date.parse('2028-11-07T23:59:59Z') - now) / 86400000;
+  // every event Kalshi had open in these series on 2026-11-13, by what it should read
+  const future = [['CONTROLS', 'CONTROLS-2028'], ['CONTROLH', 'CONTROLH-2028'], ['SENATEIA', 'SENATEIA-28'], ['SENATENC', 'SENATENC-28'],
+    ['SENATENH', 'SENATENH-28'], ['KXHOUSERACE', 'KXHOUSERACE-WYAL-28'], ['KXHOUSERACE', 'KXHOUSERACE-CA23-28'], ['KXPRESPERSON', 'KXPRESPERSON-28'], ['GOVPARTYNC', 'GOVPARTYNC-28']];
+  ok('the 2028 events read as 2028-11-07', future.every(([s, e]) => Math.abs(ev(s, e) - to2028) < 1e-9), future.map(([s, e]) => ev(s, e)));
+  const past = [['KXHOUSERACE', 'KXHOUSERACE-CA23-26'], ['KXHOUSERACE', 'KXHOUSERACE-TN04-26'], ['KXRHOUSESEATS', 'KXRHOUSESEATS-27'],
+    ['KXBLUETSUNAMICOMBO', 'KXBLUETSUNAMICOMBO-27FEB'], ['SENATETX', 'SENATETX-26'], ['CONTROLS', 'CONTROLS-2026'], ['SENATETX', 'SENATETX-30'], ['CONTROLS', 'CONTROLS-2030']];
+  ok('the midterm results still open, and any event nobody dated, read as past', past.every(([s, e]) => ev(s, e) < 0), past.map(([s, e]) => ev(s, e)));
+  ok('with no event the series date stands, as before', ev('CONTROLS', null) < 0 && ev('KXPRESPERSON', null) === null);
+  ok('an event pattern matches only the whole event, inside one segment', ev('KXHOUSERACE', 'KXHOUSERACE-WY-AL-28') < 0 && ev('CONTROLS', 'CONTROLS-20280') < 0
+    && ev('SENATEIA', 'SENATEIA-28X') < 0 && ev('KXPRESPERSON', 'KXPRESPERSON-28-CHOL') === null);
+  ok('an event pattern never dates a series by itself', maker.eventDateDays('SENATEIA', [['SENATE*-28', '2028-11-07']], now) === null);
+  ok('the earliest of two matching event dates wins, and beats a later series date',
+    Math.round(maker.eventDateDays('X', [['X', '2027-01-30'], ['X-*', '2026-12-31'], ['X-28', '2026-11-30']], at('2026-11-20T00:00:00Z'), 'X-28')) === 11);
+  ok('the derived event is the ticker less its last segment; a ticker that is its own event reads one short',
+    maker.eventOfTicker('CONTROLS-2028-R') === 'CONTROLS-2028' && maker.eventOfTicker('KXHOUSERACE-WYAL-28-R') === 'KXHOUSERACE-WYAL-28'
+    && maker.eventOfTicker('KXBLUETSUNAMICOMBO-27FEB') === 'KXBLUETSUNAMICOMBO' && maker.eventOfTicker('CONTROLS') === null && maker.eventOfTicker(null) === null);
+  ok('...which matches no event pattern and falls to its series date: refused', maker.daysToEnd('KXBLUETSUNAMICOMBO-27FEB', '2027-02-01T15:00:00Z', now, D) < 0);
+  // through the filter the crawl and the listed scan both use, with Kalshi's own close times
+  const c = cfg({ makerMinMid: 0.08, makerMaxMid: 0.92, makerMinSpread: 0.01, makerMinVol24: 5000, makerMinDaysToClose: 7, makerEventDates: D });
+  const free = () => 'quadratic';
+  const mk = (ticker, seriesTicker, eventTicker, closeTime) => ({ ticker, seriesTicker, eventTicker, yesBid: 0.58, yesAsk: 0.59, vol24: 100000, closeTime });
+  const rows = maker.candidatesFrom([
+    mk('CONTROLS-2028-R', 'CONTROLS', 'CONTROLS-2028', '2029-02-01T15:00:00Z'),
+    mk('KXHOUSERACE-WYAL-28-R', 'KXHOUSERACE', 'KXHOUSERACE-WYAL-28', '2029-11-07T15:00:00Z'),
+    mk('KXHOUSERACE-CA23-26-R', 'KXHOUSERACE', 'KXHOUSERACE-CA23-26', '2027-11-03T15:00:00Z'),
+    mk('KXRHOUSESEATS-27-237', 'KXRHOUSESEATS', 'KXRHOUSESEATS-27', '2027-02-01T15:00:00Z'),
+    mk('KXBLUETSUNAMICOMBO-27FEB', 'KXBLUETSUNAMICOMBO', 'KXBLUETSUNAMICOMBO-27FEB', '2027-02-01T15:00:00Z'),
+  ], free, c, now);
+  ok('the 2028 markets are quoted again, the 2026 results are not', rows.map((r) => r.ticker).join() === 'CONTROLS-2028-R,KXHOUSERACE-WYAL-28-R', rows.map((r) => r.ticker));
+  ok('...with days to election night 2028, not to their 2029 close', rows.every((r) => Math.abs(r.days - to2028) < 1e-9), rows.map((r) => r.days));
+  ok('...and they leave the universe a week before it', maker.candidatesFrom([mk('CONTROLS-2028-R', 'CONTROLS', 'CONTROLS-2028', '2029-02-01T15:00:00Z')], free, c, at('2028-11-01T00:00:00Z')).length === 0);
+  ok('the event ticker is read off the market when the listing gives none', maker.candidatesFrom([mk('SENATENH-28-R', 'SENATENH', undefined, '2029-11-07T15:00:00Z')], free, c, now).length === 1);
+}
+
 group('one event, one bet: the event rail on markets that exclude each other');
 {
   // SENATETX-26 on the box, 2026-09-24: long 100 D at 57.64c, and here short 80 R at 42c.

@@ -230,7 +230,7 @@ function makeMakerDesk(cfg, deps = {}) {
           if (v < cfg.makerMinVol24) continue;
           // Do not be carrying inventory when the market settles: that is a 0-or-1 coin flip, not
           // a spread. Cheap to check here -- close_time is already in the listing we just fetched.
-          const days = maker.daysToEnd(m.ticker, m.close_time, clock(), cfg.makerEventDates, s);
+          const days = maker.daysToEnd(m.ticker, m.close_time, clock(), cfg.makerEventDates, s, m.event_ticker || null);
           if (!(days >= cfg.makerMinDaysToClose)) continue;
           // top-of-book depth, free with this listing -- see marketStats
           const depth = ((parseFloat(m.yes_bid_size_fp) || 0) + (parseFloat(m.yes_ask_size_fp) || 0)) / 2;
@@ -409,7 +409,7 @@ function makeMakerDesk(cfg, deps = {}) {
       const bk = bookRes.books.get(t);
       if (!bk) continue;
       // a halt is not a reason to carry an election-night position: cross it out as the round would
-      const evDays = maker.eventDateDays(m.series || t.split('-')[0], cfg.makerEventDates, clock());
+      const evDays = maker.eventDateDays(m.series || t.split('-')[0], cfg.makerEventDates, clock(), m.event || maker.eventOfTicker(t));
       if (m.inv && evDays != null && evDays < cfg.makerEventCrossDays) {
         const lvl = m.inv > 0 ? bk.yesBids[0] : bk.yesAsks[0];
         if (lvl && Number.isFinite(lvl.price)) { const out = closeAt(E, S, t, m, lvl.price, `event ${evDays < 0 ? 'past' : `${(evDays * 24).toFixed(0)}h away`}`); E.log('MAKR', 'OPS', out.pnl, `${t}: its event is ${evDays < 0 ? 'past' : 'a day away'} and the desk is halted · crossed out ${out.qty} at ${c(lvl.price)}`); }
@@ -591,7 +591,7 @@ function makeMakerDesk(cfg, deps = {}) {
       // Inside makerEventCrossDays of the date whatever is still held is crossed out at this round's
       // touch, as a flatten would, and nothing is quoted again. A book with nothing on the side to
       // cross into is tried again next round.
-      const evDays = maker.eventDateDays(m.series || u.series || u.ticker.split('-')[0], cfg.makerEventDates, clock());
+      const evDays = maker.eventDateDays(m.series || u.series || u.ticker.split('-')[0], cfg.makerEventDates, clock(), u.event || m.event || maker.eventOfTicker(u.ticker));
       if (evDays != null && evDays < cfg.makerEventCrossDays) {
         const lvl = m.inv > 0 ? bk.yesBids[0] : m.inv < 0 ? bk.yesAsks[0] : null;
         const when = evDays < 0 ? 'past' : `${(evDays * 24).toFixed(0)}h away`;

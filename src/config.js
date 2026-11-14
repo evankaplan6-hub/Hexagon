@@ -149,10 +149,15 @@ module.exports = {
   // these leave the universe on 2026-10-27 and are worked off reduce-only from then.
   // KXMANCHINCOMBO is dated in its own ticker (-26NOV03) and KXPRIMARYTURNOUT has no open market,
   // so neither is listed. KXGOVBAL is Italy's budget balance, not an election.
-  // Keyed by SERIES, not event: after 2026-11-03 every market in these series reads as past (refused,
-  // and crossed out if held) until this map is updated, and a later-cycle event listed in one of them
-  // (a CONTROLS-2028 market) is treated as 2026-11-03 too.
-  makerEventDates: env('MAKER_EVENT_DATES', 'SENATE*,GOVPARTY*,CONTROLS,CONTROLH,KXBALANCEPOWERCOMBO,KXBLUETSUNAMICOMBO,KXHOUSERACE,KXRHOUSESEATS=2026-11-03')
+  // A pattern with a hyphen names events (SENATE*-28, `*` inside one segment) and beats every series
+  // pattern (maker.eventDateDays). So the series dates stay 2026-11-03 as the catch-all: every
+  // midterm market still open (the uncalled KXHOUSERACE-*-26 races, KXRHOUSESEATS-27,
+  // KXBLUETSUNAMICOMBO-27FEB, all 2026 results) and any event nobody dated reads as past and is
+  // refused. The 2028 events Kalshi listed on 2026-11-13 (CONTROLS-2028, CONTROLH-2028, SENATEIA/NC/NH-28,
+  // 435 KXHOUSERACE-*-28, KXPRESPERSON-28) resolve on election night, 2028-11-07, though they close in
+  // 2029. GOVPARTY*-28 has no market yet and is dated for when it lists. A new cycle's events
+  // (SENATETX-30) need a line here, or they stay refused.
+  makerEventDates: env('MAKER_EVENT_DATES', 'SENATE*,GOVPARTY*,CONTROLS,CONTROLH,KXBALANCEPOWERCOMBO,KXBLUETSUNAMICOMBO,KXHOUSERACE,KXRHOUSESEATS=2026-11-03;CONTROLS-2028,CONTROLH-2028,SENATE*-28,GOVPARTY*-28,KXHOUSERACE-*-28,KXPRESPERSON-28=2028-11-07')
     .split(';').map((g) => g.split('=').map((x) => x.trim())).filter((g) => g.length === 2 && /^\d{4}-\d{2}-\d{2}$/.test(g[1]))
     .flatMap(([list, date]) => list.split(',').map((p) => p.trim()).filter(Boolean).map((p) => [p, date])),
   // Whatever a configured event still holds this many days before its date is crossed out at the
