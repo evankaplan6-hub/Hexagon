@@ -19,6 +19,9 @@ const r2 = (x) => Math.round(x * 100) / 100;
 const money = (x) => `$${Math.abs(x).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const signed = (x) => `${x >= 0 ? '+' : '−'}${money(x)}`;
 const pct = (x) => `${Math.round(x * 100)}%`;
+// The rule checks at the start of each UTC day: 8 PM Eastern in summer, 7 PM in winter. Named from the next one.
+const ET_HOUR = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric' });
+const checkHour = (now) => { const d = new Date(now); return ET_HOUR.format(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1))); };
 const ET = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
 // The note from a desk snapshot (`snap`, the engine's), the state's minute history (`hist`, [{ t, c, bc }]) and its
@@ -26,7 +29,7 @@ const ET = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', week
 function note(snap, hist, fills, now, { band = 0.10 } = {}) {
   const book = (snap.books || []).find((b) => b.key === 'crypto');
   if (!book) return 'No crypto book in the desk.';
-  const L = [];
+  const L = [], at = checkHour(now);
   L.push(`Crypto note · ${ET.format(new Date(now))} ET · paper desk, not advice`);
   L.push('');
   // where it stands: since the start and over the last seven days, against holding the same coins
@@ -51,12 +54,12 @@ function note(snap, hist, fills, now, { band = 0.10 } = {}) {
     if (trade) moves.push(`${COIN[r.sym] || r.name} ${want > (last ?? 0) ? 'up' : 'down'} to ${pct(want)}`);
     L.push(`${(COIN[r.sym] || r.name).padEnd(10)} ${pct(held).padStart(4)}   ${want == null ? '  —' : pct(want).padStart(4)}       ${Number.isFinite(r.vol) ? pct(r.vol).padStart(4) : '  —'}     ${what}`);
   }
-  L.push(`(The rule aims each coin at 40% swings a year: a coin swinging 80% gets half its slot. It trades at the 8 PM ET check, and only when the aim has moved 10 points from what it last traded to.)`);
+  L.push(`(The rule aims each coin at 40% swings a year: a coin swinging 80% gets half its slot. It trades at the ${at} ET check, and only when the aim has moved 10 points from what it last traded to.)`);
   L.push('');
   // what changed: the book's fills in the last day
   const day = (fills || []).filter((f) => f.book === 'crypto' && f.at >= now - 864e5);
   L.push(day.length ? `Last 24 hours: ${day.map((f) => `${f.side === 'buy' ? 'bought' : 'sold'} ${COIN[f.sym] || f.sym} (${money(f.value)})`).join(', ')}.` : 'Last 24 hours: no trades.');
-  L.push(moves.length ? `At the next 8 PM ET check, if prices hold: ${moves.join(', ')}.` : 'At the next 8 PM ET check, if prices hold: nothing to do.');
+  L.push(moves.length ? `At the next ${at} ET check, if prices hold: ${moves.join(', ')}.` : `At the next ${at} ET check, if prices hold: nothing to do.`);
   return L.join('\n');
 }
 
