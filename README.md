@@ -186,7 +186,8 @@ losses. That is too few to call either way, so the tape keeps running and is gra
 
 `node tools/crypto-note.js --box` prints, in a dozen lines: the crypto book against simply holding the same coins
 since its start and over the last seven days; each coin's share of its slot, what the rule would hold at today's
-swings, and whether that is a trade at the next 8 PM ET check (the 10-point band); and the day's trades. Its figures
+swings, and whether that is a trade at the next check (the 10-point band; the check is 00:00 UTC, 8 PM ET in summer and 7 PM
+in winter, named right since 2026-11-13); and the day's trades. Its figures
 are the desk's own: it loads the real engine on a copy of the box's state (desk-check's read-only copy), fetches the
 prices from Coinbase as the desk does, and reads the snapshot, writing nothing back. It is about the paper desk:
 not advice, and the desk has no broker.

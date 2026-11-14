@@ -30,6 +30,10 @@ const hist = [{ t: NOW - 8 * D, c: 9800, bc: 9600 }, { t: NOW - 7 * D, c: 9900, 
   ok('the day\'s crypto fills only: not two days back, not SPY', /Last 24 hours: bought XRP \(\$575\.33\)\./.test(txt), txt);
   ok('a coin never traded is a trade at its first check', /would buy/.test(note(snap([row('DOGE-USD', 0, 3333.33, null, 0.5, 0.8)]), hist, [], NOW)));
   ok('going back to full size is a trade even inside the band', /would buy, to 100%/.test(note(snap([row('BTC-USD', 2900, 3000, 0.95, 1, 0.3)]), hist, [], NOW)));
+  // the check is the start of the UTC day: 8 PM Eastern on daylight time, 7 PM once the clocks go back (11-13 audit)
+  const winter = note(snap([row('BTC-USD', 3000, 3000, 1, 1, 0.38)]), hist, [], Date.UTC(2026, 10, 14, 1, 5));
+  ok('in winter the check is at 7 PM ET, both times it is named', /trades at the 7 PM ET check/.test(winter) && /next 7 PM ET check/.test(winter) && !/8 PM/.test(winter), winter);
+  ok('in October it is 8 PM ET', /trades at the 8 PM ET check/.test(note(snap([row('BTC-USD', 3000, 3000, 1, 1, 0.38)]), hist, [], NOW)));
   ok('a coin with no price history yet', /no price history yet/.test(note(snap([row('BTC-USD', 0, 3333.33, null, null, null)]), hist, [], NOW)));
 }
 
