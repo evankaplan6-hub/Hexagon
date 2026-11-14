@@ -175,6 +175,13 @@ after the fee, Kalshi tracks the sharp book closely enough and the hunt is over;
 games, it is a rule worth testing the README's way (below). `--check` (daily check step 10) says whether the last run
 worked, how many credits are left, and names any NFL game that kicked off with no read.
 
+**First grade, 2026-11-13** (due 11-09; the lab's dates read "done" once a date passed, run or not, so it slipped by
+four days unseen; a date now reads Done only with the day it ran, and Due otherwise). Over 12 taped days from 10-18 to
+11-12, 289 reads and 726 game-moments with both priced: Pinnacle's no-vig chance and Kalshi's mid sat a median 0.5
+points apart (90th percentile 1.3). Three buys cleared the fee, all settled: +6.0¢ a contract after it, one win and two
+losses. That is too few to call either way, so the tape keeps running and is graded again after the NFL regular season
+(2027-01-11, on the lab's dates).
+
 ### The crypto note (2026-10-17)
 
 `node tools/crypto-note.js --box` prints, in a dozen lines: the crypto book against simply holding the same coins
