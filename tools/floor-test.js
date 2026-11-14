@@ -73,6 +73,9 @@ ok('the total opens the whole Hexagon, each part its view', /class="tdtotal" dat
 ok('what comes next spans all of it: the bets, the two rules\' checks, the tapes and the re-test dates',
   /k: `bet-\$\{st\}`/.test(js) && /k: 'crypto', sheet: 'book:crypto'/.test(js) && /k: 'spy', sheet: 'book:stocks'/.test(js) && /k: `tape-\$\{tp\.key\}`/.test(js) && /for \(const r of RETESTS\.filter/.test(js));
 ok('the re-test dates are the plan\'s: Nov 9, Dec 7, Jan 25, Mar 22', /2026-11-09T/.test(js) && /2026-12-07T/.test(js) && /2027-01-25T/.test(js) && /2027-03-22T/.test(js));
+ok('a passed re-test date reads Done only once it records when it ran; otherwise it reads as due and late',
+  /why: r\.done \? `Done \$\{/.test(js) && /: `Due, \$\{nOf\(/.test(js) && !/: 'done' \}\)/.test(js) && /k: 'rt-odds', [^\n]*done: Date\.parse\('2026-11-13/.test(js));
+ok('the odds tape is graded again after the NFL regular season', /k: 'rt-nfl', t: Date\.parse\('2027-01-11T/.test(js));
 ok('the lab counts the ideas tested and kept from one list, and one on test says so', /const TESTS = \[/.test(js) && /kept: 'testing'/.test(js) && (js.match(/kept: true/g) || []).length === 2);
 ok('a tape that has gone quiet says so, by how often it runs', /const TAPE_QUIET_H = \{ odds: 0\.5, td: 1, chains: 80 \}/.test(js) && /word: 'Quiet'/.test(js));
 

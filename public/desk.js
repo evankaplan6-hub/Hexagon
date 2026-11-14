@@ -397,9 +397,12 @@
   }
 
   // ------------------------------------------------------------ what happens next, across all of it
+  // A date reads "done" only once `done` records when it was run; a passed date without it reads as due, so a re-test
+  // that slipped says so (the odds tape's Nov 9 grade read "done" for four days before it was run, 2026-11-13).
   const RETESTS = [
-    { k: 'rt-odds', t: Date.parse('2026-11-09T15:00:00Z'), text: 'Grade four Sundays of the odds tape', short: 'grade the odds tape' },
+    { k: 'rt-odds', t: Date.parse('2026-11-09T15:00:00Z'), done: Date.parse('2026-11-13T23:00:00Z'), text: 'Grade four Sundays of the odds tape', short: 'grade the odds tape' },
     { k: 'rt-dec', t: Date.parse('2026-12-07T15:00:00Z'), text: 'Re-test the game picks and the team model on the college regular season', short: 'the game picks on the college season' },
+    { k: 'rt-nfl', t: Date.parse('2027-01-11T15:00:00Z'), text: 'Grade the odds tape over the NFL regular season', short: 'grade the odds tape on the season' },
     { k: 'rt-jan', t: Date.parse('2027-01-25T15:00:00Z'), text: 'Re-test the crypto rule after three months live, and the game picks and the team model on full seasons', short: 'the crypto rule, the picks and the team model' },
     { k: 'rt-mar', t: Date.parse('2027-03-22T14:00:00Z'), text: "Re-run the option labs on six months of the desk's own chains", short: 'the option labs on our own chains' },
   ];
@@ -469,7 +472,7 @@
     { idea: 'Trade a coin on the X headline feed', verdict: 'No edge in 894 posts over ten days (2026-10-08)', kept: false },
     { idea: "Kalshi's temperature markets against the forecast", verdict: 'No edge, out of sample', kept: false },
     { idea: 'Bet that two venues apart will come back together', verdict: 'Lost on paper; convergence was switched off (2026-09-21)', kept: false },
-    { idea: 'Does Kalshi trail the sharp sportsbook by more than its fee?', verdict: 'On test: the odds tape logs Pinnacle beside Kalshi before every NFL kickoff, graded on Nov 9', kept: 'testing' },
+    { idea: 'Does Kalshi trail the sharp sportsbook by more than its fee?', verdict: 'On test: over four weeks Kalshi sat a median 0.5 points from Pinnacle, and 3 buys cleared the fee, too few to call (2026-11-13); graded again after the season, Jan 11', kept: 'testing' },
   ];
   // how often each tape runs, so one that has gone quiet says so: every 8 minutes, every 15, each weekday's close
   const TAPE_QUIET_H = { odds: 0.5, td: 1, chains: 80 };
@@ -733,7 +736,7 @@
         const st = tapeState(t);
         return rowHtml({ k: t.key, name: tapeName(t, st), why: `${esc(t.what)}<br>${esc(st.line)}${t.kickoff ? ` · next ${t.reads > S.now ? `reads ${esc(whenFull(t.reads))}` : 'reading now'}` : ''}` });
       }).join('')}</ul>`) : '') +
-      card('The dates', `<ul class="rows">${RETESTS.map((r) => rowHtml({ k: r.k, name: `<b>${esc(ET_DATE.format(new Date(r.t)))}</b> · ${esc(r.text)}`, why: r.t > S.now ? `in ${nOf(Math.ceil((r.t - S.now) / 864e5), 'day')}` : 'done' })).join('')}</ul>`) +
+      card('The dates', `<ul class="rows">${RETESTS.map((r) => rowHtml({ k: r.k, name: `<b>${esc(ET_DATE.format(new Date(r.t)))}</b> · ${esc(r.text)}`, why: r.done ? `Done ${ET_DATE.format(new Date(r.done))}` : r.t > S.now ? `in ${nOf(Math.ceil((r.t - S.now) / 864e5), 'day')}` : `Due, ${nOf(Math.floor((S.now - r.t) / 864e5), 'day')} late` })).join('')}</ul>`) +
       card('Tested so far', `<ul class="rows">${TESTS.map((t, i) => rowHtml({ k: `t${i}`, name: `<span class="mark ${t.kept === true ? 'ok' : t.kept === 'testing' ? 'idle' : 'no'}" aria-hidden="true">${t.kept === true ? '✓' : t.kept === 'testing' ? '○' : '×'}</span>` +
         `<span class="sr">${t.kept === true ? 'Kept: ' : t.kept === 'testing' ? 'On test: ' : 'Not kept: '}</span>${esc(t.idea)}`, why: esc(t.verdict) })).join('')}</ul>`) };
   }
