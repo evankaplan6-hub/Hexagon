@@ -462,6 +462,25 @@ const scans = (E) => E.logs.filter((l) => l.kind === 'SCAN' && /^(quoting|no mar
     }
   }
 
+  group('an event pattern beats its series date, quoting or halted (2026-11-13: the 2028 markets)');
+  {
+    // The series date has passed (a midterm); the 2028 event in the same series is dated by its own pattern.
+    const over = { makerEventDates: [['KXEVB', '2026-09-01'], ['KXEVB-28', '2027-01-01']], makerEventCrossDays: 1 };
+    for (const [how, setup] of [['quoting', () => {}], ['halted', (r) => { r.E.halt = 'stale data'; }]]) {
+      const r = rig({ over, markets: {
+        'KXEVB-28-L': held({ series: 'KXEVB', inv: 40, cost: 16 }),     // the 2028 event, its event read off the ticker
+        'KXEVB-26-L': held({ series: 'KXEVB', inv: 30, cost: 12 }),     // the midterm, past
+      }, state: { cash: 10000 - 16 - 12 } });
+      r.tape.bk.set('KXEVB-28-L', book(0.44, 50, 0.46, 50));
+      r.tape.bk.set('KXEVB-26-L', book(0.44, 50, 0.46, 50));
+      setup(r);
+      await r.round();
+      const flats = r.E.journalled.filter((j) => j.kind === 'MAKER_FLATTEN');
+      ok(`${how}: the past midterm is crossed out, the 2028 market is held`, r.S.markets['KXEVB-26-L'].inv === 0 && r.S.markets['KXEVB-28-L'].inv === 40
+        && flats.length === 1 && flats[0].ticker === 'KXEVB-26-L' && flats[0].reason === 'event past', flats);
+    }
+  }
+
   group('one event, one bet: the event rail through the loop');
   {
     // SENATETX-26 on the box, 2026-09-24: long 100 D, and short R on the same side of the race

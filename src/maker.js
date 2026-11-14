@@ -269,27 +269,49 @@ function tickerEventDays(ticker, now = Date.now()) {
 // one went against the desk). Kalshi's event record has no date either, so the date is configured:
 // `eventDates` is cfg.makerEventDates, [pattern, 'YYYY-MM-DD'] pairs, where a pattern ending in `*`
 // is a series prefix. The day is read to its last second UTC, as tickerEventDays reads a ticker's.
-// null when no pattern matches.
-function eventDateDays(series, eventDates, now = Date.now()) {
+// A pattern with a hyphen names EVENTS, not a series: CONTROLS-2028, or SENATE*-28 where `*` stands
+// for any run of letters and digits inside one segment, matched against the whole event ticker.
+// Once 2026-11-03 passed, one date per series could not tell CONTROLS-2028 (2028-11-07) from the
+// midterm it replaced, so an event pattern that matches wins over every series pattern, and the
+// series date is the catch-all: an event nobody dated reads as past and is refused, never quoted
+// into an election night. Within either kind the earliest matching date wins. null when none matches.
+function patternMatches(p, ticker) {
+  // a series prefix (SENATE*) as it always was; an event pattern's `*` never crosses a hyphen
+  if (!p.includes('-') && p.endsWith('*') && !p.slice(0, -1).includes('*')) return ticker.startsWith(p.slice(0, -1));
+  if (!p.includes('*')) return ticker === p;
+  const body = p.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('[A-Z0-9]*');
+  return new RegExp('^' + body + '$').test(ticker);
+}
+function eventDateDays(series, eventDates, now = Date.now(), event = null) {
   if (!series || !Array.isArray(eventDates)) return null;
-  let best = null;
+  let bestEvent = null, bestSeries = null;
   for (const [p, date] of eventDates) {
-    if (!(p.endsWith('*') ? series.startsWith(p.slice(0, -1)) : series === p)) continue;
+    const byEvent = p.includes('-');
+    if (byEvent ? !(event && patternMatches(p, event)) : !patternMatches(p, series)) continue;
     const end = Date.parse(`${date}T23:59:59Z`);
     if (!Number.isFinite(end)) continue;
     const d = (end - now) / 86400000;
-    if (best == null || d < best) best = d;
+    if (byEvent) { if (bestEvent == null || d < bestEvent) bestEvent = d; } else if (bestSeries == null || d < bestSeries) bestSeries = d;
   }
-  return best;
+  return bestEvent != null ? bestEvent : bestSeries;
+}
+
+// A market's event ticker when the listing did not say: the ticker less its last segment
+// (CONTROLS-2028-R is CONTROLS-2028). A market whose ticker IS its event (KXBLUETSUNAMICOMBO-27FEB)
+// reads one segment short, matches no event pattern and falls to its series date: refused, the safe
+// side. Callers pass Kalshi's event_ticker wherever they have it.
+function eventOfTicker(ticker) {
+  const t = String(ticker || '');
+  return t.includes('-') ? t.slice(0, t.lastIndexOf('-')) : null;
 }
 
 // Days until this market can no longer be safely quoted: the earliest of its close time, the event
-// date its ticker names and the event date configured for its series. NaN when none is known, which
-// every caller treats as "refuse". `series` defaults to the ticker's first segment, which is the
-// series for every market the event-date list names.
-function daysToEnd(ticker, closeTime, now = Date.now(), eventDates = null, series = null) {
+// date its ticker names and the event date configured for its event or series. NaN when none is
+// known, which every caller treats as "refuse". `series` defaults to the ticker's first segment,
+// which is the series for every market the event-date list names; `event` to eventOfTicker.
+function daysToEnd(ticker, closeTime, now = Date.now(), eventDates = null, series = null, event = null) {
   const c = closeTime ? (Date.parse(closeTime) - now) / 86400000 : NaN;
-  const dated = [tickerEventDays(ticker, now), eventDateDays(series || String(ticker || '').split('-')[0], eventDates, now)].filter((x) => x != null);
+  const dated = [tickerEventDays(ticker, now), eventDateDays(series || String(ticker || '').split('-')[0], eventDates, now, event || eventOfTicker(ticker))].filter((x) => x != null);
   const t = dated.length ? Math.min(...dated) : null;
   return t == null ? (Number.isFinite(c) ? c : 0) : Math.min(Number.isFinite(c) ? c : Infinity, t);
 }
@@ -306,7 +328,7 @@ function candidatesFrom(markets, feeTypeOf, cfg, now = Date.now()) {
     if (a - b < cfg.makerMinSpread - 1e-9) continue;
     if ((m.vol24 || 0) < cfg.makerMinVol24) continue;
     // Do not be holding inventory when the market settles: that is a 0-or-1 coin flip, not a spread.
-    const days = daysToEnd(m.ticker, m.closeTime, now, cfg.makerEventDates, series);
+    const days = daysToEnd(m.ticker, m.closeTime, now, cfg.makerEventDates, series, m.eventTicker || null);
     if (!(days >= cfg.makerMinDaysToClose)) continue;
     rows.push({
       ticker: m.ticker, series, vol: m.vol24 || 0, spread: a - b, days,
@@ -443,4 +465,4 @@ async function eligibleSeries(candidates, { getJSON = http.getJSON, sleep = (ms)
   return ok;
 }
 
-module.exports = { tickerEventDays, eventDateDays, daysToEnd, desiredQuotes, eventWorst, eventSide, fairSide, queueAfter, fillsFrom, applyFill, settlePosition, gainLock, toxWindow, toxicGate, drawdownFrom, eligibleSeries, candidatesFrom };
+module.exports = { tickerEventDays, eventDateDays, eventOfTicker, daysToEnd, desiredQuotes, eventWorst, eventSide, fairSide, queueAfter, fillsFrom, applyFill, settlePosition, gainLock, toxWindow, toxicGate, drawdownFrom, eligibleSeries, candidatesFrom };

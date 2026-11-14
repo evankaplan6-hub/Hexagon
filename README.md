@@ -1335,13 +1335,30 @@ maker's 4,682 contracts on 09-24. The map gives them that date, so they leave th
 and are worked off reduce-only, and whatever is still held `MAKER_EVENT_CROSS_DAYS` (1) before the
 date is crossed out at the touch as a `MAKER_FLATTEN` (reason `event Nh away`), paying the taker
 fee: at most about $35 on 09-24's contracts, against positions that go to 0 or 1 overnight. It fires
-around 23:59Z on 2026-11-02. Three limits: it does not fire while the maker is halted (the hold
-round quotes and crosses nothing), so a halt that day carries the inventory into the night; it
+around 23:59Z on 2026-11-02. Three limits: it did not fire while the maker was halted, until the
+2026-10-07 audit gave the hold round the same cross-out; it
 crosses the whole position at the top-of-book price whatever size is shown there, so that day's
 paper P&L is somewhat kind; and the date is keyed by **series**, so a later-cycle event in one of
 them (a `CONTROLS-2028` market) is treated as 2026-11-03 too. **After 2026-11-03 the map has to be
 updated**: until it is, every market in those series reads as past, is refused, and is crossed out
 if held.
+
+**Updated 2026-11-13: dates by event.** A pattern with a hyphen now names events, not a series
+(`CONTROLS-2028`, or `SENATE*-28` with `*` inside one segment, matched against the whole event
+ticker), and a matching event pattern wins over every series pattern. The series dates stay
+2026-11-03 as the catch-all, so what is left of the midterm (8 uncalled `KXHOUSERACE-*-26` races,
+`SENATEAK-26`, `KXRHOUSESEATS-27`, `KXBLUETSUNAMICOMBO-27FEB`), the November 2027 governor races
+(`GOVPARTYKY/LA/MS-27`) and any event nobody dated still read as past and are refused. The 2028
+events Kalshi had open on 11-13 are dated election night, 2028-11-07, though they close in 2029:
+`CONTROLS-2028`, `CONTROLH-2028`, every `SENATE*-28` and `GOVPARTY*-28` race, 435
+`KXHOUSERACE-*-28` races and `KXPRESPERSON-28` (which closes 2029-11-07, so it would otherwise have
+been held through the vote). An independent check ran all 21,954 events Kalshi had open that day
+through the new map: all 480 open 2028 election events read 2028-11-07. They are quotable again, 725 days out, and leave
+the universe a week before, on 2028-11-01 (UTC). The event comes from Kalshi's `event_ticker` where the listing gives it,
+else from the ticker less its last segment; a market whose ticker is its own event reads one segment
+short, matches no event pattern and falls to its series date, the safe side. A new cycle's events
+(`SENATETX-30`) need a line in the map or they stay refused. Nothing in these series was held on
+11-13.
 
 ### One loss limit per event (`MAKER_EVENT_MAX_LOSS`, 2026-09-24)
 

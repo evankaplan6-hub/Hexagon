@@ -192,7 +192,8 @@ src/broker.js     paper broker + live Kalshi adapter
 src/makerdesk.js  the maker's loop: universe from MAKER_SERIES (38 listed series; MAKER_WIDEN=1 adds the crawl's
                   fee-free markets, off on the box since 2026-09-23), trade-rate probe, run-over gate, the fair rail
                   (MAKER_FAIR_RAIL), reduce-only quotes that stop at flat, a hold round while halted, the event
-                  dates (MAKER_EVENT_DATES: midterm series crossed out 2026-11-02; update the map after 11-03) and the
+                  dates (MAKER_EVENT_DATES: series dates are a catch-all, 2026-11-03, so undated events stay refused;
+                  since 2026-11-13 event patterns date the 2028 markets 2028-11-07; a new cycle needs a line) and the
                   event loss limit (MAKER_EVENT_MAX_LOSS); src/maker.js holds the pure decisions
 src/venues/       Polymarket (Gamma + CLOB; since 2026-10-11 fetchGames reads every game of NFL/NBA/CFB/MLB, and since 10-14 EPL/MLS/UCL/La Liga, off its league
                   tag beside the top-N listing, PM_GAME_TAGS, after a quiet Sunday game's moneyline fell under the volume
