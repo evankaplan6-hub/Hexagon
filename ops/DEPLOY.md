@@ -36,7 +36,7 @@ brew install flyctl && fly auth signup        # once
 
 cd ~/Hexagon
 fly launch --no-deploy --copy-config --name hexagon-desk   # reads fly.toml
-fly volumes create hexagon_data --region iad --size 1      # the journals live here
+fly volumes create hexagon_data --region iad --size 3      # the journals live here (1 GB until 2026-11-13)
 fly ips allocate-egress -a hexagon-desk -r iad             # its own outgoing IP (below)
 
 fly secrets set DASH_PASS="$(openssl rand -base64 18)"     # prints nothing, and Fly cannot show it again
@@ -62,7 +62,7 @@ before tuning `KALSHI_GAP_MS` or the retry code. Do not allocate a second one. A
 new egress IP in the new region, and the old one released with `fly ips release-egress`, so it is
 not billed twice.
 
-Roughly $10–11/month: a shared-cpu-2x with 1 GB of memory and a 1GB volume ($6–7) plus the static egress
+Roughly $10–11/month: a shared-cpu-2x with 1 GB of memory and a 3 GB volume ($6–7; the volume adds about $0.15 a GB a month) plus the static egress
 IP (~$3.60). It was a shared-cpu-1x until 2026-09-22, when the desk was found pinned at that size's CPU cap
 (6.25% of a core), and had 512 MB of memory until 2026-10-18, when its peak reached 363 MB of the 470 it
 could use; `fly.toml` has the numbers. The memory is set in `fly.toml` (`[[vm]] memory`), so every deploy
@@ -197,7 +197,12 @@ line, and `fly logs` keeps about 30 minutes of those. `tools/restarts.js` (step 
 
 ## Keeping the disk from filling
 
-The box's `/data` volume is 1 GB. The tick tape (`ticks-<Eastern date>.jsonl`) grows about 90-130
+The box's `/data` volume is 3 GB since 2026-11-13 (`fly volumes extend`, live, no restart; it was 1 GB).
+The day before, the free space just before each daily pull had fallen from about 480 MB in October to
+250-295 MB, as the tick tape grew to about 165 MB a day, so one missed pull would have taken it under the
+brake. That had already happened once: the Mac's pull was down 2026-11-02 to 11-11 and the brake deleted
+the tick tapes of 11-02 to 11-08 before they were copied, so those days are lost. With 3 GB the box holds
+about two weeks of tapes. The figures below are from the 1 GB days. The tick tape (`ticks-<Eastern date>.jsonl`) grows about 90-130
 MB a day since sports joined the crawl on 2026-09-19 (about a quarter of it the maker's book and
 prints, the rest the paired markets). With about 600 MB free after a pull, the brake's 200 MB floor
 is about four days away if the pull stops; it deletes the two already-copied days first, so a tape
