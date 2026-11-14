@@ -326,6 +326,7 @@ group('event patterns: the 2028 markets after the midterms');
   ok('with no event the series date stands, as before', ev('CONTROLS', null) < 0 && ev('KXPRESPERSON', null) === null);
   ok('an event pattern matches only the whole event, inside one segment', ev('KXHOUSERACE', 'KXHOUSERACE-WY-AL-28') < 0 && ev('CONTROLS', 'CONTROLS-20280') < 0
     && ev('SENATEIA', 'SENATEIA-28X') < 0 && ev('KXPRESPERSON', 'KXPRESPERSON-28-CHOL') === null);
+  ok('an event pattern ending in * stays inside one segment', maker.eventDateDays('X', [['X-*', '2028-11-07']], now, 'X-28') > 0 && maker.eventDateDays('X', [['X-*', '2028-11-07']], now, 'X-28-R') === null);
   ok('an event pattern never dates a series by itself', maker.eventDateDays('SENATEIA', [['SENATE*-28', '2028-11-07']], now) === null);
   ok('the earliest of two matching event dates wins, and beats a later series date',
     Math.round(maker.eventDateDays('X', [['X', '2027-01-30'], ['X-*', '2026-12-31'], ['X-28', '2026-11-30']], at('2026-11-20T00:00:00Z'), 'X-28')) === 11);

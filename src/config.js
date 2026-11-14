@@ -152,11 +152,12 @@ module.exports = {
   // A pattern with a hyphen names events (SENATE*-28, `*` inside one segment) and beats every series
   // pattern (maker.eventDateDays). So the series dates stay 2026-11-03 as the catch-all: every
   // midterm market still open (the uncalled KXHOUSERACE-*-26 races, KXRHOUSESEATS-27,
-  // KXBLUETSUNAMICOMBO-27FEB, all 2026 results) and any event nobody dated reads as past and is
-  // refused. The 2028 events Kalshi listed on 2026-11-13 (CONTROLS-2028, CONTROLH-2028, SENATEIA/NC/NH-28,
+  // KXBLUETSUNAMICOMBO-27FEB, SENATEAK-26, all 2026 results), the November 2027 governor races
+  // (GOVPARTYKY/LA/MS-27) and any event nobody dated read as past and are refused. The 2028 events
+  // Kalshi listed on 2026-11-13 (CONTROLS-2028, CONTROLH-2028, every SENATE*-28 and GOVPARTY*-28 race,
   // 435 KXHOUSERACE-*-28, KXPRESPERSON-28) resolve on election night, 2028-11-07, though they close in
-  // 2029. GOVPARTY*-28 has no market yet and is dated for when it lists. A new cycle's events
-  // (SENATETX-30) need a line here, or they stay refused.
+  // 2029. A new cycle's events (SENATETX-30, or the 2027 races if they are ever wanted) need a line
+  // here, or they stay refused.
   makerEventDates: env('MAKER_EVENT_DATES', 'SENATE*,GOVPARTY*,CONTROLS,CONTROLH,KXBALANCEPOWERCOMBO,KXBLUETSUNAMICOMBO,KXHOUSERACE,KXRHOUSESEATS=2026-11-03;CONTROLS-2028,CONTROLH-2028,SENATE*-28,GOVPARTY*-28,KXHOUSERACE-*-28,KXPRESPERSON-28=2028-11-07')
     .split(';').map((g) => g.split('=').map((x) => x.trim())).filter((g) => g.length === 2 && /^\d{4}-\d{2}-\d{2}$/.test(g[1]))
     .flatMap(([list, date]) => list.split(',').map((p) => p.trim()).filter(Boolean).map((p) => [p, date])),

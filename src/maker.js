@@ -276,7 +276,8 @@ function tickerEventDays(ticker, now = Date.now()) {
 // series date is the catch-all: an event nobody dated reads as past and is refused, never quoted
 // into an election night. Within either kind the earliest matching date wins. null when none matches.
 function patternMatches(p, ticker) {
-  if (p.endsWith('*') && !p.slice(0, -1).includes('*')) return ticker.startsWith(p.slice(0, -1));
+  // a series prefix (SENATE*) as it always was; an event pattern's `*` never crosses a hyphen
+  if (!p.includes('-') && p.endsWith('*') && !p.slice(0, -1).includes('*')) return ticker.startsWith(p.slice(0, -1));
   if (!p.includes('*')) return ticker === p;
   const body = p.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('[A-Z0-9]*');
   return new RegExp('^' + body + '$').test(ticker);
