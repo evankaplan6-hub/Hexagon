@@ -131,6 +131,7 @@ ok('the chart is crypto and SPY against holding them', /const HOLD_FIELDS = \{ c
   ok('a late game, not bet, is the games\'', T({ agent: 'BRAM', text: 'NFL Bills v Jets: not bet', sub: 'it had started' }) === 'Games');
   ok('the bets going on again is the games\'', T({ agent: 'TESS', text: 'The game bets go on again', sub: 'daily drawdown' }) === 'Games');
   ok('the bets stopping too is the games\'', T({ agent: 'TESS', text: 'Prediction markets stopped taking new risk', sub: 'the game bets stop too · stale data' }) === 'Games');
+  ok('a passed game bet is the games\'', T({ agent: 'KETT', text: 'Passed on NCAAF Ohio State v Michigan', sub: 'game bet on Ohio State, but Kalshi\'s live book has nothing offered' }) === 'Games');
   ok('the desk\'s halt is the arbs\' and maker\'s, though the bets go on', T({ agent: 'TESS', text: 'Prediction markets stopped taking new risk', sub: 'daily drawdown 3.1% · no new risk until clear, but the game bets go on' }) === 'Predictions');
   ok('the desk coming online is not the games\'', T({ agent: 'TESS', text: 'Desk online', sub: 'paper + every game of 4 leagues' }) === 'Predictions');
   ok('an arb is the arbs\'', T({ agent: 'KETT', text: 'Bought 209 Yes on NBA Bucks v Heat' }) === 'Predictions');

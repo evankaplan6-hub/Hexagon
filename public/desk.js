@@ -1102,11 +1102,11 @@
   const pmTag = (name) => ({ name, color: name === 'Games' ? GAMES_COLOR : SIDE_COLOR });
   // a line of its log about a game bet is the games' ("game bet on Missouri", "<game>: not bet, it had started", "the game
   // bets go on again"), read off the line itself; a sub-line counts only when it opens on the bets ("HALT · the game bets
-  // stop too"). The desk's own halt ("… no new risk until clear, but the game bets go on") stops the arbs and the maker,
+  // stop too", a pass: "Passed on <game>" over "game bet on Ohio State, but …"). The desk's own halt ("… no new risk until clear, but the game bets go on") stops the arbs and the maker,
   // so it is theirs, as is "desk online · … every game of 4 leagues".
   const PM_GAME_LINE = /\bgame bets?\b|\bevery game\b|: not bet\b/i;
   const pmLogTag = (e) => (e.agent === 'MAKR' ? 'Maker'
-    : e.kind !== 'HALT' && !/^desk online\b/i.test(String(e.text || '')) && PM_GAME_LINE.test(String(e.text || '')) || /^the game bets\b/i.test(String(e.sub || '')) ? 'Games' : 'Predictions');
+    : e.kind !== 'HALT' && !/^desk online\b/i.test(String(e.text || '')) && PM_GAME_LINE.test(String(e.text || '')) || /^(?:the )?game bets?\b/i.test(String(e.sub || '')) ? 'Games' : 'Predictions');
   const pmLogRow = (e) => ({ t: e.t, who: pmWho(e.agent), tag: pmTag(pmLogTag(e)), text: grouped(String(e.text || '')), sub: grouped(String(e.sub || '')), level: e.level || 'info',
     pnl: e.level === 'trade' && Number.isFinite(e.pnl) ? e.pnl : null, key: `pm|${e.t}|${e.agent}|${e.text}`, src: 'pm', halt: e.kind === 'HALT' });
   // The tag names the book, so the sub-line no longer says it again ("Polymarket at 51¢ · every game"). The
