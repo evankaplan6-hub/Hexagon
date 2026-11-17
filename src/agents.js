@@ -29,15 +29,21 @@ const ambiguousOrder = (e) => !!(e && (e.ambiguousOrder || e.code === 'KALSHI_OR
 
 // TESS updates E.halt once per cycle, but an operator flatten can arrive while KETT is awaiting a
 // fresh book or exchange response. Consult the latched field directly at every await boundary.
-function entryHalt(E) {
+//
+// A game bet answers to every halt but the day's loss limit (Evan, 2026-11-16: "Yes, exempt bets"). On Saturday
+// 2026-11-14, 121 games, the bets' own losses took the desk past 3% at 8:31 PM ET and five late college games went
+// unbet until the limit reset at midnight. A bet is one $100 stake a game by design, so the limit guards the other
+// books; TESS keeps E.betHalt, the halt with the drawdown left out, beside E.halt.
+function entryHalt(E, type) {
   if (E.operatorHalt) return E.operatorHalt;
-  if (E.halt) return E.halt;
+  const halt = type === 'bet' ? E.halt && E.betHalt : E.halt;   // a bet's halt is never stricter than the desk's
+  if (halt) return halt;
   if (E.cfg.mode === 'live' && !E.liveReady) return 'live venue not authenticated';
   return null;
 }
 
-function standDown(E) {
-  const halt = entryHalt(E);
+function standDown(E, type) {
+  const halt = entryHalt(E, type);
   if (halt) E.touch('KETT', 'standing down');
   return halt;
 }
@@ -187,9 +193,20 @@ function TESS(E) {
   const dd = (E.state.dayStartEquity - eq) / Math.max(1, E.state.dayStartEquity);
   const errs = http.recentErrors();
   const halt = decide.riskState({ operatorHalt: E.operatorHalt, age, drawdown: dd, errs, mode: E.cfg.mode, liveReady: E.liveReady, cfg: E.cfg });
+  // the same rails with the day's loss left out: the game bets' halt (entryHalt)
+  E.betHalt = decide.riskState({ operatorHalt: E.operatorHalt, age, drawdown: 0, errs, mode: E.cfg.mode, liveReady: E.liveReady, cfg: E.cfg });
+  const betHaltWas = E.betHaltSaid;
   if (halt !== E.halt) {
     E.halt = halt;
-    E.log('TESS', 'OPS', null, halt ? `HALT · ${halt} · no new risk until clear` : 'window is clean · trading re-enabled');
+    E.log('TESS', 'OPS', null, halt ? `HALT · ${halt} · no new risk until clear${E.betsGoOn() ? ', but the game bets go on' : ''}` : 'window is clean · trading re-enabled');
+  }
+  // under the loss limit the bets have a halt of their own; say when it starts and ends, since E.halt's line
+  // does not change (2026-11-16 review: API errors under a drawdown stopped the bets with no line anywhere)
+  const betNow = halt && E.cfg.bets && E.cfg.mode !== 'live' && E.betHalt && E.betHalt !== halt ? E.betHalt : null;
+  if (betNow !== (betHaltWas || null)) {
+    if (betNow) E.log('TESS', 'OPS', null, `HALT · the game bets stop too · ${betNow}`);
+    else if (betHaltWas && E.betsGoOn()) E.log('TESS', 'OPS', null, `the game bets go on again · ${halt}`);
+    E.betHaltSaid = betNow;
   }
   const budget = E.budget();
   E.touch('TESS', halt ? `HALT ${halt}` : `budget ${money(budget)}`);
@@ -517,11 +534,12 @@ function mergeBrainSignals(E) {
 
 // ---------------------------------------------------------------- KETT
 async function KETT(E) {
-  if (standDown(E)) return;
+  if (standDown(E, 'bet')) return;   // nothing goes, not even a game bet
   const live = E.cfg.mode === 'live';
   let considered = 0, looked = 0;
   for (const s of E.signals) {
-    if (standDown(E)) return;
+    if (standDown(E, 'bet')) return;
+    if (entryHalt(E, s.type)) continue;   // the day's loss limit: every book but the game bets waits
     if (considered >= 2) break; // pace: at most two new positions per cycle
     // ...and at most six signals per cycle may go to the live books. `considered` used to count every signal that got
     // this far, so two thin arbs that could never fill (the 5-lot floor, a stale listing) took both slots every 15
@@ -595,7 +613,8 @@ async function KETT(E) {
     // on the rare cycle a snipe signal exists.
     if (s.type === 'snipe') {
       const m = await pm.fetchMarket(s.pair.pm.id).catch(() => null);
-      if (standDown(E)) return;
+      if (standDown(E, 'bet')) return;
+      if (entryHalt(E, s.type)) continue;
       const yesPx = m && Array.isArray(m.prices) ? m.prices[s.pair.pm.tokenIndex || 0] : null;
       const against = Number.isFinite(yesPx) && (s.won === 'yes' ? yesPx < 0.5 : yesPx > 0.5);
       if (!decide.pmRecordSays(m) || against) {
@@ -609,7 +628,8 @@ async function KETT(E) {
     looked++;
     try { books = await Promise.all(s.legs.map((l) => E.book(l.venue, s.pair, l.side))); }
     catch (e) { E.log('KETT', 'PASS', null, `${s.pair.label}: book fetch failed (${e.message.slice(0, 60)})`); passFor(); continue; }
-    if (standDown(E)) return;
+    if (standDown(E, 'bet')) return;
+    if (entryHalt(E, s.type)) continue;
     // A locked arb is re-priced from the books just fetched, as a convergence trade already was. The
     // signal came from listing quotes, and a "locked" edge that only exists in a lagging listing
     // is two unhedged fills at prices that no longer give it.
@@ -653,7 +673,8 @@ async function KETT(E) {
       let far;
       try { far = await E.book(other(leg.venue), s.pair, 'yes'); }
       catch (e) { E.log('KETT', 'PASS', null, `${s.pair.label}: ${VEN[other(leg.venue)]} book fetch failed (${e.message.slice(0, 60)})`); passFor(); continue; }
-      if (standDown(E)) return;
+      if (standDown(E, 'bet')) return;
+      if (entryHalt(E, s.type)) continue;
       const near = books[0];
       if ([near.yesBid, near.yesAsk, far.yesBid, far.yesAsk].some((x) => x == null)) { E.log('KETT', 'PASS', null, `${s.pair.label}: one-sided book, no fill`); passFor(); continue; }
       const q = s.pair.q;
@@ -720,7 +741,7 @@ async function KETT(E) {
       let f;
       // This check must be immediately adjacent to the money-moving call: flatten can land after
       // the book fetch but before the first (or a later arb leg) is submitted.
-      if (entryHalt(E)) { failed = 'operator halt'; break; }
+      if (entryHalt(E, s.type)) { failed = 'operator halt'; break; }
       // deterministic idempotency key: a retried request for THIS leg of THIS group dedupes at
       // the exchange instead of opening a second position
       try { f = await E.broker.buy({ venue: l.venue, ref: refs[i], side: l.side, qty, limit: l.px + E.cfg.slipLimit, book: books[i].asks, feeRate: s.pair.q && s.pair.q.pmFeeRate, key: `${group}-${l.venue}${l.side[0]}-in` }); }
@@ -734,7 +755,7 @@ async function KETT(E) {
       fills.push({ leg: l, f });
       // An order already in flight cannot be un-sent. If flatten landed while awaiting its response,
       // account for the known fill below and unwind it, but never send the next leg.
-      if (entryHalt(E)) { failed = 'operator halt'; break; }
+      if (entryHalt(E, s.type)) { failed = 'operator halt'; break; }
     }
     if (uncertain) {
       // The broker persisted the uncertain intent before its POST. Known earlier legs are made

@@ -293,7 +293,7 @@ function pmFloor(engine, cfg, now = Date.now()) {
     // and since 2026-09-29, the desk itself
     now, initial, equity: r2(takerEq + (Number.isFinite(M.equity) ? M.equity : 0)),
     beat: engine.beat ? { taker: engine.beat.taker, maker: engine.beat.maker } : null, every: { taker: cfg.priceEvery, maker: cfg.makerEverySec },
-    halt: engine.halt || null,
+    halt: typeof engine.haltLine === 'function' ? engine.haltLine() : engine.halt || null,
     books: [arbs, maker, snipe, converge, bets],
     games,
     fills: fills.slice(0, 40),

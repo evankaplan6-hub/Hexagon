@@ -133,8 +133,10 @@ function deskOverview(E, _in, now) {
     } : null,
     halts: {
       riskHalt: E.halt || null,
+      gameBetHalt: E.betHalt || null,
+      gameBetsGoOn: typeof E.betsGoOn === 'function' ? E.betsGoOn() : false,
       operatorHalt: E.operatorHalt || null,
-      meaning: 'riskHalt is TESS stopping NEW trades (stale data, API errors, drawdown, or warming up after a start); operatorHalt is a manual flatten that stays until resumed. Open positions keep being managed either way.',
+      meaning: 'riskHalt is TESS stopping NEW trades (stale data, API errors, drawdown, or warming up after a start); since 2026-11-16 the daily drawdown alone does not stop the game bets: gameBetHalt is what stops them (every riskHalt reason but drawdown), and gameBetsGoOn says they are still being placed. operatorHalt is a manual flatten that stops everything until resumed. Open positions keep being managed either way.',
     },
     desks: AGENT_KEYS.filter((k) => E.agentStatus[k]).map((k) => {
       const a = E.agentStatus[k];
