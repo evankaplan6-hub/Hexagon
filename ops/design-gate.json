@@ -26,5 +26,18 @@
     "440 dark 44",
     "440 light 24"
   ],
-  "phoneAuditUrls": "tools/phone-audit-urls.txt"
+  "phoneAuditUrls": "tools/phone-audit-urls.txt",
+  "phoneAuditBroken": "^(STATUS|EVAL|NOSHEET|SHEET-NOT-OPEN|NO-FRAME)\\b",
+  "render": {
+    "start": "DEMO=1 DATA_DIR=\"$GATE_DATA\" PORT=\"$GATE_PORT\" exec node server.js",
+    "ready": "/",
+    "settle": 12,
+    "audit": "node tools/phone-audit.mjs \"$GATE_URL\" \"$GATE_OUT\" \"$GATE_URLS\" \"$GATE_WIDTH\" \"$GATE_SCHEME\"",
+    "auditEnv": {
+      "SHOTS": "1",
+      "FULL": "1"
+    },
+    "views": "#today",
+    "desktopReady": "!!document.getElementById(\"floor\") && !document.getElementById(\"floor\").hasAttribute(\"aria-busy\")"
+  }
 }

@@ -53,7 +53,8 @@ commands"). This file beats every skill. **A change to `public/` merges only wit
 CI check block it otherwise (`ops/design-gate.mjs`, 2026-11-17). The guard also refuses `--admin` and auto-merge here,
 and asks for `gh pr merge N --merge --match-head-commit <sha>` (the full commit written out) so only the reviewed commit
 merges. A change to the gate's own files (`ops/design-gate.json`, `ops/design-gate.mjs`, `.github/workflows/test.yml`)
-needs a review on record too.
+needs a review on record too. The script is the same file as Sera's; Hexagon's own settings (the checks, the phone audits,
+how the skill serves the demo) are in `ops/design-gate.json`.
 
 ## Running it
 
