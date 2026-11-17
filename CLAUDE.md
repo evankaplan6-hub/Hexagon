@@ -52,8 +52,13 @@ commands"). This file beats every skill. **A change to `public/` merges only wit
 `/design-gate` skill on the branch and commit the `design-reviews/` file it writes. The merge guard and the `design-gate`
 CI check block it otherwise (`ops/design-gate.mjs`, 2026-11-17). The guard also refuses `--admin` and auto-merge here,
 and asks for `gh pr merge N --merge --match-head-commit <sha>` (the full commit written out) so only the reviewed commit
-merges. A change to the gate's own files (`ops/design-gate.json`, `ops/design-gate.mjs`, `.github/workflows/test.yml`)
-needs a review on record too.
+merges. A change to the gate's own files (`ops/design-gate.json`, `ops/design-gate.mjs`, `.github/workflows/test.yml`,
+`tools/phone-audit.mjs`, `tools/phone-audit-urls.txt`) needs a review on record too. The script is meant to be one file for
+every gated repo (Sera's copy arrives with evankaplan6-hub/sera PR 234); Hexagon's own settings (the checks, the phone audits,
+how the skill serves the demo) are in `ops/design-gate.json`. The audits cover the routes file only: a changed view or sheet
+not listed there needs its route in the skill's extra routes file, or it is never loaded.
+Removing a view or sheet takes two pull requests: one that drops its route from `tools/phone-audit-urls.txt` (a gate-only
+review), merged first, then the screen change, since the record must cover every route on main's list.
 
 ## Running it
 

@@ -486,3 +486,64 @@ test("the command line: check exits 1 when missing, guard exits 2 to block", () 
     assert.match(out, /public\/desk\.css/);
   } finally { f.done(); }
 });
+
+/** A phone audit folder in the other shape a repo's tool may write: audit.json a plain list of { url, flags } rows,
+ *  with the width, scheme and tap size in meta.json (render.sh writes it next to the commit). */
+function listAudit(root, rows, meta = { width: 375, scheme: "light", tapMin: 44 }) {
+  const d = join(root, `audit-${Math.random().toString(36).slice(2)}`); mkdirSync(d);
+  writeFileSync(join(d, "audit.json"), JSON.stringify(rows));
+  if (meta) writeFileSync(join(d, "meta.json"), JSON.stringify(meta));
+  writeFileSync(join(d, "commit"), g(join(root, "work"), "rev-parse", "HEAD"));
+  return d;
+}
+
+test("a phone audit written as a list of rows counts, with its width and scheme from meta.json", () => {
+  const f = fixture();
+  try {
+    g(f.work, "checkout", "-q", "main");
+    mkdirSync(join(f.work, "docs"), { recursive: true });
+    writeFileSync(join(f.work, "docs/urls.txt"), "/\n/t/GME\n");
+    commit(f.work, "ops/design-gate.json", JSON.stringify({ ...CONFIG, phoneAuditSet: ["440 dark 44"], phoneAuditUrls: "docs/urls.txt",
+      phoneAuditBroken: "^(STATUS|EVAL|EMPTY)\\b" }));
+    g(f.work, "push", "-q", "origin", "main"); g(f.work, "checkout", "-q", "feature"); g(f.work, "merge", "-q", "main");
+    commit(f.work, "public/desk.css", "body { color: #111; }\n");
+    const n = notes(f.root), ok = [{ url: "/", flags: [] }, { url: "/t/GME", flags: ["LAZY", "CUT 2"] }];
+    const meta = { width: 440, scheme: "dark", tapMin: 44 };
+    assert.throws(() => record(f.work, { verdict: "pass", checks: ALL, notes: n, phoneAudit: [listAudit(f.root, ok, null)] }), /no meta.json/);
+    assert.throws(() => record(f.work, { verdict: "pass", checks: ALL, notes: n, phoneAudit: [listAudit(f.root, [{ url: "/" }], meta)] }), /rows without flags/);
+    // this repo's broken flags, not another tool's: EMPTY is broken here, and NOSHEET would mean nothing
+    assert.throws(() => record(f.work, { verdict: "pass", checks: ALL, notes: n,
+      phoneAudit: [listAudit(f.root, [{ url: "/", flags: ["EMPTY"] }, ok[1]], meta)] }), /\/ \(EMPTY\) didn't load/);
+    assert.throws(() => record(f.work, { verdict: "pass", checks: ALL, notes: n, phoneAudit: [listAudit(f.root, [ok[0]], meta)] }), /didn't cover \/t\/GME/);
+    const r = record(f.work, { verdict: "pass", checks: ALL, notes: n, phoneAudit: [listAudit(f.root, ok, meta)] });
+    assert.match(readFileSync(join(f.work, r.path), "utf8"), /440px dark, 44px taps: 2 routes, 1 flagged \(\/t\/GME LAZY CUT 2\)/);
+  } finally { f.done(); }
+});
+
+test("with no settings the gate covers only its own files", () => {
+  const f = fixture();
+  try {
+    g(f.work, "checkout", "-q", "main"); commit(f.work, "ops/design-gate.json", "{}");
+    g(f.work, "push", "-q", "origin", "main"); g(f.work, "checkout", "-q", "feature"); g(f.work, "merge", "-q", "main");
+    commit(f.work, "public/desk.css", "body { color: #111; }\n");
+    assert.equal(check(f.work, "origin/main", "HEAD").ok, true);
+    commit(f.work, "ops/design-gate.mjs", "// changed\n");
+    const r = check(f.work, "origin/main", "HEAD");
+    assert.equal(r.ok, false); assert.deepEqual(r.files, ["ops/design-gate.mjs"]); assert.deepEqual(r.uiFiles, []);
+  } finally { f.done(); }
+});
+
+test("a branch can't drop a route from its own coverage: the routes file comes from main", () => {
+  const f = fixture();
+  try {
+    g(f.work, "checkout", "-q", "main");
+    mkdirSync(join(f.work, "tools"), { recursive: true });
+    writeFileSync(join(f.work, "tools/urls.txt"), "/#today\n/#crypto\n");
+    commit(f.work, "ops/design-gate.json", JSON.stringify({ ...CONFIG, phoneAuditSet: ["375 light 44"], phoneAuditUrls: "tools/urls.txt" }));
+    g(f.work, "push", "-q", "origin", "main"); g(f.work, "checkout", "-q", "feature"); g(f.work, "merge", "-q", "main");
+    writeFileSync(join(f.work, "tools/urls.txt"), "/#today\n");
+    commit(f.work, "public/desk.css", "body { color: #111; }\n");
+    // phoneAudit() covers /#today only: main's list also asks for /#crypto
+    assert.throws(() => record(f.work, { verdict: "pass", checks: ALL, notes: notes(f.root), phoneAudit: [phoneAudit(f.root)] }), /didn't cover \/#crypto, listed in tools\/urls.txt on origin\/main\. .*in a pull request of its own first/);
+  } finally { f.done(); }
+});

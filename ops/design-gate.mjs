@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-// The design gate (2026-11-17). A change to the floor's screens (ops/design-gate.json "ui") may merge only
+// The design gate (2026-11-17; project-neutral 2026-11-17). A change to a repo's screens (ops/design-gate.json "ui") may merge only
 // with a design review on record for those exact changes. The record is design-reviews/<fingerprint>.md,
 // where the fingerprint is a hash of the branch's screen diff, so any later screen edit needs a new review.
 // The /design-gate skill runs the review and then `record`; the merge guard hook (~/.claude/hooks/design-gate-guard.sh,
-// for Claude Code and Codex) runs `guard`, and CI runs `check`. Zero dependencies, as the repo is.
+// for Claude Code and Codex) runs `guard`, and CI runs `check`. Zero dependencies. The same file serves every gated repo:
+// what differs (the screen folders, the checks, how to serve and audit the screens) is in ops/design-gate.json.
 //
 // usage:
 //   node ops/design-gate.mjs status [--base origin/main] [--head HEAD]
@@ -22,9 +23,12 @@ import { fileURLToPath } from "node:url";
 
 // ui: the screen files. protect: the gate's own files; a change to them also needs a review on record, so a pull
 // request can't loosen the gate for the ones after it (the design checks and phone audit apply to ui files only).
-// phoneAuditSet: the audits a record needs, as "WIDTH SCHEME TAPMIN" (each a folder of tools/phone-audit.mjs).
-const DEFAULTS = { ui: ["public/"], ignore: [], protect: ["ops/design-gate.json", "ops/design-gate.mjs", ".github/workflows/test.yml"],
-  checks: [], phoneAudit: false, phoneAuditSet: [] };
+// phoneAuditSet: the audits a record needs, as "WIDTH SCHEME TAPMIN" (each an output folder of the repo's phone audit,
+// as the design-gate skill's render.sh leaves it). phoneAuditUrls: the routes file every audit in the set must cover.
+// phoneAuditBroken: the flags (a regular expression) that mean a route didn't load or couldn't be read.
+// render: how the skill's render.sh serves and audits the screens; this script doesn't read it.
+const DEFAULTS = { ui: [], ignore: [], protect: ["ops/design-gate.json", "ops/design-gate.mjs"],
+  checks: [], phoneAudit: false, phoneAuditSet: [], phoneAuditBroken: "^(STATUS|EVAL|NOSHEET|SHEET-NOT-OPEN|NO-FRAME)\\b" };
 const VERDICTS = ["pass", "pass-with-fixes"];
 
 // The caller's pathspec settings would turn the :(top) and :(exclude) below into literal names; every call ignores them.
@@ -238,45 +242,66 @@ export function guard(dir, argString, gh = "gh") {
   return { block: false, pr, ...r };
 }
 
-// A route that didn't load, or whose page the audit couldn't read, measured nothing: the audit has to run again.
-const BROKEN = /^(STATUS|EVAL|NOSHEET|SHEET-NOT-OPEN|NO-FRAME)\b/;
+/** A phone audit folder's audit.json, in either shape: { width, scheme, tapMin, results: [{ route, flags }] }, or a
+ *  plain list of rows ({ url, flags }) whose width, scheme and tap size are in the folder's meta.json (render.sh
+ *  writes it). Rows come back as { route, flags }. */
+export function readAudit(d) {
+  const file = join(d, "audit.json");
+  if (!existsSync(file)) throw new Error(`no audit.json in ${d}; run the phone audit first`);
+  let a;
+  try { a = JSON.parse(readFileSync(file, "utf8")); } catch { a = null; }
+  if (Array.isArray(a)) {
+    let meta = null;
+    try { meta = JSON.parse(readFileSync(join(d, "meta.json"), "utf8")); } catch { /* said below */ }
+    if (!meta || meta.width == null || !meta.scheme) throw new Error(`${d} has no meta.json with its width and scheme; run the design gate's render.sh, which writes it`);
+    if (a.some((r) => !Array.isArray(r?.flags))) throw new Error(`${file} has rows without flags; this repo's phone audit is too old for the gate`);
+    a = { width: meta.width, scheme: meta.scheme, tapMin: meta.tapMin, results: a };
+  }
+  if (!a || !Array.isArray(a.results)) throw new Error(`${file} has no results; run the phone audit again`);
+  return { width: a.width, scheme: a.scheme, tapMin: a.tapMin ?? 44,
+    results: a.results.map((r) => ({ route: r.route ?? r.url, flags: r.flags || [] })) };
+}
 
 /** One line per phone audit folder. Each must be of the screens as committed now (render.sh writes the commit it
  *  served into the folder), every route must have loaded, and together they must cover cfg.phoneAuditSet. */
-function auditSummary(dir, dirs, cfg) {
+function auditSummary(dir, dirs, cfg, base) {
+  // A route that didn't load, or whose page the audit couldn't read, measured nothing: the audit has to run again.
+  const BROKEN = new RegExp(cfg.phoneAuditBroken || DEFAULTS.phoneAuditBroken);
   const seen = new Set(), routesBy = new Map();
   const lines = dirs.map((d) => {
-    const file = join(d, "audit.json");
-    if (!existsSync(file)) throw new Error(`no audit.json in ${d}; run the phone audit first`);
+    if (!existsSync(join(d, "audit.json"))) throw new Error(`no audit.json in ${d}; run the phone audit first`);
     const commit = existsSync(join(d, "commit")) ? readFileSync(join(d, "commit"), "utf8").trim() : null;
     if (!commit || !/^[0-9a-f]{40}$/.test(commit)) throw new Error(`${d} doesn't say which commit it audited; run the design gate's render.sh, which writes it`);
     if (/^[0-9a-f]{40}$/.test(commit) && tryGit(dir, ["cat-file", "-e", `${commit}^{commit}`]) != null
       && tryGit(dir, ["diff", "--quiet", commit, "HEAD", ...pathspec(cfg)]) == null)
       throw new Error(`${d} audited ${commit.slice(0, 12)}, whose screens differ from HEAD's; run the phone audit again`);
     if (tryGit(dir, ["cat-file", "-e", `${commit}^{commit}`]) == null) throw new Error(`${d} audited ${commit.slice(0, 12)}, which isn't in this checkout; run the phone audit again`);
-    let a;
-    try { a = JSON.parse(readFileSync(file, "utf8")); } catch { a = null; }
-    if (!a || !Array.isArray(a.results)) throw new Error(`${file} has no results; run the phone audit again`);
+    const a = readAudit(d);
     const broken = a.results.filter((r) => (r.flags || []).some((f) => BROKEN.test(f)));
     if (!a.results.length || broken.length)
       throw new Error(`${d}: ${a.results.length ? `${broken.map((r) => `${r.route} (${r.flags.filter((f) => BROKEN.test(f)).join(" ")})`).join(", ")} didn't load or couldn't be read` : "no routes"}; fix it and run the phone audit again`);
-    const key = `${a.width} ${a.scheme} ${a.tapMin ?? 44}`;
+    const key = `${a.width} ${a.scheme} ${a.tapMin}`;
     seen.add(key);
     for (const r of a.results) routesBy.set(key, (routesBy.get(key) || new Set()).add(r.route));
     const flagged = a.results.filter((r) => r.flags && r.flags.length);
-    return `- ${a.width}px ${a.scheme}, ${a.tapMin ?? 44}px taps: ${a.results.length} routes, ${flagged.length} flagged`
+    return `- ${a.width}px ${a.scheme}, ${a.tapMin}px taps: ${a.results.length} routes, ${flagged.length} flagged`
       + (flagged.length ? ` (${flagged.map((r) => `${r.route} ${r.flags.join(" ")}`).join("; ")})` : "");
   });
   const missing = (cfg.phoneAuditSet || []).filter((x) => !seen.has(x));
   if (missing.length) throw new Error(`--phone-audit is missing these audits (width, scheme, tap size): ${missing.join("; ")}`);
-  // each audit in the set covers every route the repo lists (an -extra folder adds routes, it doesn't replace them)
-  const listed = cfg.phoneAuditUrls && tryGit(dir, ["show", `HEAD:${cfg.phoneAuditUrls}`]);
+  // each audit in the set covers every route the repo lists (an -extra folder adds routes, it doesn't replace them).
+  // The list is the base's, like the settings, so a branch can't drop a route from its own coverage; a base without
+  // the file yet (the pull request that adds it) uses the branch's.
+  const fromBase = cfg.phoneAuditUrls && tryGit(dir, ["show", `${base}:${cfg.phoneAuditUrls}`]);
+  const listed = fromBase ?? (cfg.phoneAuditUrls && tryGit(dir, ["show", `HEAD:${cfg.phoneAuditUrls}`]));
   if (listed) {
     const want = listed.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"))
       .map((l) => l.replace(/\s+sheet=/, " sheet="));
     for (const key of cfg.phoneAuditSet || []) {
       const lack = want.filter((r) => !routesBy.get(key)?.has(r));
-      if (lack.length) throw new Error(`the ${key} audit didn't cover ${lack.join(", ")} (${cfg.phoneAuditUrls}); run it with that file`);
+      if (lack.length) throw new Error(`the ${key} audit didn't cover ${lack.join(", ")}, listed in ${cfg.phoneAuditUrls}`
+        + (fromBase != null ? ` on ${base}. Run the audit with ${base}'s list. To drop a route (a page or sheet that goes away), drop it`
+          + ` from the list in a pull request of its own first, merge that, then record this one` : `; run the audit with that file`));
     }
   }
   return lines;
@@ -294,8 +319,8 @@ export function record(dir, opts) {
   const ui = d.uiFiles.length > 0;
   const missing = ui ? cfg.checks.filter((c) => !checks.includes(c)) : [];
   if (missing.length) throw new Error(`--checks is missing ${missing.join(", ")} (this repo's ops/design-gate.json asks for them)`);
-  const audits = cfg.phoneAudit && ui ? auditSummary(dir, opts.phoneAudit || [], cfg) : [];
-  if (cfg.phoneAudit && ui && !audits.length) throw new Error("--phone-audit DIR is required (an output folder of tools/phone-audit.mjs, run after the last screen commit)");
+  const audits = cfg.phoneAudit && ui ? auditSummary(dir, opts.phoneAudit || [], cfg, base) : [];
+  if (cfg.phoneAudit && ui && !audits.length) throw new Error("--phone-audit DIR is required (an output folder of the design gate's render.sh, run after the last screen commit)");
   const { path } = recordFor(dir, d.mergeBase, "HEAD", d.fingerprint);
   const body = [
     "# Design review", "",
