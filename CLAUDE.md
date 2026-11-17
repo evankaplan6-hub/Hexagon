@@ -48,7 +48,9 @@ Before any UI change read `PRODUCT.md` and `DESIGN.md`, review against `docs/des
 `docs/design/references/`, and run `node tools/phone-audit.mjs` on the demo. The design system is locked (`public/tokens.css`).
 Impeccable's `critique`, `audit`, `polish`, `quieter` and `distill` are allowed; `bolder`, `colorize`, `overdrive` and
 `delight` are banned. unslop runs as audit and polish only, and frontend-design is not used here (`DESIGN.md`, "Impeccable
-commands"). This file beats every skill.
+commands"). This file beats every skill. **A change to `public/` merges only with a design review on record**: run the
+`/design-gate` skill on the branch and commit the `design-reviews/` file it writes. The merge guard and the `design-gate`
+CI check block it otherwise (`ops/design-gate.mjs`, 2026-11-17).
 
 ## Running it
 
