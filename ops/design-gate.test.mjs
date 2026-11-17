@@ -140,6 +140,10 @@ test("merge arguments are read the way gh reads them", () => {
   assert.deepEqual(parseMerge(splitArgs(`7 --repo=o/r --admin`)), { ...base, selector: "7", repo: "o/r", admin: true });
   assert.deepEqual(parseMerge(splitArgs(`-R o/r --squash`)), { ...base, selector: null, repo: "o/r", admin: false });
   assert.deepEqual(parseMerge(splitArgs(`5 --auto --match-head-commit abc`)), { ...base, selector: "5", repo: null, admin: false, auto: true, matchHead: "abc" });
+  assert.equal(parseMerge(splitArgs(`5 --auto=true`)).auto, true);
+  assert.equal(parseMerge(splitArgs(`5 --admin=1`)).admin, true);
+  assert.equal(parseMerge(splitArgs(`5 --admin=false`)).admin, false);
+  assert.equal(parseMerge(splitArgs(`5 -Ro/r`)).repo, "o/r");
   for (const r of ["o/r", "github.com/o/r", "https://github.com/o/r", "https://github.com/o/r.git/", "git@github.com:o/r.git"]) assert.equal(normalizeRepo(r), "o/r", r);
 });
 
@@ -181,6 +185,65 @@ test("merging main into a reviewed branch keeps the review, even when main chang
     const e = readFileSync(join(f.work, "public/desk.css"), "utf8").replace(".r0 { top: 100px; }", ".r0 { top: 101px; }");
     commit(f.work, "public/desk.css", e);
     assert.equal(check(f.work, "origin/main", "HEAD").ok, false);
+  } finally { f.done(); }
+});
+
+test("moving a reviewed line elsewhere in its file needs a new review", () => {
+  const f = fixture();
+  try {
+    commit(f.work, "public/desk.css", ".a { top: 0; }\n@media (max-width: 400px) {\n  .tiny { top: 1px; }\n}\n.b { top: 2px; }\n");
+    g(f.work, "checkout", "-q", "main"); g(f.work, "merge", "-q", "--ff-only", "feature"); g(f.work, "push", "-q", "origin", "main");
+    g(f.work, "checkout", "-q", "-b", "f2");
+    commit(f.work, "public/desk.css", ".a { top: 0; }\n@media (max-width: 400px) {\n  .tiny { top: 1px; }\n  .nav { display: none; }\n}\n.b { top: 2px; }\n");
+    record(f.work, { verdict: "pass", checks: ALL, notes: notes(f.root), phoneAudit: [phoneAudit(f.root)] });
+    g(f.work, "add", "-A"); g(f.work, "commit", "-q", "-m", "review");
+    assert.equal(check(f.work, "origin/main", "HEAD").ok, true);
+    commit(f.work, "public/desk.css", "  .nav { display: none; }\n.a { top: 0; }\n@media (max-width: 400px) {\n  .tiny { top: 1px; }\n}\n.b { top: 2px; }\n");
+    assert.equal(check(f.work, "origin/main", "HEAD").ok, false);
+  } finally { f.done(); }
+});
+
+test("a review already on main can't be reused by a later pull request", () => {
+  const f = fixture();
+  try {
+    commit(f.work, "public/desk.css", "body { color: #111; }\n.debug {\n  display: none;\n}\n");
+    record(f.work, { verdict: "pass", checks: ALL, notes: notes(f.root), phoneAudit: [phoneAudit(f.root)] });
+    g(f.work, "add", "-A"); g(f.work, "commit", "-q", "-m", "review");
+    g(f.work, "checkout", "-q", "main"); g(f.work, "merge", "-q", "--no-ff", "-m", "merge A", "feature"); g(f.work, "push", "-q", "origin", "main");
+    // B reverts A's lines: the same patch reversed is a different fingerprint, so make B re-add exactly A's change
+    g(f.work, "checkout", "-q", "-b", "undo"); commit(f.work, "public/desk.css", "body { color: black; }\n");
+    g(f.work, "checkout", "-q", "main"); g(f.work, "merge", "-q", "--ff-only", "undo"); g(f.work, "push", "-q", "origin", "main");
+    g(f.work, "checkout", "-q", "-b", "b");
+    commit(f.work, "public/desk.css", "body { color: #111; }\n.debug {\n  display: none;\n}\n");
+    const r = check(f.work, "origin/main", "HEAD");
+    assert.equal(r.ok, false); assert.match(r.reason, /earlier pull request/);
+  } finally { f.done(); }
+});
+
+test("a change to the gate's own files needs a review on record, without the design checks", () => {
+  const f = fixture();
+  try {
+    commit(f.work, "ops/design-gate.json", JSON.stringify({ ...CONFIG, ignore: ["public/"] }));
+    const r = check(f.work, "origin/main", "HEAD");
+    assert.equal(r.ok, false); assert.deepEqual(r.files, ["ops/design-gate.json"]);
+    record(f.work, { verdict: "pass", checks: "", notes: notes(f.root) });
+    g(f.work, "add", "-A"); g(f.work, "commit", "-q", "-m", "review of the gate change");
+    assert.equal(check(f.work, "origin/main", "HEAD").ok, true);
+  } finally { f.done(); }
+});
+
+test("the fingerprint ignores compression, GIT_DIFF_OPTS and git -c settings, binary files included", () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.work, "public/icon.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 3, 255, 0, 10, 13]));
+    commit(f.work, "public/desk.css", "body { color: #111; }\n");
+    const cfg = loadConfig(f.work, "origin/main");
+    const plain = diffOf(f.work, "origin/main", "HEAD", cfg).fingerprint;
+    g(f.work, "config", "core.compression", "0");
+    const saved = { ...process.env };
+    process.env.GIT_DIFF_OPTS = "-u3"; process.env.GIT_CONFIG_PARAMETERS = "'diff.context'='5'";
+    try { assert.equal(diffOf(f.work, "origin/main", "HEAD", cfg).fingerprint, plain); }
+    finally { for (const k of ["GIT_DIFF_OPTS", "GIT_CONFIG_PARAMETERS"]) { if (saved[k] == null) delete process.env[k]; else process.env[k] = saved[k]; } }
   } finally { f.done(); }
 });
 

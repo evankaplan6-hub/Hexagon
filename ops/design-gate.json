@@ -1,6 +1,7 @@
 {
   "ui": ["public/"],
-  "ignore": ["public/vendor/"],
+  "ignore": ["public/vendor/lightweight-charts.standalone.production.js"],
+  "protect": ["ops/design-gate.json", "ops/design-gate.mjs"],
   "checks": ["impeccable-audit", "impeccable-critique", "unslop-audit", "break-ui", "phone-audit", "blind-read"],
   "phoneAudit": true
 }

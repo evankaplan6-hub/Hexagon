@@ -18,7 +18,9 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-const DEFAULTS = { ui: ["public/"], ignore: [], checks: [], phoneAudit: false };
+// ui: the screen files. protect: the gate's own files; a change to them also needs a review on record, so a pull
+// request can't loosen the gate for the ones after it (the design checks and phone audit apply to ui files only).
+const DEFAULTS = { ui: ["public/"], ignore: [], protect: ["ops/design-gate.json", "ops/design-gate.mjs"], checks: [], phoneAudit: false };
 const VERDICTS = ["pass", "pass-with-fixes"];
 
 export function git(dir, args, opts = {}) {
@@ -42,19 +44,25 @@ export function loadConfig(dir, base) {
 
 // Root-relative, so a run from a subfolder sees the same files.
 export const pathspec = (cfg) => ["--", ...cfg.ui.map((p) => `:(top)${p}`), ...cfg.ignore.map((p) => `:(top,exclude)${p}`)];
+const gatedSpec = (cfg) => [...pathspec(cfg), ...(cfg.protect || []).map((p) => `:(top)${p}`)];
+const isUi = (cfg, f) => cfg.ui.some((u) => f === u || f.startsWith(u.endsWith("/") ? u : u + "/"))
+  && !cfg.ignore.some((x) => f === x || f.startsWith(x.endsWith("/") ? x : x + "/"));
 
 // The fingerprint's diff ignores every git setting of whoever computes it (a Mac, a Codex worktree, the CI runner):
 // no user or system config, plumbing diff-tree, and each output option pinned.
-const PINNED_ENV = { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_COUNT: "0" };
-const PINNED_DIFF = ["-c", "core.quotePath=true", "diff-tree", "-r", "-p", "-U0", "--binary", "--full-index", "--no-renames",
+const PINNED_ENV = { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_COUNT: "0", GIT_CONFIG_PARAMETERS: "",
+  GIT_DIFF_OPTS: "" };
+// -U1: each changed line is tied to its neighbours, so moving a reviewed line elsewhere needs a new review. --text:
+// binary files as text, so neither zlib nor .gitattributes changes the bytes.
+const PINNED_DIFF = ["-c", "core.quotePath=true", "diff-tree", "-r", "-p", "-U1", "--text", "--full-index", "--no-renames",
   "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/", "--dst-prefix=b/", "--diff-algorithm=myers",
   "--no-indent-heuristic", "-O/dev/null"];
 
-/** The branch's own screen changes as text: which lines each file loses and gains, without where the hunks sit or
- *  which blobs the base had. So merging main into the branch, or a rebase, keeps the review when the branch's own
- *  change is the same; any edit to the changed lines needs a new one. */
+/** The branch's own screen changes as text: which lines each file loses and gains, with one line around each, without
+ *  where the hunks sit or which blobs the base had. So merging main into the branch, or a rebase, keeps the review when
+ *  the branch's own change is the same; any edit to the changed lines, or moving them, needs a new one. */
 export function screenPatch(dir, mb, head, cfg) {
-  const raw = git(dir, [...PINNED_DIFF, mb, head, ...pathspec(cfg)], { env: { ...process.env, ...PINNED_ENV } });
+  const raw = git(dir, [...PINNED_DIFF, mb, head, ...gatedSpec(cfg)], { env: { ...process.env, ...PINNED_ENV } });
   return raw.split("\n").filter((l) => !l.startsWith("index "))
     .map((l) => l.startsWith("@@") ? l.replace(/^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@.*$/, (_, a, b) => `@@ -${a ?? 1} +${b ?? 1} @@`) : l)
     .join("\n");
@@ -63,10 +71,10 @@ export function screenPatch(dir, mb, head, cfg) {
 /** The screen files a branch changes, and the hash of exactly those changes. */
 export function diffOf(dir, base, head, cfg) {
   const mb = git(dir, ["merge-base", base, head]).trim();
-  const files = git(dir, ["diff", "--name-only", "--no-renames", mb, head, ...pathspec(cfg)], { env: { ...process.env, ...PINNED_ENV } })
+  const files = git(dir, ["diff", "--name-only", "--no-renames", mb, head, ...gatedSpec(cfg)], { env: { ...process.env, ...PINNED_ENV } })
     .split("\n").filter(Boolean);
   const fingerprint = createHash("sha256").update(screenPatch(dir, mb, head, cfg)).digest("hex");
-  return { mergeBase: mb, files, fingerprint };
+  return { mergeBase: mb, files, uiFiles: files.filter((f) => isUi(cfg, f)), fingerprint };
 }
 
 export const recordPath = (fp) => `design-reviews/${fp.slice(0, 16)}.md`;
@@ -85,10 +93,12 @@ export function check(dir, base, head) {
   const path = recordPath(d.fingerprint);
   const text = tryGit(dir, ["show", `${head}:${path}`]);
   if (text == null) return { ok: false, ...d, path, reason: `no design review on record for these screen changes (${path})` };
+  if (tryGit(dir, ["cat-file", "-e", `${d.mergeBase}:${path}`]) != null)
+    return { ok: false, ...d, path, reason: `${path} belongs to an earlier pull request already on ${base}; this one needs its own review` };
   const r = parseRecord(text);
   if (r.fingerprint !== d.fingerprint) return { ok: false, ...d, path, reason: `${path} is for different screen changes` };
   if (!VERDICTS.includes(r.verdict)) return { ok: false, ...d, path, reason: `${path} says "${r.verdict}", not a pass` };
-  const missing = cfg.checks.filter((c) => !r.checks.includes(c));
+  const missing = d.uiFiles.length ? cfg.checks.filter((c) => !r.checks.includes(c)) : [];
   if (missing.length) return { ok: false, ...d, path, reason: `${path} is missing checks: ${missing.join(", ")}` };
   return { ok: true, ...d, path, reason: `design review on record (${path})` };
 }
@@ -128,11 +138,16 @@ export function parseMerge(args) {
   let selector = null, repo = null, admin = false, auto = false, disableAuto = false, matchHead = null;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (a === "--admin") { admin = true; continue; }
-    if (a === "--auto") { auto = true; continue; }
-    if (a === "--disable-auto") { disableAuto = true; continue; }
+    // on/off flags, also as --auto=true (gh takes =value; anything but false, 0 or f is on)
+    const onoff = a.match(/^--(admin|auto|disable-auto)(?:=(.*))?$/);
+    if (onoff) {
+      const on = onoff[2] == null || !/^(false|0|f)$/i.test(onoff[2]);
+      if (onoff[1] === "admin") admin = on; else if (onoff[1] === "auto") auto = on; else disableAuto = on;
+      continue;
+    }
     const eq = a.match(/^(-R|--repo|--match-head-commit)=(.*)$/);
     if (eq) { if (eq[1] === "--match-head-commit") matchHead = eq[2]; else repo = eq[2]; continue; }
+    if (/^-R./.test(a)) { repo = a.slice(2); continue; }
     if (a === "-R" || a === "--repo") { repo = args[++i] ?? null; continue; }
     if (a === "--match-head-commit") { matchHead = args[++i] ?? null; continue; }
     if (a.startsWith("-")) { if (VALUE_FLAGS.has(a)) i++; continue; }
@@ -183,21 +198,22 @@ export function record(dir, opts) {
   const cfg = loadConfig(dir, base);
   if (!VERDICTS.includes(opts.verdict)) throw new Error(`--verdict must be ${VERDICTS.join(" or ")}; a failing review is fixed, not recorded`);
   const checks = (opts.checks || "").split(",").map((s) => s.trim()).filter(Boolean);
-  const missing = cfg.checks.filter((c) => !checks.includes(c));
-  if (missing.length) throw new Error(`--checks is missing ${missing.join(", ")} (this repo's ops/design-gate.json asks for them)`);
   if (!opts.notes || !existsSync(opts.notes)) throw new Error("--notes FILE is required: what each check found and what was fixed");
-  if (git(dir, ["status", "--porcelain", ...pathspec(cfg)]).trim()) throw new Error("commit the screen changes first: the review covers committed changes only");
+  if (git(dir, ["status", "--porcelain", ...gatedSpec(cfg)]).trim()) throw new Error("commit the screen changes first: the review covers committed changes only");
   const d = diffOf(dir, base, "HEAD", cfg);
   if (!d.files.length) throw new Error("no screen files changed on this branch; nothing to review");
+  const ui = d.uiFiles.length > 0;
+  const missing = ui ? cfg.checks.filter((c) => !checks.includes(c)) : [];
+  if (missing.length) throw new Error(`--checks is missing ${missing.join(", ")} (this repo's ops/design-gate.json asks for them)`);
   const lastScreenCommit = +git(dir, ["log", "-1", "--format=%ct", "HEAD", ...pathspec(cfg)]).trim();
-  const audits = cfg.phoneAudit ? auditSummary(opts.phoneAudit || [], lastScreenCommit) : [];
-  if (cfg.phoneAudit && !audits.length) throw new Error("--phone-audit DIR is required (an output folder of tools/phone-audit.mjs, run after the last screen commit)");
+  const audits = cfg.phoneAudit && ui ? auditSummary(opts.phoneAudit || [], lastScreenCommit) : [];
+  if (cfg.phoneAudit && ui && !audits.length) throw new Error("--phone-audit DIR is required (an output folder of tools/phone-audit.mjs, run after the last screen commit)");
   const path = recordPath(d.fingerprint);
   const body = [
     "# Design review", "",
     `Fingerprint: ${d.fingerprint}`,
     `Verdict: ${opts.verdict}`,
-    `Checks: ${checks.join(", ")}`,
+    `Checks: ${checks.join(", ") || "none (only the gate's own files changed)"}`,
     `Tool: ${opts.tool || "unknown"}`,
     `Reviewed: ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC`,
     `Files: ${d.files.join(", ")}`, "",

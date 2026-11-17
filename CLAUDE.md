@@ -51,7 +51,8 @@ Impeccable's `critique`, `audit`, `polish`, `quieter` and `distill` are allowed;
 commands"). This file beats every skill. **A change to `public/` merges only with a design review on record**: run the
 `/design-gate` skill on the branch and commit the `design-reviews/` file it writes. The merge guard and the `design-gate`
 CI check block it otherwise (`ops/design-gate.mjs`, 2026-11-17). The guard also refuses `--admin` and auto-merge here,
-and asks for `gh pr merge N --merge --match-head-commit <sha>` so only the reviewed commit merges.
+and asks for `gh pr merge N --merge --match-head-commit <sha>` (the full commit written out) so only the reviewed commit
+merges. A change to the gate's own files (`ops/design-gate.json`, `ops/design-gate.mjs`) needs a review on record too.
 
 ## Running it
 
