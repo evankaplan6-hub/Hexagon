@@ -57,6 +57,8 @@ merges. A change to the gate's own files (`ops/design-gate.json`, `ops/design-ga
 every gated repo (Sera's copy arrives with evankaplan6-hub/sera PR 234); Hexagon's own settings (the checks, the phone audits,
 how the skill serves the demo) are in `ops/design-gate.json`. The audits cover the routes file only: a changed view or sheet
 not listed there needs its route in the skill's extra routes file, or it is never loaded.
+Removing a view or sheet takes two pull requests: one that drops its route from `tools/phone-audit-urls.txt` (a gate-only
+review), merged first, then the screen change, since the record must cover every route on main's list.
 
 ## Running it
 

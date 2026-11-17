@@ -544,6 +544,6 @@ test("a branch can't drop a route from its own coverage: the routes file comes f
     writeFileSync(join(f.work, "tools/urls.txt"), "/#today\n");
     commit(f.work, "public/desk.css", "body { color: #111; }\n");
     // phoneAudit() covers /#today only: main's list also asks for /#crypto
-    assert.throws(() => record(f.work, { verdict: "pass", checks: ALL, notes: notes(f.root), phoneAudit: [phoneAudit(f.root)] }), /didn't cover \/#crypto/);
+    assert.throws(() => record(f.work, { verdict: "pass", checks: ALL, notes: notes(f.root), phoneAudit: [phoneAudit(f.root)] }), /didn't cover \/#crypto, listed in tools\/urls.txt on origin\/main\. .*in a pull request of its own first/);
   } finally { f.done(); }
 });

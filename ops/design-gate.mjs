@@ -292,13 +292,16 @@ function auditSummary(dir, dirs, cfg, base) {
   // each audit in the set covers every route the repo lists (an -extra folder adds routes, it doesn't replace them).
   // The list is the base's, like the settings, so a branch can't drop a route from its own coverage; a base without
   // the file yet (the pull request that adds it) uses the branch's.
-  const listed = cfg.phoneAuditUrls && (tryGit(dir, ["show", `${base}:${cfg.phoneAuditUrls}`]) ?? tryGit(dir, ["show", `HEAD:${cfg.phoneAuditUrls}`]));
+  const fromBase = cfg.phoneAuditUrls && tryGit(dir, ["show", `${base}:${cfg.phoneAuditUrls}`]);
+  const listed = fromBase ?? (cfg.phoneAuditUrls && tryGit(dir, ["show", `HEAD:${cfg.phoneAuditUrls}`]));
   if (listed) {
     const want = listed.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"))
       .map((l) => l.replace(/\s+sheet=/, " sheet="));
     for (const key of cfg.phoneAuditSet || []) {
       const lack = want.filter((r) => !routesBy.get(key)?.has(r));
-      if (lack.length) throw new Error(`the ${key} audit didn't cover ${lack.join(", ")} (${cfg.phoneAuditUrls}); run it with that file`);
+      if (lack.length) throw new Error(`the ${key} audit didn't cover ${lack.join(", ")}, listed in ${cfg.phoneAuditUrls}`
+        + (fromBase != null ? ` on ${base}. Run the audit with ${base}'s list. To drop a route (a page or sheet that goes away), drop it`
+          + ` from the list in a pull request of its own first, merge that, then record this one` : `; run the audit with that file`));
     }
   }
   return lines;
