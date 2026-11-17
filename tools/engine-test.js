@@ -1478,6 +1478,78 @@ const position = (over = {}) => ({
     ok('a desk with no maker history yet answers empty, not undefined', Array.isArray(hb.makerHist) && hb.makerHist.length === 0 && hb.historyValidFrom === 0 && Array.isArray(hb.balanceHistory), hb);
   }
 
+  group('the day\'s loss limit stops every book but the game bets (Evan, 2026-11-16: "Yes, exempt bets")');
+  {
+    // Saturday 2026-11-14: 121 games, the bets' own losses took the desk past 3% at 8:31 PM ET, and five late college
+    // games went unbet until midnight. A drawdown halt now stops the arbs, the maker and the snipe, not the bets;
+    // every other halt (no quotes, API errors, the operator's) still stops the bets too.
+    const { TESS } = require('../src/agents');
+    const { ET_DAY } = require('../src/recorder');
+    const now = Date.now();
+    const game = () => ({ id: 'pmD:0|KXNCAAFGAME-26NOV14WYOUTEP-WYO', label: 'NCAAF Wyoming v UTEP · Wyoming', kind: 'game', series: 'KXNCAAFGAME', inPlay: false, startsAt: now + 3600000,
+      pm: { id: 'pmD', tokenIndex: 0 }, ks: { ticker: 'KXNCAAFGAME-26NOV14WYOUTEP-WYO', eventTicker: 'KXNCAAFGAME-26NOV14WYOUTEP' },
+      q: { pmBid: 0.71, pmAsk: 0.72, ksBid: 0.71, ksAsk: 0.72, pmMid: 0.715, ksMid: 0.715, pmVol: 1e6, ksVol: 1e6, pmFeeRate: 0.05, t: now, pmAt: now, ksAt: now } });
+    const arbPair = { id: 'pmA:0|KXARB-1', label: 'arb pair', pm: { id: 'pmA', tokenIndex: 0 }, ks: { ticker: 'KXARB-1' }, q: { pmFeeRate: 0.05 } };
+    const mk = () => {
+      const X = engine({ bets: true, betSeries: ['KXNCAAFGAME'], betUsd: 100, betMaxPx: 0.9 });
+      X.said = []; X.log = (agent, kind, pnl, text) => X.said.push({ agent, kind, text });
+      X.quotes.pm.set('pmD', { tokenIds: ['tWYO', 'tUTEP'] }); X.quotes.pm.set('pmA', { tokenIds: ['tA', 'tB'] });
+      X.lastQuoteAt = Date.now();
+      X.state.dayKey = ET_DAY.format(new Date()); X.state.dayStartEquity = 10500;   // down 4.8% today, over the 3% limit
+      X.pairs = [game()];
+      X.book = async () => ({ asks: [{ price: 0.40, size: 5000 }], yesBid: 0.39, yesAsk: 0.40 });
+      return X;
+    };
+    const run = async (X) => {
+      BRAM(X);
+      const bet = X.signals.find((x) => x.type === 'bet');
+      // an arb first in line, as a real one would be: it must wait, and must not stop the bet behind it
+      X.signals = [{ pair: arbPair, type: 'arb', edge: 0.10, gap: 0.10, legs: [{ venue: 'KS', side: 'yes', px: 0.40 }, { venue: 'PM', side: 'no', px: 0.40 }] }, ...(bet ? [bet] : [])];
+      X.book = async () => ({ asks: [{ price: 0.72, size: 5000 }], yesBid: 0.71, yesAsk: 0.72 });
+      await KETT(X);
+    };
+    const D = mk();
+    TESS(D);
+    ok('TESS: the desk halts on the day\'s loss', /daily drawdown/.test(D.halt || ''), D.halt);
+    ok('...but the game bets\' halt leaves the loss out: clear', D.betHalt === null, D.betHalt);
+    ok('...and TESS says the game bets go on', D.said.some((l) => l.agent === 'TESS' && /HALT · daily drawdown.*the game bets go on/.test(l.text)), D.said);
+    await run(D);
+    ok('under the loss limit the game is still bet', D.state.positions.some((p) => p.strategy === 'bet'), D.said);
+    ok('...and the arb ahead of it is not bought', !D.state.positions.some((p) => p.strategy === 'arb'), D.state.positions);
+    // no quotes for 2 minutes: stale data stops the bets as well
+    const Q = mk(); Q.lastQuoteAt = Date.now() - 120e3;
+    TESS(Q);
+    ok('stale data halts the game bets too', /stale data/.test(Q.betHalt || ''), Q.betHalt);
+    await run(Q);
+    ok('...so nothing is bought, bet or arb', Q.state.positions.length === 0, Q.state.positions);
+    // the operator's halt stops everything, the bets with it
+    const O = mk(); O.operatorHalt = 'operator halt (test)';
+    TESS(O);
+    await run(O);
+    ok('an operator halt stops the game bets', O.state.positions.length === 0, O.state.positions);
+    // a clean day: TESS clears both
+    const C = mk(); C.state.dayStartEquity = 10000;
+    TESS(C);
+    ok('a clean day clears both halts', C.halt === null && C.betHalt === null, { halt: C.halt, betHalt: C.betHalt });
+    // what a person reads: the floor, /pm and the Ask panel share one halt line (review, 2026-11-16)
+    ok('the floor\'s halt line says the bets go on under the loss limit', D.haltLine() === `${D.halt}; the game bets go on` && D.snapshot().halt === D.haltLine(), D.haltLine());
+    const L = mk(); L.cfg.mode = 'live'; L.liveReady = true;
+    TESS(L);
+    ok('live mode: no bet is ever made there, so the halt does not say the bets go on', /daily drawdown/.test(L.halt || '') && L.haltLine() === L.halt && !L.said.some((l) => /bets go on/.test(l.text)), { line: L.haltLine(), said: L.said });
+    const N = mk(); N.cfg.bets = false;
+    TESS(N);
+    ok('bets switched off: nor does it', N.haltLine() === N.halt, N.haltLine());
+    // under the loss limit, a second halt that stops the bets is said, and named on the floor
+    const http = require('../src/http');
+    const was = http.recentErrors;
+    http.recentErrors = () => 999;
+    try { TESS(D); } finally { http.recentErrors = was; }
+    ok('API errors under the loss limit: the bets stop, and TESS says so', /API errors/.test(D.betHalt || '') && D.said.some((l) => /HALT · the game bets stop too · \d+ API errors/.test(l.text)), D.said.slice(-3));
+    ok('...and the floor names it', /the game bets stopped too: \d+ API errors/.test(D.haltLine() || ''), D.haltLine());
+    TESS(D);
+    ok('when the errors clear, TESS says the bets go on again', D.betHalt === null && D.said.some((l) => /the game bets go on again/.test(l.text)), D.said.slice(-3));
+  }
+
   group('two arbs too thin to fill do not starve the game bets below them (audit 2026-10-07)');
   {
     // KETT tries at most two new positions a cycle, and used to count every signal that got as far as the

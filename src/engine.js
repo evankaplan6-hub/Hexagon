@@ -142,6 +142,7 @@ class Engine {
     this.timers = {};
     this.lastQuoteAt = 0;
     this.halt = 'warming up';
+    this.betHalt = 'warming up';   // the halt a game bet answers to: every rail but the day's loss (agents.entryHalt)
     this.cycle = 0;
     this.resolutionChecks = new Map();
     // pairId -> last exit time; no re-entry for a while. RESTORED FROM THE LEDGER, because a
@@ -287,6 +288,15 @@ class Engine {
     this.dirty = true;
     const p = pnl == null ? '' : `${pnl >= 0 ? '+' : '-'}$${Math.abs(pnl).toFixed(2)}`;
     console.log(`${new Date().toISOString().slice(11, 19)} ${agent} ${kind.padEnd(8)} ${p.padEnd(9)} ${text}`);
+  }
+  // The halt as a person reads it (the floor, /pm, the Ask panel), and whether the game bets still go on under it:
+  // the day's loss limit stops every book but the bets (agents.entryHalt), when the bets are on and in paper.
+  betsGoOn() { return !!(this.halt && !this.betHalt && !this.operatorHalt && this.cfg.bets && this.cfg.mode !== 'live'); }
+  haltLine() {
+    if (!this.halt) return null;
+    if (this.betsGoOn()) return `${this.halt}; the game bets go on`;
+    if (this.cfg.bets && this.cfg.mode !== 'live' && this.betHalt && this.betHalt !== this.halt) return `${this.halt}; the game bets stopped too: ${this.betHalt}`;
+    return this.halt;
   }
   equity() { return r2(this.state.cash + this.state.positions.reduce((a, p) => a + p.qty * (p.mark ?? p.entry), 0)); }
   budget() { return r2(Math.max(0, Math.min(this.cfg.maxPositionPct * this.equity(), this.state.cash * 0.95))); }
@@ -1288,7 +1298,7 @@ class Engine {
       // `score` is only how the widest pair was picked; the page reads the gap and the label
       .map((r) => ({ ...r, best: r.best ? { gap: r.best.gap, tradeable: r.best.tradeable, label: r.best.label } : null }));
     return {
-      now, name: 'The Hexagon', mode: this.cfg.mode, demo: this.cfg.demo, startedAt: s.startedAt, halt: this.halt,
+      now, name: 'The Hexagon', mode: this.cfg.mode, demo: this.cfg.demo, startedAt: s.startedAt, halt: this.haltLine(),
       // What this process was built from, and when it started. `bootedAt` is deliberately not
       // `startedAt`: that one is the ACCOUNT's age and survives every restart, so it cannot answer
       // "did the box actually pick up that deploy?" -- which is the question this pair exists for.
