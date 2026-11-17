@@ -195,7 +195,7 @@ function handle(req, res) {
   // Nothing here is meant to be framed (the /pm page has paper Sell buttons), and no file is a script
   // unless it says so. Since 2026-10-16 the pages may load script, data and images only from here (no page has
   // an inline script or handler; style attributes and the login page's <style> need 'unsafe-inline', and /pm
-  // and the lookout still load Google Fonts), and a browser that has seen the site keeps to https for a year:
+  // still loads Google Fonts), and a browser that has seen the site keeps to https for a year:
   // the one-click ?k= link typed as http:// would otherwise cross the internet in the clear once.
   res.setHeader('content-security-policy', CSP);
   res.setHeader('x-content-type-options', 'nosniff');

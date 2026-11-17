@@ -90,6 +90,18 @@ Nothing clever survived testing, so the books run the one thing that did.
 | KETT | fills every order at the real bid and ask, fees included |
 | PRED | the prediction-market desk trading in paper beside it: its lines on the activity list are PRED's, its maker's MAKR's |
 
+**The floor's five views (2026-11-11).** A structure audit found one grouping used three ways: Today counted three
+parts (Crypto & SPY, Games, Arbs & maker), the tabs two (Games, and a Markets view holding the other two), and the
+Activity filter two others (Crypto & SPY, then games, arbs and maker together). Evan: "Yes, fix it". So the tabs are
+the parts as Today names them: **Today** (`#today`), **Crypto & SPY** (`#crypto`: the headline against holding, the
+chart, a card per book, the retired books' line), **Games** (`#games`), **Arbs & maker** (`#arbs`: arbs, maker, snipe,
+convergence) and **Activity** (`#activity`), whose filter and tags use the same three parts. Each view's name is the
+large title on a phone. The desk's health is the light in the bar and its sheet only (it was also a Today card and a
+Markets card), and the chart against holding is drawn once, on Crypto & SPY (Today's crypto rule card links there).
+The lookout page (`/lookout.html`, the painted room with the bots, the look Evan had removed on 2026-09-25) is gone.
+The old links (`#markets`, `#markets/side`, `#markets/pm-arbs`, `#overview`, `#desk`, `#pm`) land on the view that
+has what they named.
+
 **The floor, fifth version (2026-10-17).** Evan, asked how to plan a total redesign: "u do everything surprise me". The
 four views until then followed the code, one per desk, and the plan of that morning had changed what the Hexagon does:
 the game bets, the busiest thing on the floor (a hundred games on a college Saturday), were one card of five on the
@@ -197,7 +209,7 @@ not advice, and the desk has no broker.
 The options, scalp, dip and runner books were switched off on 2026-10-08 (`tools/spy-lab.js`: no edge in two years of
 SPY minutes; `tools/runner-lab.js`: the runner rule lost over four years even before fees), and their code came out
 of the engine on 2026-10-17. Each keeps its ledger in the desk's state (its cash, what it banked and paid, its trades),
-its figure stays in the desk's total (together −$229.27), and the floor gives them one line on Markets and the
+its figure stays in the desk's total (together −$229.27), and the floor gives them one line on Crypto & SPY and the
 whole-Hexagon sheet (until the floor's fifth version the same day, a "Switched off" group of cards). Their rules stay in `src/desk/books.js`, where the two labs run them, so the verdicts can be re-run. The daily
 check still replays their old fills to the penny, against three days recorded by the engine as it was
 (`tools/fixtures/retired/`). Going with them: SPY's minute bars and the option chain, two downloads a minute from
@@ -2030,7 +2042,7 @@ src/desk/feeds.js      Coinbase (live) and Cboe (15 minutes late): parsers, fetc
 src/desk/broker.js     paper fills: the book or the touch, fees per asset; no live broker
 src/desk/clock.js      the NYSE calendar: sessions, holidays, 1 PM closes
 public/desk.*          the floor at /: desk.html, desk.js, and desk.css, its own sheet built on tokens.css; the prediction-market desk's board and books too since 2026-09-29;
-                       four views since 2026-10-17, the fifth version: Today, Games, Markets, Activity (tools/floor-test.js);
+                       five views since 2026-11-11: Today, Crypto & SPY, Games, Arbs & maker, Activity (tools/floor-test.js);
                        drawn as Apple draws its apps since 2026-09-29 (San Francisco, Apple's colours, light or dark as the device is set), and an app of its own
                        once added to an iPhone's Home Screen or a Mac's Dock (manifest.webmanifest; the icons and it are all the server gives out before the login)
 src/pmfloor.js         what the floor is sent about the prediction-market desk: its five books from its own ledger, its log in the floor's words,

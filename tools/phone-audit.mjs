@@ -6,7 +6,7 @@
 // usage: node tools/phone-audit.mjs BASE OUTDIR URLFILE [width=375] [light|dark]
 //   BASE     the server, e.g. http://127.0.0.1:8799 (the demo: see below) or the live floor
 //   OUTDIR   where audit.json and the screenshots go (made if absent)
-//   URLFILE  one route a line, a path with its hash: /#today, /#markets/crypto. A route may end in sheet=ID to open that
+//   URLFILE  one route a line, a path with its hash: /#today, /#crypto/stocks. A route may end in sheet=ID to open that
 //            sheet first and check the sheet instead of the page: /#today sheet=book:crypto (ids: desk, book:<key>,
 //            mkt:<sym>, game:<id>, lab, health; sheets are not part of the address, so the audit taps a stand-in for
 //            what opens them). Blank lines and lines starting with # are skipped; a line must start with /. See
@@ -86,7 +86,8 @@ const check = (sheetMode) => `(() => {
     return s + (h && h !== el ? " in [" + h.textContent.trim().slice(0, 36) + "]" : ""); };
   // not ours to judge: hidden, screen-reader-only, a script, the vendored chart library (it keeps its logo), and, for a
   // page check, the sheets (a sheet is checked on its own run)
-  const skip = el => el.closest('[hidden], .sr, script, style, .tv-lightweight-charts' + ${sheetMode ? `""` : `", #sheet, #chartbig"`});
+  // text hidden on purpose for a screen reader (.sr, and the wide screen's h1, which the phone shows as its large title)
+  const skip = el => el.closest('[hidden], .sr, script, style, .tv-lightweight-charts' + ${sheetMode ? `""` : `", #sheet, #chartbig"`}) || getComputedStyle(el).clipPath === "inset(50%)";
   const shown = el => { const r = el.getBoundingClientRect(); return r.width >= 1 && r.height >= 1; };
   const clipped = el => { for (let p = el.parentElement; p && p !== document.documentElement; p = p.parentElement) {
       const s = getComputedStyle(p); if (/(auto|scroll|hidden|clip)/.test(s.overflowX)) { const r = p.getBoundingClientRect(); return r.right <= W + 1 && r.left >= -1; } } return false; };
