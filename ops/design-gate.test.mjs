@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { check, guard, parseMerge, record, recordPath, splitArgs } from "./design-gate.mjs";
+import { check, diffOf, guard, loadConfig, normalizeRepo, parseMerge, record, recordPath, splitArgs } from "./design-gate.mjs";
 
 const SCRIPT = new URL("./design-gate.mjs", import.meta.url).pathname;
 const CONFIG = { ui: ["public/"], ignore: ["public/vendor/"], checks: ["impeccable-audit", "blind-read", "phone-audit"], phoneAudit: true };
@@ -133,9 +133,63 @@ test("a branch can't loosen its own gate: settings come from main", () => {
 
 test("merge arguments are read the way gh reads them", () => {
   assert.deepEqual(splitArgs(`12 --merge --subject "a b" -b 'c d' --delete-branch`), ["12", "--merge", "--subject", "a b", "-b", "c d", "--delete-branch"]);
-  assert.deepEqual(parseMerge(splitArgs(`--merge -t "x y" 42`)), { selector: "42", repo: null, admin: false });
-  assert.deepEqual(parseMerge(splitArgs(`7 --repo=o/r --admin`)), { selector: "7", repo: "o/r", admin: true });
-  assert.deepEqual(parseMerge(splitArgs(`-R o/r --squash`)), { selector: null, repo: "o/r", admin: false });
+  assert.deepEqual(splitArgs(`5 --merge && echo 'done'`), ["5", "--merge"]);
+  assert.deepEqual(splitArgs(`5 --merge\ncd /x`), ["5", "--merge"]);
+  const base = { auto: false, disableAuto: false, matchHead: null };
+  assert.deepEqual(parseMerge(splitArgs(`--merge -t "x y" 42`)), { ...base, selector: "42", repo: null, admin: false });
+  assert.deepEqual(parseMerge(splitArgs(`7 --repo=o/r --admin`)), { ...base, selector: "7", repo: "o/r", admin: true });
+  assert.deepEqual(parseMerge(splitArgs(`-R o/r --squash`)), { ...base, selector: null, repo: "o/r", admin: false });
+  assert.deepEqual(parseMerge(splitArgs(`5 --auto --match-head-commit abc`)), { ...base, selector: "5", repo: null, admin: false, auto: true, matchHead: "abc" });
+  for (const r of ["o/r", "github.com/o/r", "https://github.com/o/r", "https://github.com/o/r.git/", "git@github.com:o/r.git"]) assert.equal(normalizeRepo(r), "o/r", r);
+});
+
+test("the fingerprint doesn't depend on anyone's git settings", () => {
+  const f = fixture();
+  try {
+    commit(f.work, "public/desk.css", "body { color: #111; }\nh1 { margin: 0; }\n");
+    const cfg = loadConfig(f.work, "origin/main");
+    const plain = diffOf(f.work, "origin/main", "HEAD", cfg).fingerprint;
+    const gc = join(f.root, "gitconfig");
+    writeFileSync(gc, "[diff]\n\tnoprefix = true\n\tcontext = 9\n\talgorithm = histogram\n\tmnemonicPrefix = true\n[core]\n\tquotePath = false\n");
+    for (const [k, v] of [["diff.noprefix", "true"], ["diff.context", "1"], ["diff.relative", "true"], ["diff.orderFile", gc], ["diff.indentHeuristic", "false"]]) g(f.work, "config", k, v);
+    const saved = process.env.GIT_CONFIG_GLOBAL; process.env.GIT_CONFIG_GLOBAL = gc;
+    try { assert.equal(diffOf(f.work, "origin/main", "HEAD", cfg).fingerprint, plain); }
+    finally { if (saved == null) delete process.env.GIT_CONFIG_GLOBAL; else process.env.GIT_CONFIG_GLOBAL = saved; }
+  } finally { f.done(); }
+});
+
+test("merging main into a reviewed branch keeps the review, even when main changed the same screen file", () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.work, "public/desk.css"), Array.from({ length: 12 }, (_, i) => `.r${i} { top: ${i}px; }`).join("\n") + "\n");
+    g(f.work, "checkout", "-q", "main"); g(f.work, "add", "-A"); g(f.work, "commit", "-q", "-m", "long css"); g(f.work, "push", "-q", "origin", "main");
+    g(f.work, "checkout", "-q", "feature"); g(f.work, "merge", "-q", "--ff-only", "main");
+    const lines = readFileSync(join(f.work, "public/desk.css"), "utf8").split("\n");
+    lines[0] = ".r0 { top: 100px; }"; commit(f.work, "public/desk.css", lines.join("\n"));
+    record(f.work, { verdict: "pass", checks: ALL, notes: notes(f.root), phoneAudit: [phoneAudit(f.root)] });
+    g(f.work, "add", "-A"); g(f.work, "commit", "-q", "-m", "review");
+    assert.equal(check(f.work, "origin/main", "HEAD").ok, true);
+    // main adds lines above and changes another line of the same file
+    g(f.work, "checkout", "-q", "main");
+    const m = readFileSync(join(f.work, "public/desk.css"), "utf8").split("\n");
+    m[10] = ".r10 { top: 999px; }"; m.splice(5, 0, ".new { top: 0; }"); commit(f.work, "public/desk.css", m.join("\n"), "main edit");
+    g(f.work, "push", "-q", "origin", "main"); g(f.work, "checkout", "-q", "feature");
+    g(f.work, "merge", "-q", "--no-edit", "origin/main");
+    const after = check(f.work, "origin/main", "HEAD");
+    assert.equal(after.ok, true, after.reason);
+    // but editing the changed line again needs a new review
+    const e = readFileSync(join(f.work, "public/desk.css"), "utf8").replace(".r0 { top: 100px; }", ".r0 { top: 101px; }");
+    commit(f.work, "public/desk.css", e);
+    assert.equal(check(f.work, "origin/main", "HEAD").ok, false);
+  } finally { f.done(); }
+});
+
+test("the command line works from a subfolder", () => {
+  const f = fixture();
+  try {
+    commit(f.work, "public/desk.css", "body { color: #111; }\n");
+    assert.throws(() => sh(join(f.work, "ops"), "node", [SCRIPT, "check"]), (e) => e.status === 1 && /MISSING/.test(e.stdout) && /public\/desk\.css/.test(e.stdout));
+  } finally { f.done(); }
 });
 
 /** A fake gh that answers `gh pr view` for one PR whose head is pushed as refs/pull/N/head. */
@@ -159,9 +213,42 @@ test("guard blocks an unreviewed screen PR and --admin, and lets a reviewed one 
     record(f.work, { verdict: "pass-with-fixes", checks: ALL, notes: notes(f.root), phoneAudit: [phoneAudit(f.root)] });
     g(f.work, "add", "-A"); g(f.work, "commit", "-q", "-m", "review");
     gh = fakeGh(f, 5);
-    const ok = guard(f.work, "5 --merge --delete-branch", gh);
+    const head = g(f.work, "rev-parse", "HEAD").trim();
+    // reviewed, but the merge must be pinned to the commit the gate checked
+    const unpinned = guard(f.work, "5 --merge --delete-branch", gh);
+    assert.equal(unpinned.block, true); assert.match(unpinned.reason, new RegExp(`--match-head-commit ${head}`));
+    assert.equal(guard(f.work, `5 --merge --match-head-commit ${"1".repeat(40)}`, gh).block, true);
+    const ok = guard(f.work, `5 --merge --delete-branch --match-head-commit ${head}`, gh);
     assert.equal(ok.block, false, ok.reason);
+    assert.equal(guard(f.work, `5 --auto --merge --match-head-commit ${head}`, gh).block, true);
   } finally { f.done(); }
+});
+
+test("guard lets --disable-auto through, blocks --auto, and lets a no-screen PR merge unpinned", () => {
+  const f = fixture();
+  try {
+    commit(f.work, "public/desk.css", "body { color: #111; }\n");
+    const gh = fakeGh(f, 7);
+    assert.equal(guard(f.work, "7 --disable-auto", gh).block, false);
+    const auto = guard(f.work, "7 --auto --merge", gh);
+    assert.equal(auto.block, true); assert.match(auto.reason, /--auto/);
+    const f2 = fixture();
+    try { commit(f2.work, "src/engine.js", "export const x = 9;\n"); assert.equal(guard(f2.work, "8 --merge", fakeGh(f2, 8)).block, false); }
+    finally { f2.done(); }
+  } finally { f.done(); }
+});
+
+test("guard blocks when gh doesn't answer in time", () => {
+  const f = fixture();
+  const saved = process.env.DESIGN_GATE_TIMEOUT_MS;
+  try {
+    const bin = join(f.root, "gh-slow"); writeFileSync(bin, "#!/bin/sh\nsleep 5\n"); chmodSync(bin, 0o755);
+    process.env.DESIGN_GATE_TIMEOUT_MS = "500";
+    const t = process.hrtime.bigint();
+    const r = guard(f.work, "9 --merge", bin);
+    assert.equal(r.block, true); assert.match(r.reason, /no answer in 0.5 s/);
+    assert.ok(Number(process.hrtime.bigint() - t) / 1e9 < 4);
+  } finally { if (saved == null) delete process.env.DESIGN_GATE_TIMEOUT_MS; else process.env.DESIGN_GATE_TIMEOUT_MS = saved; f.done(); }
 });
 
 test("guard fails closed when gh can't answer", () => {

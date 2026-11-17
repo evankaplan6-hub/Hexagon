@@ -2,8 +2,8 @@
 // The design gate (2026-11-17). A change to the floor's screens (ops/design-gate.json "ui") may merge only
 // with a design review on record for those exact changes. The record is design-reviews/<fingerprint>.md,
 // where the fingerprint is a hash of the branch's screen diff, so any later screen edit needs a new review.
-// The /design-gate skill runs the review and then `record`; the Claude Code merge guard
-// (~/.claude/hooks/design-gate-guard.sh) runs `guard`, and CI runs `check`. Zero dependencies, as the repo is.
+// The /design-gate skill runs the review and then `record`; the merge guard hook (~/.claude/hooks/design-gate-guard.sh,
+// for Claude Code and Codex) runs `guard`, and CI runs `check`. Zero dependencies, as the repo is.
 //
 // usage:
 //   node ops/design-gate.mjs status [--base origin/main] [--head HEAD]
@@ -25,6 +25,13 @@ export function git(dir, args, opts = {}) {
   return execFileSync("git", args, { cwd: dir, encoding: "utf8", maxBuffer: 256 * 1024 * 1024,
     stdio: ["ignore", "pipe", "pipe"], ...opts });
 }
+// Network steps (gh, git fetch) get a time limit and never wait on a password or passphrase prompt, so the merge
+// guard answers well inside its hook's 60 s and blocks, rather than timing out and letting the merge run.
+const netMs = () => +(process.env.DESIGN_GATE_TIMEOUT_MS || 15000);
+const netEnv = () => ({ ...process.env, GIT_TERMINAL_PROMPT: "0", GH_PROMPT_DISABLED: "1",
+  GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND || "ssh -o BatchMode=yes -o ConnectTimeout=10" });
+const firstLine = (e) => (e.code === "ETIMEDOUT" || e.signal) ? `no answer in ${netMs() / 1000} s`
+  : String(e.stderr || e.message).trim().split("\n")[0];
 const tryGit = (dir, args) => { try { return git(dir, args); } catch { return null; } };
 
 export function loadConfig(dir, base) {
@@ -33,14 +40,32 @@ export function loadConfig(dir, base) {
   return { ...DEFAULTS, ...(text ? JSON.parse(text) : {}) };
 }
 
-export const pathspec = (cfg) => ["--", ...cfg.ui, ...cfg.ignore.map((p) => `:(exclude)${p}`)];
+// Root-relative, so a run from a subfolder sees the same files.
+export const pathspec = (cfg) => ["--", ...cfg.ui.map((p) => `:(top)${p}`), ...cfg.ignore.map((p) => `:(top,exclude)${p}`)];
+
+// The fingerprint's diff ignores every git setting of whoever computes it (a Mac, a Codex worktree, the CI runner):
+// no user or system config, plumbing diff-tree, and each output option pinned.
+const PINNED_ENV = { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_COUNT: "0" };
+const PINNED_DIFF = ["-c", "core.quotePath=true", "diff-tree", "-r", "-p", "-U0", "--binary", "--full-index", "--no-renames",
+  "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/", "--dst-prefix=b/", "--diff-algorithm=myers",
+  "--no-indent-heuristic", "-O/dev/null"];
+
+/** The branch's own screen changes as text: which lines each file loses and gains, without where the hunks sit or
+ *  which blobs the base had. So merging main into the branch, or a rebase, keeps the review when the branch's own
+ *  change is the same; any edit to the changed lines needs a new one. */
+export function screenPatch(dir, mb, head, cfg) {
+  const raw = git(dir, [...PINNED_DIFF, mb, head, ...pathspec(cfg)], { env: { ...process.env, ...PINNED_ENV } });
+  return raw.split("\n").filter((l) => !l.startsWith("index "))
+    .map((l) => l.startsWith("@@") ? l.replace(/^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@.*$/, (_, a, b) => `@@ -${a ?? 1} +${b ?? 1} @@`) : l)
+    .join("\n");
+}
 
 /** The screen files a branch changes, and the hash of exactly those changes. */
 export function diffOf(dir, base, head, cfg) {
   const mb = git(dir, ["merge-base", base, head]).trim();
-  const files = git(dir, ["diff", "--name-only", "--no-renames", mb, head, ...pathspec(cfg)]).split("\n").filter(Boolean);
-  const patch = git(dir, ["diff", "--binary", "--full-index", "--no-color", "--no-ext-diff", "--no-renames", mb, head, ...pathspec(cfg)]);
-  const fingerprint = createHash("sha256").update(patch).digest("hex");
+  const files = git(dir, ["diff", "--name-only", "--no-renames", mb, head, ...pathspec(cfg)], { env: { ...process.env, ...PINNED_ENV } })
+    .split("\n").filter(Boolean);
+  const fingerprint = createHash("sha256").update(screenPatch(dir, mb, head, cfg)).digest("hex");
   return { mergeBase: mb, files, fingerprint };
 }
 
@@ -68,7 +93,8 @@ export function check(dir, base, head) {
   return { ok: true, ...d, path, reason: `design review on record (${path})` };
 }
 
-/** Splits a shell argument string the way sh would for plain words and simple quotes. */
+/** Splits a shell argument string the way sh would for plain words and simple quotes. It stops at an unquoted
+ *  ; & | or newline, where the shell would end the command. */
 export function splitArgs(s) {
   const out = []; let cur = ""; let q = null; let has = false;
   for (let i = 0; i < s.length; i++) {
@@ -76,6 +102,7 @@ export function splitArgs(s) {
     if (q) { if (c === q) q = null; else if (c === "\\" && q === '"' && i + 1 < s.length) cur += s[++i]; else cur += c; continue; }
     if (c === "'" || c === '"') { q = c; has = true; continue; }
     if (c === "\\" && i + 1 < s.length) { cur += s[++i]; has = true; continue; }
+    if (/[;&|\n]/.test(c)) break;
     if (/\s/.test(c)) { if (has || cur) out.push(cur); cur = ""; has = false; continue; }
     cur += c;
   }
@@ -87,35 +114,56 @@ export function splitArgs(s) {
 const VALUE_FLAGS = new Set(["-b", "--body", "-F", "--body-file", "-t", "--subject", "-A", "--author-email",
   "--match-head-commit", "-R", "--repo"]);
 
-/** What `gh pr merge <args>` would merge: the PR selector, the --repo, and whether it bypasses the rules. */
+/** OWNER/REPO from the forms gh takes: OWNER/REPO, HOST/OWNER/REPO, a github.com URL, with or without .git. */
+export function normalizeRepo(r) {
+  if (!r) return null;
+  const s = r.trim().replace(/^(https?:\/\/|ssh:\/\/git@|git@)/, "").replace(/^(www\.)?github\.com[/:]/, "")
+    .replace(/\/+$/, "").replace(/\.git$/, "");
+  const parts = s.split("/");
+  return parts.length >= 2 ? parts.slice(-2).join("/") : s;
+}
+
+/** What `gh pr merge <args>` would do: the PR selector, the --repo, and the flags the gate cares about. */
 export function parseMerge(args) {
-  let selector = null, repo = null, admin = false;
+  let selector = null, repo = null, admin = false, auto = false, disableAuto = false, matchHead = null;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--admin") { admin = true; continue; }
-    const eq = a.match(/^(-R|--repo)=(.*)$/); if (eq) { repo = eq[2]; continue; }
+    if (a === "--auto") { auto = true; continue; }
+    if (a === "--disable-auto") { disableAuto = true; continue; }
+    const eq = a.match(/^(-R|--repo|--match-head-commit)=(.*)$/);
+    if (eq) { if (eq[1] === "--match-head-commit") matchHead = eq[2]; else repo = eq[2]; continue; }
     if (a === "-R" || a === "--repo") { repo = args[++i] ?? null; continue; }
+    if (a === "--match-head-commit") { matchHead = args[++i] ?? null; continue; }
     if (a.startsWith("-")) { if (VALUE_FLAGS.has(a)) i++; continue; }
     if (selector == null) selector = a;
   }
-  return { selector, repo, admin };
+  return { selector, repo: normalizeRepo(repo), admin, auto, disableAuto, matchHead };
 }
 
-/** The merge guard: block a merge of a screen change with no review on record, and any --admin merge. */
+/** The merge guard: block a merge of a screen change with no review on record for the exact head it merges, and
+ *  any --admin or --auto merge. */
 export function guard(dir, argString, gh = "gh") {
   const m = parseMerge(splitArgs(argString));
+  if (m.disableAuto) return { block: false, reason: "turns off auto-merge only" };
   if (m.admin) return { block: true, reason: "--admin skips the repo's required checks, including the design gate. Merge without --admin." };
+  if (m.auto) return { block: true, reason: "--auto would let GitHub merge later pushes that nobody checked. Merge when the branch is final, without --auto." };
   const view = ["pr", "view", ...(m.selector ? [m.selector] : []), ...(m.repo ? ["--repo", m.repo] : []),
     "--json", "number,headRefOid,baseRefName,url"];
   let pr;
-  try { pr = JSON.parse(execFileSync(gh, view, { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })); }
-  catch (e) { return { block: true, reason: `couldn't look up the pull request (${String(e.stderr || e.message).trim().split("\n")[0]}), so the design gate can't check it` }; }
-  try { git(dir, ["fetch", "-q", "origin", `+refs/heads/${pr.baseRefName}:refs/remotes/origin/${pr.baseRefName}`, `+refs/pull/${pr.number}/head:refs/design-gate/pr-${pr.number}`]); }
-  catch (e) { return { block: true, reason: `couldn't fetch pull request ${pr.number} (${String(e.stderr || e.message).trim().split("\n")[0]})` }; }
+  try { pr = JSON.parse(execFileSync(gh, view, { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: netMs(), env: netEnv() })); }
+  catch (e) { return { block: true, reason: `couldn't look up the pull request (${firstLine(e)}), so the design gate can't check it; try again` }; }
+  try { git(dir, ["fetch", "-q", "origin", `+refs/heads/${pr.baseRefName}:refs/remotes/origin/${pr.baseRefName}`, `+refs/pull/${pr.number}/head:refs/design-gate/pr-${pr.number}`], { timeout: netMs(), env: netEnv() }); }
+  catch (e) { return { block: true, reason: `couldn't fetch pull request ${pr.number} (${firstLine(e)}); try again` }; }
   const head = git(dir, ["rev-parse", `refs/design-gate/pr-${pr.number}`]).trim();
   if (head !== pr.headRefOid) return { block: true, reason: `pull request ${pr.number} moved while checking; try again` };
+  if (m.matchHead && m.matchHead !== head) return { block: true, pr, reason: `--match-head-commit ${m.matchHead} is not pull request ${pr.number}'s head (${head})` };
   const r = check(dir, `origin/${pr.baseRefName}`, head);
-  return { block: !r.ok, pr, ...r };
+  if (!r.ok) return { block: true, pr, ...r };
+  // A reviewed screen change merges only the commit that was checked, never a push that lands meanwhile.
+  if (r.files.length && !m.matchHead) return { block: true, pr, ...r, files: [],
+    reason: `the review is on record; pin the merge to the commit it checked: add --match-head-commit ${head}` };
+  return { block: false, pr, ...r };
 }
 
 function auditSummary(dirs, since) {
@@ -170,7 +218,8 @@ function main(argv) {
     const key = k.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
     if (key === "phoneAudit") opts.phoneAudit.push(rest[++i]); else opts[key] = rest[++i];
   }
-  const dir = opts.dir || process.cwd();
+  let dir = opts.dir || process.cwd();
+  try { dir = git(dir, ["rev-parse", "--show-toplevel"]).trim(); } catch { /* not a checkout: the command says so below */ }
   const base = opts.base || "origin/main", head = opts.head || "HEAD";
   try {
     if (cmd === "status" || cmd === "check") {

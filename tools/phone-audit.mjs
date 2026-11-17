@@ -19,16 +19,21 @@
 //   TAP_MIN   smallest control, px (default 44, Apple's; desk.css asks 32 for a segment button and 24 for a link,
 //             so findings between those and 44 are advisory, not a break of the repo's own rule)
 //   FULL=1    screenshots of the whole page, not only the first screen
+//   SHOTS=1   a screenshot of every route and sheet, flagged or not (the design gate's review uses these: the phone
+//             width here is real, through DevTools; headless Chrome's --window-size won't go under 500px)
 //   STRICT=1  exit 1 when any route is flagged (default: exit 0, read audit.json)
 //   HEX_COOKIE  the floor's hexsession cookie value, for a floor behind the login. Pass it by command substitution
 //             and never echo it; this tool never prints it. The demo and a loopback server need none.
 // Node 22 or newer: it uses the global WebSocket (Node 20, the repo's floor for the server, has none) and global fetch.
 // Zero dependencies, as the repo is: node:child_process, node:fs, node:net, node:os, node:path only.
 //
-// Run it on the demo, never on a funded or real setup (the floor is paper only either way):
-//   DEMO=1 DATA_DIR=<scratch dir> PORT=8799 node server.js &
-//   node tools/phone-audit.mjs http://127.0.0.1:8799 <outdir> tools/phone-audit-urls.txt 375 light
-// then stop the server (lsof -ti:8799 | xargs kill).
+// Run it on the demo, never on a funded or real setup (the floor is paper only either way). Pick a free port, wait
+// until the server answers, and stop only that server (a plain `lsof -ti:PORT | xargs kill` also kills its clients):
+//   PORT=8799; while lsof -ti tcp:$PORT -sTCP:LISTEN >/dev/null; do PORT=$((PORT+1)); done
+//   DEMO=1 DATA_DIR=<scratch dir> PORT=$PORT node server.js > <scratch dir>/server.log 2>&1 & SRV=$!
+//   until curl -sf http://127.0.0.1:$PORT/ -o /dev/null; do kill -0 $SRV || break; sleep 1; done
+//   node tools/phone-audit.mjs http://127.0.0.1:$PORT <outdir> tools/phone-audit-urls.txt 375 light
+//   kill $SRV
 import { spawn } from "node:child_process";
 import { mkdirSync, writeFileSync, readFileSync, mkdtempSync, rmSync, existsSync } from "node:fs";
 import { createServer } from "node:net";
@@ -208,7 +213,7 @@ try {
       row.nSmall && "TAP " + row.nSmall, row.nCut && "CUT " + row.nCut, (exc.length || cons.length || logs.length) && "JS", bad.length && "RES"].filter(Boolean);
     row.flags = flags;
     process.stderr.write(`${row.route} ${row.status} ${ms}ms ${row.screens == null ? "?" : row.screens + " screens"} ${flags.join(" ") || "ok"}\n`);
-    if (flags.length) {
+    if (flags.length || process.env.SHOTS === "1") {
       const shot = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: process.env.FULL === "1" });
       if (shot.result) writeFileSync(join(outdir, (row.route.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_|_$/g, "") || "home") + ".png"), Buffer.from(shot.result.data, "base64"));
     }
