@@ -65,7 +65,8 @@ jobs:
         with:
           node-version: '22'
       - name: The gate's own tests
-        run: node --test ops/design-gate.test.mjs
+        # a branch cut before the gate has no tests to run; the check below still runs the base's script
+        run: '[ -f ops/design-gate.test.mjs ] || { echo "no ops/design-gate.test.mjs on this branch"; exit 0; }; node --test ops/design-gate.test.mjs'
       - name: A design review is on record for the screen changes
         env:
           BASE: ${{ github.base_ref }}

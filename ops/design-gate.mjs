@@ -264,7 +264,7 @@ export function readAudit(d) {
 
 /** One line per phone audit folder. Each must be of the screens as committed now (render.sh writes the commit it
  *  served into the folder), every route must have loaded, and together they must cover cfg.phoneAuditSet. */
-function auditSummary(dir, dirs, cfg) {
+function auditSummary(dir, dirs, cfg, base) {
   // A route that didn't load, or whose page the audit couldn't read, measured nothing: the audit has to run again.
   const BROKEN = new RegExp(cfg.phoneAuditBroken || DEFAULTS.phoneAuditBroken);
   const seen = new Set(), routesBy = new Map();
@@ -289,8 +289,10 @@ function auditSummary(dir, dirs, cfg) {
   });
   const missing = (cfg.phoneAuditSet || []).filter((x) => !seen.has(x));
   if (missing.length) throw new Error(`--phone-audit is missing these audits (width, scheme, tap size): ${missing.join("; ")}`);
-  // each audit in the set covers every route the repo lists (an -extra folder adds routes, it doesn't replace them)
-  const listed = cfg.phoneAuditUrls && tryGit(dir, ["show", `HEAD:${cfg.phoneAuditUrls}`]);
+  // each audit in the set covers every route the repo lists (an -extra folder adds routes, it doesn't replace them).
+  // The list is the base's, like the settings, so a branch can't drop a route from its own coverage; a base without
+  // the file yet (the pull request that adds it) uses the branch's.
+  const listed = cfg.phoneAuditUrls && (tryGit(dir, ["show", `${base}:${cfg.phoneAuditUrls}`]) ?? tryGit(dir, ["show", `HEAD:${cfg.phoneAuditUrls}`]));
   if (listed) {
     const want = listed.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"))
       .map((l) => l.replace(/\s+sheet=/, " sheet="));
@@ -314,7 +316,7 @@ export function record(dir, opts) {
   const ui = d.uiFiles.length > 0;
   const missing = ui ? cfg.checks.filter((c) => !checks.includes(c)) : [];
   if (missing.length) throw new Error(`--checks is missing ${missing.join(", ")} (this repo's ops/design-gate.json asks for them)`);
-  const audits = cfg.phoneAudit && ui ? auditSummary(dir, opts.phoneAudit || [], cfg) : [];
+  const audits = cfg.phoneAudit && ui ? auditSummary(dir, opts.phoneAudit || [], cfg, base) : [];
   if (cfg.phoneAudit && ui && !audits.length) throw new Error("--phone-audit DIR is required (an output folder of the design gate's render.sh, run after the last screen commit)");
   const { path } = recordFor(dir, d.mergeBase, "HEAD", d.fingerprint);
   const body = [

@@ -8,7 +8,9 @@
   "protect": [
     "ops/design-gate.json",
     "ops/design-gate.mjs",
-    ".github/workflows/test.yml"
+    ".github/workflows/test.yml",
+    "tools/phone-audit-urls.txt",
+    "tools/phone-audit.mjs"
   ],
   "checks": [
     "impeccable-audit",

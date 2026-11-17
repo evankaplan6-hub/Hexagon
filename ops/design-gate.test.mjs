@@ -532,3 +532,18 @@ test("with no settings the gate covers only its own files", () => {
     assert.equal(r.ok, false); assert.deepEqual(r.files, ["ops/design-gate.mjs"]); assert.deepEqual(r.uiFiles, []);
   } finally { f.done(); }
 });
+
+test("a branch can't drop a route from its own coverage: the routes file comes from main", () => {
+  const f = fixture();
+  try {
+    g(f.work, "checkout", "-q", "main");
+    mkdirSync(join(f.work, "tools"), { recursive: true });
+    writeFileSync(join(f.work, "tools/urls.txt"), "/#today\n/#crypto\n");
+    commit(f.work, "ops/design-gate.json", JSON.stringify({ ...CONFIG, phoneAuditSet: ["375 light 44"], phoneAuditUrls: "tools/urls.txt" }));
+    g(f.work, "push", "-q", "origin", "main"); g(f.work, "checkout", "-q", "feature"); g(f.work, "merge", "-q", "main");
+    writeFileSync(join(f.work, "tools/urls.txt"), "/#today\n");
+    commit(f.work, "public/desk.css", "body { color: #111; }\n");
+    // phoneAudit() covers /#today only: main's list also asks for /#crypto
+    assert.throws(() => record(f.work, { verdict: "pass", checks: ALL, notes: notes(f.root), phoneAudit: [phoneAudit(f.root)] }), /didn't cover \/#crypto/);
+  } finally { f.done(); }
+});
