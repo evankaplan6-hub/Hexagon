@@ -1,22 +1,24 @@
 /* The Hexagon — the floor at /. Consumes /api/desk/stream.
  *
- * Four views (2026-10-17, the floor's fifth version; Evan: "u do everything surprise me"):
- *   Today     the whole Hexagon as the day it is having: the date, all the paper in play and its three parts
- *             (crypto and SPY, the games, the arbs and the maker); then today's games as a scoreboard, the crypto
- *             rule against simply holding with how much of each coin it wants, what happens next across all of
- *             it, the lab's tapes and tests, the arbs and the maker, and the health
- *   Games     every game the book bets: its record against what the prices said it would win, then a tile per
- *             game, in progress, up next by start time, and final
- *   Markets   the crypto and SPY books in full (the headline against holding, the desk, the chart, a card each),
- *             the prediction-market desk's arbs, maker, snipe and convergence, and one line for the retired books
- *   Activity  everything any of it did, newest first, each line tagged with the part it is about
- * Until 2026-10-17 the views followed the code, one per desk (an overview of the stocks and crypto desk, its books,
- * the prediction-market desk, activity): the game bets, the busiest thing on the floor, were one card of five on the
- * Predictions view, the four retired books kept a group of their own, and the lab showed nowhere. Now the views
- * follow what is happening.
- * Each view is a link (#today, #games, #markets, #activity, and #markets/crypto or #markets/pm-arbs for one card),
- * so the back button, a bookmark and a reload all land where they were; the old links (#overview, #desk, #pm,
- * #desk/crypto, #pm/arbs, #pm/bets) land on the view that has what they named.
+ * Five views: Today, then one for each of the Hexagon's three parts, then Activity (2026-11-11, the structure
+ * audit; Evan: "Yes, fix it"). The parts are named the same way everywhere: Today's summary, the tabs, the
+ * Activity filter and the tags.
+ *   Today         the whole Hexagon as the day it is having: the date, all the paper in play and its three parts;
+ *                 then today's games as a scoreboard, the crypto rule against simply holding with how much of each
+ *                 coin it wants, what happens next across all of it, the lab's tapes and tests, the arbs and maker
+ *   Crypto & SPY  the two books that trade, in full: the headline against holding, the chart, a card each, and
+ *                 one line for the retired books
+ *   Games         every game the book bets: its record against what the prices said it would win, then a tile
+ *                 per game, in progress, up next by start time, and final
+ *   Arbs & maker  the prediction-market desk's other books: arbs, maker, snipe and convergence
+ *   Activity      everything any of it did, newest first, each line tagged with the part it is about
+ * The desk's health is the light in the bar and the sheet it opens, and nowhere else; the chart against holding
+ * is on Crypto & SPY, and nowhere else.
+ * Until 2026-10-17 the views followed the code, one per desk; from then until 2026-11-11 a Markets view held two of
+ * the three parts, Today counted three, and the Activity filter grouped them a third way.
+ * Each view is a link (#today, #crypto, #games, #arbs, #activity, and #crypto/stocks or #arbs/pm-maker for one card),
+ * so the back button, a bookmark and a reload all land where they were; the old links (#markets, #markets/side,
+ * #overview, #desk, #pm, #desk/crypto, #pm/arbs, #pm/bets) land on the view that has what they named.
  *
  * Read-only: nothing on this page can place, change or cancel anything.
  */
@@ -209,7 +211,7 @@
     // the desk's figure carries the retired books' too, which the crypto rule's card leaves out: said here, so the two
     // figures are not read as one that disagrees with itself
     const gone = r2((S.books || []).filter(isRetired).reduce((a, b) => a + b.pnl, 0));
-    const L = S.legacy, out = [{ k: 'desk', name: 'Crypto & SPY', color: BOOK_COLOR.crypto, href: '#markets', pnl: S.pnl,
+    const L = S.legacy, out = [{ k: 'desk', name: 'Crypto & SPY', color: BOOK_COLOR.crypto, href: '#crypto', pnl: S.pnl,
       sub: `${S.today != null ? `${plain(signed(S.today))} today` : `on ${money(S.initial, 0)}`}${isZero(gone) ? '' : ` · ${plain(signed(gone))} of it retired books`}` }];
     if (L) {
       const bets = pmBook('bets'), g = G(), t = g && g.record.today, R = g && g.record;
@@ -217,7 +219,7 @@
       out.push({ k: 'games', name: 'Games', color: GAMES_COLOR, href: '#games', pnl: gp,
         sub: t && t.bets ? `${t.won}–${t.bets - t.won} today` : R && R.bets ? `${R.won} of ${nOf(R.bets, 'game')} won` : bets ? `${bets.rows.length} open` : '' });
       const side = SIDE.map(pmBook).filter(Boolean), open = side.reduce((a, b) => a + (b.key === 'maker' ? 0 : b.rows.length), 0);
-      out.push({ k: 'side', name: 'Arbs & maker', color: SIDE_COLOR, href: '#markets/side', pnl: r2((L.pnl || 0) - gp),
+      out.push({ k: 'side', name: 'Arbs & maker', color: SIDE_COLOR, href: '#arbs', pnl: r2((L.pnl || 0) - gp),
         sub: `${nOf(open, 'position')} open${(pmBook('maker') || {}).markets ? ` · maker in ${nOf(pmBook('maker').markets, 'market')}` : ''}` });
     }
     return out;
@@ -295,8 +297,8 @@
     return [...m.entries()].sort((a, b) => a[0] - b[0]);
   }
   function groupStatus(ts, B) {
-    // switched off, a group bets nothing, whatever the clock says (its tiles said so and its heading did not)
-    if (!B.g.on) return 'not bet: the game bets are switched off';
+    // switched off, a group bets nothing, whatever the clock says: Up next says so once, and its tiles do
+    if (!B.g.on) return '';
     const toBet = ts.filter((t) => t.stage === 'next').length, bet = ts.filter((t) => t.stage === 'bet').length, skip = ts.filter((t) => t.stage === 'skip').length;
     const opens = ts[0].start - B.ahead;
     const parts2 = [];
@@ -325,7 +327,8 @@
     const show = [...live, ...soon].slice(0, 6);
     if (show.length < 6) show.push(...finals.slice(0, 6 - show.length));
     const grp = startGroups(coming).find(([st]) => st > S.now);
-    const foot = grp ? `<p class="ovnote">Next: ${nOf(grp[1].length, 'game')} at ${esc(whenTxt(grp[0]))} · ${esc(groupStatus(grp[1], B))}.` +
+    const gs = grp ? groupStatus(grp[1], B) || 'not bet: the game bets are switched off' : '';
+    const foot = grp ? `<p class="ovnote">Next: ${nOf(grp[1].length, 'game')} at ${esc(whenTxt(grp[0]))} · ${esc(gs)}.` +
       `${B.skipped.length ? ` ${nOf(B.skipped.length, 'game')} left alone today: the favourite was over ${Math.round((B.g.maxPx || 0.9) * 100)}¢.` : ''}</p>` : '';
     return head + (show.length ? tiles(show) : '') + foot;
   }
@@ -499,7 +502,7 @@
   function tdSideHtml() {
     return SIDE.map(pmBook).filter((b) => b && (b.on || b.rows.length || !isZero(b.pnl))).map((b) => {
       const x = pmBits(b);
-      return rowHtml({ k: `side-${b.key}`, href: `#markets/pm-${b.key}`, color: SIDE_COLOR, name: `${esc(b.name)}${b.on ? '' : ' <span class="offtag">Off</span>'}`, fig: b.pnl,
+      return rowHtml({ k: `side-${b.key}`, href: `#arbs/pm-${b.key}`, color: SIDE_COLOR, name: `${esc(b.name)}${b.on ? '' : ' <span class="offtag">Off</span>'}`, fig: b.pnl,
         why: b.on ? `${esc(cap(x.chip))} · ${x.next}` : x.next });
     }).join('');
   }
@@ -527,7 +530,8 @@
     const n = nextOpenDay();
     return n ? `${LONG_DAY[n] || n} after the 9:30 AM open` : 'after the next open';
   }
-  // is anything wrong: the light in the bar says it in a word; these say what it looked at
+  // is anything wrong: the light in the bar says it in a word; its sheet, these checks (the Today card that repeated
+  // them and the Markets card that said them a third time went on 2026-11-11)
   function healthChecks() {
     const M = marketBits(), C = S.cfg || {}, coins = (bookOf('crypto') || { rows: [] }).rows;
     const at = Math.max(0, ...coins.map((r) => r.at || 0));
@@ -545,7 +549,6 @@
     ];
   }
   const checkName = (c) => `<span class="mark ${c.ok}" aria-hidden="true">${c.ok === 'ok' ? '✓' : '!'}</span><span class="sr">${c.ok === 'ok' ? 'Fine: ' : 'Look: '}</span>${esc(c.name)}`;
-  const healthHtml = () => healthChecks().map((c) => rowHtml({ k: c.k, sheet: 'health', name: checkName(c) })).join('');
 
   function renderToday() {
     morph($('tdhero'), todayHeroHtml());
@@ -558,7 +561,6 @@
     const side = $('tdside').closest('.card');
     side.hidden = !S.legacy;
     if (S.legacy) morph($('tdside'), tdSideHtml());
-    morph($('health'), healthHtml());
   }
 
   // ------------------------------------------------------------ the Games view
@@ -578,7 +580,7 @@
         `${Math.abs(diff) <= 2 * sd ? `well inside chance (one standard deviation is ${sd.toFixed(1)} wins)` : `more than chance usually gives (one standard deviation is ${sd.toFixed(1)} wins)`}. ` +
         "Bought at the market's own price, the book should lose about the fee over many games; that is the yardstick.";
     const leagues = Object.entries(R.leagues || {}).filter(([, x]) => x.bets).sort((a, b) => b[1].bets - a[1].bets);
-    return `<div class="ghs">` +
+    return `<h2 class="label">The record</h2><div class="ghs">` +
       `<div class="ghb"><span class="ghl">Today</span><span class="ghr">${t.won}–${t.bets - t.won}</span><span class="ghp">${t.bets ? `${figure(t.pnl)} · the prices said ${t.expected.toFixed(1)} wins` : 'no final yet'}</span></div>` +
       `<div class="ghb"><span class="ghl">Since the start</span><span class="ghr">${R.won}–${R.bets - R.won}</span><span class="ghp">${figure(R.pnl)} on ${money(R.staked, 0)} bet and settled</span></div>` +
       `<div class="ghb"><span class="ghl">Won</span><span class="ghr">${rateTxt(R.won, R.bets)}</span><span class="ghp">the prices said ${rateTxt(R.expected, R.bets)}</span></div></div>` +
@@ -608,8 +610,10 @@
     const live = [...B.open.filter((t) => t.stage === 'live' && mine(t)).sort(byStart), ...B.next.filter((t) => t.stage === 'late' && mine(t)), ...B.open.filter((t) => t.stage === 'wait' && mine(t))];
     morph($('glive'), gsecHtml('In progress', nOf(live.length, 'game'), live.length ? tiles(live) : ''));
     const soon = [...B.open.filter((t) => t.stage === 'bet'), ...B.next.filter((t) => t.stage !== 'late')].filter(mine).sort(byStart);
-    morph($('gnext'), gsecHtml('Up next', soon.length ? nOf(soon.length, 'game') : '', startGroups(soon).map(([st, ts]) =>
-      `<div class="ggrp" data-k="g-${st}"><h3><span>${esc(st ? whenTxt(st) : 'Start not on record')}</span><span class="gsn">${nOf(ts.length, 'game')} · ${esc(groupStatus(ts, B))}</span></h3>${tiles(ts)}</div>`).join('')) ||
+    morph($('gnext'), gsecHtml('Up next', soon.length ? `${nOf(soon.length, 'game')}${B.g.on ? '' : ' · not bet: the game bets are switched off'}` : '', startGroups(soon).map(([st, ts]) => {
+      const gs = groupStatus(ts, B);
+      return `<div class="ggrp" data-k="g-${st}"><h3><span>${esc(st ? whenTxt(st) : 'Start not on record')}</span><span class="gsn">${nOf(ts.length, 'game')}${gs ? ` · ${esc(gs)}` : ''}</span></h3>${tiles(ts)}</div>`;
+    }).join('')) ||
       (live.length ? '' : `<div class="gsh"><h2 class="sect">Up next</h2></div><p class="ovp">No game on the board in the next thirty hours${games.league === 'all' ? '' : ` in ${esc(leagueName(games.league))}`}.</p>`));
     const fin = B.fin.filter(mine), byDay = new Map();
     for (const t of fin) { const k = t.day; if (!byDay.has(k)) byDay.set(k, []); byDay.get(k).push(t); }
@@ -668,7 +672,7 @@
           why: `${pct(share(r))} held${Number.isFinite(r.vol) ? ` · swings ${pct(r.vol)} a year` : ''} · ${signed(since)} since start` });
       }).join('')}</ul><p>Each line's figure is how far it is ahead of simply holding it.</p>`) +
       card('Trades', tradeList((S.fills || []).filter((f) => f.book === key))) +
-      `<p class="shlink"><a href="#markets/${key}">Its card on Markets</a></p>` };
+      `<p class="shlink"><a href="#crypto/${key}">Its card on Crypto &amp; SPY</a></p>` };
   }
   // why a market holds what it holds: how much it swings, what the rule wants, and the band it trades outside
   function whyHtml(b, r, name) {
@@ -747,7 +751,7 @@
     return { title: 'Health', html:
       card('', `<div class="shfig st-${cls}">${esc(state)}</div><p>The light in the bar turns amber when prices are stale or the desk is not buying, and red when the desk stops or this page loses its signal.</p>`) +
       card('Checks', `<ul class="rows">${healthChecks().map(line).join('')}</ul>`) +
-      (pm ? card('Prediction markets', `<ul class="rows">${line({ k: 'pm', href: '#markets/side', ok: pm[1] === 'good' ? 'ok' : pm[1], name: pm[0], detail: 'Its own loop, trading the games, arbs and maker in paper beside the books' })}</ul>`) : '') };
+      (pm ? card('Prediction markets', `<ul class="rows">${line({ k: 'pm', href: '#arbs', ok: pm[1] === 'good' ? 'ok' : pm[1], name: pm[0], detail: 'Its own loop, trading the games, arbs and maker in paper beside the books' })}</ul>`) : '') };
   }
   // A sheet's id is its kind and, after the first colon, what it is of: "game:5348755:0|KXNCAAFGAME-...-KU" is a
   // game pair's id, colons and all.
@@ -820,7 +824,7 @@
     else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus(); }
   });
 
-  // ------------------------------------------------------------ Markets: crypto and SPY in full
+  // ------------------------------------------------------------ Crypto & SPY: the two books that trade, in full
   // what the headline says: the books against simply holding, the fees, the cash
   function deskTotals() {
     const books = S.books || [];
@@ -855,7 +859,7 @@
         insight += ` ${isZero(extra) ? 'The fees are even' : 'Holding paid more in fees'}, so the gap is how much the books hold: their rule keeps some money in cash when prices swing hard.`;
       }
     }
-    return `<span class="label">Crypto &amp; SPY</span>` +
+    return `<h2 class="label">Since the start</h2>` +
       `<div class="big ${tone(S.pnl)}">${signed(S.pnl)}</div>` +
       `<div class="sub">on ${money(S.initial, 0)} of paper · marked ${esc(ET_HM.format(new Date(S.now)))} ET</div>` +
       `<dl class="kpis">${kpi('Today', S.today != null ? figure(S.today) : '—')}` +
@@ -873,28 +877,6 @@
     // from today yet, so the delay is the feed's usual one rather than the hours since yesterday's close.
     const spy = !spyOk ? 'SPY stale' : !mk.open ? 'SPY closed' : mk.delayMin != null && mk.delayMin <= 30 ? `SPY ${mk.delayMin} min late` : 'SPY about 15 min late';
     return { open: !!mk.open, says: mk.says || '', cryptoOk, spyOk, spy };
-  }
-  function deskHtml() {
-    const C = S.cfg || {}, M = marketBits();
-    const rows = [
-      ['Stock market', `<b>${M.open ? 'Open' : 'Closed'}</b> · ${esc(M.says)}`],
-      ['Prices', `<span class="dot${M.cryptoOk ? '' : ' warn'}"></span>Crypto ${M.cryptoOk ? 'live' : 'stale'} · <span class="dot ${M.spyOk ? 'late' : 'warn'}"></span>${esc(M.spy)}`],
-    ];
-    // how much of the day's loss limit is used: TESS stops all new buying when it is. The meter stays plain
-    // until half of it is gone, is amber to 80% and red past that.
-    if (C.maxDailyDdPct && S.today != null && S.equity) {
-      const start = S.equity - S.today, raw = start > 0 ? Math.max(0, -S.today / start) : 0, down = raw >= 0.00005 ? raw : 0, used = Math.min(1, down / C.maxDailyDdPct);
-      const level = used >= 0.8 ? ' bad' : used >= 0.5 ? ' warn' : '';
-      rows.push(['Loss limit', `${down ? `down ${(down * 100).toFixed(2)}%` : 'nothing lost'} today; buying stops at ${(C.maxDailyDdPct * 100).toFixed(0)}%` +
-        `<span class="meter${level}" role="img" aria-label="${Math.round(used * 100)}% of the daily loss limit used"><i style="width:${(used * 100).toFixed(1)}%"></i></span>`]);
-    }
-    const sha = S.build && S.build.sha ? String(S.build.sha).slice(0, 7) : 'dev';
-    // Since when (it read "Running 19h 02m", which sounds like time since the last restart), and when the
-    // last round finished, the heartbeat behind the Stalled light
-    const since = new Date(S.startedAt), agoS = S.beat ? Math.max(0, Math.round((S.now - S.beat) / 1000)) : null;
-    const beat = agoS == null ? '' : ` · last round ${agoS < 120 ? `${agoS}s ago` : `at ${ET_HM.format(new Date(S.beat))}`}`;
-    return `<span class="label">The desk</span><dl class="facts">${rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl>` +
-      `<p class="deskfoot">Running since ${esc(ET_DAY.format(since))}, ${esc(ET_HM.format(since))}${beat} · build ${esc(sha)}</p>`;
   }
   // A desk starts all cash, level with its capital, and records its first minute just after its first buys,
   // with their fees paid: on the box, 21:35:20 on 25 September, five seconds in, at −$31.99. While a line's
@@ -963,7 +945,7 @@
       `<details class="rule"><summary>How this book trades</summary><p>${esc(b.rule)}</p></details></article>`;
   }
 
-  // ------------------------------------------------------------ Markets: the arbs, the maker, the snipe
+  // ------------------------------------------------------------ Arbs & maker: the arbs, the maker, the snipe
   // The desk Hexagon began as, pricing the same outcomes on Polymarket and Kalshi, trades in paper in the same
   // process (src/pmfloor.js builds what the frame carries as `legacy`), with a contract's price in cents, the way
   // those markets quote it. Its game bets are the Games view; the rest of its books are here.
@@ -1045,29 +1027,29 @@
   function sideHtml() {
     const L = S.legacy, [state, cls] = pmState(L), books = SIDE.map(pmBook).filter(Boolean);
     const side = r2((L.pnl || 0) - ((pmBook('bets') || {}).pnl || 0));
-    return `<div class="sidehead" data-anchor="side"><div class="cardhead"><h2 class="sect">Arbs, maker and snipe</h2>` +
-      `<span class="pill ${cls}"><i></i>${esc(state)}<span class="mode">Paper</span></span></div>` +
+    // its own loop's light only when it wants a look: beside the bar's light, a second "Working" read as the same one twice
+    return `<div class="sidehead" data-anchor="side">${cls === 'good' ? '' : `<span class="pill ${cls}"><i></i>${esc(state)}<span class="mode">Paper</span></span>`}` +
       `<p class="lede">The prediction-market desk's other books, on its own paper beside the games: <b>${figure(side)}</b> together, counting what is open at today's prices` +
       `${L.halt ? ` · ${esc(L.halt)}` : ''}. <a class="pmold" href="/pm">Every market, on its old page ›</a></p></div>` +
       `<div class="pmbooks">${books.map(pmCard).join('')}</div>`;
   }
-  function renderMarkets() {
+  function renderArbs() {
+    morph($('side'), S.legacy ? sideHtml() : '<p class="ovp">The arbs and the maker run on the prediction-market desk, and this frame does not carry it.</p>');
+  }
+  function renderCrypto() {
     morph($('hero'), heroHtml());
-    morph($('deskcard'), deskHtml());
     morph($('books'), ['crypto', 'stocks'].map(bookOf).filter(Boolean).map(bookCard).join(''));
-    $('side').hidden = !S.legacy;
-    if (S.legacy) morph($('side'), sideHtml());
     const gone = (S.books || []).filter(isRetired);
     $('retired').hidden = !gone.length;
     if (gone.length) morph($('retired'), `Retired on 2026-10-17: ${esc(listOf(gone.map((b, i) => (i ? b.name.toLowerCase() : b.name))))}. Together ` +
       `${figure(r2(gone.reduce((a, b) => a + b.pnl, 0)))}, still inside the figure above. Their labs found no edge, and they hold nothing. ` +
       '<button type="button" class="seeall" data-sheet="desk">Each one</button>');
   }
-  $('v-markets').addEventListener('click', (ev) => {
+  $('v-arbs').addEventListener('click', (ev) => {
     const t = ev.target.closest('[data-all]');
     if (!t) return;
     if (allRows.has(t.dataset.all)) allRows.delete(t.dataset.all); else allRows.add(t.dataset.all);
-    if (S) renderMarkets();
+    if (S) renderArbs();
   });
 
   // ------------------------------------------------------------ what's happening: the desk's trades and the bots' log
@@ -1118,7 +1100,14 @@
   const pmWho = (agent) => (agent === 'MAKR' ? 'MAKR' : 'PRED');
   const PM_TAG = { arb: 'Arbs', snipe: 'Snipe', converge: 'Convergence', maker: 'Maker', bet: 'Games' };
   const pmTag = (name) => ({ name, color: name === 'Games' ? GAMES_COLOR : SIDE_COLOR });
-  const pmLogRow = (e) => ({ t: e.t, who: pmWho(e.agent), tag: pmTag(e.agent === 'MAKR' ? 'Maker' : 'Predictions'), text: grouped(String(e.text || '')), sub: grouped(String(e.sub || '')), level: e.level || 'info',
+  // a line of its log about a game bet is the games' ("game bet on Missouri", "<game>: not bet, it had started", "the game
+  // bets go on again"), read off the line itself; a sub-line counts only when it opens on the bets ("HALT · the game bets
+  // stop too"). The desk's own halt ("… no new risk until clear, but the game bets go on") stops the arbs and the maker,
+  // so it is theirs, as is "desk online · … every game of 4 leagues".
+  const PM_GAME_LINE = /\bgame bets?\b|\bevery game\b|: not bet\b/i;
+  const pmLogTag = (e) => (e.agent === 'MAKR' ? 'Maker'
+    : e.kind !== 'HALT' && !/^desk online\b/i.test(String(e.text || '')) && PM_GAME_LINE.test(String(e.text || '')) || /^the game bets\b/i.test(String(e.sub || '')) ? 'Games' : 'Predictions');
+  const pmLogRow = (e) => ({ t: e.t, who: pmWho(e.agent), tag: pmTag(pmLogTag(e)), text: grouped(String(e.text || '')), sub: grouped(String(e.sub || '')), level: e.level || 'info',
     pnl: e.level === 'trade' && Number.isFinite(e.pnl) ? e.pnl : null, key: `pm|${e.t}|${e.agent}|${e.text}`, src: 'pm', halt: e.kind === 'HALT' });
   // The tag names the book, so the sub-line no longer says it again ("Polymarket at 51¢ · every game"). The
   // maker's fills come folded by minute and price, with their count (src/pmfloor.js).
@@ -1168,14 +1157,16 @@
   // few trades out of sight, so they are shown only when asked for. Two segmented controls, each one choice:
   // how much (each takes in the one before it, and a warning is always shown), and which part.
   const SHOWS = [['trades', 'Trades', ['trade', 'warn']], ['decisions', 'Trades & signals', ['trade', 'info', 'warn']], ['all', 'Everything', ['trade', 'info', 'warn', 'quiet']]];
-  const DESKS = [['both', 'All of it'], ['desk', 'Crypto & SPY'], ['pm', 'Games, arbs & maker']];
+  // the three parts, named as Today names them; a line's part is its source and, on the prediction-market desk, its tag
+  const DESKS = [['both', 'All of it'], ['desk', 'Crypto & SPY'], ['games', 'Games'], ['side', 'Arbs & maker']];
+  const partOf = (r) => (r.src !== 'pm' ? 'desk' : r.tag.name === 'Games' ? 'games' : 'side');
   const feed = { show: 'decisions', desk: 'both' };
   try { const v = JSON.parse(localStorage.getItem('desk-feed') || '{}'); if (SHOWS.some(([k]) => k === v.show)) feed.show = v.show; if (DESKS.some(([k]) => k === v.desk)) feed.desk = v.desk; } catch { /* defaults */ }
   const phone = matchMedia('(max-width: 640px)');
   const segHtml = (attr, opts, on) => opts.map(([k, name, n]) => `<button type="button" data-${attr}="${k}" class="${k === on ? 'on' : ''}" aria-pressed="${k === on}">${esc(name)}${n != null ? `<span>${n}</span>` : ''}</button>`).join('');
   function renderActivity(all = activityRows()) {
     const desk = S.legacy ? feed.desk : 'both';
-    const rows = all.filter((r) => desk === 'both' || (desk === 'pm') === (r.src === 'pm'));
+    const rows = all.filter((r) => desk === 'both' || partOf(r) === desk);
     const levels = (k) => SHOWS.find((s) => s[0] === k)[2];
     morph($('fshow'), segHtml('show', SHOWS.map(([k, name]) => [k, name, rows.filter((r) => levels(k).includes(r.level)).length]), feed.show));
     $('fdesk').hidden = !S.legacy;
@@ -1212,7 +1203,7 @@
       const h = await r.json();
       hist = { points: h.points || [], initial: h.initial || 0, books: h.books || {}, step: h.step || 60, recentFrom: h.recentFrom || null, loaded: true };
       for (const el of plots.keys()) drawChart(el);
-      if (S && view === 'markets') renderMarkets();
+      if (S && view === 'crypto') renderCrypto();
     } catch { /* the chart waits for the next try */ }
   }
   const plots = new Map();
@@ -1405,11 +1396,14 @@
   });
 
   // ------------------------------------------------------------ the views: one showing at a time, each a link
-  // #today, #games, #markets and #activity, and #markets/<card> for one card on Markets (a book, pm-arbs, side,
-  // retired), which is scrolled to and lit for a moment. No element has those ids, so the browser does not jump to
-  // one by itself. The floor's links before 2026-10-17 land on the view that has what they named.
-  const VIEWS = ['today', 'games', 'markets', 'activity'];
-  const OLD_VIEWS = { overview: 'today', desk: 'markets', pm: 'markets' };
+  // #today, #crypto, #games, #arbs and #activity, and #crypto/<book> or #arbs/<card> for one card (crypto, stocks,
+  // retired; pm-arbs, pm-maker, pm-snipe, pm-converge), which is scrolled to and lit for a moment. No element has
+  // those ids, so the browser does not jump to one by itself. The floor's older links land on the view that has
+  // what they named: Markets (until 2026-11-11) held both Crypto & SPY and the arbs' cards.
+  const VIEWS = ['today', 'crypto', 'games', 'arbs', 'activity'];
+  const TITLES = { today: 'Today', crypto: 'Crypto & SPY', games: 'Games', arbs: 'Arbs & maker', activity: 'Activity' };
+  const OLD_VIEWS = { overview: 'today', desk: 'crypto', markets: 'crypto' };
+  const ARB_CARDS = ['side', 'pm-arbs', 'pm-maker', 'pm-snipe', 'pm-converge'];
   let view = null, pendingAnchor = null;
   // `draw` is false from inside a render, which goes on to draw the view itself
   function setView(v, draw = true) {
@@ -1417,6 +1411,7 @@
     view = v;
     for (const el of document.querySelectorAll('main > .view')) el.hidden = el.dataset.view !== v;
     for (const a of $('views').querySelectorAll('a')) { if (a.dataset.view === v) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); }
+    $('viewtitle').textContent = TITLES[v];
     if (S && draw) render();
   }
   function route() {
@@ -1425,15 +1420,17 @@
     let raw = location.hash.slice(1);
     try { raw = decodeURIComponent(raw); } catch { /* malformed escape */ }
     let [v, k] = raw.split('/');
-    // the old links: #pm/bets is the Games view, #pm/arbs a card on Markets, #desk/options a retired book
-    if (v === 'pm') { if (k === 'bets') { v = 'games'; k = null; } else k = k ? `pm-${k}` : 'side'; }
+    // the old links: #pm/bets is the Games view, #pm/arbs a card on Arbs & maker, #desk/options a retired book,
+    // #markets/side and #markets/pm-maker the Arbs & maker view, #markets/stocks a card on Crypto & SPY
+    if (v === 'pm') { if (k === 'bets') { v = 'games'; k = null; } else { v = 'arbs'; k = k ? `pm-${k}` : null; } }
     else if (v === 'desk' && RETIRED.includes(k)) k = 'retired';
+    else if (v === 'markets' && ARB_CARDS.includes(k)) { v = 'arbs'; if (k === 'side') k = null; }
     v = OLD_VIEWS[v] || v;
     const before = view;
     if (!bigChart.hidden) closeBigChart();       // the sheets are not part of the address: they stayed over the new view
     closeSheet();
     setView(VIEWS.includes(v) ? v : 'today');
-    pendingAnchor = k && view === 'markets' ? k : null;
+    pendingAnchor = k && (view === 'crypto' || view === 'arbs') ? k : null;
     if (pendingAnchor) showAnchor(); else if (before !== null && before !== view) window.scrollTo({ top: 0, behavior: 'instant' });
   }
   function showAnchor() {
@@ -1455,11 +1452,11 @@
     renderClock();
     if (view === 'today') renderToday();
     else if (view === 'games') renderGames();
-    else if (view === 'markets') renderMarkets();
+    else if (view === 'crypto') renderCrypto();
+    else if (view === 'arbs') renderArbs();
     const rows = activityRows();
     if (view === 'activity') renderActivity(rows);
     announce(rows);
-    drawChart($('chart'));
     drawChart($('chart2'));
     if (!bigChart.hidden) drawChart($('chartbig-pnl'));
     renderSheet();
@@ -1536,7 +1533,6 @@
   route();
   morph($('tdhero'), `<p class="tddate">${esc(ET_LONG.format(new Date()))}</p><span class="tdlab">Connecting to the desk</span>`);
   morph($('ghero'), '<p class="ovp">Connecting to the desk</p>');
-  wireChart($('chart'), false);
   wireChart($('chart2'), false);
   wireChart($('chartbig-pnl'), true);
   connect();

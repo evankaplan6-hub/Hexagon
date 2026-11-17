@@ -114,7 +114,7 @@ components:
 
 Since 2026-09-29 the floor is drawn the way Apple draws its apps (Evan: "making the website iOS and macOS and Apple beautiful"): San Francisco, Apple's system colours as light-dark() pairs, cards on a grouped page, a translucent bar that blurs what scrolls under it, a large title on a phone that scrolls away, segmented controls and sheets as iOS draws them, and a tab bar along the foot of a phone. It is an **Operate** surface: the reader is checking a desk, so scanning, consistency and familiar controls outrank expression, and brand lives in precise details. The reference is Apple's own Stocks app first (see `docs/design/references/README.md`).
 
-The page is laid out for reading: nothing under 12px, figures all one width (`tabular-nums`), money signed and coloured only by direction. Four views follow what is happening (Today, Games, Markets, Activity). Everything that leads somewhere opens a sheet or a view. No pixel room and no bots are drawn (Evan's call, 2026-09-25).
+The page is laid out for reading: nothing under 12px, figures all one width (`tabular-nums`), money signed and coloured only by direction. Five views follow what is happening (Today, then Crypto & SPY, Games and Arbs & maker, the three parts as Today names them, then Activity). Everything that leads somewhere opens a sheet or a view. No pixel room and no bots are drawn (Evan's call, 2026-09-25).
 
 **Key Characteristics:**
 - Light or dark as the device is set (`color-scheme: light dark`).
@@ -171,7 +171,7 @@ Apple's system palette in two appearances, named by job in `tokens.css`. `desk.c
 
 ## Layout
 
-A twelve-column grid per view (`.view`, 16px gap) in a page up to 1,680px wide, padded by the safe areas. Today puts the games and the crypto rule in a 7-of-12 column and next up, the lab, the arbs and the health in 5 of 12. Narrower: at 1,023px columns stack and the views become a row under the name; at **640px and under** (a phone) everything is one column, the title is large and scrolls away leaving the desk's light and the time pinned, and the views are a **tab bar along the foot** over the home indicator, with room left for it (`calc(76px + safe area)`). Spacing is a 4px base (`--space-1` to `--space-6`). Game tiles are two to a row on a phone and one to a row under 360px.
+A twelve-column grid per view (`.view`, 16px gap) in a page up to 1,680px wide, padded by the safe areas. Today puts the games and the crypto rule in a 7-of-12 column and next up, the lab and the arbs in 5 of 12 (the desk's health is the light in the bar and its sheet). Narrower: at 1,023px columns stack and the views become a row under the name; at **640px and under** (a phone) everything is one column, the title is large and scrolls away leaving the desk's light and the time pinned, and the views are a **tab bar along the foot** over the home indicator, with room left for it (`calc(76px + safe area)`). Spacing is a 4px base (`--space-1` to `--space-6`). Game tiles are two to a row on a phone and one to a row under 360px.
 
 ## Elevation & Depth
 

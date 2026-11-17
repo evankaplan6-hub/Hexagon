@@ -16,7 +16,7 @@ Source: Vercel's Web Interface Guidelines, `command.md` of [vercel-labs/web-inte
 - **Tailwind:** `focus-visible:ring-*`, `hover:`, `truncate`, `line-clamp-*`, `min-w-0`, `overflow-x-hidden` as class names. Use the CSS they stand for, which this checklist names.
 - **Libraries not in the repo:** `virtua`, `nuqs`. Zero npm dependencies is a rule (`CLAUDE.md`). Use `content-visibility: auto` and the URL hash.
 - **No forms on the floor:** the form rules (autocomplete, input types, paste, labels, submit state, inline errors, placeholders, unsaved-changes warning) apply only to the login page in `server.js`. The floor has no fields.
-- **Web fonts:** "preload critical fonts", `font-display`, "preconnect for CDN domains". The floor loads no font and no CDN (`tools/tokens-test.js` fails any). The old `/pm` and lookout pages are not the floor.
+- **Web fonts:** "preload critical fonts", `font-display`, "preconnect for CDN domains". The floor loads no font and no CDN (`tools/tokens-test.js` fails any). The old `/pm` page is not the floor (it still loads Google Fonts); the lookout page was retired 2026-11-11.
 - **Destructive actions:** the floor is read-only and has no delete control (`tools/floor-test.js`).
 - **Video and GIF rules:** the floor has none.
 - **Locale detection by `Accept-Language`:** Hexagon reads in `America/New_York` and en-US on purpose (the market's clock); keep using `Intl.DateTimeFormat` and `Intl.NumberFormat` with explicit options.
@@ -88,7 +88,7 @@ Source: Vercel's Web Interface Guidelines, `command.md` of [vercel-labs/web-inte
 - [ ] The 2-second frame patches in place (`morph`) rather than rebuilding, so focus and scroll survive.
 
 ### Navigation and state
-- [ ] URL reflects state: the view and the card are in the hash (`#markets/crypto`). A sheet is not in the address; do not add state that would be lost on reload without saying so.
+- [ ] URL reflects state: the view and the card are in the hash (`#crypto/stocks`). A sheet is not in the address; do not add state that would be lost on reload without saying so.
 - [ ] Links are `<a href>` so Cmd/Ctrl-click and middle-click work.
 - [ ] Back, forward and reload land where they were.
 

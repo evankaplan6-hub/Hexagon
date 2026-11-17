@@ -143,22 +143,25 @@ tools/crypto-note.js the crypto note (2026-10-17): the crypto rule against holdi
                   a dozen lines, from the real engine on a copy of the box's state (--box); paper, not advice
 src/desk/broker.js  paper fills: crypto walks Coinbase's book + 0.40%, SPY at the touch, options at the touch + $0.03
 src/desk/clock.js   NYSE sessions, holidays and 1 PM closes through 2027 (TESS warns when the list runs out)
-public/desk.*     the floor at /: since 2026-10-17 (the fifth version, Evan: "u do everything surprise me") four views that
-                  follow what is happening, not the code, each a link (#today, #games, #markets, #activity; #markets/crypto,
-                  #markets/pm-arbs, #markets/side for one card; the old #overview, #desk, #pm, #pm/bets links still land):
+public/desk.*     the floor at /: since 2026-10-17 (the fifth version, Evan: "u do everything surprise me") views that
+                  follow what is happening, not the code; since 2026-11-11 (the structure audit, Evan: "Yes, fix it") five,
+                  one per part as Today names them, each a link (#today, #crypto, #games, #arbs, #activity; #crypto/stocks,
+                  #arbs/pm-maker for one card; the old #markets, #markets/side, #overview, #desk, #pm, #pm/bets links still land):
                   Today (the date; all the paper in play, both desks together, in three parts that add up: Crypto & SPY,
-                  Games, Arbs & maker; today's games as scoreboard tiles; the crypto rule vs holding with the chart and a bar
+                  Games, Arbs & maker; today's games as scoreboard tiles; the crypto rule vs holding with a bar
                   per market with a mark where the rule wants it; Next up, one timeline across all of it; the lab, its TESTS
-                  list, tapes (src/labstatus.js) and re-test dates; the arbs/maker/snipe; health), Games (the record vs what the
+                  list, tapes (src/labstatus.js) and re-test dates; the arbs/maker/snipe), Crypto & SPY (the two books in full: the headline vs holding,
+                  the chart, a card each; the retired books one line), Games (the record vs what the
                   prices expected, by league; a tile per game: in progress, up next by start, final by the day played; from
-                  src/pmfloor.js gameBoard), Markets (crypto + SPY in full, then arbs, maker, snipe, convergence; the retired
-                  books one line) and Activity (tagged by part). Every tile, bar and line that leads somewhere opens a sheet
+                  src/pmfloor.js gameBoard), Arbs & maker (arbs, maker, snipe, convergence) and Activity (filtered and tagged by
+                  the same three parts). Each view's name is the large title on a phone; the desk's health is only the bar's
+                  light and its sheet; the chart vs holding is only on Crypto & SPY. Every tile, bar and line that leads somewhere opens a sheet
                   (#sheet: desk = the whole Hexagon, book:<key>, mkt:<sym>, game:<id>, lab, health); a tab bar on a phone; tools/floor-test.js holds
                   the views to the page. Laid out for reading, 12px and up; no pixel room or bots drawn since 2026-09-25 (Evan's
                   call). desk.css is its own sheet on public/tokens.css, colours named by job; tools/tokens-test.js holds
                   every text colour to 4.5:1. desk.js patches boards in place (morph) so focus survives the 2s stream.
                   Since 2026-09-29 drawn as Apple draws its apps (Evan: "making the website iOS and macOS and Apple beautiful"):
-                  the system font (no web fonts on the floor; the old /pm and lookout pages still load Google Fonts), Apple's colours as light-dark() pairs, light or dark as the device is set,
+                  the system font (no web fonts on the floor; the old /pm page still loads Google Fonts; the lookout page was retired 2026-11-11), Apple's colours as light-dark() pairs, light or dark as the device is set,
                   a translucent bar, a phone's large title, the large chart as a sheet; the retired books' four colours went to the
                   games, the arbs and the maker, and the lab (--part-*) on 2026-10-17; addable to an iPhone's Home Screen
                   or a Mac's Dock (manifest.webmanifest; tools/icons.js draws the icons; server.js OPEN_FILES serves those
@@ -204,7 +207,7 @@ src/venues/       Polymarket (Gamma + CLOB; since 2026-10-11 fetchGames reads ev
 src/watchdog.js   stall watchdog: exits the process when the taker or maker loop, or (since 2026-09-26) the stocks,
                   crypto and options desk's loop, finishes no round (WATCHDOG_SEC); Fly restarts it
 src/volume.js     the desk's own trading volume by the minute (fed by the journal, rebuilt from it; /api/volume) for the chart's bars
-src/recorder.js   tick tape writer      public/          dashboard (lookout.html: the same desk as one painted room, read-only)
+src/recorder.js   tick tape writer      public/          dashboard (the old /pm page; the floor is desk.*)
                                          public/vendor/   TradingView Lightweight Charts, one vendored file: draws the P&L chart (candles or line)
                                                           (large chart: momentum + maker not-yet-banked panes, describe only)
 src/tape.js       maker market data     src/kalshi-ws.js Kalshi trade socket (read-only; needs the key, else the tape polls)

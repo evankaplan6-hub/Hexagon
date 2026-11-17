@@ -35,18 +35,22 @@
           <polygon class="core" points="20,15.5 24.5,18 24.5,22 20,24.5 15.5,22 15.5,18"/>
         </svg>
       </span>
-      <h1>The Hexagon</h1>
+      <!-- the app's name in the bar on a wide screen; the h1 is the view showing, the large title on a phone the way
+           each of an iOS app's tabs has its own (desk.js sets it) -->
+      <span class="brandname" aria-hidden="true">The Hexagon</span>
+      <h1 id="viewtitle">Today</h1>
     </div>
-    <!-- Four views (2026-10-17, the floor's fifth version, Evan: "u do everything surprise me"): Today, the whole
-         Hexagon on one page as the day it is having; Games, every game the book bets as a scoreboard; Markets,
-         the crypto rule and SPY, and the arbs, maker and snipe; Activity, everything any of it did. Until then the
-         views followed the code (one per desk); now they follow what is happening. A segmented control in the bar
-         on a wide screen, a tab bar along the foot of a phone's. Each is a link, so back, a bookmark and a reload
-         land where they were, and the old links (#overview, #desk, #pm) still land. -->
+    <!-- Five views, one for each part of the Hexagon (2026-11-11 structure audit, Evan: "Yes, fix it"): Today,
+         the whole Hexagon on one page as the day it is having; then a view for each of its three parts, named as
+         Today names them (Crypto & SPY, Games, Arbs & maker); and Activity, everything any of it did. Until then
+         Markets held two of the parts, and the Activity filter grouped them a third way. A segmented control in the
+         bar on a wide screen, a tab bar along the foot of a phone's. Each is a link, so back, a bookmark and a
+         reload land where they were, and the old links (#markets, #overview, #desk, #pm) still land. -->
     <nav class="views" id="views" aria-label="Views">
       <a href="#today" data-view="today"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/></svg><span>Today</span></a>
+      <a href="#crypto" data-view="crypto"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 17.5l5-5.5 4 3.5 7.5-8.5"/><path d="M15 7h5v5"/></svg><span>Crypto</span></a>
       <a href="#games" data-view="games"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="5" width="19" height="14" rx="3"/><path d="M12 5v14"/><circle cx="12" cy="12" r="3"/></svg><span>Games</span></a>
-      <a href="#markets" data-view="markets"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 17.5l5-5.5 4 3.5 7.5-8.5"/><path d="M15 7h5v5"/></svg><span>Markets</span></a>
+      <a href="#arbs" data-view="arbs"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5h13.5M14 5l3.5 3.5L14 12"/><path d="M20 15.5H6.5M10 12l-3.5 3.5L10 19"/></svg><span>Arbs</span></a>
       <a href="#activity" data-view="activity"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6.5h11M9 12h11M9 17.5h11"/><circle cx="4.75" cy="6.5" r="1.1"/><circle cx="4.75" cy="12" r="1.1"/><circle cx="4.75" cy="17.5" r="1.1"/></svg><span>Activity</span></a>
     </nav>
     <!-- the one thing a glance is asking: is the desk working, and with whose money -->
@@ -60,9 +64,9 @@
 
   <main id="floor" aria-busy="true">
     <!-- Today: the date, all the paper in play and its three parts; then the day's games, the crypto rule against
-         simply holding, what happens next, the lab's tapes, the arbs and the maker, and the health. Anything with
-         more behind it opens it: a sheet, or the view that has it. -->
-    <section class="view tv" id="v-today" data-view="today" aria-label="Today">
+         simply holding, what happens next, the lab's tapes, and the arbs and the maker. Anything with more behind it
+         opens it: a sheet, or the view that has it. The desk's health is the light in the bar and its sheet. -->
+    <section class="view tv" id="v-today" data-view="today" aria-labelledby="viewtitle">
       <section class="tdhero" id="tdhero" aria-label="All the paper"></section>
       <div class="tdcol tdmain">
         <section class="card" aria-labelledby="tdg-h">
@@ -70,9 +74,8 @@
           <div id="tdgames"></div>
         </section>
         <section class="card tdrule" aria-labelledby="tdr-h">
-          <div class="cardhead"><h2 class="label" id="tdr-h">The crypto rule</h2><button type="button" class="seeall" data-expand="1">Large chart</button></div>
+          <div class="cardhead"><h2 class="label" id="tdr-h">The crypto rule</h2><a class="seeall" href="#crypto">Crypto &amp; SPY</a></div>
           <div id="tdrule"></div>
-          <div id="chart" class="pnl bare"></div>
           <ul class="aims" id="aims"></ul>
           <div id="tdlast"></div>
         </section>
@@ -87,19 +90,26 @@
           <div id="tdlab"></div>
         </section>
         <section class="card" aria-labelledby="tds-h">
-          <div class="cardhead"><h2 class="label" id="tds-h">Arbs, maker and snipe</h2><a class="seeall" href="#markets/side">Their cards</a></div>
+          <div class="cardhead"><h2 class="label" id="tds-h">Arbs &amp; maker</h2><a class="seeall" href="#arbs">Their cards</a></div>
           <ul class="rows" id="tdside"></ul>
-        </section>
-        <section class="card" aria-labelledby="health-h">
-          <div class="cardhead"><h2 class="label" id="health-h">Health</h2><button type="button" class="seeall" data-sheet="health">Details</button></div>
-          <ul class="rows checks" id="health"></ul>
         </section>
       </div>
     </section>
 
+    <!-- Crypto & SPY: the books against just holding, the chart, a card per book, and one line for the retired books -->
+    <section class="view cv-view" id="v-crypto" data-view="crypto" aria-labelledby="viewtitle" hidden>
+      <section class="card hero" id="hero" aria-label="Since the start"></section>
+      <section class="card mchart" aria-labelledby="mch-h">
+        <div class="cardhead"><h2 class="label" id="mch-h">Against just holding</h2><button type="button" class="seeall" data-expand="1">Large chart</button></div>
+        <div id="chart2" class="pnl"></div>
+      </section>
+      <section class="books" id="books" aria-label="The crypto and SPY books"></section>
+      <p class="retired" id="retired" data-anchor="retired" hidden></p>
+    </section>
+
     <!-- Games: the record against what the prices expected, then every game as a tile: in progress, up next by
          start time, and the finals -->
-    <section class="view gv" id="v-games" data-view="games" aria-label="Games" hidden>
+    <section class="view gv" id="v-games" data-view="games" aria-labelledby="viewtitle" hidden>
       <section class="card ghero" id="ghero" aria-label="The record"></section>
       <div class="gbar"><div class="seg" id="gleague" role="group" aria-label="League"></div></div>
       <section class="gsec" id="glive" aria-label="In progress"></section>
@@ -107,24 +117,14 @@
       <section class="gsec" id="gfinal" aria-label="Final"></section>
     </section>
 
-    <!-- Markets: crypto and SPY in full (the headline against holding, the desk's state, the chart, a card per
-         book), then the prediction-market desk's arbs, maker and snipe, then one line for the retired books -->
-    <section class="view mv" id="v-markets" data-view="markets" aria-label="Markets" hidden>
-      <section class="card hero" id="hero" aria-label="Crypto and SPY"></section>
-      <section class="card deskcard" id="deskcard" aria-label="The desk"></section>
-      <section class="card mchart" aria-labelledby="mch-h">
-        <div class="cardhead"><h2 class="label" id="mch-h">Against just holding</h2><button type="button" class="seeall" data-expand="1">Large chart</button></div>
-        <div id="chart2" class="pnl"></div>
-      </section>
-      <section class="books" id="books" aria-label="The crypto and SPY books"></section>
+    <!-- Arbs & maker: the prediction-market desk's books other than the games (arbs, maker, snipe, convergence) -->
+    <section class="view sv" id="v-arbs" data-view="arbs" aria-labelledby="viewtitle" hidden>
       <section class="side" id="side" aria-label="Arbs, maker and snipe"></section>
-      <p class="retired" id="retired" data-anchor="retired" hidden></p>
     </section>
 
     <!-- everything the desks did, newest first, filtered by how much of it to show and which part -->
-    <section class="view av" id="v-activity" data-view="activity" aria-label="Activity" hidden>
+    <section class="view av" id="v-activity" data-view="activity" aria-labelledby="viewtitle" hidden>
       <section class="card act">
-        <div class="cardhead"><h2 class="label">Activity</h2></div>
         <div class="filters">
           <div class="seg" id="fshow" role="group" aria-label="Show"></div>
           <div class="seg" id="fdesk" role="group" aria-label="Part"></div>

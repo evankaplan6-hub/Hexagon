@@ -54,7 +54,10 @@ button:active, a:active, summary:active { opacity: .55; }
   background: linear-gradient(180deg, var(--icon-top), var(--icon-bottom)); box-shadow: inset 0 0 0 .5px var(--icon-edge); }
 .appicon svg { width: 21px; height: 21px; }
 .appicon .core { fill: var(--icon-core); }
-h1 { margin: 0; font: 600 var(--type-title)/1.2 var(--sans); letter-spacing: -.02em; white-space: nowrap; }
+/* the app's name in the bar on a wide screen, where the segmented control says which view is showing; the h1 is that
+   view's own title, read out there and shown on a phone as its large title */
+.brandname, h1 { margin: 0; font: 600 var(--type-title)/1.2 var(--sans); letter-spacing: -.02em; white-space: nowrap; }
+h1 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 /* the desk's light: a dot in the state's colour, the words in the ink, and a wash behind them when the
    state wants a look */
 .pill { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 12px 0 11px; border-radius: var(--radius-pill);
@@ -150,7 +153,6 @@ button.row, a.row { cursor: pointer; transition: background-color .15s; }
 .rf { font: 600 var(--type-title)/1.2 var(--sans); letter-spacing: -.015em; text-align: right; white-space: nowrap; }
 .rw { grid-column: 2 / -1; font-size: var(--type-small); line-height: 1.35; color: var(--ink-3); }
 .rw b { font-weight: 600; color: var(--ink-2); }
-.checks .rn { font-weight: 400; color: var(--ink-2); }
 .mark { display: inline-block; width: 1.3em; font-weight: 700; }
 .mark.ok { color: var(--ok); } .mark.warn { color: var(--warn); } .mark.bad { color: var(--bad); }
 .mark.idle, .mark.no { color: var(--ink-3); }
@@ -179,8 +181,6 @@ button.row, a.row { cursor: pointer; transition: background-color .15s; }
 .tdaside { grid-column: span 5; }
 .verdict .rec { letter-spacing: -.01em; }
 /* the crypto rule's chart under its verdict: no title of its own, its figure a size down */
-.tdrule .pnl { height: 220px; margin-top: var(--space-3); }
-.tdrule .pnl .cv { font-size: 20px; }
 /* how much of each slot is in the market (the bar) and where the rule wants it (the mark) */
 .aims { list-style: none; margin: var(--space-3) 0 0; padding: 0; border-top: 1px solid var(--line-1); }
 .aims li + li { border-top: 1px solid var(--line-1); }
@@ -266,10 +266,9 @@ button.row, a.row { cursor: pointer; transition: background-color .15s; }
 .ggrp > h3 { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--space-1) var(--space-3); margin: 0; font: 600 var(--type-title)/1.25 var(--sans); letter-spacing: -.015em; color: var(--ink-1); }
 .ggrp .tiles { margin-top: var(--space-2); }
 
-/* ---- Markets: crypto and SPY's headline beside the desk, the chart, the two books, then the arbs, maker and snipe */
-.mv .hero { grid-column: span 7; align-self: stretch; }
-.mv .deskcard { grid-column: span 5; align-self: stretch; }
-.mchart { grid-column: 1 / -1; }
+/* ---- Crypto & SPY: the headline beside the chart, then the two books; Arbs & maker: its cards */
+.cv-view .hero { grid-column: span 5; align-self: stretch; }
+.mchart { grid-column: span 7; align-self: stretch; }
 .mchart .pnl { height: 320px; margin-top: var(--space-2); }
 .hero .big { margin-top: var(--space-1); font: 700 var(--type-headline)/1.05 var(--sans); letter-spacing: -.025em; white-space: nowrap; }
 .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: var(--space-4) 0 0; padding-top: var(--space-3); border-top: 1px solid var(--line-1); }
@@ -281,21 +280,11 @@ button.row, a.row { cursor: pointer; transition: background-color .15s; }
 .insight { margin: var(--space-3) 0 0; color: var(--ink-2); font-size: var(--type-small); }
 .insight b { font-weight: 600; }
 /* the desk: market, prices, the loss limit */
-.facts { margin: var(--space-2) 0 0; }
-.facts div { display: grid; grid-template-columns: 7.5em minmax(0, 1fr); gap: var(--space-3); padding: 9px 0; border-bottom: 1px solid var(--line-1); }
-.facts div:last-child { border-bottom: 0; }
-.facts dt { font-size: var(--type-small); color: var(--ink-3); }
-.facts dd { margin: 0; font-size: var(--type-small); color: var(--ink-2); }
-.facts dd b { color: var(--ink-1); font-weight: 600; }
-/* amber and red are for a limit getting close, not for every loss: plain until half of it is used */
-.meter { display: block; height: 6px; margin-top: 8px; border-radius: var(--radius-pill); background: var(--fill-1); overflow: hidden; }
-.meter i { display: block; height: 100%; border-radius: inherit; background: var(--ink-3); }
-.meter.warn i { background: var(--warn); } .meter.bad i { background: var(--bad); }
-.deskfoot { margin: var(--space-2) 0 0; font-size: var(--type-label); line-height: 1.45; color: var(--ink-3); }
 .books { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); align-items: start; min-width: 0; }
 .side { grid-column: 1 / -1; min-width: 0; }
-.sidehead { margin-top: var(--space-2); }
-.sidehead .cardhead { justify-content: flex-start; }
+.sv > * { grid-column: 1 / -1; }
+.sidehead { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); }
+.sidehead .lede { margin: 0; }
 .retired { grid-column: 1 / -1; margin: 0; max-width: 96ch; font-size: var(--type-small); color: var(--ink-3); }
 
 /* ---- a book: its figure against holding, what it is doing now, what it holds ---------------------- */
@@ -495,13 +484,12 @@ footer { max-width: 96ch; font-size: var(--type-label); line-height: 1.5; letter
   .views a { flex: 1 1 0; }
   .tdhero { grid-template-columns: minmax(0, 1fr); }
   .tdmain, .tdaside { grid-column: 1 / -1; }
-  .mv .hero, .mv .deskcard { grid-column: span 6; }
+  .cv-view .hero, .mchart { grid-column: 1 / -1; }
   .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .kpis div:nth-child(3) { padding-left: 0; border-left: 0; }
   .kpis div:nth-child(n+3) { margin-top: var(--space-3); }
 }
 @media (max-width: 767px) {
-  .mv .hero, .mv .deskcard { grid-column: 1 / -1; }
   .books { grid-template-columns: minmax(0, 1fr); }
   .pmbooks > [data-k] { grid-column: 1 / -1; }
   .ghs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -522,7 +510,8 @@ footer { max-width: 96ch; font-size: var(--type-label); line-height: 1.5; letter
   .clock { grid-area: clock; }
   .appicon { width: 32px; height: 32px; border-radius: 7.5px; }
   .appicon svg { width: 23px; height: 23px; }
-  h1 { font-size: 26px; font-weight: 700; letter-spacing: -.025em; }
+  .brandname { display: none; }
+  h1 { position: static; width: auto; height: auto; overflow: visible; clip-path: none; font-size: 26px; font-weight: 700; letter-spacing: -.025em; }
   /* the tab bar: an icon over its name, the one showing in the accent */
   .views { position: fixed; left: 0; right: 0; bottom: 0; z-index: 25; display: flex; gap: 0; margin: 0; border-radius: 0;
     padding: 6px max(var(--space-2), env(safe-area-inset-right)) max(6px, env(safe-area-inset-bottom)) max(var(--space-2), env(safe-area-inset-left));
@@ -544,7 +533,6 @@ footer { max-width: 96ch; font-size: var(--type-label); line-height: 1.5; letter
   .part .pn .chev { display: none; }
   .part .pf { grid-area: f; align-self: center; font-size: var(--type-title); }
   .part .ps { grid-area: s; }
-  .tdrule .pnl { height: 200px; }
   .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .gt { padding: 9px 10px 10px; }
   .gtn { font-size: 14px; }

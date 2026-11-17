@@ -52,7 +52,6 @@ const SUITES = [
   ['journal-gaps', "the journal's two disk-full holes (10-15, 10-16): the restored taker lines are the state's difference to the cent, the maker's inventory jumps, and a journal that ends before them is untouched"],
   ['tdsched', "the anytime-touchdown tape on the box's timer: DATA_DIR/td, a minute after boot then every 15, one run at a time, a quiet run unlogged, a throw caught"],
   ['td-tape', "the anytime-touchdown tape: 1+ markets only, kickoff off Kalshi's expected end, the three-hour window, a Sunday night filed under Sunday, the last record before kickoff, voids (a finalized scalar), the fee and its fallback said, the bands, a missed game named and a gap noted"],
-  ['lookout', 'the lookout page: the painted room, read-only, fed by the same stream as the floor'],
   ['themes', 'what a market is about: leagues off the series, the tickers that only look like one, and the page filter built on it'],
   ['desk', 'the stocks, crypto and options desk: the market calendar, the feeds, paper fills, every book\'s rules, and whole rounds of a trading day, a morning of scalps and a morning dip'],
   ['crypto-lab', "the crypto lab: next-open fills, the cost of a trade, the rebalance band, and the desk's own volatility rule"],
@@ -69,7 +68,7 @@ const SUITES = [
   ['week-report', 'the weekly report: Eastern weeks from Monday that add up to the run, counted from the starting cash, the prediction desk in the same weeks, one page with nothing fetched'],
   ['desk-check', "the desk's daily check: a real day replays to the penny, every drift named, alive and today's checks at any hour of the week"],
   ['pmfloor', "the prediction-market desk on the floor at /: its books add up to its own P&L to the cent, the log in the floor's words and levels, trades from the ledger, a box-sized desk in one frame"],
-  ['floor', "the floor at / as four views of the whole Hexagon (Today, Games, Markets, Activity): a link and a panel each, the old links landing, every element desk.js reads in desk.html, read-only, every tile and line that leads somewhere opening it, and a tab bar on a phone"],
+  ['floor', "the floor at / as five views of the whole Hexagon (Today, Crypto & SPY, Games, Arbs & maker, Activity): a link and a panel each, the old links landing, every element desk.js reads in desk.html, read-only, every tile and line that leads somewhere opening it, and a tab bar on a phone"],
   ['tokens', "the desk's design tokens: every text colour at 4.5:1 or better on every surface in light and in dark, no colour of desk.css's own, no token that is not there, the system font, the app icons, and only they served before the login"],
 ];
 
