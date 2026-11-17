@@ -49,6 +49,36 @@ jobs:
       # The suite is hermetic: no network, no wall clock.
       - run: npm test
 
+  # The design gate (ops/design-gate.mjs): a pull request that changes screen files (public/, not the vendored chart)
+  # needs a design review committed on the branch for exactly those changes, written by the /design-gate skill.
+  # The gate's script and settings come from the base branch, so a pull request can't loosen its own gate. It
+  # never touches the deploy job: that runs on pushes to main only.
+  design-gate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: The gate's own tests
+        run: node --test ops/design-gate.test.mjs
+      - name: A design review is on record for the screen changes
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          git fetch --quiet origin "+refs/heads/$BASE:refs/remotes/origin/$BASE"
+          gate="$RUNNER_TEMP/design-gate.mjs"
+          if ! git cat-file -e "origin/$BASE:ops/design-gate.mjs" 2>/dev/null; then
+            # the pull request that adds the gate, or a base without one: there is no gate to check against yet
+            echo "origin/$BASE has no ops/design-gate.mjs; nothing to check."; exit 0
+          fi
+          git show "origin/$BASE:ops/design-gate.mjs" > "$gate"
+          node "$gate" check --base "origin/$BASE" --head HEAD
+
   # Every push to main that passes the suite goes straight to the Fly desk, so the live dashboard is
   # never a deploy behind the repo. The rails before anything ships:
   #   - it waits for BOTH test jobs, so a red build never reaches the box;
