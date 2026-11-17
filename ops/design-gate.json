@@ -25,5 +25,6 @@
     "440 light 44",
     "440 dark 44",
     "440 light 24"
-  ]
+  ],
+  "phoneAuditUrls": "tools/phone-audit-urls.txt"
 }

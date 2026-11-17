@@ -230,17 +230,17 @@ test("main deleting lines between two reviewed changes keeps the review", () => 
   const f = fixture();
   try {
     const css = (a, b, mid) => `.a { top: ${a}; }\n${mid.map((m) => `.m${m} { top: 0; }\n`).join("")}.b { top: ${b}; }\n`;
-    commit(f.work, "public/desk.css", css(0, 0, [1, 2, 3, 4]));
+    commit(f.work, "public/desk.css", css(0, 0, [1, 2, 3, 4, 5, 6]));
     g(f.work, "checkout", "-q", "main"); g(f.work, "merge", "-q", "--ff-only", "feature"); g(f.work, "push", "-q", "origin", "main");
     g(f.work, "checkout", "-q", "-b", "f2");
-    commit(f.work, "public/desk.css", css(1, 1, [1, 2, 3, 4]));
+    commit(f.work, "public/desk.css", css(1, 1, [1, 2, 3, 4, 5, 6]));
     record(f.work, { verdict: "pass", checks: ALL, notes: notes(f.root), phoneAudit: [phoneAudit(f.root)] });
     g(f.work, "add", "-A"); g(f.work, "commit", "-q", "-m", "review");
-    // main drops two of the lines between, so git's own hunks for the branch's two changes would join into one
-    g(f.work, "checkout", "-q", "main"); g(f.work, "checkout", "-q", "-b", "trim"); commit(f.work, "public/desk.css", css(0, 0, [1, 4]));
+    // main drops two lines between (more than two lines from each change), so git's own hunks would join into one
+    g(f.work, "checkout", "-q", "main"); g(f.work, "checkout", "-q", "-b", "trim"); commit(f.work, "public/desk.css", css(0, 0, [1, 2, 5, 6]));
     g(f.work, "checkout", "-q", "main"); g(f.work, "merge", "-q", "--ff-only", "trim"); g(f.work, "push", "-q", "origin", "main");
     g(f.work, "checkout", "-q", "f2"); g(f.work, "merge", "-q", "-m", "merge main", "main");
-    assert.equal(g(f.work, "show", "HEAD:public/desk.css"), css(1, 1, [1, 4]));
+    assert.equal(g(f.work, "show", "HEAD:public/desk.css"), css(1, 1, [1, 2, 5, 6]));
     assert.equal(check(f.work, "origin/main", "HEAD").ok, true);
   } finally { f.done(); }
 });
@@ -280,6 +280,75 @@ test("status and record run main's own script when the branch's differs", () => 
     assert.match(r, /The gate's own files changed/);
     const both = spawnSync(process.execPath, [SCRIPT, "status"], { cwd: f.work, encoding: "utf8" });
     assert.match(both.stderr, /ran the base script/);
+  } finally { f.done(); }
+});
+
+test("bytes that aren't valid UTF-8 still change the fingerprint", () => {
+  const f = fixture();
+  try {
+    const put = (byte) => { writeFileSync(join(f.work, "public/x.bin"), Buffer.from([0x61, byte, 0x0a])); g(f.work, "add", "-A"); g(f.work, "commit", "-q", "-m", "b"); };
+    put(0x80); const a = diffOf(f.work, "origin/main", "HEAD", loadConfig(f.work)).fingerprint;
+    put(0x81); const b = diffOf(f.work, "origin/main", "HEAD", loadConfig(f.work)).fingerprint;
+    assert.notEqual(a, b);
+  } finally { f.done(); }
+});
+
+test("the caller's pathspec settings don't hide screen files", () => {
+  const f = fixture();
+  try {
+    commit(f.work, "public/desk.css", "body { color: #111; }\n");
+    for (const v of ["GIT_LITERAL_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS"]) {
+      process.env[v] = "1";
+      try { assert.deepEqual(check(f.work, "origin/main", "HEAD").uiFiles, ["public/desk.css"], v); } finally { delete process.env[v]; }
+    }
+  } finally { f.done(); }
+});
+
+test("a change landed, reverted with its record and landed again needs a new review", () => {
+  const f = fixture();
+  try {
+    commit(f.work, "public/desk.css", "body { color: #111; }\n");
+    record(f.work, { verdict: "pass", checks: ALL, notes: notes(f.root), phoneAudit: [phoneAudit(f.root)] });
+    g(f.work, "add", "-A"); g(f.work, "commit", "-q", "-m", "review");
+    g(f.work, "checkout", "-q", "main"); g(f.work, "merge", "-q", "--no-ff", "-m", "merge A", "feature");
+    g(f.work, "revert", "--no-edit", "-m", "1", "HEAD"); const revert = g(f.work, "rev-parse", "HEAD").trim();
+    g(f.work, "push", "-q", "origin", "main");
+    g(f.work, "checkout", "-q", "-b", "reland"); g(f.work, "revert", "--no-edit", revert);
+    const r = check(f.work, "origin/main", "HEAD");
+    assert.equal(r.ok, false); assert.match(r.reason, /earlier pull request/);
+    assert.equal(record(f.work, { verdict: "pass", checks: ALL, notes: notes(f.root), phoneAudit: [phoneAudit(f.root)] }).path, recordPath(r.fingerprint, 2));
+  } finally { f.done(); }
+});
+
+test("record needs every listed route in each audit of the set", () => {
+  const f = fixture();
+  try {
+    g(f.work, "checkout", "-q", "main");
+    mkdirSync(join(f.work, "tools"), { recursive: true });
+    writeFileSync(join(f.work, "tools/urls.txt"), "# routes\n/#today\n/#today   sheet=desk\n");
+    commit(f.work, "ops/design-gate.json", JSON.stringify({ ...CONFIG, phoneAuditSet: ["375 light 44"], phoneAuditUrls: "tools/urls.txt" }));
+    g(f.work, "push", "-q", "origin", "main"); g(f.work, "checkout", "-q", "feature"); g(f.work, "merge", "-q", "main");
+    commit(f.work, "public/desk.css", "body { color: #111; }\n");
+    const n = notes(f.root);
+    assert.throws(() => record(f.work, { verdict: "pass", checks: ALL, notes: n, phoneAudit: [phoneAudit(f.root)] }), /didn't cover \/#today sheet=desk/);
+    const extra = phoneAudit(f.root);
+    const j = JSON.parse(readFileSync(join(extra, "audit.json"), "utf8")); j.results = [{ route: "/#today sheet=desk", flags: [] }];
+    writeFileSync(join(extra, "audit.json"), JSON.stringify(j));
+    record(f.work, { verdict: "pass", checks: ALL, notes: n, phoneAudit: [phoneAudit(f.root), extra] });
+  } finally { f.done(); }
+});
+
+test("record refuses an audit of a commit this checkout doesn't have, or with no results", () => {
+  const f = fixture();
+  try {
+    commit(f.work, "public/desk.css", "body { color: #111; }\n");
+    const n = notes(f.root), pa = phoneAudit(f.root);
+    writeFileSync(join(pa, "commit"), "1".repeat(40));
+    assert.throws(() => record(f.work, { verdict: "pass", checks: ALL, notes: n, phoneAudit: [pa] }), /isn't in this checkout/);
+    const bad = phoneAudit(f.root); writeFileSync(join(bad, "audit.json"), "{}");
+    assert.throws(() => record(f.work, { verdict: "pass", checks: ALL, notes: n, phoneAudit: [bad] }), /has no results/);
+    const r = spawnSync(process.execPath, [SCRIPT, "record", "--verdict", "pass", "--phone-audit"], { cwd: f.work, encoding: "utf8" });
+    assert.equal(r.status, 2); assert.match(r.stderr, /--phone-audit needs a value/);
   } finally { f.done(); }
 });
 
