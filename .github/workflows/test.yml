@@ -72,11 +72,11 @@ jobs:
         run: |
           git fetch --quiet origin "+refs/heads/$BASE:refs/remotes/origin/$BASE"
           gate="$RUNNER_TEMP/design-gate.mjs"
-          if git cat-file -e "origin/$BASE:ops/design-gate.mjs" 2>/dev/null; then
-            git show "origin/$BASE:ops/design-gate.mjs" > "$gate"
-          else
-            cp ops/design-gate.mjs "$gate"   # the pull request that adds the gate
+          if ! git cat-file -e "origin/$BASE:ops/design-gate.mjs" 2>/dev/null; then
+            # the pull request that adds the gate, or a base without one: there is no gate to check against yet
+            echo "origin/$BASE has no ops/design-gate.mjs; nothing to check."; exit 0
           fi
+          git show "origin/$BASE:ops/design-gate.mjs" > "$gate"
           node "$gate" check --base "origin/$BASE" --head HEAD
 
   # Every push to main that passes the suite goes straight to the Fly desk, so the live dashboard is
