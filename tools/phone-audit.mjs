@@ -18,7 +18,7 @@
 //   MIN_FONT  smallest text, px (default 12: tokens.css --type-label is the floor, and tools/tokens-test.js holds desk.css to it)
 //   TAP_MIN   smallest control, px (default 44, Apple's; desk.css asks 32 for a segment button and 24 for a link,
 //             so findings between those and 44 are advisory, not a break of the repo's own rule)
-//   FULL=1    screenshots of the whole page, not only the first screen
+//   FULL=1    screenshots of the whole page at 1x (up to 8 screens), not only the first screen
 //   SHOTS=1   a screenshot of every route and sheet, flagged or not (the design gate's review uses these: the phone
 //             width here is real, through DevTools; headless Chrome's --window-size won't go under 500px)
 //   STRICT=1  exit 1 when any route is flagged (default: exit 0, read audit.json)
@@ -214,7 +214,14 @@ try {
     row.flags = flags;
     process.stderr.write(`${row.route} ${row.status} ${ms}ms ${row.screens == null ? "?" : row.screens + " screens"} ${flags.join(" ") || "ok"}\n`);
     if (flags.length || process.env.SHOTS === "1") {
-      const shot = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: process.env.FULL === "1" });
+      // FULL=1: the whole page at 1x (a clip of the content; capped at 8 screens), not only the first screen
+      let opts = { format: "png" };
+      if (process.env.FULL === "1") {
+        const m = await send("Page.getLayoutMetrics");
+        const h = Math.min(Math.ceil((m.result?.cssContentSize || m.result?.contentSize || {}).height || 812), 812 * 8);
+        opts = { format: "png", captureBeyondViewport: true, clip: { x: 0, y: 0, width: +width, height: h, scale: 1 / 3 } };
+      }
+      const shot = await send("Page.captureScreenshot", opts);
       if (shot.result) writeFileSync(join(outdir, (row.route.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_|_$/g, "") || "home") + ".png"), Buffer.from(shot.result.data, "base64"));
     }
   }

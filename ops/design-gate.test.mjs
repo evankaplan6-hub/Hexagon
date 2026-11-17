@@ -2,8 +2,8 @@
 // Nothing here touches this checkout or the network. Run: node ops/design-gate.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { check, diffOf, guard, loadConfig, normalizeRepo, parseMerge, record, recordPath, splitArgs } from "./design-gate.mjs";
@@ -32,9 +32,11 @@ function fixture() {
   return { root, origin, work, done: () => rmSync(root, { recursive: true, force: true }) };
 }
 function commit(work, file, text, msg = "change") { writeFileSync(join(work, file), text); g(work, "add", "-A"); g(work, "commit", "-q", "-m", msg); }
-function phoneAudit(root, flagged = false) {
+/** A phone audit folder as render.sh leaves it: audit.json, and the commit it audited (the work clone's HEAD). */
+function phoneAudit(root, flags = [], { width = 375, scheme = "light", tapMin = 44, commit = true } = {}) {
   const d = join(root, `audit-${Math.random().toString(36).slice(2)}`); mkdirSync(d);
-  writeFileSync(join(d, "audit.json"), JSON.stringify({ width: 375, scheme: "light", results: [{ route: "/#today", flags: flagged ? ["CUT 1"] : [] }] }));
+  writeFileSync(join(d, "audit.json"), JSON.stringify({ width, scheme, tapMin, results: [{ route: "/#today", flags }] }));
+  if (commit) writeFileSync(join(d, "commit"), g(join(root, "work"), "rev-parse", "HEAD"));
   return d;
 }
 function notes(root) { const f = join(root, "notes.md"); writeFileSync(f, "impeccable audit: pass. blind read: reads as a trading floor."); return f; }
@@ -66,7 +68,7 @@ test("a screen change with no review is missing, and record + commit makes it pa
     const after = check(f.work, "origin/main", "HEAD");
     assert.equal(after.ok, true, after.reason);
     const text = readFileSync(join(f.work, r.path), "utf8");
-    assert.match(text, /^Verdict: pass$/m); assert.match(text, /375px light: 1 routes, 0 flagged/);
+    assert.match(text, /^Verdict: pass$/m); assert.match(text, /375px light, 44px taps: 1 routes, 0 flagged/);
   } finally { f.done(); }
 });
 
@@ -100,8 +102,13 @@ test("record refuses a fail verdict, missing checks, uncommitted screen edits, a
     assert.throws(() => record(f.work, { verdict: "pass", checks: "impeccable-audit", notes: n, phoneAudit: [pa] }), /missing blind-read, phone-audit/);
     assert.throws(() => record(f.work, { verdict: "pass", checks: ALL, notes: n, phoneAudit: [] }), /phone-audit DIR is required/);
     assert.throws(() => record(f.work, { verdict: "pass", checks: ALL, notes: n }), /phone-audit DIR is required/);
-    const old = phoneAudit(f.root); utimesSync(join(old, "audit.json"), 1, 1);
-    assert.throws(() => record(f.work, { verdict: "pass", checks: ALL, notes: n, phoneAudit: [old] }), /older than the last screen commit/);
+    assert.throws(() => record(f.work, { verdict: "pass", checks: ALL, notes: n, phoneAudit: [phoneAudit(f.root, [], { commit: false })] }), /doesn't say which commit/);
+    for (const flag of ["EVAL", "NO-FRAME", "STATUS 0", "NOSHEET", "SHEET-NOT-OPEN"])
+      assert.throws(() => record(f.work, { verdict: "pass", checks: ALL, notes: n, phoneAudit: [phoneAudit(f.root, [flag])] }), /didn't load/, flag);
+    commit(f.work, "public/desk.css", "body { color: #222; }\n");
+    assert.throws(() => record(f.work, { verdict: "pass", checks: ALL, notes: n, phoneAudit: [pa] }), /screens differ from HEAD/);
+    commit(f.work, "src/engine.js", "export const x = 2;\n");  // a later commit that isn't a screen file keeps the audit good
+    record(f.work, { verdict: "pass", checks: ALL, notes: n, phoneAudit: [phoneAudit(f.root)] });
     writeFileSync(join(f.work, "public/desk.css"), "body { color: red; }\n");
     assert.throws(() => record(f.work, { verdict: "pass", checks: ALL, notes: n, phoneAudit: [pa] }), /commit the screen changes first/);
   } finally { f.done(); }
@@ -203,6 +210,79 @@ test("moving a reviewed line elsewhere in its file needs a new review", () => {
   } finally { f.done(); }
 });
 
+test("moving a reviewed line to the same neighbours elsewhere in the file needs a new review", () => {
+  const f = fixture();
+  try {
+    const block = (name, extra) => `.${name} {\n  color: red;\n${extra}}\n`;
+    commit(f.work, "public/desk.css", block("one", "") + block("two", ""));
+    g(f.work, "checkout", "-q", "main"); g(f.work, "merge", "-q", "--ff-only", "feature"); g(f.work, "push", "-q", "origin", "main");
+    g(f.work, "checkout", "-q", "-b", "f2");
+    commit(f.work, "public/desk.css", block("one", "  display: none;\n") + block("two", ""));
+    record(f.work, { verdict: "pass", checks: ALL, notes: notes(f.root), phoneAudit: [phoneAudit(f.root)] });
+    g(f.work, "add", "-A"); g(f.work, "commit", "-q", "-m", "review");
+    assert.equal(check(f.work, "origin/main", "HEAD").ok, true);
+    commit(f.work, "public/desk.css", block("one", "") + block("two", "  display: none;\n"));
+    assert.equal(check(f.work, "origin/main", "HEAD").ok, false);
+  } finally { f.done(); }
+});
+
+test("main deleting lines between two reviewed changes keeps the review", () => {
+  const f = fixture();
+  try {
+    const css = (a, b, mid) => `.a { top: ${a}; }\n${mid.map((m) => `.m${m} { top: 0; }\n`).join("")}.b { top: ${b}; }\n`;
+    commit(f.work, "public/desk.css", css(0, 0, [1, 2, 3, 4]));
+    g(f.work, "checkout", "-q", "main"); g(f.work, "merge", "-q", "--ff-only", "feature"); g(f.work, "push", "-q", "origin", "main");
+    g(f.work, "checkout", "-q", "-b", "f2");
+    commit(f.work, "public/desk.css", css(1, 1, [1, 2, 3, 4]));
+    record(f.work, { verdict: "pass", checks: ALL, notes: notes(f.root), phoneAudit: [phoneAudit(f.root)] });
+    g(f.work, "add", "-A"); g(f.work, "commit", "-q", "-m", "review");
+    // main drops two of the lines between, so git's own hunks for the branch's two changes would join into one
+    g(f.work, "checkout", "-q", "main"); g(f.work, "checkout", "-q", "-b", "trim"); commit(f.work, "public/desk.css", css(0, 0, [1, 4]));
+    g(f.work, "checkout", "-q", "main"); g(f.work, "merge", "-q", "--ff-only", "trim"); g(f.work, "push", "-q", "origin", "main");
+    g(f.work, "checkout", "-q", "f2"); g(f.work, "merge", "-q", "-m", "merge main", "main");
+    assert.equal(g(f.work, "show", "HEAD:public/desk.css"), css(1, 1, [1, 4]));
+    assert.equal(check(f.work, "origin/main", "HEAD").ok, true);
+  } finally { f.done(); }
+});
+
+test("a screen file with a space or non-ASCII letters in its name is a screen file", () => {
+  const f = fixture();
+  try {
+    commit(f.work, "public/café menu.css", "a { color: red; }\n");
+    const r = check(f.work, "origin/main", "HEAD");
+    assert.deepEqual(r.uiFiles, ["public/café menu.css"]); assert.equal(r.ok, false);
+    assert.throws(() => record(f.work, { verdict: "pass", checks: "", notes: notes(f.root), phoneAudit: [phoneAudit(f.root)] }), /missing/);
+  } finally { f.done(); }
+});
+
+test("record needs every phone audit the repo lists", () => {
+  const f = fixture();
+  try {
+    g(f.work, "checkout", "-q", "main");
+    commit(f.work, "ops/design-gate.json", JSON.stringify({ ...CONFIG, phoneAuditSet: ["375 light 44", "440 dark 44", "440 light 24"] }));
+    g(f.work, "push", "-q", "origin", "main"); g(f.work, "checkout", "-q", "feature"); g(f.work, "merge", "-q", "main");
+    commit(f.work, "public/desk.css", "body { color: #111; }\n");
+    const n = notes(f.root);
+    assert.throws(() => record(f.work, { verdict: "pass", checks: ALL, notes: n, phoneAudit: [phoneAudit(f.root)] }), /missing these audits.*440 dark 44; 440 light 24/);
+    const all = [phoneAudit(f.root), phoneAudit(f.root, [], { width: 440, scheme: "dark" }), phoneAudit(f.root, ["TAP 3"], { width: 440, tapMin: 24 })];
+    assert.match(readFileSync(join(f.work, record(f.work, { verdict: "pass", checks: ALL, notes: n, phoneAudit: all }).path), "utf8"), /440px light, 24px taps: 1 routes, 1 flagged/);
+  } finally { f.done(); }
+});
+
+test("status and record run main's own script when the branch's differs", () => {
+  const f = fixture();
+  try {
+    g(f.work, "checkout", "-q", "main");
+    commit(f.work, "ops/design-gate.mjs", readFileSync(SCRIPT, "utf8") + '\nconsole.error("ran the base script");\n');
+    g(f.work, "push", "-q", "origin", "main"); g(f.work, "checkout", "-q", "feature"); g(f.work, "merge", "-q", "main");
+    commit(f.work, "ops/design-gate.mjs", readFileSync(SCRIPT, "utf8"));
+    const r = execFileSync(process.execPath, [SCRIPT, "status", "--base=origin/main"], { cwd: f.work, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    assert.match(r, /The gate's own files changed/);
+    const both = spawnSync(process.execPath, [SCRIPT, "status"], { cwd: f.work, encoding: "utf8" });
+    assert.match(both.stderr, /ran the base script/);
+  } finally { f.done(); }
+});
+
 test("a review already on main can't be reused by a later pull request", () => {
   const f = fixture();
   try {
@@ -217,6 +297,11 @@ test("a review already on main can't be reused by a later pull request", () => {
     commit(f.work, "public/desk.css", "body { color: #111; }\n.debug {\n  display: none;\n}\n");
     const r = check(f.work, "origin/main", "HEAD");
     assert.equal(r.ok, false); assert.match(r.reason, /earlier pull request/);
+    // its own review gets its own record name, so landing the same change again isn't stuck
+    const rec = record(f.work, { verdict: "pass", checks: ALL, notes: notes(f.root), phoneAudit: [phoneAudit(f.root)] });
+    assert.equal(rec.path, recordPath(r.fingerprint, 2));
+    g(f.work, "add", "-A"); g(f.work, "commit", "-q", "-m", "review again");
+    assert.equal(check(f.work, "origin/main", "HEAD").ok, true);
   } finally { f.done(); }
 });
 
