@@ -48,17 +48,8 @@ Before any UI change read `PRODUCT.md` and `DESIGN.md`, review against `docs/des
 `docs/design/references/`, and run `node tools/phone-audit.mjs` on the demo. The design system is locked (`public/tokens.css`).
 Impeccable's `critique`, `audit`, `polish`, `quieter` and `distill` are allowed; `bolder`, `colorize`, `overdrive` and
 `delight` are banned. unslop runs as audit and polish only, and frontend-design is not used here (`DESIGN.md`, "Impeccable
-commands"). This file beats every skill. **A change to `public/` merges only with a design review on record**: run the
-`/design-gate` skill on the branch and commit the `design-reviews/` file it writes. The merge guard and the `design-gate`
-CI check block it otherwise (`ops/design-gate.mjs`, 2026-11-17). The guard also refuses `--admin` and auto-merge here,
-and asks for `gh pr merge N --merge --match-head-commit <sha>` (the full commit written out) so only the reviewed commit
-merges. A change to the gate's own files (`ops/design-gate.json`, `ops/design-gate.mjs`, `.github/workflows/test.yml`,
-`tools/phone-audit.mjs`, `tools/phone-audit-urls.txt`) needs a review on record too. The script is meant to be one file for
-every gated repo (Sera's copy arrives with evankaplan6-hub/sera PR 234); Hexagon's own settings (the checks, the phone audits,
-how the skill serves the demo) are in `ops/design-gate.json`. The audits cover the routes file only: a changed view or sheet
-not listed there needs its route in the skill's extra routes file, or it is never loaded.
-Removing a view or sheet takes two pull requests: one that drops its route from `tools/phone-audit-urls.txt` (a gate-only
-review), merged first, then the screen change, since the record must cover every route on main's list.
+commands"). This file beats every skill. Run the `/design-stack` skill on a
+screen change before merging it.
 
 ## Running it
 
