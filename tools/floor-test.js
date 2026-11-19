@@ -105,6 +105,11 @@ ok('the record is set against what the prices said, with chance\'s spread beside
 ok('a team\'s whole name, and on a phone the price at the tile\'s foot', !/\.gtn \{[^}]*text-overflow: ellipsis/.test(css) && /\.gtp \{ display: none; \}/.test(phone) && /\.gtsp \{ display: inline;/.test(phone));
 ok('the league picked is remembered here, and only here', /localStorage\.setItem\('desk-games'/.test(js));
 
+// the design-stack audit of 2026-11-19: Today's tiles stop at six and say how many more there are
+ok('Today draws six tiles at most and says how many more, as a link to Games',
+  /const TD_TILES = 6;/.test(js) && /const all = \[\.\.\.live, \.\.\.soon, \.\.\.finals\], show = all\.slice\(0, TD_TILES\), more = all\.length - show\.length;/.test(js)
+  && /more > 0 \? `<p class="ovnote"><a class="seeall" href="#games">\$\{nOf\(more, 'more game'\)\}<\/a><\/p>` : ''/.test(js));
+
 // ---- Crypto & SPY, Arbs & maker, and the retired books
 ok('Crypto & SPY holds the crypto and SPY books and one line for the retired; Arbs & maker the arbs, maker, snipe and convergence',
   /\['crypto', 'stocks'\]\.map\(bookOf\)/.test(js) && /const SIDE = \['arbs', 'maker', 'snipe', 'converge'\]/.test(js) && /Retired on 2026-10-17/.test(js));
@@ -136,6 +141,33 @@ ok('the chart is crypto and SPY against holding them', /const HOLD_FIELDS = \{ c
   ok('the desk coming online is not the games\'', T({ agent: 'TESS', text: 'Desk online', sub: 'paper + every game of 4 leagues' }) === 'Predictions');
   ok('an arb is the arbs\'', T({ agent: 'KETT', text: 'Bought 209 Yes on NBA Bucks v Heat' }) === 'Predictions');
   ok('the maker is the maker\'s', T({ agent: 'MAKR', text: 'game bets' }) === 'Maker');
+}
+// the light in the bar, run on desk.js's own deskState: the Health sheet says amber "when prices are stale or the desk
+// is not buying" and red "when the desk stops or this page loses its signal", and the light does each of them. Until
+// 2026-11-19 stale SPY prices left it green.
+{
+  const src = (js.match(/  const pricesStale = [^\n]*\n  const deskState = [\s\S]*?\['Working', 'good'\]\);/) || [''])[0];
+  const light = (S, o = {}) => { try { return new Function('S', 'stale', 'stalled', `${src}; return deskState();`)(S, () => !!o.gone, () => !!o.stuck).join(); } catch (e) { return e.message; } };
+  const mk = (crypto, stocks) => ({ halt: null, market: { stale: { crypto, stocks } } });
+  ok('deskState is found and runs', !!src && light(mk(false, false)) === 'Working,good', light(mk(false, false)));
+  ok('stale crypto prices turn the light amber', light(mk(true, false)) === 'Waiting on prices,warn', light(mk(true, false)));
+  ok('stale SPY prices turn the light amber too', light(mk(false, true)) === 'Waiting on prices,warn', light(mk(false, true)));
+  ok('not buying is amber, and comes before stale prices', light({ ...mk(false, true), halt: 'daily loss limit' }) === 'Not buying,warn');
+  ok('a stalled desk and a lost signal are red, whatever the prices', light(mk(false, false), { stuck: true }) === 'Stalled,bad' && light(mk(true, true), { gone: true }) === 'No signal,bad');
+  ok('a frame with no market reads as working, not as an error', light({ halt: null }) === 'Working,good', light({ halt: null }));
+  ok('the Health sheet says what the light does', /The light in the bar turns amber when prices are stale or the desk is not buying, and red when the desk stops or this page loses its signal\./.test(js));
+  ok('the sheet\'s SPY line and the light read the same flag', /spyOk = !\(mk\.stale && mk\.stale\.stocks\)/.test(js) && /S\.market\.stale\.crypto \|\| S\.market\.stale\.stocks/.test(js));
+}
+// a name that wraps: its " · " stays with the word before it, and a settle day stays whole
+{
+  const src = (js.match(/  const esc = [^\n]*\n/) || [''])[0] + (js.match(/  const joined = [^\n]*\n/) || [''])[0];
+  let joined = null;
+  try { joined = new Function(`${src}; return joined;`)(); } catch { /* reported below */ }
+  ok('joined is found and runs', typeof joined === 'function');
+  ok('a name\'s dot is held to the word before it', !!joined && joined('NCAAF Indiana v Washington · Indiana') === 'NCAAF Indiana v Washington\u00A0· Indiana');
+  ok('...and the name is still escaped', !!joined && joined('A&M v <b> · A&M') === 'A&amp;M v &lt;b&gt;\u00A0· A&amp;M');
+  ok('an arb\'s name, a leg\'s name and an Activity line are drawn with it', (js.match(/<span class="nm">\$\{joined\(r\.label\)\}<\/span>/g) || []).length === 2 && /<span class="what">\$\{joined\(r\.text\)\}/.test(js));
+  ok('a settle day is one word: its space is a no-break space, written as an escape', /\.format\(new Date\(t\)\)\.replace\(' ', '\\u00A0'\);/.test(js));
 }
 ok('the Activity filter is the same three parts Today counts', /const DESKS = \[\['both', 'All of it'\], \['desk', 'Crypto & SPY'\], \['games', 'Games'\], \['side', 'Arbs & maker'\]\]/.test(js)
   && /name: 'Crypto & SPY'/.test(js) && /name: 'Games'/.test(js) && /name: 'Arbs & maker'/.test(js)

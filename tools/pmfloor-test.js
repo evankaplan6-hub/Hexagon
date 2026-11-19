@@ -9,7 +9,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { Engine, betTally } = require('../src/engine');
-const { pmFloor, pmLine, kindOf, gameOf } = require('../src/pmfloor');
+const { pmFloor, pmLine, kindOf, gameOf, shown } = require('../src/pmfloor');
 const base = require('../src/config');
 
 let pass = 0, fail = 0;
@@ -261,6 +261,29 @@ group('the floor\'s words (2026-10-10 audit): a bet names its pick, maker fills 
   ok('a ticker the snapshot does not know stays a ticker, with the hours spelt out', unknown && unknown.text === 'KXSOMEWHERE-1: quotes pulled for 4 hours' && unknown.sub === '72% of the contracts in its last 30 fills were run over, the limit is 40% · 100 held', unknown);
   ok('a crossed-out market is named too', F.log.some((e) => e.text === 'The Philadelphia pro football team win at least 9 games this season · 9+ wins: its event is tomorrow' && e.level === 'trade'), F.log.map((e) => e.text));
   ok('no maker line says "Maker:" under a tag that says Maker', F.log.every((e) => !/^Maker: /.test(e.text)) && F.log.some((e) => e.text === 'Settled 2 finalized markets, 39 contracts'), F.log.map((e) => e.text));
+}
+
+group('a soccer market\'s day (2026-11-19): "win 11-21" read as a score, so the floor writes the day as a day')
+{
+  const N = '\u00A0';
+  ok('a trailing month and day reads as a date, held together', shown('EPL Sunderland win 11-21') === `EPL Sunderland win Nov${N}21`, shown('EPL Sunderland win 11-21'));
+  ok('a single-digit day loses its zero', shown('UCL Bayern Munich win 12-02') === `UCL Bayern Munich win Dec${N}2`, shown('UCL Bayern Munich win 12-02'));
+  ok('Feb 29 is a day', shown('MLS Inter Miami win 02-29') === `MLS Inter Miami win Feb${N}29`);
+  ok('a month or a day that is not one is left alone', shown('EPL Arsenal win 13-01') === 'EPL Arsenal win 13-01' && shown('EPL Arsenal win 02-31') === 'EPL Arsenal win 02-31' && shown('EPL Arsenal win 00-10') === 'EPL Arsenal win 00-10');
+  ok('a score, a year and a game\'s label are left alone', shown('Final 11-21') === 'Final 11-21' && shown('Team to win 2026-11-21') === 'Team to win 2026-11-21' && shown('NBA Clippers v Spurs · Clippers') === 'NBA Clippers v Spurs · Clippers');
+  ok('a label cut short still reads as one name', shown('Sint Maarten -... - Both Teams to Score') === 'Sint Maarten… - Both Teams to Score');
+  // on the floor: an arb's row, its fills and the log's lines about it; the ledger's own label does not change
+  const { E, cfg } = engine(); boxLike(E);
+  const raw = 'EPL Nottingham Forest win 11-27';
+  E.state.positions.push(leg({ id: 's1', group: 'gs', pairId: 'ps', label: raw, venue: 'PM', side: 'yes', qty: 100, entry: 0.40, mark: 0.41, cost: 40.5, strategy: 'arb' }),
+    leg({ id: 's2', group: 'gs', pairId: 'ps', label: raw, venue: 'KS', side: 'no', qty: 100, entry: 0.56, mark: 0.55, cost: 56.4, strategy: 'arb' }));
+  E.state.log.unshift({ t: T, agent: 'KETT', kind: 'PASS', text: `${raw}: the gap closed before the second leg` });
+  const F = pmFloor(E, cfg, T), want = `EPL Nottingham Forest win Nov${N}27`;
+  const arbs = F.books.find((b) => b.key === 'arbs');
+  ok('the arb\'s row says the day', arbs.rows.some((r) => r.label === want), arbs.rows.map((r) => r.label));
+  ok('its fills say the day', F.fills.filter((f) => f.label === want).length === 2 && !F.fills.some((f) => f.label === raw), F.fills.map((f) => f.label));
+  ok('a log line about it says the day', F.log.some((e) => e.text === `Passed on ${want}`) && !JSON.stringify(F.log).includes('win 11-27'), F.log.map((e) => e.text));
+  ok('the ledger keeps the label as the journals have it', E.state.positions.filter((p) => p.label === raw).length === 2);
 }
 
 group('the game board (2026-10-17): the games still to bet, the finals, and the record against the prices');

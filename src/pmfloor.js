@@ -20,6 +20,17 @@ const money = (x) => `$${Math.abs(x).toLocaleString('en-US', { minimumFractionDi
 // Polymarket cuts a long question short with three dots, often after a dash ("Sint Maarten -... - Both
 // Teams to Score", "news outlets from... - Before Oct 1"): one ellipsis, against the word it cut
 const unellipsis = (s) => String(s || '').replace(/\s*-?\s*(?:\.{3}|…)/g, '…').replace(/\s{2,}/g, ' ').trim();
+// The matcher names a soccer market by its team and its day, "EPL Sunderland win 11-21" (src/matcher.js; the label is
+// in the journals and stays as it is). On the floor "win 11-21" read as a score, over a line saying "settles Nov 21",
+// so here the day is written as a day. A no-break space holds it together: at 375 wide it split as "11-" and "27".
+const NBSP = '\u00A0';
+const MD = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' });
+const plainDay = (s) => String(s || '').replace(/\bwin (\d\d)-(\d\d)(?!\d)/g, (m, mo, d) => {
+  const t = new Date(Date.UTC(2024, +mo - 1, +d));   // 2024 has a Feb 29
+  return t.getUTCMonth() === +mo - 1 && t.getUTCDate() === +d ? `win ${MD.format(t).replace(' ', NBSP)}` : m;
+});
+// a market's name as the floor shows it
+const shown = (s) => plainDay(unellipsis(s));
 // Kalshi writes its questions in full ("Will Marco Rubio be the nominee ...?", some with **bold**); the
 // outcome goes after it, so the question is kept without its "Will" and its question mark
 // (Kalshi's Senate series say "Will Democratics win..." in every state: the venue's typo, not a party)
@@ -53,7 +64,7 @@ function gameOf(p) {
 // as the new desk's do, so a busy hour of routine lines cannot push a trade out of the frame.
 function pmLine(e, titles = null) {
   const t = String(e.text || ''), parts = t.split(' · '), first = parts[0], rest = parts.slice(1).join(' · ');
-  const line = (text, sub, level) => ({ text: cap(text), sub: sub || '', level });
+  const line = (text, sub, level) => ({ text: plainDay(cap(text)), sub: plainDay(sub || ''), level });
   // The maker names a market by its Kalshi ticker ("GOVPARTYFL-26-R cooled 60m: ..."); the floor is for reading,
   // so a line that starts with a ticker the maker's snapshot knows starts with the market's name instead.
   const named = (s) => s.replace(/^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*(?=[:\s]|$)/, (k) => (titles && titles.get(k)) || k);
@@ -156,7 +167,7 @@ function pmFloor(engine, cfg, now = Date.now()) {
   // Guardians on 2026-10-16 were two games of a series, and read as one game bet twice
   const startOf = new Map((engine.pairs || []).filter((x) => Number.isFinite(x.startsAt)).map((x) => [x.id, x.startsAt]));
   // pairId: a game's tile and sheet follow the game from "up next" (keyed by its pair) to the bet on it
-  const posRow = (p) => ({ id: p.id, pairId: p.pairId || null, label: unellipsis(p.label), game: gameOf(p), venue: VENUE[p.venue] || p.venue, side: p.side, qty: p.qty, entry: p.entry, mark: p.mark ?? null,
+  const posRow = (p) => ({ id: p.id, pairId: p.pairId || null, label: shown(p.label), game: gameOf(p), venue: VENUE[p.venue] || p.venue, side: p.side, qty: p.qty, entry: p.entry, mark: p.mark ?? null,
     cost: r2(p.cost), worth: r2(p.qty * (p.mark ?? p.entry)), pnl: r2(p.qty * (p.mark ?? p.entry) - p.cost), settlesAt: Number.isFinite(p.settlesAt) ? p.settlesAt : null,
     startsAt: startOf.get(p.pairId) ?? null });
 
@@ -169,7 +180,7 @@ function pmFloor(engine, cfg, now = Date.now()) {
   // A group /pm's scorecard cannot vouch for has no settlement figure and counts at what it would sell
   // for now (engine.pnlScorecard's arbUnvouched), so "at settlement" never reads a broken hedge as $0.
   const arbRows = groups.map((g) => ({
-    id: g.id, label: unellipsis(g.label), settlesAt: g.settlesAt ?? null, qty: g.qty, cost: g.entryCost, worth: g.liquidationValue,
+    id: g.id, label: shown(g.label), settlesAt: g.settlesAt ?? null, qty: g.qty, cost: g.entryCost, worth: g.liquidationValue,
     pays: g.settlementValue, locked: g.lockedPnl, pnl: g.liquidationPnl, integrity: g.integrity,
   })).sort((a, b) => (a.settlesAt ?? Infinity) - (b.settlesAt ?? Infinity) || String(a.label).localeCompare(String(b.label)));
   const arbs = {
@@ -252,7 +263,7 @@ function pmFloor(engine, cfg, now = Date.now()) {
   // The ledger's own fills, newest first: the taker's legs as they opened and closed, and the maker's.
   const fills = [];
   for (const p of [...s.positions, ...closed.slice(-80)]) {
-    const base = { book: kindOf(p), label: unellipsis(p.label), game: gameOf(p), qty: p.qty, venue: VENUE[p.venue] || p.venue, side: p.side };
+    const base = { book: kindOf(p), label: shown(p.label), game: gameOf(p), qty: p.qty, venue: VENUE[p.venue] || p.venue, side: p.side };
     if (Number.isFinite(p.openedAt)) fills.push({ ...base, id: `${p.id}:open`, at: p.openedAt, action: 'bought', px: p.entry, pnl: null });
     if (Number.isFinite(p.exitAt)) fills.push({ ...base, id: `${p.id}:close`, at: p.exitAt, action: /^resolved/.test(String(p.reason || '')) ? 'settled' : 'sold', px: p.exit, pnl: Number.isFinite(p.exitPnl) ? p.exitPnl : p.pnl ?? null });
   }
@@ -352,7 +363,7 @@ function gameBoard(engine, cfg, betOpen, betShut, now) {
   const finals = betShut.filter((c) => Number.isFinite(c.exitAt) && now - c.exitAt < 30 * 3600e3).sort((a, b) => b.exitAt - a.exitAt).slice(0, 80).map((c) => {
     const g = gameOf(c);
     // keyed by its pair (the page follows a game by it); the position's own id only when there is no pair
-    return { id: c.pairId || c.id, league: g ? g.league : leagueOf(c.label), pick: g ? g.pick : unellipsis(c.label), foe: g ? g.foe : '', venue: VENUE[c.venue] || c.venue,
+    return { id: c.pairId || c.id, league: g ? g.league : leagueOf(c.label), pick: g ? g.pick : shown(c.label), foe: g ? g.foe : '', venue: VENUE[c.venue] || c.venue,
       qty: c.qty, entry: c.entry, cost: r2(c.cost), pnl: r2(c.pnl), at: c.exitAt, openedAt: c.openedAt ?? null };
   });
   // The record since the start comes from the engine's running tally (src/engine.js tallyBet): state.closed keeps only
@@ -374,4 +385,4 @@ function gameBoard(engine, cfg, betOpen, betShut, now) {
   };
 }
 
-module.exports = { pmFloor, pmLine, kindOf, gameOf, gameBoard };
+module.exports = { pmFloor, pmLine, kindOf, gameOf, gameBoard, shown };

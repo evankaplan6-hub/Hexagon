@@ -48,6 +48,9 @@
   const pct = (x, d = 0) => `${(x * 100).toFixed(d)}%`;
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const cap = (s) => { const t = String(s || '').trim(); return t.charAt(0).toUpperCase() + t.slice(1); };
+  // A name or a line that may wrap, escaped, with each " · " held to the word before it by a no-break space, so a new
+  // line never starts with the dot: at 375 wide an arb read "NCAAF Indiana v Washington" and then "· Indiana" (2026-11-19)
+  const joined = (s) => esc(s).replace(/ · /g, '\u00A0· ');
   const ET_HM = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', hour12: true });
   const ET_DAY = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' });
   const ET_CLOCK = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
@@ -163,8 +166,12 @@
   // Working. Two minutes is twelve rounds, and longer than any round's calls can take.
   const stalled = () => !!(S && S.beat && S.now - S.beat > Math.max(120000, 12 * ((S.cfg && S.cfg.everySec) || 10) * 1000));
   // Past the daily loss limit the desk is still marking and may still sell: it is not stopped, it is not buying.
+  // Stale prices are amber whichever feed they are: the Health sheet says "the light in the bar turns amber when prices
+  // are stale", and until 2026-11-19 only Coinbase's did it. With SPY's feed stalled the SPY rule does not trade
+  // (src/desk/engine.js), and the light went on saying Working over a "SPY prices stale" line in its own sheet.
+  const pricesStale = () => !!(S.market && S.market.stale && (S.market.stale.crypto || S.market.stale.stocks));
   const deskState = () => (stale() ? ['No signal', 'bad'] : stalled() ? ['Stalled', 'bad'] : S.halt ? ['Not buying', 'warn']
-    : S.market && S.market.stale && S.market.stale.crypto ? ['Waiting on prices', 'warn'] : ['Working', 'good']);
+    : pricesStale() ? ['Waiting on prices', 'warn'] : ['Working', 'good']);
   // the desk's clock, carried forward between frames
   const nowT = () => (S ? S.now + (performance.now() - (S._rxPerf || performance.now())) : Date.now());
   const today = () => dayKey(nowT());
@@ -308,6 +315,7 @@
     return parts2.join(', ');
   }
   // Today's card: the day's record, the next few games, and when the next ones are bet
+  const TD_TILES = 6;
   function tdGamesHtml() {
     const B = board();
     if (!B) return '<p class="ovp">The game bets run on the prediction-market desk, and this frame does not carry it.</p>';
@@ -324,13 +332,13 @@
         `<p class="ovp">Won ${R.won} of today's ${nOf(R.bets, 'final')}; the prices said ${R.expected.toFixed(1)}.${live.length ? ` ${nOf(live.length, 'game')} in progress.` : ''}</p>`
       : `<div class="verdict zero">${live.length ? `${nOf(live.length, 'game')} in progress` : soon.length ? `${nOf(soon.length, 'game')} to come` : 'No game today'}</div>` +
         `<p class="ovp">No game has finished today yet.${live.length && soon.length ? ` ${soon.length} more to come.` : ''}</p>`;
-    const show = [...live, ...soon].slice(0, 6);
-    if (show.length < 6) show.push(...finals.slice(0, 6 - show.length));
+    // six tiles at most, and the rest said: "7 games to come" stood over six tiles with nothing for the seventh (2026-11-19)
+    const all = [...live, ...soon, ...finals], show = all.slice(0, TD_TILES), more = all.length - show.length;
     const grp = startGroups(coming).find(([st]) => st > S.now);
     const gs = grp ? groupStatus(grp[1], B) || 'not bet: the game bets are switched off' : '';
     const foot = grp ? `<p class="ovnote">Next: ${nOf(grp[1].length, 'game')} at ${esc(whenTxt(grp[0]))} · ${esc(gs)}.` +
       `${B.skipped.length ? ` ${nOf(B.skipped.length, 'game')} left alone today: the favourite was over ${Math.round((B.g.maxPx || 0.9) * 100)}¢.` : ''}</p>` : '';
-    return head + (show.length ? tiles(show) : '') + foot;
+    return head + (show.length ? tiles(show) : '') + (more > 0 ? `<p class="ovnote"><a class="seeall" href="#games">${nOf(more, 'more game')}</a></p>` : '') + foot;
   }
 
   // ------------------------------------------------------------ the crypto rule: against holding, and what it wants
@@ -951,8 +959,9 @@
   // those markets quote it. Its game bets are the Games view; the rest of its books are here.
   const ET_DAY_Y = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', year: 'numeric' });
   const yearOf = (t) => ET_YMD.format(new Date(t)).slice(-4);
-  // a no-break space keeps "Oct 3" on one line; a date in another year says the year
-  const settleDay = (t) => (yearOf(t) === yearOf(nowT()) ? ET_DAY : ET_DAY_Y).format(new Date(t)).replace(' ', ' ');
+  // a no-break space keeps "Oct 3" on one line (written as an escape since 2026-11-19: the character itself had
+  // become a plain space, and the replace did nothing); a date in another year says the year
+  const settleDay = (t) => (yearOf(t) === yearOf(nowT()) ? ET_DAY : ET_DAY_Y).format(new Date(t)).replace(' ', '\u00A0');
   // Its loop's own heartbeat, like the desk's (stalled): two minutes, or twelve of its rounds
   function pmState(L) {
     const stuck = L.beat && L.now - L.beat.taker > Math.max(120000, 12 * ((L.every && L.every.taker) || 15) * 1000);
@@ -968,7 +977,7 @@
   }
   const HEAD = (a, b, lead = '') => `<thead><tr><th class="lead">${lead}</th><th>${a}</th><th>${b}</th></tr></thead>`;
   // a taker position the snipe or convergence holds: one leg on one venue
-  const legRow = (r) => `<tr data-k="${esc(r.id)}"><th><span class="nm">${esc(r.label)}</span>` +
+  const legRow = (r) => `<tr data-k="${esc(r.id)}"><th><span class="nm">${joined(r.label)}</span>` +
     `<small>${esc(`${r.startsAt ? `${r.startsAt > S.now ? 'starts' : 'started'} ${whenTxt(r.startsAt)} · ` : ''}${cap(r.side)} on ${r.venue} · ${nOf(r.qty, 'contract')} at ${cents(r.entry)}, ${cents(r.mark)} now`)}</small></th>` +
     `<td class="v">${money(r.worth)}</td><td>${figure(r.pnl)}</td></tr>`;
   // Today's line and a book's card say the same things: its chip and what it does next (the card has its
@@ -986,7 +995,7 @@
         const broken = r.integrity !== 'valid' && r.integrity !== 'half_settled';
         // a settle date that has passed is not "settles": the market has not paid out on the day it was to
         const when = !r.settlesAt ? 'no settle date on record' : r.settlesAt < S.now ? `was to settle ${settleDay(r.settlesAt)}, still open` : `settles ${settleDay(r.settlesAt)}`;
-        return `<tr data-k="${esc(r.id)}"><th><span class="nm">${esc(r.label)}</span><small>${esc(`${when} · ${nOf(r.qty, 'pair')}${r.integrity === 'half_settled' ? ' · one side settled' : ''}`)}` +
+        return `<tr data-k="${esc(r.id)}"><th><span class="nm">${joined(r.label)}</span><small>${esc(`${when} · ${nOf(r.qty, 'pair')}${r.integrity === 'half_settled' ? ' · one side settled' : ''}`)}` +
           `${broken ? ` · <b class="neg">${esc(String(r.integrity).replace(/_/g, ' '))}</b>` : ''}</small></th><td class="v">${money(r.cost)}</td><td>${r.locked == null ? '—' : figure(r.locked)}</td></tr>`;
       }) || '<p class="bksub">No arb open.</p>';
       const nxt = b.rows.find((r) => r.settlesAt && r.settlesAt > S.now), then = nxt ? `next settles <b>${esc(settleDay(nxt.settlesAt))}</b>` : '';
@@ -1150,7 +1159,7 @@
       const amt = r.pnl != null ? `<span class="amt ${tone(r.pnl)}">${signed(r.pnl)}</span>` : '<span class="amt"></span>';
       return `${head}<li class="lv-${r.level}" data-k="${esc(r.key)}"><time${Number.isFinite(r.t) ? ` datetime="${new Date(r.t).toISOString()}"` : ''}>${esc(ET_HM.format(new Date(r.t)))}</time>` +
         `<span class="tag" style="--bk:${r.tag.color}" title="${esc(`Written by ${r.who}${ROLE[r.who] ? `, ${ROLE[r.who]}` : ''}`)}"><i class="sw"></i>${esc(r.tag.name)}</span>` +
-        `<span class="what">${esc(r.text)}${r.sub ? `<small>${esc(r.sub)}</small>` : ''}</span>${amt}</li>`;
+        `<span class="what">${joined(r.text)}${r.sub ? `<small>${esc(r.sub)}</small>` : ''}</span>${amt}</li>`;
     }).join('');
   }
   // The routine rounds ("3/3 coins live", "all clear") come every few minutes and used to push the day's
