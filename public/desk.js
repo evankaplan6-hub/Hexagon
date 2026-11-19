@@ -278,7 +278,7 @@
       if (u.over && begun) { skipped.push(u); continue; }
       next.push({ k: u.id, stage: begun ? 'late' : u.over ? 'skip' : 'next', league: u.league, start: u.startsAt, pick: u.pick || u.a, foe, px: u.px,
         status: !g.on ? 'Not bet: the game bets are switched off' : begun ? 'Under way, too late to bet'
-          : u.over ? `Left alone: the favourite is ${wholeCents(u.px)}` : opens <= now ? 'Bets this round' : `Bets at ${ET_HM.format(new Date(opens))}` });
+          : u.over ? `The favourite is ${wholeCents(u.px)}` : opens <= now ? 'Bets this round' : `Bets at ${ET_HM.format(new Date(opens))}` });
     }
     const fin = g.finals.map((f) => ({ k: f.id, stage: f.pnl > 0 ? 'won' : 'lost', league: f.league, start: f.at, day: playedDay(f.at), pick: f.pick, foe: f.foe, px: f.entry,
       status: f.pnl > 0 ? `Won${f.foe ? `: ${f.pick} beat ${f.foe}` : ''}` : `Lost${f.foe ? `: ${f.foe} won` : ''}`, fig: f.pnl }));
@@ -289,10 +289,11 @@
   // today" over a Games view with three under way, and its "Next: 1 game" stood beside Games' two (one left alone).
   const inPlay = (B, mine = () => true) => [...B.open.filter((t) => t.stage === 'live' && mine(t)).sort(byStart), ...B.next.filter((t) => t.stage === 'late' && mine(t)), ...B.open.filter((t) => t.stage === 'wait' && mine(t))];
   const toCome = (B, mine = () => true) => [...B.open.filter((t) => t.stage === 'bet'), ...B.next.filter((t) => t.stage !== 'late')].filter(mine).sort(byStart);
-  function tileHtml(t) {
+  // `grouped`: under a heading that already gives the start (Up next on Games), a tile does not say it again
+  function tileHtml(t, grouped) {
     const fin = t.stage === 'won' || t.stage === 'lost';
-    const when = t.stage === 'live' ? '<span class="gtlive">Live</span>' : t.stage === 'wait' ? 'Waiting on the result' : t.stage === 'late' ? 'Under way' : fin ? esc(ET_HM.format(new Date(t.start))) : t.start ? esc(whenTxt(t.start)) : '';
-    const badge = t.stage === 'won' ? '<span class="gtb pos">Won</span>' : t.stage === 'lost' ? '<span class="gtb neg">Lost</span>' : t.stage === 'skip' ? '<span class="gtb">Skip</span>' : '';
+    const when = grouped && (t.stage === 'next' || t.stage === 'bet' || t.stage === 'skip') ? '' : t.stage === 'live' ? '<span class="gtlive">Live</span>' : t.stage === 'wait' ? 'Waiting on the result' : t.stage === 'late' ? 'Under way' : fin ? esc(ET_HM.format(new Date(t.start))) : t.start ? esc(whenTxt(t.start)) : '';
+    const badge = t.stage === 'won' ? '<span class="gtb pos">Won</span>' : t.stage === 'lost' ? '<span class="gtb neg">Lost</span>' : t.stage === 'skip' ? '<span class="gtb">Left alone</span>' : '';
     return `<li data-k="${esc(t.k)}"><button type="button" class="gt st-${t.stage}" data-sheet="game:${esc(t.k)}">` +
       `<span class="gth"><span class="gtl">${esc(leagueName(t.league))}</span><span class="gtw">${when}</span>${badge}</span>` +
       `<span class="gtr gtpick"><i class="gtd" aria-hidden="true"></i><span class="gtn">${esc(t.pick)}<span class="sr">, the pick</span></span><span class="gtp">${t.px != null ? wholeCents(t.px) : ''}</span></span>` +
@@ -301,7 +302,7 @@
   }
   // a tile's price to the whole cent: a mid between two quotes read "96.9¢"
   const wholeCents = (p) => (!Number.isFinite(p) ? '' : p >= 0.995 ? '$1' : `${Math.max(1, Math.round(p * 100))}¢`);
-  const tiles = (ts) => `<ul class="tiles">${ts.map(tileHtml).join('')}</ul>`;
+  const tiles = (ts, grouped) => `<ul class="tiles">${ts.map((t) => tileHtml(t, grouped)).join('')}</ul>`;
   // a group of games that start together: how many, and where the book is with them
   function startGroups(ts) {
     const m = new Map();
@@ -336,7 +337,7 @@
       ? `<div class="verdict"><span class="rec">${R.won}–${R.bets - R.won}</span> <span class="vfig ${tone(R.pnl)}">${signed(R.pnl)}</span></div>` +
         `<p class="ovp">Won ${R.won} of today's ${nOf(R.bets, 'final')}; the prices said ${R.expected.toFixed(1)}.${live.length ? ` ${nOf(live.length, 'game')} in progress.` : ''}</p>`
       : `<div class="verdict zero">${live.length ? `${nOf(live.length, 'game')} in progress` : soon.length ? `${nOf(soon.length, 'game')} to come` : 'No game today'}</div>` +
-        `<p class="ovp">No game has finished today yet.${live.length && soon.length ? ` ${soon.length} more to come.` : ''}</p>`;
+        (live.length || soon.length ? `<p class="ovp">No game has finished today yet.${live.length && soon.length ? ` ${soon.length} more to come.` : ''}</p>` : '');
     // six tiles at most, and the rest said: "7 games to come" stood over six tiles with nothing for the seventh (2026-11-19)
     const all = [...live, ...soon, ...finals], show = all.slice(0, TD_TILES), more = all.length - show.length;
     const grp = startGroups(coming).find(([st]) => st > S.now);
@@ -446,7 +447,7 @@
       for (const st of [...by.keys()].sort((a, b) => a - b).slice(0, 3)) {
         const n = by.get(st), at = st - ahead;
         ev.push({ t: Math.max(at, now), now: at <= now, k: `bet-${st}`, href: '#games', color: GAMES_COLOR,
-          text: at <= now ? `Betting ${nOf(n, 'game')} that start at ${ET_HM.format(new Date(st))}` : `Bets go in for ${nOf(n, 'game')} starting ${whenTxt(st)}` });
+          text: at <= now ? `Betting ${nOf(n, 'game')} that start${n === 1 ? 's' : ''} ${whenAt(st)}` : `Bets go in for ${nOf(n, 'game')} starting ${whenAt(st)}` });
       }
     }
     if (bookOf('crypto')) ev.push({ t: Math.floor(now / 864e5 + 1) * 864e5, k: 'crypto', sheet: 'book:crypto', color: BOOK_COLOR.crypto, text: 'The crypto rule checks its coins' });
@@ -454,7 +455,7 @@
     if (open && bookOf('stocks')) ev.push({ t: open + 5 * 6e4, k: 'spy', sheet: 'book:stocks', color: BOOK_COLOR.stocks, text: 'The SPY rule checks, a few minutes after the open' });
     for (const tp of (S.lab && S.lab.tapes) || []) {
       if (!tp.kickoff) continue;
-      if (tp.reads > now) ev.push({ t: tp.reads, k: `tape-${tp.key}`, sheet: 'lab', color: LAB_COLOR, text: `The ${tp.name.toLowerCase()} starts reading, before ${tp.game || `the ${whenTxt(tp.kickoff)} kickoff`}` });
+      if (tp.reads > now) ev.push({ t: tp.reads, k: `tape-${tp.key}`, sheet: 'lab', color: LAB_COLOR, text: `The ${tp.name.toLowerCase()} starts reading, before ${tp.game || `the kickoff ${whenAt(tp.kickoff)}`}` });
       else ev.push({ t: now, now: true, k: `tape-${tp.key}`, sheet: 'lab', color: LAB_COLOR, text: `The ${tp.name.toLowerCase()} is reading${tp.game ? `, before ${tp.game} at ${ET_HM.format(new Date(tp.kickoff))}` : ''}` });
     }
     for (const r of RETESTS.filter((x) => x.t > now).slice(0, 2)) ev.push({ t: r.t, k: r.k, sheet: 'lab', color: LAB_COLOR, text: r.text, dateOnly: true });
@@ -630,7 +631,7 @@
     const soon = toCome(B, mine);
     morph($('gnext'), gsecHtml('Up next', soon.length ? `${nOf(soon.length, 'game')}${B.g.on ? '' : ' · not bet: the game bets are switched off'}` : '', startGroups(soon).map(([st, ts]) => {
       const gs = groupStatus(ts, B);
-      return `<div class="ggrp" data-k="g-${st}"><h3><span>${esc(st ? whenTxt(st) : 'Start not on record')}</span><span class="gsn">${nOf(ts.length, 'game')}${gs ? ` · ${esc(gs)}` : ''}</span></h3>${tiles(ts)}</div>`;
+      return `<div class="ggrp" data-k="g-${st}"><h3><span>${esc(st ? whenTxt(st) : 'Start not on record')}</span><span class="gsn">${nOf(ts.length, 'game')}${gs ? ` · ${esc(gs)}` : ''}</span></h3>${tiles(ts, !!st)}</div>`;
     }).join('')) ||
       (live.length ? '' : `<div class="gsh"><h2 class="sect">Up next</h2></div><p class="ovp">No game on the board in the next thirty hours${games.league === 'all' ? '' : ` in ${esc(leagueName(games.league))}`}.</p>`));
     const fin = B.fin.filter(mine), byDay = new Map();
@@ -773,7 +774,7 @@
     return { title: 'Health', html:
       card('', `<div class="shfig st-${cls}">${esc(state)}</div><p>The light in the bar turns amber when prices are stale or the desk is not buying, and red when the desk stops or this page loses its signal.</p>`) +
       card('Checks', `<ul class="rows">${healthChecks().map(line).join('')}</ul>`) +
-      (pm ? card('Prediction markets', `<ul class="rows">${line({ k: 'pm', href: '#arbs', ok: pm[1] === 'good' ? 'ok' : pm[1], name: pm[0], detail: 'Its own loop, trading the games, arbs and maker in paper beside the books' })}</ul>`) : '') };
+      (pm ? card('The prediction-market desk', `<ul class="rows">${line({ k: 'pm', href: '#arbs', ok: pm[1] === 'good' ? 'ok' : pm[1], name: pm[0], detail: 'Its own loop, trading the games, arbs and maker in paper beside the books' })}</ul>`) : '') };
   }
   // A sheet's id is its kind and, after the first colon, what it is of: "game:5348755:0|KXNCAAFGAME-...-KU" is a
   // game pair's id, colons and all.
@@ -938,7 +939,7 @@
     const want = Number.isFinite(r.want) ? r.want : r.target;
     const bits = [`<span>${r.qty > 0 ? `${qtyTxt(r.qty, b.key, r.sym)} held` : 'not held yet'}</span>`];
     if (Number.isFinite(r.vol)) bits.push(`<span title="${SWINGS}">swings ${pct(r.vol)}</span>`);
-    if (Number.isFinite(want)) bits.push(`<span title="${TARGET}">target ${pct(want)}</span>`);
+    if (Number.isFinite(want)) bits.push(`<span title="${TARGET}">wants ${pct(want)}</span>`);
     const worth = r.qty > 0 ? `<td class="v">${money(r.value || 0, 0)}</td><td>${Number.isFinite(r.pnl) ? figure(r.pnl) : '—'}</td>` : '<td class="v"></td><td></td>';
     return `<tr data-k="${esc(r.sym)}"><th><span class="tk">${esc(r.name)}</span><span class="mk">${b.key === 'crypto' ? coinPx(last) : px(last)}${chg == null ? '' : ` ${change(chg)}`}</span>` +
       `<small>${bits.join(' · ')}</small></th>${worth}</tr>`;
@@ -948,7 +949,7 @@
     if (b.key === 'crypto') return `Checks again: <b>${esc(whenTxt(Math.floor(S.now / 864e5 + 1) * 864e5))} ET</b>`;
     const checked = b.rows.some((r) => r.checkDay === today());
     return S.market && S.market.open ? (checked ? 'Checked today; checks again after the next open' : 'Checks once a trading day, after the open')
-      : `Checks at the next open: <b>${esc(String((S.market && S.market.says) || '').replace(/^opens /, ''))}</b>`;
+      : `Checks a few minutes after the next open: <b>${esc(String((S.market && S.market.says) || '').replace(/^opens /, ''))}</b>`;
   }
   // A book that has never traded is its figure, its markets and its next check: no line that has never moved.
   function bookCard(b) {
@@ -997,7 +998,7 @@
   const HEAD = (a, b, lead = '') => `<thead><tr><th class="lead">${lead}</th><th>${a}</th><th>${b}</th></tr></thead>`;
   // a taker position the snipe or convergence holds: one leg on one venue
   const legRow = (r) => `<tr data-k="${esc(r.id)}"><th><span class="nm">${joined(r.label)}</span>` +
-    `<small>${esc(`${r.startsAt ? `${r.startsAt > S.now ? 'starts' : 'started'} ${whenTxt(r.startsAt)} · ` : ''}${cap(r.side)} on ${r.venue} · ${nOf(r.qty, 'contract')} at ${cents(r.entry)}, ${cents(r.mark)} now`)}</small></th>` +
+    `<small>${esc(`${r.startsAt ? `${r.startsAt > S.now ? 'starts' : 'started'} ${whenAt(r.startsAt)} · ` : ''}${cap(r.side)} on ${r.venue} · ${nOf(r.qty, 'contract')} at ${cents(r.entry)}, ${cents(r.mark)} now`)}</small></th>` +
     `<td class="v">${money(r.worth)}</td><td>${figure(r.pnl)}</td></tr>`;
   // Today's line and a book's card say the same things: its chip and what it does next (the card has its
   // figure's comparison, its rows and its rule as well)
@@ -1008,7 +1009,7 @@
       // more open than the cap allows (opened before it was lowered): "19 of 12 open" read as a sum gone wrong
       const over = b.rows.length > b.max;
       chip = b.on ? (over ? `${b.rows.length} open` : `${b.rows.length} of ${b.max} open`) : b.rows.length ? `${b.rows.length} open · off` : 'switched off';
-      vs = `<span class="vs" title="What the open arbs pay when their markets settle, with what the closed ones banked">at settlement <b class="${tone(b.atSettle)}">${signed(b.atSettle)}</b></span>`;
+      vs = `<span class="vs" title="What the open arbs pay when their markets settle, with what the closed ones banked">at settlement <b class="${tone(b.atSettle)}">${signed(b.atSettle)}</b>${b.closed && !isZero(b.realized) ? ', banked included' : ''}</span>`;
       sub = `paid ${money(b.cost)}, worth ${money(b.worth)} if sold now${b.closed ? ` · banked ${signed(b.realized)} on ${b.closed} closed` : ''}`;
       body = rowsTable(k, HEAD('Paid', 'Locks in'), b.rows, (r) => {
         const broken = r.integrity !== 'valid' && r.integrity !== 'half_settled';
@@ -1023,16 +1024,16 @@
           : b.rows.length >= b.max ? `All ${b.max} slots taken: no new arb until one settles${then ? ` · ${then}` : ''}`
             : `Looks for a new one every ${(L.every && L.every.taker) || 15} seconds${then ? ` · ${then}` : ''}`;
     } else if (b.key === 'maker') {
-      chip = !b.on ? 'quoting off' : b.halted ? 'halted' : `quoting ${b.quoting}`;
+      chip = !b.on ? 'quoting off' : b.halted ? 'halted' : `quoting in ${nOf(b.quoting, 'market')}`;
       vs = `<span class="vs" title="What its closed round trips have made; the rest is on contracts it still holds">banked <b class="${tone(b.realized)}">${signed(b.realized)}</b></span>`;
       sub = `${Number.isFinite(b.equity) ? `worth ${money(b.equity)} of ${money(b.initial, 0)} · ` : ''}${nOf(b.fills, 'fill')} · ${nOf(b.contracts, 'contract')} in ${nOf(b.markets, 'market')}`;
       body = rowsTable(k, HEAD('Worth', 'P&amp;L', 'Moving it most'), b.rows, (r) => `<tr data-k="${esc(r.ticker)}"><th><span class="nm">${esc(r.title || r.ticker)}</span>` +
         `<small>${esc(cap(`${r.sub ? `${r.sub} · ` : ''}${r.inv > 0 ? 'long' : 'short'} ${Math.abs(r.inv).toLocaleString('en-US')} · paid ${money(Math.abs(r.cost))}`))}</small></th><td class="v">${money(r.worth)}</td><td>${figure(r.pnl)}</td></tr>`, 6) +
         (b.markets > b.rows.length ? `<p class="bksub">and ${nOf(b.markets - b.rows.length, 'more market')} held</p>` : '');
-      next = b.halted ? esc(cap(b.halted)) : b.lastFillAt ? `Last fill <b>${esc(whenTxt(b.lastFillAt))}</b> ET` : 'No fill yet';
+      next = b.halted ? esc(cap(b.halted)) : b.lastFillAt ? `Last fill <b>${esc(whenAt(b.lastFillAt))}</b> ET` : 'No fill yet';
     } else if (b.key === 'snipe') {
       chip = !b.on ? 'switched off' : b.bought ? `${nOf(b.bought, 'buy', 'buys')}` : 'never fired';
-      vs = `<span class="vs">${b.watched ? `${nOf(b.watched, 'finished game')} watched in 6 hours` : 'no finished game in 6 hours'}</span>`;
+      vs = `<span class="vs">${b.watched ? `${nOf(b.watched, 'finished game')} watched in the last 6 hours` : 'no finished game in the last 6 hours'}</span>`;
       body = b.rows.length ? `<table class="hold-t">${HEAD('Worth', 'P&amp;L')}<tbody>${b.rows.map(legRow).join('')}</tbody></table>`
         : b.seen.length ? `<dl class="bkfacts">${b.seen.map((e) => `<div><dt>${esc(ET_HM.format(new Date(e.t)))}</dt><dd>${esc(e.text)}${e.sub ? `<small>${esc(e.sub)}</small>` : ''}</dd></div>`).join('')}</dl>` : '';
       next = b.on ? 'Watches every game as it finishes' : b.watching ? 'Switched off: still watches finished games, buying nothing' : 'Switched off';
@@ -1186,7 +1187,7 @@
   // how much (each takes in the one before it, and a warning is always shown), and which part.
   const SHOWS = [['trades', 'Trades', ['trade', 'warn']], ['decisions', 'Trades & signals', ['trade', 'info', 'warn']], ['all', 'Everything', ['trade', 'info', 'warn', 'quiet']]];
   // the three parts, named as Today names them; a line's part is its source and, on the prediction-market desk, its tag
-  const DESKS = [['both', 'All of it'], ['desk', 'Crypto & SPY'], ['games', 'Games'], ['side', 'Arbs & maker']];
+  const DESKS = [['both', 'All parts'], ['desk', 'Crypto & SPY'], ['games', 'Games'], ['side', 'Arbs & maker']];
   const partOf = (r) => (r.src !== 'pm' ? 'desk' : r.tag.name === 'Games' ? 'games' : 'side');
   const feed = { show: 'decisions', desk: 'both' };
   try { const v = JSON.parse(localStorage.getItem('desk-feed') || '{}'); if (SHOWS.some(([k]) => k === v.show)) feed.show = v.show; if (DESKS.some(([k]) => k === v.desk)) feed.desk = v.desk; } catch { /* defaults */ }
@@ -1305,7 +1306,8 @@
       lineWidth: big ? 3 : 2, priceLineVisible: false, lastValueVisible: big, crosshairMarkerRadius: 3,
       priceFormat: { type: 'custom', minMove: 0.01, formatter: (v) => plain(signed(v)) } });
     const hold = c.addSeries(LW.LineSeries, { color: TOK['ink-3'], lineWidth: 1, lineStyle: LW.LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
-    desk.createPriceLine({ price: 0, color: withAlpha(TOK['ink-3'], 0.45), lineWidth: 1, lineStyle: LW.LineStyle.Dashed, axisLabelVisible: false });
+    // zero is a solid line and holding the dashed one, as on each book's small chart: both dashed, they read as one
+    desk.createPriceLine({ price: 0, color: withAlpha(TOK['ink-3'], 0.45), lineWidth: 1, lineStyle: LW.LineStyle.Solid, axisLabelVisible: false });
     // The plot is always the whole range (it cannot be scrolled or zoomed), but when its width changes the
     // library keeps its bar spacing and cuts the end off. The large chart is measured again as it opens and
     // when the axis's font arrives, and four times in six it opened ending 17 minutes early, its last-value
@@ -1393,6 +1395,7 @@
   function openBigChart() {
     opener = document.activeElement;
     bigChart.hidden = false;
+    document.body.classList.add('sheeted');   // the page behind does not scroll, as behind a sheet
     drawChart($('chartbig-pnl'));
     behind();
     bigChart.querySelector('.cbback').focus();
@@ -1400,6 +1403,7 @@
   function closeBigChart() {
     if (bigChart.hidden) return;
     bigChart.hidden = true;
+    document.body.classList.remove('sheeted');
     behind();
     if (opener && document.contains(opener)) opener.focus();
     opener = null;
@@ -1556,6 +1560,9 @@
     banner.hidden = false;
     banner.classList.remove('warn');
     if (banner.textContent !== msg) banner.textContent = msg;
+    // the page's own first words go too: "Connecting to the desk" stood under a light that said No signal
+    morph($('tdhero'), `<p class="tddate">${esc(ET_LONG.format(new Date()))}</p><span class="tdlab">No signal from the desk</span>`);
+    morph($('ghero'), '<p class="ovp">No signal from the desk</p>');
   };
   setInterval(() => { if (quiet() && !retry && !paused) connect(); if (!S) { noFirstFrame(); return; } renderClock(); if (!!stale() !== shownGone) render(); }, 1000);
   route();

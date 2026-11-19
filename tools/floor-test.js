@@ -178,6 +178,27 @@ ok('a part on Today has its chevron on a phone too, after its figure',
   /<span class="ps">\$\{esc\(p\.sub\)\}<\/span><i class="chev" aria-hidden="true"><\/i><\/a>/.test(js) && !/\.part [^{]*\.chev \{ display: none; \}/.test(css)
   && /\.part \{ grid-template-columns: minmax\(0, 1fr\) auto 8px; grid-template-areas: "n f c" "s f c";/.test(phone) && /\.part > \.chev \{ grid-area: c; align-self: center; \}/.test(css));
 
+// the polish of 2026-11-19
+ok('one word for a thing: "wants", "Left alone", "The prediction-market desk", and the two filters do not both say all',
+  /wants \$\{pct\(want\)\}<\/span>/.test(js) && !/>target \$\{pct/.test(js) && /<span class="gtb">Left alone<\/span>/.test(js) && !/>Skip</.test(js)
+  && /card\('The prediction-market desk', `<ul class="rows">\$\{line\(\{ k: 'pm'/.test(js) && !/'All of it'/.test(js) && /href="#arbs">Every book<\/a>/.test(html));
+ok('"1 game that starts", "2 games that start"', /that start\$\{n === 1 \? 's' : ''\} \$\{whenAt\(st\)\}/.test(js));
+ok('no time is written mid-sentence with a capital "Tomorrow"', !/(starting|starts'|started'\}|the|fill <b>)\s*\$\{(esc\()?whenTxt\(/.test(js) && (js.match(/whenAt\(/g) || []).length >= 6);
+ok('the arbs\' settlement figure says it counts what is banked', /\$\{b\.closed && !isZero\(b\.realized\) \? ', banked included' : ''\}/.test(js));
+ok('the snipe\'s six hours are the last six, and the maker\'s chip has its noun', /watched in the last 6 hours/.test(js) && /'no finished game in the last 6 hours'/.test(js) && /`quoting in \$\{nOf\(b\.quoting, 'market'\)\}`/.test(js));
+ok('with no game today the card says so once', /\(live\.length \|\| soon\.length \? `<p class="ovp">No game has finished today yet\./.test(js));
+ok('a tile under a start time does not repeat it', /const when = grouped && \(t\.stage === 'next' \|\| t\.stage === 'bet' \|\| t\.stage === 'skip'\) \? '' :/.test(js) && /<\/h3>\$\{tiles\(ts, !!st\)\}<\/div>/.test(js)
+  && /return head \+ \(show\.length \? tiles\(show\) : ''\)/.test(js));
+ok('with no first frame the page does not say Connecting under No signal', /morph\(\$\('tdhero'\), `<p class="tddate">\$\{esc\(ET_LONG\.format\(new Date\(\)\)\)\}<\/p><span class="tdlab">No signal from the desk<\/span>`\);\n\s*morph\(\$\('ghero'\), '<p class="ovp">No signal from the desk<\/p>'\);\n  \};/.test(js));
+ok('the chart\'s zero line is solid; only holding is dashed', /createPriceLine\(\{ price: 0,[^\n]*lineStyle: LW\.LineStyle\.Solid/.test(js) && (js.match(/LineStyle\.Dashed/g) || []).length === 1);
+ok('the page does not scroll behind the large chart', /bigChart\.hidden = false;\n\s*document\.body\.classList\.add\('sheeted'\);/.test(js) && /bigChart\.hidden = true;\n\s*document\.body\.classList\.remove\('sheeted'\);/.test(js));
+ok('the record: a gap under its title, a figure that does not break, and no stray indent on a phone',
+  /\.ghs \{[^}]*margin-top: var\(--space-2\); \}/.test(css) && /\.ghr \{[^}]*white-space: nowrap; \}/.test(css) && /@media \(max-width: 399px\) \{\s*\.ghr \{ font-size: var\(--type-figure\); \}/.test(css)
+  && /\.ghb:nth-child\(2\) \{ padding-left: var\(--space-3\); \}/.test(phone) && !/\.ghb \+ \.ghb/.test(phone));
+ok('on a wide screen convergence sits under the snipe, beside the two tall cards',
+  /@media \(min-width: 1280px\) \{\s*\.pmbooks \{ grid-template-rows: auto 1fr; \}\s*\.pmbooks > \[data-k="pm-arbs"\], \.pmbooks > \[data-k="pm-maker"\] \{ grid-row: 1 \/ span 2; \}\s*\.pmbooks > \[data-k="pm-snipe"\] \{ grid-row: 1; \}\s*\.pmbooks > \[data-k="pm-converge"\] \{ grid-row: 2; \}/.test(css));
+ok('the arbs\' opening line stands clear of the first card', /\.sidehead \{[^}]*margin-bottom: var\(--space-3\); \}/.test(css));
+
 // ---- Crypto & SPY, Arbs & maker, and the retired books
 ok('Crypto & SPY holds the crypto and SPY books and one line for the retired; Arbs & maker the arbs, maker, snipe and convergence',
   /\['crypto', 'stocks'\]\.map\(bookOf\)/.test(js) && /const SIDE = \['arbs', 'maker', 'snipe', 'converge'\]/.test(js) && /Retired on \$\{ymd\(RETIRED_ON\)\}/.test(js) && /RETIRED_ON = '2026-10-17'/.test(js));
@@ -237,7 +258,7 @@ ok('the chart is crypto and SPY against holding them', /const HOLD_FIELDS = \{ c
   ok('an arb\'s name, a leg\'s name and an Activity line are drawn with it', (js.match(/<span class="nm">\$\{joined\(r\.label\)\}<\/span>/g) || []).length === 2 && /<span class="what">\$\{joined\(r\.text\)\}/.test(js));
   ok('a settle day is one word: its space is a no-break space, written as an escape', /\.format\(new Date\(t\)\)\.replace\(' ', '\\u00A0'\);/.test(js));
 }
-ok('the Activity filter is the same three parts Today counts', /const DESKS = \[\['both', 'All of it'\], \['desk', 'Crypto & SPY'\], \['games', 'Games'\], \['side', 'Arbs & maker'\]\]/.test(js)
+ok('the Activity filter is the same three parts Today counts', /const DESKS = \[\['both', 'All parts'\], \['desk', 'Crypto & SPY'\], \['games', 'Games'\], \['side', 'Arbs & maker'\]\]/.test(js)
   && /name: 'Crypto & SPY'/.test(js) && /name: 'Games'/.test(js) && /name: 'Arbs & maker'/.test(js)
   && /crypto: 'Crypto & SPY', games: 'Games', arbs: 'Arbs & maker'/.test(js));
 

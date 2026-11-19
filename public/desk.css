@@ -244,11 +244,11 @@ button.row, a.row { cursor: pointer; transition: background-color .15s; }
 
 /* ---- Games: the record across the top, then a tile per game in sections ------------------------------- */
 .gv > * { grid-column: 1 / -1; }
-.ghs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); }
+.ghs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); margin-top: var(--space-2); }
 .ghb { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .ghb + .ghb { padding-left: var(--space-4); border-left: 1px solid var(--line-1); }
 .ghl { font: 600 var(--type-small)/1.3 var(--sans); color: var(--ink-3); }
-.ghr { font: 700 var(--type-headline)/1.05 var(--sans); letter-spacing: -.03em; color: var(--ink-1); }
+.ghr { font: 700 var(--type-headline)/1.05 var(--sans); letter-spacing: -.03em; color: var(--ink-1); white-space: nowrap; }
 .ghp { font-size: var(--type-small); color: var(--ink-2); }
 .ghero .ovp { max-width: 90ch; margin-top: var(--space-3); }
 /* the record by league */
@@ -284,7 +284,7 @@ button.row, a.row { cursor: pointer; transition: background-color .15s; }
 .books { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); align-items: start; min-width: 0; }
 .side { grid-column: 1 / -1; min-width: 0; }
 .sv > * { grid-column: 1 / -1; }
-.sidehead { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); }
+.sidehead { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); margin-bottom: var(--space-3); }
 .sidehead .lede { margin: 0; }
 .retired { grid-column: 1 / -1; margin: 0; max-width: 96ch; font-size: var(--type-small); color: var(--ink-3); }
 
@@ -345,6 +345,14 @@ button.row, a.row { cursor: pointer; transition: background-color .15s; }
 .pmbooks > [data-k="pm-maker"] { grid-column: span 4; }
 .pmbooks > [data-k="pm-snipe"], .pmbooks > [data-k="pm-converge"] { grid-column: span 3; }
 .pmbooks > [data-k="pm-converge"] { grid-column: 10 / span 3; }
+/* on a wide screen convergence sits straight under the snipe, beside the two tall cards: on a row of its own it hung
+   under the tallest of them, with a hole above it */
+@media (min-width: 1280px) {
+  .pmbooks { grid-template-rows: auto 1fr; }
+  .pmbooks > [data-k="pm-arbs"], .pmbooks > [data-k="pm-maker"] { grid-row: 1 / span 2; }
+  .pmbooks > [data-k="pm-snipe"] { grid-row: 1; }
+  .pmbooks > [data-k="pm-converge"] { grid-row: 2; }
+}
 /* a market's name is words, not a ticker, and it wraps */
 .hold-t .nm { font-weight: 600; color: var(--ink-1); overflow-wrap: anywhere; }
 .hold-t thead th.lead { text-align: left; }
@@ -542,7 +550,7 @@ footer { max-width: 96ch; font-size: var(--type-label); line-height: 1.5; letter
   .gtsp { display: inline; font-weight: 600; color: var(--ink-2); }
   .sect { font-size: 20px; }
   .ghr { font-size: 36px; }
-  .ghb + .ghb { padding-left: var(--space-3); }
+  .ghb:nth-child(2) { padding-left: var(--space-3); }
   .lg-t th, .lg-t td { padding-left: var(--space-2); }
   .gbar .seg { display: flex; width: 100%; }
   .gbar .seg button { flex: 1 1 auto; min-width: 0; padding-left: 6px; padding-right: 6px; }
@@ -569,6 +577,10 @@ footer { max-width: 96ch; font-size: var(--type-label); line-height: 1.5; letter
     #chartbig:not([hidden]) .cbbox, #sheet:not([hidden]) .shbox { animation: sheetup .42s cubic-bezier(.2, .9, .3, 1); }
     @keyframes sheetup { from { transform: translateY(100%); } }
   }
+}
+/* under 400 wide a record in the hundreds ("268–144") does not fit half the card at 36px: the figure's own size */
+@media (max-width: 399px) {
+  .ghr { font-size: var(--type-figure); }
 }
 /* the narrowest phones (320 wide): one tile to a row */
 @media (max-width: 359px) {
