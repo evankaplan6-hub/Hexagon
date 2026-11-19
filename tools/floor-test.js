@@ -110,9 +110,77 @@ ok('Today draws six tiles at most and says how many more, as a link to Games',
   /const TD_TILES = 6;/.test(js) && /const all = \[\.\.\.live, \.\.\.soon, \.\.\.finals\], show = all\.slice\(0, TD_TILES\), more = all\.length - show\.length;/.test(js)
   && /more > 0 \? `<p class="ovnote"><a class="seeall" href="#games">\$\{nOf\(more, 'more game'\)\}<\/a><\/p>` : ''/.test(js));
 
+// Today and Games count the same games: run desk.js's own two lists on a board with one of every stage
+{
+  const src = (js.match(/  const byStart = [^\n]*\n/) || [''])[0] + (js.match(/  const inPlay = [^\n]*\n  const toCome = [^\n]*\n/) || [''])[0];
+  let L = null;
+  try { L = new Function(`${src}; return { inPlay, toCome };`)(); } catch { /* reported below */ }
+  ok('inPlay and toCome are found and run', !!L && typeof L.inPlay === 'function' && typeof L.toCome === 'function');
+  if (L) {
+    const B = { open: [{ k: 'live', stage: 'live', start: 5, league: 'NFL' }, { k: 'bet', stage: 'bet', start: 30, league: 'NBA' }, { k: 'wait', stage: 'wait', league: 'NFL' }],
+      next: [{ k: 'late', stage: 'late', start: 6, league: 'NBA' }, { k: 'skip', stage: 'skip', start: 20, league: 'NFL' }, { k: 'next', stage: 'next', start: 10, league: 'NBA' }] };
+    const ks = (ts) => ts.map((t) => t.k).join();
+    ok('in progress: the bets under way, the games under way that were not bet, and the bets waiting on a result', ks(L.inPlay(B)) === 'live,late,wait', ks(L.inPlay(B)));
+    ok('to come: the bets not started, the games still to bet and the ones left alone, by start', ks(L.toCome(B)) === 'next,skip,bet', ks(L.toCome(B)));
+    ok('a league picks from both', ks(L.inPlay(B, (t) => t.league === 'NBA')) === 'late' && ks(L.toCome(B, (t) => t.league === 'NFL')) === 'skip');
+  }
+  ok('Today\'s card and the Games view read the same two lists',
+    /const live = inPlay\(B\);/.test(js) && /const coming = toCome\(B\);/.test(js) && /const live = inPlay\(B, mine\);/.test(js) && /const soon = toCome\(B, mine\);/.test(js));
+}
+// a time inside a sentence, and a day the code writes as 2026-10-17: run on desk.js's own helpers, with the clock set
+{
+  const line = (name) => (js.match(new RegExp(`  const ${name} = [^\\n]*\\n`)) || [''])[0];
+  const src = ['ET_HM', 'ET_DAY', 'ET_YMD', 'ET_DATE', 'dayKey', 'addDay', 'dayBefore', 'dayName', 'whenTxt', 'whenAt', 'ET_DAY_Y', 'yearOf', 'settleDay', 'ymd', 'ymdIn'].map(line).join('');
+  const NOW = Date.parse('2026-11-19T23:30:00Z'), H = 3600e3, N = '\u00A0';   // 6:30 PM ET on Thursday, Nov 19
+  let D = null;
+  try { D = new Function('nowT', `const today = () => dayKey(nowT());\n${src}; return { whenTxt, whenAt, ymd, ymdIn };`); } catch { /* reported below */ }
+  const at = (now) => { try { return D(() => now); } catch { return null; } };
+  const d = D && at(NOW);
+  ok('the date helpers are found and run', !!d && typeof d.whenAt === 'function' && typeof d.ymdIn === 'function');
+  if (d) {
+    ok('today: "at 8:00 PM"', d.whenAt(NOW + 1.5 * H) === 'at 8:00 PM', d.whenAt(NOW + 1.5 * H));
+    ok('tomorrow, in a sentence: "tomorrow at 7:00 PM", not "at Tomorrow 7:00 PM"', d.whenAt(NOW + 24.5 * H) === 'tomorrow at 7:00 PM', d.whenAt(NOW + 24.5 * H));
+    ok('a later day keeps its capitals: "Sat, Nov 21 at 12:00 PM"', d.whenAt(Date.parse('2026-11-21T17:00:00Z')) === 'Sat, Nov 21 at 12:00 PM', d.whenAt(Date.parse('2026-11-21T17:00:00Z')));
+    // midnight UTC is 7:00 PM Eastern in November: before it the check is today's, after it tomorrow's
+    const check = (now) => at(now).whenTxt(Math.floor(now / 864e5 + 1) * 864e5);
+    ok('the crypto rule\'s next check has no day before it, and "Tomorrow" after it', check(NOW) === '7:00 PM' && check(NOW + 2 * H) === 'Tomorrow 7:00 PM', [check(NOW), check(NOW + 2 * H)]);
+    ok('a typed day reads as a day', d.ymd('2026-10-17') === `Oct${N}17` && d.ymd('2026-10-08') === `Oct${N}8`, d.ymd('2026-10-17'));
+    ok('...with its year once that is not this year', at(Date.parse('2027-02-01T17:00:00Z')).ymd('2026-10-17') === `Oct${N}17, 2026`, at(Date.parse('2027-02-01T17:00:00Z')).ymd('2026-10-17'));
+    ok('a sentence keeps its words and loses its typed days', d.ymdIn('Lost on paper; convergence was switched off (2026-09-21)') === `Lost on paper; convergence was switched off (Sep${N}21)`
+      && d.ymdIn('0 of 24 settings') === '0 of 24 settings', d.ymdIn('Lost on paper; convergence was switched off (2026-09-21)'));
+  }
+  ok('the crypto rule\'s next check is written with its day, not "after midnight UTC"', /`Checks again: <b>\$\{esc\(whenTxt\(Math\.floor\(S\.now \/ 864e5 \+ 1\) \* 864e5\)\)\} ET<\/b>`/.test(js) && !/after midnight UTC:/.test(js));
+  ok('Today\'s foot names the next games in a sentence', /`<p class="ovnote">Next: \$\{nOf\(grp\[1\]\.length, 'game'\)\} \$\{esc\(whenAt\(grp\[0\]\)\)\} · /.test(js));
+  // every string the page draws: no day typed as 2026-10-17 outside the lists that are passed through ymdIn (TESTS,
+  // the books' rules) and the dates the code computes with (Date.parse, RETIRED_ON, comments)
+  const drawn = js.split('\n').filter((l) => /\d{4}-\d\d-\d\d/.test(l) && !/^\s*(\/\/|\*|\/\*)/.test(l) && !/Date\.parse\('/.test(l) && !/RETIRED_ON = /.test(l) && !/^\s*\{ idea: /.test(l))
+    .map((l) => l.replace(/\/\/[^\n]*$/, '')).filter((l) => /\d{4}-\d\d-\d\d/.test(l));
+  ok('no day is typed as 2026-10-17 in what the page draws', drawn.length === 0, drawn.map((l) => l.trim().slice(0, 90)));
+  ok('the lab\'s verdicts and the books\' rules are passed through', /why: esc\(ymdIn\(t\.verdict\)\)/.test(js) && (js.match(/esc\(ymdIn\(/g) || []).length >= 5);
+}
+// a coin's line in its book's sheet: the coin's own figure, and where it stands against holding in words
+{
+  const src = ['money', 'isZero', 'holdTxt'].map((n) => (js.match(new RegExp(`  const ${n} = [^\\n]*\\n`)) || [''])[0]).join('');
+  let holdTxt = null;
+  try { holdTxt = new Function(`${src}; return holdTxt;`)(); } catch { /* reported below */ }
+  ok('holdTxt is found and runs', typeof holdTxt === 'function');
+  ok('ahead, behind and level, in words', !!holdTxt && holdTxt(0.84) === 'ahead of holding by $0.84' && holdTxt(-1234.5) === 'behind holding by $1,234.50' && holdTxt(0.004) === 'level with holding');
+  ok('the line\'s figure is the coin\'s own since its start, with holding said beside it, and no sentence under the list to explain it',
+    /name: esc\(mktName\(b, r\)\), fig: since,/.test(js) && /const vs = hold == null \? '' : ` · \$\{holdTxt\(r2\(since - hold\)\)\}`;/.test(js) && !/Each line's figure is/.test(js));
+}
+// the look (design-stack audit, 2026-11-19)
+ok('Today\'s date is not in the link colour: it is not a link', /\.tddate \{[^}]*color: var\(--ink-3\); \}/.test(css) && !/\.tddate \{[^}]*var\(--accent\)/.test(css));
+ok('every chevron is drawn, none typed', !/[›»→]/.test(js + html) && /\.seeall::after, \.pmold::after \{ content: ''; display: inline-block;/.test(css));
+ok('the disclosure\'s chevron turns only when the device allows motion',
+  !/\.rule summary::after \{[^}]*transition/.test(css.replace(/@media \(prefers-reduced-motion: no-preference\) \{ \.rule summary::after \{[^}]*\} \}/, ''))
+  && /@media \(prefers-reduced-motion: no-preference\) \{ \.rule summary::after \{ transition: transform \.2s; \} \}/.test(css));
+ok('a part on Today has its chevron on a phone too, after its figure',
+  /<span class="ps">\$\{esc\(p\.sub\)\}<\/span><i class="chev" aria-hidden="true"><\/i><\/a>/.test(js) && !/\.part [^{]*\.chev \{ display: none; \}/.test(css)
+  && /\.part \{ grid-template-columns: minmax\(0, 1fr\) auto 8px; grid-template-areas: "n f c" "s f c";/.test(phone) && /\.part > \.chev \{ grid-area: c; align-self: center; \}/.test(css));
+
 // ---- Crypto & SPY, Arbs & maker, and the retired books
 ok('Crypto & SPY holds the crypto and SPY books and one line for the retired; Arbs & maker the arbs, maker, snipe and convergence',
-  /\['crypto', 'stocks'\]\.map\(bookOf\)/.test(js) && /const SIDE = \['arbs', 'maker', 'snipe', 'converge'\]/.test(js) && /Retired on 2026-10-17/.test(js));
+  /\['crypto', 'stocks'\]\.map\(bookOf\)/.test(js) && /const SIDE = \['arbs', 'maker', 'snipe', 'converge'\]/.test(js) && /Retired on \$\{ymd\(RETIRED_ON\)\}/.test(js) && /RETIRED_ON = '2026-10-17'/.test(js));
 ok('the retired books have no card and no colour: four of six used to outnumber the two that trade', !/var\(--book-(options|scalps|dips|runners)\)/.test(js + css) && !/GROUPS/.test(js));
 ok('an arb past its settle date says so', /was to settle \$\{settleDay\(r\.settlesAt\)\}, still open/.test(js));
 ok('arbs over their cap are not "19 of 12 open"', /const over = b\.rows\.length > b\.max/.test(js) && /more than its \$\{b\.max\} slots/.test(js));
