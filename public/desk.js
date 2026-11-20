@@ -48,6 +48,9 @@
   const pct = (x, d = 0) => `${(x * 100).toFixed(d)}%`;
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const cap = (s) => { const t = String(s || '').trim(); return t.charAt(0).toUpperCase() + t.slice(1); };
+  // A name or a line that may wrap, escaped, with each " · " held to the word before it by a no-break space, so a new
+  // line never starts with the dot: at 375 wide an arb read "NCAAF Indiana v Washington" and then "· Indiana" (2026-11-19)
+  const joined = (s) => esc(s).replace(/ · /g, '\u00A0· ');
   const ET_HM = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', hour12: true });
   const ET_DAY = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' });
   const ET_CLOCK = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
@@ -82,7 +85,7 @@
   // their figure inside the desk's, and nothing else: no colour, no card.
   const BOOK_COLOR = { crypto: 'var(--book-crypto)', stocks: 'var(--book-stocks)' };
   const GAMES_COLOR = 'var(--part-games)', SIDE_COLOR = 'var(--part-side)', LAB_COLOR = 'var(--part-lab)';
-  const RETIRED = ['options', 'scalps', 'dips', 'runners'];
+  const RETIRED = ['options', 'scalps', 'dips', 'runners'], RETIRED_ON = '2026-10-17';
   const isRetired = (b) => RETIRED.includes(b.key);
   const listOf = (xs) => (xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
   const nOf = (n, one, many = `${one}s`) => `${Number(n || 0).toLocaleString('en-US')} ${n === 1 ? one : many}`;
@@ -163,8 +166,12 @@
   // Working. Two minutes is twelve rounds, and longer than any round's calls can take.
   const stalled = () => !!(S && S.beat && S.now - S.beat > Math.max(120000, 12 * ((S.cfg && S.cfg.everySec) || 10) * 1000));
   // Past the daily loss limit the desk is still marking and may still sell: it is not stopped, it is not buying.
+  // Stale prices are amber whichever feed they are: the Health sheet says "the light in the bar turns amber when prices
+  // are stale", and until 2026-11-19 only Coinbase's did it. With SPY's feed stalled the SPY rule does not trade
+  // (src/desk/engine.js), and the light went on saying Working over a "SPY prices stale" line in its own sheet.
+  const pricesStale = () => !!(S.market && S.market.stale && (S.market.stale.crypto || S.market.stale.stocks));
   const deskState = () => (stale() ? ['No signal', 'bad'] : stalled() ? ['Stalled', 'bad'] : S.halt ? ['Not buying', 'warn']
-    : S.market && S.market.stale && S.market.stale.crypto ? ['Waiting on prices', 'warn'] : ['Working', 'good']);
+    : pricesStale() ? ['Waiting on prices', 'warn'] : ['Working', 'good']);
   // the desk's clock, carried forward between frames
   const nowT = () => (S ? S.now + (performance.now() - (S._rxPerf || performance.now())) : Date.now());
   const today = () => dayKey(nowT());
@@ -231,8 +238,8 @@
       `<span class="tdlab">All the paper in play<i class="chev" aria-hidden="true"></i></span><span class="big">${money(T.equity)}</span>` +
       `<span class="tdsub"><span class="${tone(T.pnl)}">${signed(T.pnl)}</span> on ${money(T.initial, 0)} of paper</span></button>` +
       `<nav class="parts" aria-label="The parts">${parts().map((p) => `<a class="part" data-k="part-${p.k}" href="${p.href}" style="--bk:${p.color}">` +
-        `<span class="pn"><i class="sw"></i>${esc(p.name)}<i class="chev" aria-hidden="true"></i></span><span class="pf ${tone(p.pnl)}">${signed(p.pnl)}</span>` +
-        `<span class="ps">${esc(p.sub)}</span></a>`).join('')}</nav>`;
+        `<span class="pn"><i class="sw"></i>${esc(p.name)}</span><span class="pf ${tone(p.pnl)}">${signed(p.pnl)}</span>` +
+        `<span class="ps">${esc(p.sub)}</span><i class="chev" aria-hidden="true"></i></a>`).join('')}</nav>`;
   }
 
   // ------------------------------------------------------------ the games: a scoreboard
@@ -271,25 +278,34 @@
       if (u.over && begun) { skipped.push(u); continue; }
       next.push({ k: u.id, stage: begun ? 'late' : u.over ? 'skip' : 'next', league: u.league, start: u.startsAt, pick: u.pick || u.a, foe, px: u.px,
         status: !g.on ? 'Not bet: the game bets are switched off' : begun ? 'Under way, too late to bet'
-          : u.over ? `Left alone: the favourite is ${wholeCents(u.px)}` : opens <= now ? 'Bets this round' : `Bets at ${ET_HM.format(new Date(opens))}` });
+          : u.over ? `Favourite over ${Math.round((g.maxPx || 0.9) * 100)}¢` : opens <= now ? 'Bets this round' : `Bets at ${ET_HM.format(new Date(opens))}` });
     }
     const fin = g.finals.map((f) => ({ k: f.id, stage: f.pnl > 0 ? 'won' : 'lost', league: f.league, start: f.at, day: playedDay(f.at), pick: f.pick, foe: f.foe, px: f.entry,
       status: f.pnl > 0 ? `Won${f.foe ? `: ${f.pick} beat ${f.foe}` : ''}` : `Lost${f.foe ? `: ${f.foe} won` : ''}`, fig: f.pnl }));
     return { g, open, next, fin, skipped, ahead };
   }
-  function tileHtml(t) {
+  // The games under way and the games to come: one list of each, for Today's card and for the Games view. Until
+  // 2026-11-19 Today counted only the bets as in progress and only the games it would bet as to come: it said "No game
+  // today" over a Games view with three under way, and its "Next: 1 game" stood beside Games' two (one left alone).
+  const inPlay = (B, mine = () => true) => [...B.open.filter((t) => t.stage === 'live' && mine(t)).sort(byStart), ...B.next.filter((t) => t.stage === 'late' && mine(t)), ...B.open.filter((t) => t.stage === 'wait' && mine(t))];
+  const toCome = (B, mine = () => true) => [...B.open.filter((t) => t.stage === 'bet'), ...B.next.filter((t) => t.stage !== 'late')].filter(mine).sort(byStart);
+  // `grouped`: under a heading that already gives the start (Up next on Games), a tile does not say it again, and a
+  // game left alone has room for its pill. On its own (Today's card) the start and the pill together wrapped the tile's
+  // header onto two lines at 375 wide, so there the foot says "Left alone" instead.
+  function tileHtml(t, grouped) {
     const fin = t.stage === 'won' || t.stage === 'lost';
-    const when = t.stage === 'live' ? '<span class="gtlive">Live</span>' : t.stage === 'wait' ? 'Waiting on the result' : t.stage === 'late' ? 'Under way' : fin ? esc(ET_HM.format(new Date(t.start))) : t.start ? esc(whenTxt(t.start)) : '';
-    const badge = t.stage === 'won' ? '<span class="gtb pos">Won</span>' : t.stage === 'lost' ? '<span class="gtb neg">Lost</span>' : t.stage === 'skip' ? '<span class="gtb">Skip</span>' : '';
+    const when = grouped && (t.stage === 'next' || t.stage === 'bet' || t.stage === 'skip') ? '' : t.stage === 'live' ? '<span class="gtlive">Live</span>' : t.stage === 'wait' ? 'Waiting on the result' : t.stage === 'late' ? 'Under way' : fin ? esc(ET_HM.format(new Date(t.start))) : t.start ? esc(whenTxt(t.start)) : '';
+    const badge = t.stage === 'won' ? '<span class="gtb pos">Won</span>' : t.stage === 'lost' ? '<span class="gtb neg">Lost</span>' : t.stage === 'skip' && grouped ? '<span class="gtb">Left alone</span>' : '';
+    const status = t.stage === 'skip' && !grouped && /^Favourite /.test(t.status) ? `Left alone: f${t.status.slice(1)}` : t.status;
     return `<li data-k="${esc(t.k)}"><button type="button" class="gt st-${t.stage}" data-sheet="game:${esc(t.k)}">` +
       `<span class="gth"><span class="gtl">${esc(leagueName(t.league))}</span><span class="gtw">${when}</span>${badge}</span>` +
       `<span class="gtr gtpick"><i class="gtd" aria-hidden="true"></i><span class="gtn">${esc(t.pick)}<span class="sr">, the pick</span></span><span class="gtp">${t.px != null ? wholeCents(t.px) : ''}</span></span>` +
       `<span class="gtr"><span class="gtn">${esc(t.foe)}</span></span>` +
-      `<span class="gts">${t.px != null ? `<span class="gtsp">${wholeCents(t.px)} · </span>` : ''}${esc(t.status)}${t.fig != null ? ` <b class="${tone(t.fig)}">${signed(t.fig)}</b>` : ''}</span></button></li>`;
+      `<span class="gts">${t.px != null ? `<span class="gtsp">${wholeCents(t.px)} · </span>` : ''}${esc(status)}${t.fig != null ? ` <b class="${tone(t.fig)}">${signed(t.fig)}</b>` : ''}</span></button></li>`;
   }
   // a tile's price to the whole cent: a mid between two quotes read "96.9¢"
   const wholeCents = (p) => (!Number.isFinite(p) ? '' : p >= 0.995 ? '$1' : `${Math.max(1, Math.round(p * 100))}¢`);
-  const tiles = (ts) => `<ul class="tiles">${ts.map(tileHtml).join('')}</ul>`;
+  const tiles = (ts, grouped) => `<ul class="tiles">${ts.map((t) => tileHtml(t, grouped)).join('')}</ul>`;
   // a group of games that start together: how many, and where the book is with them
   function startGroups(ts) {
     const m = new Map();
@@ -308,29 +324,29 @@
     return parts2.join(', ');
   }
   // Today's card: the day's record, the next few games, and when the next ones are bet
+  const TD_TILES = 6;
+  // Today's games, from the board. The finals are the games played today, and until 4 AM "today" is still the evening
+  // before (playedDay). The games to come are the calendar day's: the board runs thirty hours on, and "8 games to come"
+  // counted tomorrow's two (audit 2026-10-20); and they were filtered by the played day until 2026-11-20, so from
+  // midnight to 4 AM, with that evening's games on the board, the card said "No game today".
+  const tdLists = (B, now) => { const coming = toCome(B); return { live: inPlay(B), coming, soon: coming.filter((t) => dayKey(t.start) === dayKey(now)), finals: B.fin.filter((t) => t.day === playedDay(now)) }; };
+  const tdHead = (R, live, soon) => (R.bets
+    ? `<div class="verdict"><span class="rec">${R.won}–${R.bets - R.won}</span> <span class="vfig ${tone(R.pnl)}">${signed(R.pnl)}</span></div>` +
+      `<p class="ovp">Won ${R.won} of today's ${nOf(R.bets, 'final')}; the prices said ${R.expected.toFixed(1)}.${live.length ? ` ${nOf(live.length, 'game')} in progress.` : ''}</p>`
+    : `<div class="verdict zero">${live.length ? `${nOf(live.length, 'game')} in progress` : soon.length ? `${nOf(soon.length, 'game')} to come` : 'No game today'}</div>` +
+      (live.length || soon.length ? `<p class="ovp">No game has finished today yet.${live.length && soon.length ? ` ${soon.length} more to come.` : ''}</p>` : ''));
   function tdGamesHtml() {
     const B = board();
     if (!B) return '<p class="ovp">The game bets run on the prediction-market desk, and this frame does not carry it.</p>';
-    // today's finals are the games played today, and until 4 AM "today" is still the evening before (playedDay)
-    const R = B.g.record.today, td = playedDay(S.now);
-    const live = B.open.filter((t) => t.stage === 'live').sort(byStart);
-    // still to come TODAY: the board runs thirty hours on, and "8 games to come" counted tomorrow's two (audit 2026-10-20);
-    // the foot's "Next" still names the next group, today's or not
-    const coming = [...B.open.filter((t) => t.stage === 'bet'), ...B.next.filter((t) => t.stage === 'next')].sort(byStart);
-    const soon = coming.filter((t) => dayKey(t.start) === td);
-    const finals = B.fin.filter((t) => t.day === td);
-    const head = R.bets
-      ? `<div class="verdict"><span class="rec">${R.won}–${R.bets - R.won}</span> <span class="vfig ${tone(R.pnl)}">${signed(R.pnl)}</span></div>` +
-        `<p class="ovp">Won ${R.won} of today's ${nOf(R.bets, 'final')}; the prices said ${R.expected.toFixed(1)}.${live.length ? ` ${nOf(live.length, 'game')} in progress.` : ''}</p>`
-      : `<div class="verdict zero">${live.length ? `${nOf(live.length, 'game')} in progress` : soon.length ? `${nOf(soon.length, 'game')} to come` : 'No game today'}</div>` +
-        `<p class="ovp">No game has finished today yet.${live.length && soon.length ? ` ${soon.length} more to come.` : ''}</p>`;
-    const show = [...live, ...soon].slice(0, 6);
-    if (show.length < 6) show.push(...finals.slice(0, 6 - show.length));
+    // the foot's "Next" names the next group, today's or not
+    const { live, coming, soon, finals } = tdLists(B, S.now), head = tdHead(B.g.record.today, live, soon);
+    // six tiles at most, and the rest said: "7 games to come" stood over six tiles with nothing for the seventh (2026-11-19)
+    const all = [...live, ...soon, ...finals], show = all.slice(0, TD_TILES), more = all.length - show.length;
     const grp = startGroups(coming).find(([st]) => st > S.now);
     const gs = grp ? groupStatus(grp[1], B) || 'not bet: the game bets are switched off' : '';
-    const foot = grp ? `<p class="ovnote">Next: ${nOf(grp[1].length, 'game')} at ${esc(whenTxt(grp[0]))} · ${esc(gs)}.` +
+    const foot = grp ? `<p class="ovnote">Next: ${nOf(grp[1].length, 'game')} ${esc(whenAt(grp[0]))} · ${esc(gs)}.` +
       `${B.skipped.length ? ` ${nOf(B.skipped.length, 'game')} left alone today: the favourite was over ${Math.round((B.g.maxPx || 0.9) * 100)}¢.` : ''}</p>` : '';
-    return head + (show.length ? tiles(show) : '') + foot;
+    return head + (show.length ? tiles(show) : '') + (more > 0 ? `<p class="ovnote"><a class="seeall" href="#games">${nOf(more, 'more game')}</a></p>` : '') + foot;
   }
 
   // ------------------------------------------------------------ the crypto rule: against holding, and what it wants
@@ -345,11 +361,16 @@
   const share = (r) => (r.worth > 0 ? (r.value || 0) / r.worth : 0);
   const upDown = (x) => (isZero(x) ? 'level' : `${x > 0 ? 'up' : 'down'} ${money(x)}`);
   const aheadTxt = (d) => (d == null ? '' : isZero(d) ? 'level with holding' : `<b class="${tone(d)}">${d > 0 ? 'ahead' : 'behind'} ${money(d)}</b>`);
+  // the same in a grey line, in the line's own ink
+  const holdTxt = (d) => (isZero(d) ? 'level with holding' : `${d > 0 ? 'ahead of' : 'behind'} holding by ${money(d)}`);
   const sinceDay = () => ET_DAY.format(new Date(S.startedAt));
   // a time with its day: "Today, 8:00 PM ET", "Yesterday, ...", "Thu, Oct 8, ..."
   const whenFull = (t) => `${dayKey(t) === today() ? 'Today' : dayName(t, today())}, ${ET_HM.format(new Date(t))} ET`;
   // a time, with its day only when it is not today ("Tomorrow 1:00 PM")
   const whenTxt = (t) => `${dayKey(t) === today() ? '' : `${dayName(t, today())} `}${ET_HM.format(new Date(t))}`;
+  // the same inside a sentence: "at 7:00 PM", "tomorrow at 7:00 PM", "Sat, Oct 18 at 7:00 PM" ("Next: 1 game at Tomorrow
+  // 7:00 PM", 2026-11-19)
+  const whenAt = (t) => { const d = dayKey(t) === today() ? '' : dayName(t, today()); return `${d ? `${d === 'Tomorrow' || d === 'Yesterday' ? d.toLowerCase() : d} ` : ''}at ${ET_HM.format(new Date(t))}`; };
   function vsHold() {
     const bs = heldBooks();
     if (!bs.length) return null;
@@ -428,7 +449,7 @@
       for (const st of [...by.keys()].sort((a, b) => a - b).slice(0, 3)) {
         const n = by.get(st), at = st - ahead;
         ev.push({ t: Math.max(at, now), now: at <= now, k: `bet-${st}`, href: '#games', color: GAMES_COLOR,
-          text: at <= now ? `Betting ${nOf(n, 'game')} that start at ${ET_HM.format(new Date(st))}` : `Bets go in for ${nOf(n, 'game')} starting ${whenTxt(st)}` });
+          text: at <= now ? `Betting ${nOf(n, 'game')} that start${n === 1 ? 's' : ''} ${whenAt(st)}` : `Bets go in for ${nOf(n, 'game')} starting ${whenAt(st)}` });
       }
     }
     if (bookOf('crypto')) ev.push({ t: Math.floor(now / 864e5 + 1) * 864e5, k: 'crypto', sheet: 'book:crypto', color: BOOK_COLOR.crypto, text: 'The crypto rule checks its coins' });
@@ -436,7 +457,7 @@
     if (open && bookOf('stocks')) ev.push({ t: open + 5 * 6e4, k: 'spy', sheet: 'book:stocks', color: BOOK_COLOR.stocks, text: 'The SPY rule checks, a few minutes after the open' });
     for (const tp of (S.lab && S.lab.tapes) || []) {
       if (!tp.kickoff) continue;
-      if (tp.reads > now) ev.push({ t: tp.reads, k: `tape-${tp.key}`, sheet: 'lab', color: LAB_COLOR, text: `The ${tp.name.toLowerCase()} starts reading, before ${tp.game || `the ${whenTxt(tp.kickoff)} kickoff`}` });
+      if (tp.reads > now) ev.push({ t: tp.reads, k: `tape-${tp.key}`, sheet: 'lab', color: LAB_COLOR, text: `The ${tp.name.toLowerCase()} starts reading, before ${tp.game || `the kickoff ${whenAt(tp.kickoff)}`}` });
       else ev.push({ t: now, now: true, k: `tape-${tp.key}`, sheet: 'lab', color: LAB_COLOR, text: `The ${tp.name.toLowerCase()} is reading${tp.game ? `, before ${tp.game} at ${ET_HM.format(new Date(tp.kickoff))}` : ''}` });
     }
     for (const r of RETESTS.filter((x) => x.t > now).slice(0, 2)) ev.push({ t: r.t, k: r.k, sheet: 'lab', color: LAB_COLOR, text: r.text, dateOnly: true });
@@ -607,12 +628,12 @@
     const opts = [['all', 'All'], ...present.map((l) => [l, leagueName(l)])];
     morph($('gleague'), opts.map(([k, name]) => `<button type="button" data-league="${esc(k)}" class="${k === games.league ? 'on' : ''}" aria-pressed="${k === games.league}">${esc(name)}</button>`).join(''));
     const mine = (t) => games.league === 'all' || t.league === games.league;
-    const live = [...B.open.filter((t) => t.stage === 'live' && mine(t)).sort(byStart), ...B.next.filter((t) => t.stage === 'late' && mine(t)), ...B.open.filter((t) => t.stage === 'wait' && mine(t))];
+    const live = inPlay(B, mine);
     morph($('glive'), gsecHtml('In progress', nOf(live.length, 'game'), live.length ? tiles(live) : ''));
-    const soon = [...B.open.filter((t) => t.stage === 'bet'), ...B.next.filter((t) => t.stage !== 'late')].filter(mine).sort(byStart);
+    const soon = toCome(B, mine);
     morph($('gnext'), gsecHtml('Up next', soon.length ? `${nOf(soon.length, 'game')}${B.g.on ? '' : ' · not bet: the game bets are switched off'}` : '', startGroups(soon).map(([st, ts]) => {
       const gs = groupStatus(ts, B);
-      return `<div class="ggrp" data-k="g-${st}"><h3><span>${esc(st ? whenTxt(st) : 'Start not on record')}</span><span class="gsn">${nOf(ts.length, 'game')}${gs ? ` · ${esc(gs)}` : ''}</span></h3>${tiles(ts)}</div>`;
+      return `<div class="ggrp" data-k="g-${st}"><h3><span>${esc(st ? whenTxt(st) : 'Start not on record')}</span><span class="gsn">${nOf(ts.length, 'game')}${gs ? ` · ${esc(gs)}` : ''}</span></h3>${tiles(ts, !!st)}</div>`;
     }).join('')) ||
       (live.length ? '' : `<div class="gsh"><h2 class="sect">Up next</h2></div><p class="ovp">No game on the board in the next thirty hours${games.league === 'all' ? '' : ` in ${esc(leagueName(games.league))}`}.</p>`));
     const fin = B.fin.filter(mine), byDay = new Map();
@@ -655,7 +676,7 @@
       card('Crypto & SPY', `<ul class="rows">${live.map(line).join('')}</ul>` + kv([['In the market', money(atWork)], ['Cash', money(cash)], ['Fees paid', money(fees)]])) +
       (ps.length ? card('The prediction-market desk', `<ul class="rows">${ps.map((p) => rowHtml({ k: p.k, href: p.href, color: p.color, name: esc(p.name), fig: p.pnl, why: esc(p.sub) })).join('')}</ul>` +
         `<p>Its own paper: ${money(S.legacy.equity)} from ${money(S.legacy.initial, 0)}.</p>`) : '') +
-      (gone.length ? card('Retired', `<ul class="rows">${gone.map((b) => rowHtml({ k: b.key, color: null, name: esc(b.name), fig: b.pnl, why: 'retired 2026-10-17 · holds nothing' })).join('')}</ul>` +
+      (gone.length ? card('Retired', `<ul class="rows">${gone.map((b) => rowHtml({ k: b.key, color: null, name: esc(b.name), fig: b.pnl, why: `retired ${ymd(RETIRED_ON)} · holds nothing` })).join('')}</ul>` +
         `<p>Together ${figure(r2(gone.reduce((a, b) => a + b.pnl, 0)))}, still inside the Crypto &amp; SPY figure. Their labs found no edge; their rules are kept for the labs.</p>`) : '') };
   }
   function bookSheet(key) {
@@ -665,12 +686,16 @@
     return { title: b.name, html:
       card('', `<div class="shfig">${money(b.equity)}</div><p>${figure(b.pnl)} since its start · holding would be ${d == null ? 'known with the first price' : `${figure(b.benchPnl)} · ${aheadTxt(d)}`}</p>` +
         `<p class="now" style="--bk:${BOOK_COLOR[key]}">${nextLine(b)}</p>`) +
-      card('The rule', `<p>${esc(b.rule)}</p><p>It trades only when a market's share should move ${band} points or more.</p>`) +
+      card('The rule', `<p>${esc(ymdIn(b.rule))}</p><p>It trades only when a market's share should move ${band} points or more.</p>`) +
       card(key === 'crypto' ? 'Coins' : 'Market', `<ul class="rows">${b.rows.map((r) => {
         const since = r2(r.worth - r.initial), hold = r.hold == null ? null : r2(r.hold - r.initial);
-        return rowHtml({ k: r.sym, sheet: `mkt:${r.sym}`, color: BOOK_COLOR[key], name: esc(mktName(b, r)), fig: hold == null ? null : r2(since - hold),
-          why: `${pct(share(r))} held${Number.isFinite(r.vol) ? ` · swings ${pct(r.vol)} a year` : ''} · ${signed(since)} since start` });
-      }).join('')}</ul><p>Each line's figure is how far it is ahead of simply holding it.</p>`) +
+        // the figure is the coin's own, since its start, as on its card and its sheet; how it stands against holding is
+        // said in words beside it. Until 2026-11-19 the figure was the gap to holding with nothing on the line to say
+        // so: Bitcoin read +$0.84 in green over "−$7.61 since start".
+        const vs = hold == null ? '' : ` · ${holdTxt(r2(since - hold))}`;
+        return rowHtml({ k: r.sym, sheet: `mkt:${r.sym}`, color: BOOK_COLOR[key], name: esc(mktName(b, r)), fig: since,
+          why: `${pct(share(r))} held${Number.isFinite(r.vol) ? ` · swings ${pct(r.vol)} a year` : ''}${vs}` });
+      }).join('')}</ul>`) +
       card('Trades', tradeList((S.fills || []).filter((f) => f.book === key))) +
       `<p class="shlink"><a href="#crypto/${key}">Its card on Crypto &amp; SPY</a></p>` };
   }
@@ -705,7 +730,7 @@
   function gameSheet(id) {
     const g = G(), bets = pmBook('bets');
     if (!g) return null;
-    const rule = card('The rule', `<p>${esc((bets && bets.rule) || '')}</p>`) + '<p class="shlink"><a href="#games">Every game</a></p>';
+    const rule = card('The rule', `<p>${esc(ymdIn((bets && bets.rule) || ''))}</p>`) + '<p class="shlink"><a href="#games">Every game</a></p>';
     const r = bets && bets.rows.find((x) => x.id === id || x.pairId === id);
     if (r) {
       const x = r.game || {}, started = Number.isFinite(r.startsAt) && r.startsAt <= S.now;
@@ -735,14 +760,14 @@
   function labSheet() {
     const tapes = (S.lab && S.lab.tapes) || [];
     return { title: 'The lab', html:
-      card('', `<p>A third of the Hexagon's work since 2026-10-17: collect what cannot be fetched later, test each idea the same way (a train and a holdout, ±2 standard errors, the fee in), and re-test on fixed dates. No new book without that.</p>`) +
+      card('', `<p>A third of the Hexagon's work since ${ymd(RETIRED_ON)}: collect what cannot be fetched later, test each idea the same way (a train and a holdout, ±2 standard errors, the fee in), and re-test on fixed dates. No new book without that.</p>`) +
       (tapes.length ? card('The tapes', `<ul class="rows">${tapes.map((t) => {
         const st = tapeState(t);
         return rowHtml({ k: t.key, name: tapeName(t, st), why: `${esc(t.what)}<br>${esc(st.line)}${t.kickoff ? ` · next ${t.reads > S.now ? `reads ${esc(whenFull(t.reads))}` : 'reading now'}` : ''}` });
       }).join('')}</ul>`) : '') +
       card('The dates', `<ul class="rows">${RETESTS.map((r) => rowHtml({ k: r.k, name: `<b>${esc(ET_DATE.format(new Date(r.t)))}</b> · ${esc(r.text)}`, why: r.done ? `Done ${ET_DATE.format(new Date(r.done))}` : r.t > S.now ? `in ${nOf(Math.ceil((r.t - S.now) / 864e5), 'day')}` : `Due, ${nOf(Math.floor((S.now - r.t) / 864e5), 'day')} late` })).join('')}</ul>`) +
       card('Tested so far', `<ul class="rows">${TESTS.map((t, i) => rowHtml({ k: `t${i}`, name: `<span class="mark ${t.kept === true ? 'ok' : t.kept === 'testing' ? 'idle' : 'no'}" aria-hidden="true">${t.kept === true ? '✓' : t.kept === 'testing' ? '○' : '×'}</span>` +
-        `<span class="sr">${t.kept === true ? 'Kept: ' : t.kept === 'testing' ? 'On test: ' : 'Not kept: '}</span>${esc(t.idea)}`, why: esc(t.verdict) })).join('')}</ul>`) };
+        `<span class="sr">${t.kept === true ? 'Kept: ' : t.kept === 'testing' ? 'On test: ' : 'Not kept: '}</span>${esc(t.idea)}`, why: esc(ymdIn(t.verdict)) })).join('')}</ul>`) };
   }
   function healthSheet() {
     // the prediction desk's light is read from the last frame too, so with no signal it has none either
@@ -751,7 +776,7 @@
     return { title: 'Health', html:
       card('', `<div class="shfig st-${cls}">${esc(state)}</div><p>The light in the bar turns amber when prices are stale or the desk is not buying, and red when the desk stops or this page loses its signal.</p>`) +
       card('Checks', `<ul class="rows">${healthChecks().map(line).join('')}</ul>`) +
-      (pm ? card('Prediction markets', `<ul class="rows">${line({ k: 'pm', href: '#arbs', ok: pm[1] === 'good' ? 'ok' : pm[1], name: pm[0], detail: 'Its own loop, trading the games, arbs and maker in paper beside the books' })}</ul>`) : '') };
+      (pm ? card('The prediction-market desk', `<ul class="rows">${line({ k: 'pm', href: '#arbs', ok: pm[1] === 'good' ? 'ok' : pm[1], name: pm[0], detail: 'Its own loop, trading the games, arbs and maker in paper beside the books' })}</ul>`) : '') };
   }
   // A sheet's id is its kind and, after the first colon, what it is of: "game:5348755:0|KXNCAAFGAME-...-KU" is a
   // game pair's id, colons and all.
@@ -916,16 +941,17 @@
     const want = Number.isFinite(r.want) ? r.want : r.target;
     const bits = [`<span>${r.qty > 0 ? `${qtyTxt(r.qty, b.key, r.sym)} held` : 'not held yet'}</span>`];
     if (Number.isFinite(r.vol)) bits.push(`<span title="${SWINGS}">swings ${pct(r.vol)}</span>`);
-    if (Number.isFinite(want)) bits.push(`<span title="${TARGET}">target ${pct(want)}</span>`);
+    if (Number.isFinite(want)) bits.push(`<span title="${TARGET}">wants ${pct(want)}</span>`);
     const worth = r.qty > 0 ? `<td class="v">${money(r.value || 0, 0)}</td><td>${Number.isFinite(r.pnl) ? figure(r.pnl) : '—'}</td>` : '<td class="v"></td><td></td>';
     return `<tr data-k="${esc(r.sym)}"><th><span class="tk">${esc(r.name)}</span><span class="mk">${b.key === 'crypto' ? coinPx(last) : px(last)}${chg == null ? '' : ` ${change(chg)}`}</span>` +
       `<small>${bits.join(' · ')}</small></th>${worth}</tr>`;
   }
   function nextLine(b) {
-    if (b.key === 'crypto') return `Checks again after midnight UTC: <b>${esc(ET_HM.format(new Date(Math.floor(S.now / 864e5 + 1) * 864e5)))} ET</b>`;
+    // with its day once that is not today: in the evening, after the check, a bare "7:00 PM ET" read as already past
+    if (b.key === 'crypto') return `Checks again: <b>${esc(whenTxt(Math.floor(S.now / 864e5 + 1) * 864e5))} ET</b>`;
     const checked = b.rows.some((r) => r.checkDay === today());
     return S.market && S.market.open ? (checked ? 'Checked today; checks again after the next open' : 'Checks once a trading day, after the open')
-      : `Checks at the next open: <b>${esc(String((S.market && S.market.says) || '').replace(/^opens /, ''))}</b>`;
+      : `Checks after the open: <b>${esc(String((S.market && S.market.says) || '').replace(/^opens /, '').replace(/ /g, '\u00A0'))}</b>`;   // the time in one piece: it split as "tomorrow 9:30" and "AM ET"
   }
   // A book that has never traded is its figure, its markets and its next check: no line that has never moved.
   function bookCard(b) {
@@ -942,7 +968,7 @@
       `<p class="now">${nextLine(b)}</p>` +
       `<div class="bksub">worth ${money(b.equity)} of ${money(b.initial, 0)}${b.fees ? ` · fees ${money(b.fees)}` : ''}${b.realized && !isZero(b.realized) ? ` · banked ${signed(b.realized)}` : ''}</div>` +
       (traded ? sparkSvg(b.key) : '') + body +
-      `<details class="rule"><summary>How this book trades</summary><p>${esc(b.rule)}</p></details></article>`;
+      `<details class="rule"><summary>How this book trades</summary><p>${esc(ymdIn(b.rule))}</p></details></article>`;
   }
 
   // ------------------------------------------------------------ Arbs & maker: the arbs, the maker, the snipe
@@ -951,8 +977,13 @@
   // those markets quote it. Its game bets are the Games view; the rest of its books are here.
   const ET_DAY_Y = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', year: 'numeric' });
   const yearOf = (t) => ET_YMD.format(new Date(t)).slice(-4);
-  // a no-break space keeps "Oct 3" on one line; a date in another year says the year
-  const settleDay = (t) => (yearOf(t) === yearOf(nowT()) ? ET_DAY : ET_DAY_Y).format(new Date(t)).replace(' ', ' ');
+  // a no-break space keeps "Oct 3" on one line (written as an escape since 2026-11-19: the character itself had
+  // become a plain space, and the replace did nothing); a date in another year says the year
+  const settleDay = (t) => (yearOf(t) === yearOf(nowT()) ? ET_DAY : ET_DAY_Y).format(new Date(t)).replace(' ', '\u00A0');
+  // A day the code writes as 2026-10-17, shown as a day: "Oct 17", with its year once that is not this one. The lab's
+  // verdicts and the books' rules carry their days that way, so a sentence is passed through whole (2026-11-19).
+  const ymd = (k) => settleDay(Date.parse(`${k}T12:00:00Z`));
+  const ymdIn = (s) => String(s).replace(/\b\d{4}-\d\d-\d\d\b/g, ymd);
   // Its loop's own heartbeat, like the desk's (stalled): two minutes, or twelve of its rounds
   function pmState(L) {
     const stuck = L.beat && L.now - L.beat.taker > Math.max(120000, 12 * ((L.every && L.every.taker) || 15) * 1000);
@@ -968,8 +999,8 @@
   }
   const HEAD = (a, b, lead = '') => `<thead><tr><th class="lead">${lead}</th><th>${a}</th><th>${b}</th></tr></thead>`;
   // a taker position the snipe or convergence holds: one leg on one venue
-  const legRow = (r) => `<tr data-k="${esc(r.id)}"><th><span class="nm">${esc(r.label)}</span>` +
-    `<small>${esc(`${r.startsAt ? `${r.startsAt > S.now ? 'starts' : 'started'} ${whenTxt(r.startsAt)} · ` : ''}${cap(r.side)} on ${r.venue} · ${nOf(r.qty, 'contract')} at ${cents(r.entry)}, ${cents(r.mark)} now`)}</small></th>` +
+  const legRow = (r) => `<tr data-k="${esc(r.id)}"><th><span class="nm">${joined(r.label)}</span>` +
+    `<small>${esc(`${r.startsAt ? `${r.startsAt > S.now ? 'starts' : 'started'} ${whenAt(r.startsAt)} · ` : ''}${cap(r.side)} on ${r.venue} · ${nOf(r.qty, 'contract')} at ${cents(r.entry)}, ${cents(r.mark)} now`)}</small></th>` +
     `<td class="v">${money(r.worth)}</td><td>${figure(r.pnl)}</td></tr>`;
   // Today's line and a book's card say the same things: its chip and what it does next (the card has its
   // figure's comparison, its rows and its rule as well)
@@ -980,13 +1011,13 @@
       // more open than the cap allows (opened before it was lowered): "19 of 12 open" read as a sum gone wrong
       const over = b.rows.length > b.max;
       chip = b.on ? (over ? `${b.rows.length} open` : `${b.rows.length} of ${b.max} open`) : b.rows.length ? `${b.rows.length} open · off` : 'switched off';
-      vs = `<span class="vs" title="What the open arbs pay when their markets settle, with what the closed ones banked">at settlement <b class="${tone(b.atSettle)}">${signed(b.atSettle)}</b></span>`;
+      vs = `<span class="vs" title="What the open arbs pay when their markets settle, with what the closed ones banked">at settlement <b class="${tone(b.atSettle)}">${signed(b.atSettle)}</b>${b.closed && !isZero(b.realized) ? ', banked included' : ''}</span>`;
       sub = `paid ${money(b.cost)}, worth ${money(b.worth)} if sold now${b.closed ? ` · banked ${signed(b.realized)} on ${b.closed} closed` : ''}`;
       body = rowsTable(k, HEAD('Paid', 'Locks in'), b.rows, (r) => {
         const broken = r.integrity !== 'valid' && r.integrity !== 'half_settled';
         // a settle date that has passed is not "settles": the market has not paid out on the day it was to
         const when = !r.settlesAt ? 'no settle date on record' : r.settlesAt < S.now ? `was to settle ${settleDay(r.settlesAt)}, still open` : `settles ${settleDay(r.settlesAt)}`;
-        return `<tr data-k="${esc(r.id)}"><th><span class="nm">${esc(r.label)}</span><small>${esc(`${when} · ${nOf(r.qty, 'pair')}${r.integrity === 'half_settled' ? ' · one side settled' : ''}`)}` +
+        return `<tr data-k="${esc(r.id)}"><th><span class="nm">${joined(r.label)}</span><small>${esc(`${when} · ${nOf(r.qty, 'pair')}${r.integrity === 'half_settled' ? ' · one side settled' : ''}`)}` +
           `${broken ? ` · <b class="neg">${esc(String(r.integrity).replace(/_/g, ' '))}</b>` : ''}</small></th><td class="v">${money(r.cost)}</td><td>${r.locked == null ? '—' : figure(r.locked)}</td></tr>`;
       }) || '<p class="bksub">No arb open.</p>';
       const nxt = b.rows.find((r) => r.settlesAt && r.settlesAt > S.now), then = nxt ? `next settles <b>${esc(settleDay(nxt.settlesAt))}</b>` : '';
@@ -995,16 +1026,16 @@
           : b.rows.length >= b.max ? `All ${b.max} slots taken: no new arb until one settles${then ? ` · ${then}` : ''}`
             : `Looks for a new one every ${(L.every && L.every.taker) || 15} seconds${then ? ` · ${then}` : ''}`;
     } else if (b.key === 'maker') {
-      chip = !b.on ? 'quoting off' : b.halted ? 'halted' : `quoting ${b.quoting}`;
+      chip = !b.on ? 'quoting off' : b.halted ? 'halted' : `quoting in ${nOf(b.quoting, 'market')}`;
       vs = `<span class="vs" title="What its closed round trips have made; the rest is on contracts it still holds">banked <b class="${tone(b.realized)}">${signed(b.realized)}</b></span>`;
       sub = `${Number.isFinite(b.equity) ? `worth ${money(b.equity)} of ${money(b.initial, 0)} · ` : ''}${nOf(b.fills, 'fill')} · ${nOf(b.contracts, 'contract')} in ${nOf(b.markets, 'market')}`;
       body = rowsTable(k, HEAD('Worth', 'P&amp;L', 'Moving it most'), b.rows, (r) => `<tr data-k="${esc(r.ticker)}"><th><span class="nm">${esc(r.title || r.ticker)}</span>` +
         `<small>${esc(cap(`${r.sub ? `${r.sub} · ` : ''}${r.inv > 0 ? 'long' : 'short'} ${Math.abs(r.inv).toLocaleString('en-US')} · paid ${money(Math.abs(r.cost))}`))}</small></th><td class="v">${money(r.worth)}</td><td>${figure(r.pnl)}</td></tr>`, 6) +
         (b.markets > b.rows.length ? `<p class="bksub">and ${nOf(b.markets - b.rows.length, 'more market')} held</p>` : '');
-      next = b.halted ? esc(cap(b.halted)) : b.lastFillAt ? `Last fill <b>${esc(whenTxt(b.lastFillAt))}</b> ET` : 'No fill yet';
+      next = b.halted ? esc(cap(b.halted)) : b.lastFillAt ? `Last fill <b>${esc(whenAt(b.lastFillAt))}</b> ET` : 'No fill yet';
     } else if (b.key === 'snipe') {
       chip = !b.on ? 'switched off' : b.bought ? `${nOf(b.bought, 'buy', 'buys')}` : 'never fired';
-      vs = `<span class="vs">${b.watched ? `${nOf(b.watched, 'finished game')} watched in 6 hours` : 'no finished game in 6 hours'}</span>`;
+      vs = `<span class="vs">${b.watched ? `${nOf(b.watched, 'final')} watched in the last 6 hours` : 'no final in the last 6 hours'}</span>`;
       body = b.rows.length ? `<table class="hold-t">${HEAD('Worth', 'P&amp;L')}<tbody>${b.rows.map(legRow).join('')}</tbody></table>`
         : b.seen.length ? `<dl class="bkfacts">${b.seen.map((e) => `<div><dt>${esc(ET_HM.format(new Date(e.t)))}</dt><dd>${esc(e.text)}${e.sub ? `<small>${esc(e.sub)}</small>` : ''}</dd></div>`).join('')}</dl>` : '';
       next = b.on ? 'Watches every game as it finishes' : b.watching ? 'Switched off: still watches finished games, buying nothing' : 'Switched off';
@@ -1022,7 +1053,7 @@
       `<header><i class="sw"></i><h3>${esc(b.name)}</h3><span class="chip">${esc(chip)}</span></header>` +
       `<div class="figline"><span class="fig ${tone(b.pnl)}">${signed(b.pnl)}</span>${vs}</div>` +
       `<p class="now">${next}</p>${sub ? `<div class="bksub">${sub}</div>` : ''}${body}` +
-      `<details class="rule"><summary>How this book trades</summary><p>${esc(b.rule || '')}</p></details></article>`;
+      `<details class="rule"><summary>How this book trades</summary><p>${esc(ymdIn(b.rule || ''))}</p></details></article>`;
   }
   function sideHtml() {
     const L = S.legacy, [state, cls] = pmState(L), books = SIDE.map(pmBook).filter(Boolean);
@@ -1030,7 +1061,7 @@
     // its own loop's light only when it wants a look: beside the bar's light, a second "Working" read as the same one twice
     return `<div class="sidehead" data-anchor="side">${cls === 'good' ? '' : `<span class="pill ${cls}"><i></i>${esc(state)}<span class="mode">Paper</span></span>`}` +
       `<p class="lede">The prediction-market desk's other books, on its own paper beside the games: <b>${figure(side)}</b> together, counting what is open at today's prices` +
-      `${L.halt ? ` · ${esc(L.halt)}` : ''}. <a class="pmold" href="/pm">Every market, on its old page ›</a></p></div>` +
+      `${L.halt ? ` · ${esc(L.halt)}` : ''}. <a class="pmold" href="/pm">Every market, on its old page</a></p></div>` +
       `<div class="pmbooks">${books.map(pmCard).join('')}</div>`;
   }
   function renderArbs() {
@@ -1041,7 +1072,7 @@
     morph($('books'), ['crypto', 'stocks'].map(bookOf).filter(Boolean).map(bookCard).join(''));
     const gone = (S.books || []).filter(isRetired);
     $('retired').hidden = !gone.length;
-    if (gone.length) morph($('retired'), `Retired on 2026-10-17: ${esc(listOf(gone.map((b, i) => (i ? b.name.toLowerCase() : b.name))))}. Together ` +
+    if (gone.length) morph($('retired'), `Retired on ${ymd(RETIRED_ON)}: ${esc(listOf(gone.map((b, i) => (i ? b.name.toLowerCase() : b.name))))}. Together ` +
       `${figure(r2(gone.reduce((a, b) => a + b.pnl, 0)))}, still inside the figure above. Their labs found no edge, and they hold nothing. ` +
       '<button type="button" class="seeall" data-sheet="desk">Each one</button>');
   }
@@ -1150,7 +1181,7 @@
       const amt = r.pnl != null ? `<span class="amt ${tone(r.pnl)}">${signed(r.pnl)}</span>` : '<span class="amt"></span>';
       return `${head}<li class="lv-${r.level}" data-k="${esc(r.key)}"><time${Number.isFinite(r.t) ? ` datetime="${new Date(r.t).toISOString()}"` : ''}>${esc(ET_HM.format(new Date(r.t)))}</time>` +
         `<span class="tag" style="--bk:${r.tag.color}" title="${esc(`Written by ${r.who}${ROLE[r.who] ? `, ${ROLE[r.who]}` : ''}`)}"><i class="sw"></i>${esc(r.tag.name)}</span>` +
-        `<span class="what">${esc(r.text)}${r.sub ? `<small>${esc(r.sub)}</small>` : ''}</span>${amt}</li>`;
+        `<span class="what">${joined(r.text)}${r.sub ? `<small>${esc(r.sub)}</small>` : ''}</span>${amt}</li>`;
     }).join('');
   }
   // The routine rounds ("3/3 coins live", "all clear") come every few minutes and used to push the day's
@@ -1158,7 +1189,7 @@
   // how much (each takes in the one before it, and a warning is always shown), and which part.
   const SHOWS = [['trades', 'Trades', ['trade', 'warn']], ['decisions', 'Trades & signals', ['trade', 'info', 'warn']], ['all', 'Everything', ['trade', 'info', 'warn', 'quiet']]];
   // the three parts, named as Today names them; a line's part is its source and, on the prediction-market desk, its tag
-  const DESKS = [['both', 'All of it'], ['desk', 'Crypto & SPY'], ['games', 'Games'], ['side', 'Arbs & maker']];
+  const DESKS = [['both', 'All parts'], ['desk', 'Crypto & SPY'], ['games', 'Games'], ['side', 'Arbs & maker']];
   const partOf = (r) => (r.src !== 'pm' ? 'desk' : r.tag.name === 'Games' ? 'games' : 'side');
   const feed = { show: 'decisions', desk: 'both' };
   try { const v = JSON.parse(localStorage.getItem('desk-feed') || '{}'); if (SHOWS.some(([k]) => k === v.show)) feed.show = v.show; if (DESKS.some(([k]) => k === v.desk)) feed.desk = v.desk; } catch { /* defaults */ }
@@ -1277,7 +1308,8 @@
       lineWidth: big ? 3 : 2, priceLineVisible: false, lastValueVisible: big, crosshairMarkerRadius: 3,
       priceFormat: { type: 'custom', minMove: 0.01, formatter: (v) => plain(signed(v)) } });
     const hold = c.addSeries(LW.LineSeries, { color: TOK['ink-3'], lineWidth: 1, lineStyle: LW.LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
-    desk.createPriceLine({ price: 0, color: withAlpha(TOK['ink-3'], 0.45), lineWidth: 1, lineStyle: LW.LineStyle.Dashed, axisLabelVisible: false });
+    // zero is a solid line and holding the dashed one, as on each book's small chart: both dashed, they read as one
+    desk.createPriceLine({ price: 0, color: withAlpha(TOK['ink-3'], 0.45), lineWidth: 1, lineStyle: LW.LineStyle.Solid, axisLabelVisible: false });
     // The plot is always the whole range (it cannot be scrolled or zoomed), but when its width changes the
     // library keeps its bar spacing and cuts the end off. The large chart is measured again as it opens and
     // when the axis's font arrives, and four times in six it opened ending 17 minutes early, its last-value
@@ -1365,6 +1397,7 @@
   function openBigChart() {
     opener = document.activeElement;
     bigChart.hidden = false;
+    document.body.classList.add('sheeted');   // the page behind does not scroll, as behind a sheet
     drawChart($('chartbig-pnl'));
     behind();
     bigChart.querySelector('.cbback').focus();
@@ -1372,6 +1405,7 @@
   function closeBigChart() {
     if (bigChart.hidden) return;
     bigChart.hidden = true;
+    document.body.classList.remove('sheeted');
     behind();
     if (opener && document.contains(opener)) opener.focus();
     opener = null;
@@ -1528,6 +1562,9 @@
     banner.hidden = false;
     banner.classList.remove('warn');
     if (banner.textContent !== msg) banner.textContent = msg;
+    // the page's own first words go too: "Connecting to the desk" stood under a light that said No signal
+    morph($('tdhero'), `<p class="tddate">${esc(ET_LONG.format(new Date()))}</p><span class="tdlab">No signal from the desk</span>`);
+    morph($('ghero'), '<p class="ovp">No signal from the desk</p>');
   };
   setInterval(() => { if (quiet() && !retry && !paused) connect(); if (!S) { noFirstFrame(); return; } renderClock(); if (!!stale() !== shownGone) render(); }, 1000);
   route();
