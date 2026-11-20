@@ -6,7 +6,7 @@ checkout — if you find a reference to `~/claude/hexagon` anywhere, it is stale
 
 **The Hexagon** is a paper trading desk for **stocks, crypto and options**, its main scope since
 2026-09-25: bots run paper books on free public prices -- crypto (BTC, ETH, SOL and, since 2026-09-30,
-XRP and DOGE, live from Coinbase) and stocks (SPY, Cboe about 15 minutes late), the two that trade -- and stream
+XRP and DOGE, live from Coinbase) and stocks (SPY, from Yahoo's chart feed, read every five minutes in the session; Cboe until 2026-11-19), the two that trade -- and stream
 them to a live trading floor at `/`. The code is `src/desk/`; README's first section explains it. Four more
 books (options, scalps, dips, runners) were switched off 2026-10-08 after their labs and RETIRED 2026-10-17:
 their ledgers stay, their code is gone from the engine, their rules stay in src/desk/books.js for the labs
@@ -126,9 +126,10 @@ src/desk/books.js   the rules, pure: volatility targeting (crypto 40%/30 days, S
                   RUNNER (2026-09-30, Evan's QNT; OFF since 2026-10-08, tools/runner-lab.js: it lost over four years): every 3 min, a coin Robinhood sells (RUNNER_COINS, a dated list)
                   up 8%+ in 24h, $2M+ traded, within 3% of its high and still climbing; 4 at once, a quarter each;
                   out 10% off its best or 48h not above cost; a coin sold waits 12h
-src/desk/feeds.js   Coinbase (live) and Cboe (15 min late) parsers + fetches; the engine reads only Coinbase's tickers,
-                  books and daily candles and Cboe's SPY quote and daily bars since 2026-10-17 (the minute bars, VWAP,
-                  ATR14 and the option chain stay here for tools/spy-lab.js)
+src/desk/feeds.js   Coinbase (live) and Yahoo's chart feed (SPY) parsers + fetches; the engine reads only Coinbase's tickers,
+                  books and daily candles and Yahoo's SPY quote and daily bars since 2026-11-20 (Cboe's until 2026-11-19,
+                  when Cboe blocked its feed; Cboe's minute bars, VWAP, ATR14 and the option chain stay here for
+                  tools/spy-lab.js)
 tools/odds-tape.js  the odds tape (2026-10-17, The Odds API free tier, Evan's account; ODDS_API_KEY a Fly secret, never logged):
                   Pinnacle + US books' NFL moneylines beside Kalshi's books in the 2h before each kickoff, every 10 min on the
                   box (src/oddssched.js, ODDS_TAPE=1) → /data/odds, pulled to data/fly/archive/odds/; --grade: does Kalshi

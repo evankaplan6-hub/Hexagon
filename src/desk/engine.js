@@ -22,7 +22,7 @@
 // the three option books and the runner book against their own cash.
 //
 // THE BOTS, one job each, in the order a round runs them:
-//   HOLT  market data     prices from Coinbase (live) and Cboe (15 minutes behind)
+//   HOLT  market data     prices from Coinbase (live) and Yahoo (SPY, asked every five minutes; Cboe until 2026-11-19)
 //   ILSA  volatility      how hard each market has been swinging, and SPY's trend today
 //   TESS  risk            stale data, the daily loss limit, the calendar
 //   RIGO  settlement      marks every position; takes the option books' exits
@@ -44,6 +44,8 @@ const r6 = (x) => Math.round(x * 1e6) / 1e6;
 const utcDay = (t) => new Date(t).toISOString().slice(0, 10);
 const iso = (t) => (Number.isFinite(t) ? new Date(t).toISOString() : null);
 const MIN = 60000, HOUR = 3600000;
+// how often SPY's quote is asked for while its session is on: a free feed, and a rule that trades once a day
+const SPY_EVERY = 5 * MIN;
 const WATCHDOG_EVERY_MS = 15000;
 
 const AGENTS = [
@@ -320,7 +322,8 @@ class Desk {
 
   // ---------------------------------------------------------------- valuation
   coinBid(id) { const c = this.mkt.coins[id]; return c && c.tick ? c.tick.bid : null; }
-  // SPY is marked at its bid while the market is open, what a sale would get. Outside the session Cboe's bid is an
+  // SPY is marked at its bid while the market is open, what a sale would get, and at its last trade when the quote
+  // has no bid (Yahoo's has none: since 2026-11-20 that is always). Outside the session Cboe's bid was an
   // after-hours one, wide and thin: on the evening of 2026-10-16 it was $761.20 under a $763.25 last trade, and
   // the stocks book read $26.71 below the price on its own row (2026-10-16 audit). Closed, it is marked at the
   // last trade. Holding is marked the same way, so the comparison with it does not move.
@@ -455,10 +458,10 @@ class Desk {
   }
 
   // ---------------------------------------------------------------- HOLT: market data
-  // Crypto every round (three small calls). SPY's quote every 30 seconds while the session is on the tape --
-  // the tape runs 15 minutes late, so that is until 4:25 -- and every ten minutes otherwise. Daily bars hourly
-  // for crypto, every few hours for SPY. SPY's minute bars and the option chain were read for the option books
-  // and went with them on 2026-10-17: two fewer downloads from Cboe's delayed feed, whose terms forbid them.
+  // Crypto every round (three small calls). SPY's quote every five minutes while the session is on (SPY_EVERY, and
+  // until 4:25, so the close is read) and every ten minutes otherwise; its daily bars every few hours, from the same
+  // answer. Since 2026-11-20 both come from Yahoo's chart feed: Cboe's delayed feed, read every 30 seconds until
+  // then, answered 403 to every client from 2026-11-19. Daily bars hourly for crypto.
   async holt() {
     const t = this.now(), e = clock.et(t);
     const s = clock.session(e.day);
@@ -478,18 +481,18 @@ class Desk {
       }
     }
     const S = this.mkt.spy;
-    // Cboe's files are a courtesy of a free delayed feed whose terms forbid automated download and which blocks by address: a failed
-    // fetch was retried every round (10 seconds, three feeds), which is how a block gets worse. Each feed now waits twice as long
-    // after each failure in a row (10 s, 20 s, 40 s ... at most two minutes) and starts over after one that works.
-    const waiting = (key) => { const f = S.fail && S.fail[key]; return !!f && t - f.at < Math.min(2 * MIN, 10000 * 2 ** (f.n - 1)); };
-    const cboe = (key, what, run, take) => {
+    // A free feed is a courtesy, and a failed fetch retried every round (10 seconds) is how a refusal (Yahoo's 429,
+    // Cboe's block) gets worse. Each feed waits twice as long after each failure in a row (10 s, 20 s, 40 s ... at
+    // most ten minutes; two until 2026-11-20) and starts over after one that works.
+    const waiting = (key) => { const f = S.fail && S.fail[key]; return !!f && t - f.at < Math.min(10 * MIN, 10000 * 2 ** (f.n - 1)); };
+    const spyFeed = (key, what, run, take) => {
       jobs.push(run().then((x) => { if (take(x) && S.fail) delete S.fail[key]; }).catch((err) => {
         S.fail = S.fail || {}; S.fail[key] = { at: t, n: ((S.fail[key] && S.fail[key].n) || 0) + 1 };
         fail(what)(err);
       }));
     };
-    if (t - S.quoteAt > (onTape ? 30000 : 10 * MIN) && !waiting('quote')) cboe('quote', 'SPY quote', () => this.feeds.quote(this.D.stockSym), (x) => { if (!x) return false; S.quote = x; S.quoteAt = t; return true; });
-    if ((!S.daily || t - S.dailyAt > 3 * HOUR || clock.et(S.dailyAt).day !== e.day) && !waiting('daily')) cboe('daily', 'SPY daily bars', () => this.feeds.daily(this.D.stockSym), (x) => { if (!(x && x.length)) return false; S.daily = x; S.dailyAt = t; return true; });
+    if (t - S.quoteAt >= (onTape ? SPY_EVERY : 10 * MIN) && !waiting('quote')) spyFeed('quote', 'SPY quote', () => this.feeds.quote(this.D.stockSym, t), (x) => { if (!x) return false; S.quote = x; S.quoteAt = t; return true; });
+    if ((!S.daily || t - S.dailyAt > 3 * HOUR || clock.et(S.dailyAt).day !== e.day) && !waiting('daily')) spyFeed('daily', 'SPY daily bars', () => this.feeds.daily(this.D.stockSym, t), (x) => { if (!(x && x.length)) return false; S.daily = x; S.dailyAt = t; return true; });
     await Promise.all(jobs);
     for (const [why, whats] of failed) {
       const names = whats.length < 2 ? whats[0] : `${whats.slice(0, -1).join(', ')} and ${whats[whats.length - 1]}`;
@@ -542,8 +545,10 @@ class Desk {
     this.stale.crypto = coins.some((c) => !c.tick || t - c.tickAt > 60000);
     const s = clock.session(e.day), q = this.mkt.spy.quote;
     const inSession = !!s && e.min >= s.open + 20 && e.min < s.close;
-    // the feed runs ~15 minutes late; in the session a quote more than 25 minutes old is a feed that stopped
-    this.stale.stocks = !q || !q.at || (inSession && (t - q.at > 25 * MIN || t - this.mkt.spy.quoteAt > 5 * MIN));
+    // In the session a price more than 25 minutes old, or no answer in three of the feed's own turns, is a feed that
+    // stopped (the answer's limit was a flat 5 minutes while Cboe was asked every 30 seconds). Out of the session a
+    // quote is not stale once there is one: its price is the close, and says so by its time.
+    this.stale.stocks = !q || !q.at || (inSession && (t - q.at > 25 * MIN || t - this.mkt.spy.quoteAt > 3 * SPY_EVERY));
     // the day's loss limit, on the whole desk, from the first mark of the Eastern day
     // and only on a desk with a price for every slot: one marked at cost would start the day, or cross the
     // limit, on a figure that is not the market's (priced)
@@ -604,13 +609,15 @@ class Desk {
       if (await this.rebalance('crypto', id, sl, c.w, c.vol, c.tick) === 'held') sl.checkDay = was;
     }
   }
-  // Once a trading day, from the first quote at or after 9:35 on the delayed tape.
+  // Once a trading day, from the first quote stamped at or after 9:35, and only while the market is open.
   async stockBook() {
     const t = this.now(), today = clock.et(t).day, S = this.mkt.spy, q = S.quote;
     if (!clock.isTradingDay(today) || this.stale.stocks || !q || !q.at) return;
-    // Only while the tape is running: a quote from inside today's session and no older than the
-    // feed's own delay. After the close the last quote is the 3:59 price, and buying at it at 4:30
-    // would be a fill no broker gives.
+    // Only while the market is open, by the clock as well as by the quote: a quote from inside today's session, no
+    // older than 25 minutes. After the close the last quote is the 3:59 price, and buying at it at 4:10 would be a
+    // fill no broker gives. Cboe's stamp ran 15 minutes behind the clock, so its stamp alone kept this to the session's
+    // tape; Yahoo's is the trade's own time, and at 4:10 a 3:59:59 stamp passed every test here (review, 2026-11-20).
+    if (!clock.isOpen(t)) return;
     const qe = clock.et(q.at), s = clock.session(today);
     if (qe.day !== today || qe.min < clock.OPEN_MIN + 5 || qe.min >= s.close || t - q.at > 25 * MIN) return;
     for (const [sym, sl] of Object.entries(this.state.books.stocks.sleeves)) {
