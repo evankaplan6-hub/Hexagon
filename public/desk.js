@@ -278,7 +278,7 @@
       if (u.over && begun) { skipped.push(u); continue; }
       next.push({ k: u.id, stage: begun ? 'late' : u.over ? 'skip' : 'next', league: u.league, start: u.startsAt, pick: u.pick || u.a, foe, px: u.px,
         status: !g.on ? 'Not bet: the game bets are switched off' : begun ? 'Under way, too late to bet'
-          : u.over ? `The favourite is ${wholeCents(u.px)}` : opens <= now ? 'Bets this round' : `Bets at ${ET_HM.format(new Date(opens))}` });
+          : u.over ? `Favourite over ${Math.round((g.maxPx || 0.9) * 100)}¢` : opens <= now ? 'Bets this round' : `Bets at ${ET_HM.format(new Date(opens))}` });
     }
     const fin = g.finals.map((f) => ({ k: f.id, stage: f.pnl > 0 ? 'won' : 'lost', league: f.league, start: f.at, day: playedDay(f.at), pick: f.pick, foe: f.foe, px: f.entry,
       status: f.pnl > 0 ? `Won${f.foe ? `: ${f.pick} beat ${f.foe}` : ''}` : `Lost${f.foe ? `: ${f.foe} won` : ''}`, fig: f.pnl }));
@@ -289,16 +289,19 @@
   // today" over a Games view with three under way, and its "Next: 1 game" stood beside Games' two (one left alone).
   const inPlay = (B, mine = () => true) => [...B.open.filter((t) => t.stage === 'live' && mine(t)).sort(byStart), ...B.next.filter((t) => t.stage === 'late' && mine(t)), ...B.open.filter((t) => t.stage === 'wait' && mine(t))];
   const toCome = (B, mine = () => true) => [...B.open.filter((t) => t.stage === 'bet'), ...B.next.filter((t) => t.stage !== 'late')].filter(mine).sort(byStart);
-  // `grouped`: under a heading that already gives the start (Up next on Games), a tile does not say it again
+  // `grouped`: under a heading that already gives the start (Up next on Games), a tile does not say it again, and a
+  // game left alone has room for its pill. On its own (Today's card) the start and the pill together wrapped the tile's
+  // header onto two lines at 375 wide, so there the foot says "Left alone" instead.
   function tileHtml(t, grouped) {
     const fin = t.stage === 'won' || t.stage === 'lost';
     const when = grouped && (t.stage === 'next' || t.stage === 'bet' || t.stage === 'skip') ? '' : t.stage === 'live' ? '<span class="gtlive">Live</span>' : t.stage === 'wait' ? 'Waiting on the result' : t.stage === 'late' ? 'Under way' : fin ? esc(ET_HM.format(new Date(t.start))) : t.start ? esc(whenTxt(t.start)) : '';
-    const badge = t.stage === 'won' ? '<span class="gtb pos">Won</span>' : t.stage === 'lost' ? '<span class="gtb neg">Lost</span>' : t.stage === 'skip' ? '<span class="gtb">Left alone</span>' : '';
+    const badge = t.stage === 'won' ? '<span class="gtb pos">Won</span>' : t.stage === 'lost' ? '<span class="gtb neg">Lost</span>' : t.stage === 'skip' && grouped ? '<span class="gtb">Left alone</span>' : '';
+    const status = t.stage === 'skip' && !grouped && /^Favourite /.test(t.status) ? `Left alone: f${t.status.slice(1)}` : t.status;
     return `<li data-k="${esc(t.k)}"><button type="button" class="gt st-${t.stage}" data-sheet="game:${esc(t.k)}">` +
       `<span class="gth"><span class="gtl">${esc(leagueName(t.league))}</span><span class="gtw">${when}</span>${badge}</span>` +
       `<span class="gtr gtpick"><i class="gtd" aria-hidden="true"></i><span class="gtn">${esc(t.pick)}<span class="sr">, the pick</span></span><span class="gtp">${t.px != null ? wholeCents(t.px) : ''}</span></span>` +
       `<span class="gtr"><span class="gtn">${esc(t.foe)}</span></span>` +
-      `<span class="gts">${t.px != null ? `<span class="gtsp">${wholeCents(t.px)} · </span>` : ''}${esc(t.status)}${t.fig != null ? ` <b class="${tone(t.fig)}">${signed(t.fig)}</b>` : ''}</span></button></li>`;
+      `<span class="gts">${t.px != null ? `<span class="gtsp">${wholeCents(t.px)} · </span>` : ''}${esc(status)}${t.fig != null ? ` <b class="${tone(t.fig)}">${signed(t.fig)}</b>` : ''}</span></button></li>`;
   }
   // a tile's price to the whole cent: a mid between two quotes read "96.9¢"
   const wholeCents = (p) => (!Number.isFinite(p) ? '' : p >= 0.995 ? '$1' : `${Math.max(1, Math.round(p * 100))}¢`);
@@ -322,22 +325,21 @@
   }
   // Today's card: the day's record, the next few games, and when the next ones are bet
   const TD_TILES = 6;
+  // Today's games, from the board. The finals are the games played today, and until 4 AM "today" is still the evening
+  // before (playedDay). The games to come are the calendar day's: the board runs thirty hours on, and "8 games to come"
+  // counted tomorrow's two (audit 2026-10-20); and they were filtered by the played day until 2026-11-20, so from
+  // midnight to 4 AM, with that evening's games on the board, the card said "No game today".
+  const tdLists = (B, now) => { const coming = toCome(B); return { live: inPlay(B), coming, soon: coming.filter((t) => dayKey(t.start) === dayKey(now)), finals: B.fin.filter((t) => t.day === playedDay(now)) }; };
+  const tdHead = (R, live, soon) => (R.bets
+    ? `<div class="verdict"><span class="rec">${R.won}–${R.bets - R.won}</span> <span class="vfig ${tone(R.pnl)}">${signed(R.pnl)}</span></div>` +
+      `<p class="ovp">Won ${R.won} of today's ${nOf(R.bets, 'final')}; the prices said ${R.expected.toFixed(1)}.${live.length ? ` ${nOf(live.length, 'game')} in progress.` : ''}</p>`
+    : `<div class="verdict zero">${live.length ? `${nOf(live.length, 'game')} in progress` : soon.length ? `${nOf(soon.length, 'game')} to come` : 'No game today'}</div>` +
+      (live.length || soon.length ? `<p class="ovp">No game has finished today yet.${live.length && soon.length ? ` ${soon.length} more to come.` : ''}</p>` : ''));
   function tdGamesHtml() {
     const B = board();
     if (!B) return '<p class="ovp">The game bets run on the prediction-market desk, and this frame does not carry it.</p>';
-    // today's finals are the games played today, and until 4 AM "today" is still the evening before (playedDay)
-    const R = B.g.record.today, td = playedDay(S.now);
-    const live = inPlay(B);
-    // still to come TODAY: the board runs thirty hours on, and "8 games to come" counted tomorrow's two (audit 2026-10-20);
-    // the foot's "Next" still names the next group, today's or not
-    const coming = toCome(B);
-    const soon = coming.filter((t) => dayKey(t.start) === td);
-    const finals = B.fin.filter((t) => t.day === td);
-    const head = R.bets
-      ? `<div class="verdict"><span class="rec">${R.won}–${R.bets - R.won}</span> <span class="vfig ${tone(R.pnl)}">${signed(R.pnl)}</span></div>` +
-        `<p class="ovp">Won ${R.won} of today's ${nOf(R.bets, 'final')}; the prices said ${R.expected.toFixed(1)}.${live.length ? ` ${nOf(live.length, 'game')} in progress.` : ''}</p>`
-      : `<div class="verdict zero">${live.length ? `${nOf(live.length, 'game')} in progress` : soon.length ? `${nOf(soon.length, 'game')} to come` : 'No game today'}</div>` +
-        (live.length || soon.length ? `<p class="ovp">No game has finished today yet.${live.length && soon.length ? ` ${soon.length} more to come.` : ''}</p>` : '');
+    // the foot's "Next" names the next group, today's or not
+    const { live, coming, soon, finals } = tdLists(B, S.now), head = tdHead(B.g.record.today, live, soon);
     // six tiles at most, and the rest said: "7 games to come" stood over six tiles with nothing for the seventh (2026-11-19)
     const all = [...live, ...soon, ...finals], show = all.slice(0, TD_TILES), more = all.length - show.length;
     const grp = startGroups(coming).find(([st]) => st > S.now);
@@ -949,7 +951,7 @@
     if (b.key === 'crypto') return `Checks again: <b>${esc(whenTxt(Math.floor(S.now / 864e5 + 1) * 864e5))} ET</b>`;
     const checked = b.rows.some((r) => r.checkDay === today());
     return S.market && S.market.open ? (checked ? 'Checked today; checks again after the next open' : 'Checks once a trading day, after the open')
-      : `Checks a few minutes after the next open: <b>${esc(String((S.market && S.market.says) || '').replace(/^opens /, ''))}</b>`;
+      : `Checks after the open: <b>${esc(String((S.market && S.market.says) || '').replace(/^opens /, '').replace(/ /g, '\u00A0'))}</b>`;   // the time in one piece: it split as "tomorrow 9:30" and "AM ET"
   }
   // A book that has never traded is its figure, its markets and its next check: no line that has never moved.
   function bookCard(b) {
@@ -1033,7 +1035,7 @@
       next = b.halted ? esc(cap(b.halted)) : b.lastFillAt ? `Last fill <b>${esc(whenAt(b.lastFillAt))}</b> ET` : 'No fill yet';
     } else if (b.key === 'snipe') {
       chip = !b.on ? 'switched off' : b.bought ? `${nOf(b.bought, 'buy', 'buys')}` : 'never fired';
-      vs = `<span class="vs">${b.watched ? `${nOf(b.watched, 'finished game')} watched in the last 6 hours` : 'no finished game in the last 6 hours'}</span>`;
+      vs = `<span class="vs">${b.watched ? `${nOf(b.watched, 'final')} watched in the last 6 hours` : 'no final in the last 6 hours'}</span>`;
       body = b.rows.length ? `<table class="hold-t">${HEAD('Worth', 'P&amp;L')}<tbody>${b.rows.map(legRow).join('')}</tbody></table>`
         : b.seen.length ? `<dl class="bkfacts">${b.seen.map((e) => `<div><dt>${esc(ET_HM.format(new Date(e.t)))}</dt><dd>${esc(e.text)}${e.sub ? `<small>${esc(e.sub)}</small>` : ''}</dd></div>`).join('')}</dl>` : '';
       next = b.on ? 'Watches every game as it finishes' : b.watching ? 'Switched off: still watches finished games, buying nothing' : 'Switched off';

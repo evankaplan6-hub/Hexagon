@@ -25,7 +25,8 @@ const unellipsis = (s) => String(s || '').replace(/\s*-?\s*(?:\.{3}|…)/g, '…
 // so here the day is written as a day. A no-break space holds it together: at 375 wide it split as "11-" and "27".
 const NBSP = '\u00A0';
 const MD = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' });
-const plainDay = (s) => String(s || '').replace(/\bwin (\d\d)-(\d\d)(?!\d)/g, (m, mo, d) => {
+// Only where the name ends (or its ":" or " · " follows): "Will the Jets win 10-12 games" is a count, not a day.
+const plainDay = (s) => String(s || '').replace(/\bwin (\d\d)-(\d\d)(?=$|:| ·)/g, (m, mo, d) => {
   const t = new Date(Date.UTC(2024, +mo - 1, +d));   // 2024 has a Feb 29
   return t.getUTCMonth() === +mo - 1 && t.getUTCDate() === +d ? `win ${MD.format(t).replace(' ', NBSP)}` : m;
 });

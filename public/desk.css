@@ -578,13 +578,17 @@ footer { max-width: 96ch; font-size: var(--type-label); line-height: 1.5; letter
     @keyframes sheetup { from { transform: translateY(100%); } }
   }
 }
-/* under 400 wide a record in the hundreds ("268–144") does not fit half the card at 36px: the figure's own size */
-@media (max-width: 399px) {
+/* under 420 wide a record in the hundreds ("268–144") does not fit half the card at 36px (it ran 8px past it at 402,
+   an iPhone 17 Pro): the figure's own size */
+@media (max-width: 419px) {
   .ghr { font-size: var(--type-figure); }
 }
 /* the narrowest phones (320 wide): one tile to a row */
 @media (max-width: 359px) {
   .tiles { grid-template-columns: minmax(0, 1fr); }
+  /* the record's blocks one under another: two side by side have no room for "268–144" at any size on the scale */
+  .ghs { grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }
+  .ghb:nth-child(2) { padding-left: 0; border-left: 0; }
   .lg-t th, .lg-t td { padding-left: 6px; }
   .lg-t td small { display: none; }
   .hold-t td { padding-left: var(--space-2); }

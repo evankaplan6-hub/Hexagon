@@ -284,6 +284,21 @@ group('a soccer market\'s day (2026-11-19): "win 11-21" read as a score, so the 
   ok('its fills say the day', F.fills.filter((f) => f.label === want).length === 2 && !F.fills.some((f) => f.label === raw), F.fills.map((f) => f.label));
   ok('a log line about it says the day', F.log.some((e) => e.text === `Passed on ${want}`) && !JSON.stringify(F.log).includes('win 11-27'), F.log.map((e) => e.text));
   ok('the ledger keeps the label as the journals have it', E.state.positions.filter((p) => p.label === raw).length === 2);
+  // a count is not a day (review of 2026-11-20): only where the name ends, or its ":" or " · " follows
+  ok('"win 10-12 games" is a count and stays', shown('Will the Jets win 10-12 games') === 'Will the Jets win 10-12 games' && shown('Jets win 10-12 games · Yes') === 'Jets win 10-12 games · Yes', shown('Will the Jets win 10-12 games'));
+  ok('the day before a colon or the name\'s dot is still a day', shown('EPL Arsenal win 11-21: closed') === `EPL Arsenal win Nov${N}21: closed` && shown('EPL Arsenal win 11-21 · Arsenal') === `EPL Arsenal win Nov${N}21 · Arsenal`, shown('EPL Arsenal win 11-21 · Arsenal'));
+  // every other place the name is drawn: a snipe's position, a final's tile, and a log line's second line
+  {
+    const { E: E2, cfg: cfg2 } = engine(); boxLike(E2);
+    E2.state.positions.push(leg({ id: 'sn1', group: 'gsn', pairId: 'psn', label: raw, venue: 'KS', side: 'yes', qty: 40, entry: 0.97, mark: 0.98, cost: 38.9, strategy: 'snipe' }));
+    E2.state.closed.push({ ...leg({ id: 'bf1', group: 'gbf', pairId: 'pbf', label: raw, venue: 'KS', side: 'yes', qty: 150, entry: 0.6, cost: 90, strategy: 'bet' }), exit: 1, exitAt: T - 3600e3, pnl: 60, reason: 'resolved YES' });
+    E2.state.log.unshift({ t: T, agent: 'KETT', kind: 'PASS', text: `NBA Bucks v Heat · Bucks: its slot went to ${raw}` });
+    const F2 = pmFloor(E2, cfg2, T);
+    ok('a snipe\'s position says the day', F2.books.find((b) => b.key === 'snipe').rows.some((r) => r.label === want), F2.books.find((b) => b.key === 'snipe').rows.map((r) => r.label));
+    ok('a final\'s tile says the day', F2.games.finals.some((f) => f.pick === want), F2.games.finals.map((f) => f.pick));
+    ok('a log line\'s second line says the day', F2.log.some((e) => e.sub === `its slot went to ${want}`), F2.log.map((e) => e.sub));
+    ok('...and nothing in the frame keeps it raw', !JSON.stringify(F2).includes('win 11-27'));
+  }
 }
 
 group('the game board (2026-10-17): the games still to bet, the finals, and the record against the prices');
