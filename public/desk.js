@@ -561,8 +561,8 @@
     const sha = S.build && S.build.sha ? String(S.build.sha).slice(0, 7) : 'dev';
     return [
       { k: 'crypto', ok: M.cryptoOk ? 'ok' : 'warn', name: M.cryptoOk ? `Crypto prices live${at ? `, ${ago(at)}` : ''}` : 'Crypto prices stale', detail: `${coins.length} coins from Coinbase` },
-      { k: 'spy', ok: M.spyOk ? 'ok' : 'warn', name: !M.spyOk ? 'SPY prices stale' : M.open ? 'SPY prices up to 5 minutes old, as always' : 'SPY prices fine; the market is closed',
-        detail: `From Yahoo's chart feed, read every 5 minutes · the stock market ${M.says ? `${M.open ? 'is ' : ''}${M.says}` : M.open ? 'is open' : 'is closed'}` },
+      { k: 'spy', ok: M.spyOk ? 'ok' : 'warn', name: !M.spyOk ? 'SPY prices stale' : M.open ? M.spyAge : 'SPY prices fine; the market is closed',
+        detail: `From Yahoo's chart feed, read every 5 minutes in the session and every 10 out of it · the stock market ${M.says ? `${M.open ? 'is ' : ''}${M.says}` : M.open ? 'is open' : 'is closed'}` },
       { k: 'loop', ok: stale() || stalled() ? 'bad' : 'ok', name: stale() ? 'No signal from the desk' : stalled() ? `No round since ${ET_HM.format(new Date(S.beat))} ET` : S.beat ? `Last round ${ago(S.beat)}` : 'Waiting for the first round',
         detail: `Running since ${ET_DAY.format(new Date(S.startedAt))}, ${ET_HM.format(new Date(S.startedAt))} · build ${sha}` },
       { k: 'buying', ok: S.halt ? 'warn' : 'ok', name: S.halt ? `Not buying: ${S.halt}` : `Loss limit: ${down ? `down ${(down * 100).toFixed(2)}% today` : 'nothing lost today'}${C.maxDailyDdPct ? `; buying stops at ${(C.maxDailyDdPct * 100).toFixed(0)}%` : ''}`,
@@ -892,6 +892,9 @@
       `${kpi('Fees paid', money(fees), 'Every book’s fees since the start, the retired books’ too')}${kpi('Invested', `${money(atWork, 0)}<small>${money(cash, 0)} in cash</small>`)}</dl>` +
       (insight ? `<p class="insight">${insight}</p>` : '');
   }
+  // SPY's price while the market is open, by its own time: the chip's words and the Health line's
+  const spyAgeTxt = (at, mins, td) => (!(at > 0) || dayKey(at) !== td || !(mins >= 0) ? ['SPY at the last close', 'SPY price is the last close']
+    : mins < 1 ? ['SPY under a min old', 'SPY price under a minute old'] : [`SPY ${mins} min old`, `SPY price ${mins} minute${mins === 1 ? '' : 's'} old`]);
   // the market and how fresh its prices are
   function marketBits() {
     const mk = S.market || {};
@@ -901,8 +904,11 @@
     // one, and it turns amber only when TESS finds the feed has stopped. Out of hours nothing is late (it
     // said "15 min late" all weekend), and in the first minutes of a session the late tape has no trade
     // from today yet, so the delay is the feed's usual one rather than the hours since yesterday's close.
-    const spy = !spyOk ? 'SPY stale' : !mk.open ? 'SPY closed' : mk.delayMin != null && mk.delayMin <= 30 ? `SPY ${mk.delayMin} min old` : 'SPY up to 5 min old';
-    return { open: !!mk.open, says: mk.says || '', cryptoOk, spyOk, spy };
+    // The age is the measured one, from the price's own time, never a promise (a fixed "5 minutes at most" stood beside a
+    // price 20 minutes old, and at 9:31 beside "priced yesterday at 4:00 PM"): a price from before today's session is
+    // the last close, and says so.
+    const [spy, spyAge] = spyAgeTxt(S.spy && S.spy.at, mk.delayMin, today());
+    return { open: !!mk.open, says: mk.says || '', cryptoOk, spyOk, spy: !spyOk ? 'SPY stale' : !mk.open ? 'SPY closed' : spy, spyAge };
   }
   // A desk starts all cash, level with its capital, and records its first minute just after its first buys,
   // with their fees paid: on the box, 21:35:20 on 25 September, five seconds in, at −$31.99. While a line's

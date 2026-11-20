@@ -251,8 +251,25 @@ ok('the arbs\' opening line stands clear of the first card', /\.sidehead \{[^}]*
 
 // SPY's prices come from Yahoo's chart feed since 2026-11-20, and the page says so wherever it names a source
 ok('the page names Yahoo as SPY\'s source, and nowhere Cboe or a 15-minute delay',
-  /SPY's come from Yahoo, read every five minutes and stamped with their own time/.test(html) && /From Yahoo's chart feed, read every 5 minutes/.test(js)
+  /SPY's come from Yahoo, read every five minutes while the market is open\. Each price carries its own time, and the desk trades at that price\./.test(html) && /From Yahoo's chart feed, read every 5 minutes in the session and every 10 out of it/.test(js)
   && !/Cboe/.test(html) && !/['`][^'`\n]*Cboe/.test(js.split('\n').filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n')) && !/15 min(utes)? late/.test(html + js.split('\n').filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n')));
+// how old SPY's price is, in the session: measured, never promised (review of 2026-11-20)
+{
+  const line = (name) => (js.match(new RegExp(`  const ${name} = [^\\n]*\\n`)) || [''])[0];
+  const src = ['ET_YMD', 'dayKey'].map(line).join('') + (js.match(/  const spyAgeTxt = [\s\S]*?minute\$\{mins === 1 \? '' : 's'\} old`\]\);\n/) || [''])[0];
+  let age = null;
+  try { age = new Function(`${src}; return spyAgeTxt;`)(); } catch { /* reported below */ }
+  ok('spyAgeTxt is found and runs', typeof age === 'function');
+  if (age) {
+    const at = Date.parse('2026-11-20T15:00:00Z'), td = '2026-11-20';
+    ok('a price 7 minutes old says 7', age(at, 7, td).join('|') === 'SPY 7 min old|SPY price 7 minutes old', age(at, 7, td));
+    ok('...and one 20 minutes old says 20, not "up to 5"', age(at, 20, td).join('|') === 'SPY 20 min old|SPY price 20 minutes old', age(at, 20, td));
+    ok('one minute is one minute, and none is under a minute', age(at, 1, td)[1] === 'SPY price 1 minute old' && age(at, 0, td).join('|') === 'SPY under a min old|SPY price under a minute old');
+    ok('at 9:31 a price from yesterday\'s bell is the last close', age(Date.parse('2026-11-19T21:00:00Z'), 990, td).join('|') === 'SPY at the last close|SPY price is the last close');
+    ok('no price time is not an age', age(null, null, td)[0] === 'SPY at the last close');
+  }
+  ok('the Health line and the chip read the measured age, and no fixed promise is left', /M\.open \? M\.spyAge :/.test(js) && /spyAgeTxt\(S\.spy && S\.spy\.at, mk\.delayMin, today\(\)\)/.test(js) && !/up to 5 min/.test(js));
+}
 ok('SPY\'s row says when its price is from', /if \(b\.key === 'stocks' && r\.at > 0\) bits\.push\(`<span>priced \$\{esc\(whenAt\(r\.at\)\)\} ET<\/span>`\);/.test(js));
 
 // ---- Crypto & SPY, Arbs & maker, and the retired books

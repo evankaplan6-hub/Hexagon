@@ -609,13 +609,15 @@ class Desk {
       if (await this.rebalance('crypto', id, sl, c.w, c.vol, c.tick) === 'held') sl.checkDay = was;
     }
   }
-  // Once a trading day, from the first quote at or after 9:35 on the delayed tape.
+  // Once a trading day, from the first quote stamped at or after 9:35, and only while the market is open.
   async stockBook() {
     const t = this.now(), today = clock.et(t).day, S = this.mkt.spy, q = S.quote;
     if (!clock.isTradingDay(today) || this.stale.stocks || !q || !q.at) return;
-    // Only while the tape is running: a quote from inside today's session and no older than the
-    // feed's own delay. After the close the last quote is the 3:59 price, and buying at it at 4:30
-    // would be a fill no broker gives.
+    // Only while the market is open, by the clock as well as by the quote: a quote from inside today's session, no
+    // older than 25 minutes. After the close the last quote is the 3:59 price, and buying at it at 4:10 would be a
+    // fill no broker gives. Cboe's stamp ran 15 minutes behind the clock, so its stamp alone kept this to the session's
+    // tape; Yahoo's is the trade's own time, and at 4:10 a 3:59:59 stamp passed every test here (review, 2026-11-20).
+    if (!clock.isOpen(t)) return;
     const qe = clock.et(q.at), s = clock.session(today);
     if (qe.day !== today || qe.min < clock.OPEN_MIN + 5 || qe.min >= s.close || t - q.at > 25 * MIN) return;
     for (const [sym, sl] of Object.entries(this.state.books.stocks.sleeves)) {

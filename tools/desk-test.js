@@ -679,7 +679,19 @@ async function auditTests() {
     eq('...and is one once the bell has gone, from its own row', F.parseYahooDaily(open, NIGHT).slice(-1).map((b) => [b.day, b.c]), [['2026-11-19', 720.5]]);
     eq('the quote of a session under way: its own time, and yesterday\'s close before it', [F.parseYahooQuote(open, 'SPY').at, F.parseYahooQuote(open, 'SPY').prevClose], [Date.parse('2026-11-19T18:30:00Z'), 730.2]);
     // each way an answer goes wrong
-    eq('pre-market and after-hours prices are not read: the regular price only', F.parseYahooQuote(edit((r) => { r.meta.postMarketPrice = 701.11; r.meta.preMarketPrice = 699.5; r.meta.postMarketTime = 1795130000; }), 'SPY').last, 715.87);
+    const after = edit((r) => { r.meta.postMarketPrice = 701.11; r.meta.preMarketPrice = 699.5; r.meta.postMarketTime = 1795130000; r.meta.preMarketTime = 1795090000; });
+    eq('pre-market and after-hours prices are not read: the regular price, at the regular time', [F.parseYahooQuote(after, 'SPY').last, F.parseYahooQuote(after, 'SPY').at], [715.87, CLOSE]);
+    eq('...and the close that stands in for the day is the regular one', F.parseYahooDaily(after, NIGHT).slice(-1).map((b) => [b.day, b.c]), [['2026-11-19', 715.87]]);
+    // 7: only a price stamped at the bell is the day's close
+    const early = edit((r) => { r.meta.regularMarketTime = Date.parse('2026-11-19T20:58:00Z') / 1000; });
+    eq('a price stamped before the bell (3:58) does not stand in for the day\'s close', F.parseYahooDaily(early, NIGHT).slice(-1)[0].day, '2026-11-18');
+    // 6: with no change in the answer, the close before comes only from the trading day just before
+    const gap = edit((r) => { delete r.meta.regularMarketChangePercent; r.indicators.quote[0].close[38] = null; });
+    eq('no change and no row for the day before: no previous close, not an older day\'s', F.parseYahooQuote(gap, 'SPY').prevClose, null);
+    const monday = edit((r) => { delete r.meta.regularMarketChangePercent; r.meta.regularMarketTime = Date.parse('2026-11-23T15:00:00Z') / 1000; r.indicators.quote[0].close[39] = 715.87; });
+    eq('...and on a Monday a Thursday row is not the day before', F.parseYahooQuote(monday, 'SPY').prevClose, null);
+    const friday = edit((r) => { delete r.meta.regularMarketChangePercent; r.meta.regularMarketTime = Date.parse('2026-11-20T15:00:00Z') / 1000; r.indicators.quote[0].close[39] = 715.87; });
+    eq('...the next morning, with the row in, it is that row', F.parseYahooQuote(friday, 'SPY').prevClose, 715.87);
     eq('no price is no quote', F.parseYahooQuote(edit((r) => { r.meta.regularMarketPrice = null; }), 'SPY'), null);
     eq('a price with no time is no quote: its age could not be told', F.parseYahooQuote(edit((r) => { delete r.meta.regularMarketTime; }), 'SPY'), null);
     eq('another symbol\'s answer is no quote', F.parseYahooQuote(edit((r) => { r.meta.symbol = 'SPYG'; }), 'SPY'), null);
@@ -767,10 +779,14 @@ async function auditTests() {
     const desk = new Desk(deskConfig(dir), { feeds: M.feeds, now: () => T }); desk.quiet = true;
     await desk.step();
     let calls = 0;
-    M.feeds.quote = async () => { calls++; throw new Error('HTTP 429 from query1.finance.yahoo.com'); };
+    const tries = [];
+    M.feeds.quote = async () => { calls++; tries.push(T); throw new Error('HTTP 429 from query1.finance.yahoo.com'); };
     desk.mkt.spy.quoteAt = 0;
-    for (let i = 0; i < 6 * 60; i++) { T += 10000; await desk.step(); }               // an hour of refusals
-    ok('an hour of 429s: about a dozen tries, not 360', calls >= 9 && calls <= 13, calls);
+    for (let i = 0; i < 6 * 120; i++) { T += 10000; await desk.step(); }              // two hours of refusals
+    const gaps = tries.slice(1).map((x, i) => (x - tries[i]) / 1000);
+    ok('two hours of 429s: under twenty tries, not 720', calls >= 15 && calls <= 19, calls);
+    eq('...10 s, 20 s, 40 s apart and on, each wait twice the last', gaps.slice(0, 6), [10, 20, 40, 80, 160, 320]);
+    eq('...and never more than ten minutes apart', [Math.max(...gaps), gaps.filter((g) => g === 600).length >= 8], [600, true]);
     fs.rmSync(dir, { recursive: true, force: true });
   }
   // After a restart with no SPY quote (2026-11-19, the night Cboe's feed went): what the desk does, and what the first
@@ -804,6 +820,41 @@ async function auditTests() {
     ok('...the chart records again', desk.state.history.length > n0, desk.state.history.length);
     ok('...the day starts from that figure, so the stop is armed from there', desk.state.dayKey === clock.et(T).day && Math.abs(desk.state.dayStart - desk.equity()) < 1, [desk.state.dayStart, desk.equity()]);
     ok('...and the flag is down', desk.stale.stocks === false);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  // the once-a-day check never fills after the bell (review of 2026-11-20): Yahoo's stamp is the trade's own time, so
+  // at 4:10 PM a quote stamped 3:59:59 is 10 minutes old, from inside the session, and under 25 minutes
+  {
+    const dir = mkDir();
+    let T = atT('16:10');
+    const M = fakeMarket(() => T); M.setMinutes(12 * 60 + 30);
+    const stamp = atT('15:59') + 59000;
+    M.feeds.quote = async () => ({ ...M.W.quote, bid: null, ask: null, at: stamp });
+    const desk = new Desk(deskConfig(dir), { feeds: M.feeds, now: () => T }); desk.quiet = true;
+    for (let i = 0; i < 6; i++) { await desk.step(); T += 10000; }
+    const spy = desk.state.books.stocks.sleeves.SPY;
+    ok('at 4:10 PM, with no check all day and a 3:59:59 quote, SPY is not bought', spy.qty === 0 && spy.checkDay == null && !desk.state.fills.some((f) => f.book === 'stocks'), [spy.qty, spy.checkDay]);
+    // the same quote a minute before the bell is a session's quote, and the check runs
+    const dir2 = mkDir();
+    T = atT('15:59') + 59500;
+    const desk2 = new Desk(deskConfig(dir2), { feeds: M.feeds, now: () => T }); desk2.quiet = true;
+    await desk2.step();
+    ok('...and at 3:59:59 the same quote is traded on', desk2.state.books.stocks.sleeves.SPY.qty > 0);
+    fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(dir2, { recursive: true, force: true });
+  }
+  // out of the session the quote is asked every ten minutes
+  {
+    const dir = mkDir();
+    let T = atT('18:30');
+    const M = fakeMarket(() => T); M.setMinutes(12 * 60 + 30);
+    let calls = 0;
+    M.feeds.quote = async () => { calls++; return { ...M.W.quote, bid: null, ask: null, at: atT('16:00') }; };
+    const desk = new Desk(deskConfig(dir), { feeds: M.feeds, now: () => T }); desk.quiet = true;
+    await desk.step();
+    calls = 0;
+    for (let i = 0; i < 6 * 30; i++) { T += 10000; await desk.step(); }
+    ok('half an hour out of the session: three asks', calls === 3, calls);
     fs.rmSync(dir, { recursive: true, force: true });
   }
 

@@ -20,7 +20,7 @@
 //
 // The parsers are pure (a response in, rows out) so tools/desk-test.js checks them with no network.
 // Every one returns null or [] for a response it does not understand, never a guess.
-const { etToUtc, et, session } = require('./clock');
+const { etToUtc, et, session, prevTradingDay } = require('./clock');
 const { parseOsi } = require('../venues/cboe');
 
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
@@ -195,8 +195,9 @@ function parseYahooDaily(json, now) {
 // bid or ask: the book is marked, and filled, at the last trade (the engine and the broker already do that when a
 // quote has no touch). The close before the quote's session is the price less its own change
 // (regularMarketChangePercent), as Cboe's was read, because the bars can be a day short (see THE LAST DAY above);
-// from the bars only when the answer has no change. chartPreviousClose is not it: that is the close before the
-// whole range, months back. null for an answer without a price, a time, or the symbol asked for.
+// from the bars only when the answer has no change, and then only from the row of the trading day just before
+// (an older row is some other day's close: none is better). chartPreviousClose is not it: that is the close before
+// the whole range, months back. null for an answer without a price, a time, or the symbol asked for.
 function parseYahooQuote(json, want) {
   const { bars } = parseYahooChart(json);
   const m = json.chart.result[0].meta || {};
@@ -204,7 +205,7 @@ function parseYahooQuote(json, want) {
   if (!(last > 0) || !(at > 0)) return null;
   if (want && String(m.symbol || '').toUpperCase() !== String(want).toUpperCase()) return null;
   const day = et(at * 1000).day, prev = bars.filter((b) => b.d < day).pop(), chg = fin(m.regularMarketChangePercent);
-  const prevClose = chg != null && chg > -100 ? Math.round((last / (1 + chg / 100)) * 100) / 100 : prev ? prev.c : null;
+  const prevClose = chg != null && chg > -100 ? Math.round((last / (1 + chg / 100)) * 100) / 100 : prev && prev.d === prevTradingDay(day) ? prev.c : null;
   return {
     sym: m.symbol || null, bid: null, ask: null, bidSz: null, askSz: null,
     last, open: null, high: fin(m.regularMarketDayHigh), low: fin(m.regularMarketDayLow), volume: fin(m.regularMarketVolume),

@@ -206,12 +206,13 @@ function health(S, now, { journalAt = 0, freeMb = null } = {}) {
   if (!behind.length) lines.push(`crypto checked ${uday} (UTC): ${coins.map(([id, sl]) => `${short(id)} ${Math.round((sl.target || 0) * 100)}%`).join(', ')}`);
   else if (umin >= 30 && !young) problems.push(`crypto: ${behind.join(', ')} not checked today (${uday} UTC): no fresh Coinbase prices, or no daily candle for yesterday`);
   else lines.push(`crypto: today's check is due after midnight UTC (${behind.join(', ')} last checked ${coins.map(([, sl]) => sl.checkDay || 'never')[0]})`);
-  // SPY: checked on a trading day once the late tape has shown the open (about 9:50 ET; flagged from 10:15)
+  // SPY: checked on a trading day at the first quote stamped 9:35 ET or later (Yahoo's, asked every five minutes;
+  // flagged from 10:15)
   const e = clock.et(now), sess = clock.session(e.day);
   const spy = ((B.stocks && B.stocks.sleeves) || {}).SPY;
   if (spy) {
     if (spy.checkDay === e.day) lines.push(`SPY checked today: ${Math.round((spy.target || 0) * 100)}%`);
-    else if (sess && e.min >= 10 * 60 + 15 && !young) problems.push(`SPY: not checked today (${e.day}): the Cboe quote did not reach the desk after the open`);
+    else if (sess && e.min >= 10 * 60 + 15 && !young) problems.push(`SPY: not checked today (${e.day}): Yahoo's quote did not reach the desk after the open`);
     else lines.push(`SPY: next check after the ${sess && e.min < sess.open ? 'open today' : 'next open'} (last ${spy.checkDay || 'never'})`);
   }
   // The options, scalp, dip and runner books were retired on 2026-10-17 (switched off since 10-08): nothing of
