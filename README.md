@@ -2,7 +2,7 @@
 
 [![test](https://github.com/evankaplan6-hub/Hexagon/actions/workflows/test.yml/badge.svg)](https://github.com/evankaplan6-hub/Hexagon/actions/workflows/test.yml)
 
-A paper trading desk for **stocks, crypto and options**. Six bots run six books on free public prices -- crypto live from Coinbase, SPY and its same-day options from Cboe -- and stream everything to a live trading floor. Zero npm dependencies (the chart is one vendored file, TradingView Lightweight Charts); Node 20+. **Paper only: nothing here can place a real order.**
+A paper trading desk for **stocks, crypto and options**. Six bots run six books on free public prices -- crypto live from Coinbase, SPY from Yahoo's chart feed (from Cboe until 2026-11-19, with its same-day options) -- and stream everything to a live trading floor. Zero npm dependencies (the chart is one vendored file, TradingView Lightweight Charts); Node 20+. **Paper only: nothing here can place a real order.**
 
 It started on 2026-09-10 as a prediction-market desk trading the gaps between Polymarket and Kalshi. Fifteen days of paper said there was no edge after fees (-$1,753 on $10,000, every book lost), so on 2026-09-25 that desk stopped opening trades; since 2026-09-27 its arbs, maker and snipe trade again in paper beside the new desk, so the record keeps growing, and since 2026-09-29 its books are on the same floor at `/` (its old page at `/pm` still lists every market). Everything from [The prediction-market desk](#the-prediction-market-desk-winding-down) down is that desk's record.
 
@@ -68,12 +68,12 @@ Nothing clever survived testing, so the books run the one thing that did.
 
   **The longer test (2026-10-08): the rule loses.** `tools/runner-lab.js` runs the book's own `runnerScan` and `runnerExit` on Coinbase's hourly candles for all 81 coins on the list, from 2022-01-01, scanning hourly (the book scans every 3 minutes), at 0.95% a side plus 0.10% of slip. It reproduces the check above (2026-08-25 to 09-30: 48 trades, 15 won, SKR and ARB most of it, +6%) and the book's own journal (from 09-30: $1,000 to about $780 on 15 trades, 1 won; the box's book was $797 that night). Before 2026-08-25, the years the rule never saw: a fresh $1,000 each quarter ended above $1,000 in 3 of 20 quarters (best +24%, worst -77%), and run straight through, $1,000 was $20 by the end. With no fee and no slip at all it still lost 83%, so the fee is not the problem: a coin up 8%+ and near its 24-hour high has, on these years, more often given the move back than run on. No single setting rescues it (a 5%, 15% or 20% trail, 15%+ moves, $10M+ traded, Coinbase's 0.40% fee: all lost over 95%; 25%+ moves lost 68%). The list is Robinhood's of 2026-09-30, so coins that died earlier are missing, which flatters the rule; a loss here is a real loss. Hourly scans miss what three-minute scans see inside the hour, but the live book, at three minutes, has done no better. `node tools/runner-lab.js --fetch && node tools/runner-lab.js` reruns it (about an hour to fetch, 110 MB).
 
-### Fills, fees and the 15-minute delay
+### Fills, fees and how old a price is
 
 - Crypto buys walk Coinbase's real order book, so a big order pays for its size, plus 0.40% of the notional (`DESK_CRYPTO_FEE_BPS`).
-- SPY fills at the bid or the ask, in fractional shares, with no commission.
+- SPY fills at the bid or the ask, in fractional shares, with no commission. Since 2026-11-20 its quote has no bid or ask (Yahoo's chart feed carries none), so it fills, and is marked, at the last regular-session trade.
 - Options fill at the bid or the ask, capped at the size shown, plus $0.03 a contract (`DESK_OPTION_FEE`). A target is a resting limit: it fills when the bid reaches it, or when the contract prints there after it was bought.
-- **Cboe's free feed is about 15 minutes late**, and the desk trades on it as exactly that: the price it decides on is the price it fills at, so a stock or option result is honest, just 15 minutes behind. It never buys off a tape that has stopped: after the close the SPY book waits for the next session rather than buy the 3:59 price at 4:30.
+- **SPY's price comes from Yahoo's public chart feed since 2026-11-20**, asked every five minutes in the session and stamped with the trade's own time (`regularMarketTime`), so a price is up to about five minutes old and says how old. One call carries the quote and the daily bars; pre-market and after-hours prices are not read. Cboe put its delayed feed behind a block on 2026-11-19 (a Cloudflare 403 for every client, a real browser too), and Evan chose Yahoo: "Yes, use Yahoo". It is as unofficial as Cboe's feed was, and its terms were not read. Yahoo answered the project's own client name (`the-hexagon/1.0`) and refused a browser-like one with a 429, so that is the name sent. **The option chain tape records nothing until a source for it is chosen**: its feed was Cboe's too. Until then Cboe's feed was about 15 minutes late, and the desk traded on it as exactly that: the price it decides on is the price it fills at, so a stock or option result is honest, just as old as its price. It never buys off a tape that has stopped: after the close the SPY book waits for the next session rather than buy the 3:59 price at 4:30.
 - **An option is bought only off a chain from the trigger's own moment** (2026-09-26). The trigger is a SPY bar from Cboe's chart file (one minute for the options and dip books, five for scalps) and the fill is the ask on Cboe's option chain: two files on the same delay, and nothing tied them together, so a chain from before a breakout would have sold the call at its pre-breakout price and flattered every entry. At a trigger the desk fetches a fresh chain and compares its own time (SPY's last trade in it) with the trigger bar's close; more than `DESK_CHAIN_SKEW_SEC` (120 s) either way and the entry is skipped, journaled as `OPTIONS_SKIP` with both times, and said on the floor and in the daily check. Every option fill journals the same three fields (`barAt`, `chainAt`, `skewSec`), so the gap is measured on every trade, not assumed. A sale is never held back: one off a chain out of step is made and flagged.
 - The scalp and dip books read the same chain, under the same rule, at a trigger and once a finished bar while they hold anything; a read from the last 20 seconds serves every option book.
 - TESS stops all new buying for the rest of the Eastern day once the whole desk is down 5% (`DESK_MAX_DAILY_DD`). Selling is never blocked.
@@ -163,7 +163,7 @@ No new books; the prediction-market desk runs on in paper as Evan asked, without
 edge in free data. The one hunt still worth its cost needs a free account only Evan can open: The Odds API's free
 tier carries Pinnacle, and a few NFL Sundays logged against Kalshi would show whether Kalshi's price trails the
 sharp book's after news by more than its fee (log only, no bet, as the touchdown tape). Three decisions are his:
-Cboe's terms (below: the desk now reads only SPY's quote and daily bars from it), that account, and whether the note
+Cboe's terms (settled by Cboe on 2026-11-19: it blocked the feed, and SPY's quote and daily bars come from Yahoo since 11-20), that account, and whether the note
 ever informs his own trades.
 
 ### The odds tape (2026-10-17)
@@ -2038,7 +2038,7 @@ re-keying, not money.
                        the stocks, crypto and options desk
 src/desk/engine.js     the six books' ledgers, the six bots' jobs, data/desk/, the floor's snapshot
 src/desk/books.js      the rules, pure: volatility targeting, and the SPY same-day options rules
-src/desk/feeds.js      Coinbase (live) and Cboe (15 minutes late): parsers, fetches, bars, VWAP, ATR14
+src/desk/feeds.js      Coinbase (live) and Yahoo's chart feed (SPY, every five minutes; Cboe's parsers stay for the labs): parsers, fetches, bars, VWAP, ATR14
 src/desk/broker.js     paper fills: the book or the touch, fees per asset; no live broker
 src/desk/clock.js      the NYSE calendar: sessions, holidays, 1 PM closes
 public/desk.*          the floor at /: desk.html, desk.js, and desk.css, its own sheet built on tokens.css; the prediction-market desk's board and books too since 2026-09-29;

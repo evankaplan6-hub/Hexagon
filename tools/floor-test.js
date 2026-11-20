@@ -249,6 +249,12 @@ ok('on a wide screen convergence sits under the snipe, beside the two tall cards
   /@media \(min-width: 1280px\) \{\s*\.pmbooks \{ grid-template-rows: auto 1fr; \}\s*\.pmbooks > \[data-k="pm-arbs"\], \.pmbooks > \[data-k="pm-maker"\] \{ grid-row: 1 \/ span 2; \}\s*\.pmbooks > \[data-k="pm-snipe"\] \{ grid-row: 1; \}\s*\.pmbooks > \[data-k="pm-converge"\] \{ grid-row: 2; \}/.test(css));
 ok('the arbs\' opening line stands clear of the first card', /\.sidehead \{[^}]*margin-bottom: var\(--space-3\); \}/.test(css));
 
+// SPY's prices come from Yahoo's chart feed since 2026-11-20, and the page says so wherever it names a source
+ok('the page names Yahoo as SPY\'s source, and nowhere Cboe or a 15-minute delay',
+  /SPY's come from Yahoo, read every five minutes and stamped with their own time/.test(html) && /From Yahoo's chart feed, read every 5 minutes/.test(js)
+  && !/Cboe/.test(html) && !/['`][^'`\n]*Cboe/.test(js.split('\n').filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n')) && !/15 min(utes)? late/.test(html + js.split('\n').filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n')));
+ok('SPY\'s row says when its price is from', /if \(b\.key === 'stocks' && r\.at > 0\) bits\.push\(`<span>priced \$\{esc\(whenAt\(r\.at\)\)\} ET<\/span>`\);/.test(js));
+
 // ---- Crypto & SPY, Arbs & maker, and the retired books
 ok('Crypto & SPY holds the crypto and SPY books and one line for the retired; Arbs & maker the arbs, maker, snipe and convergence',
   /\['crypto', 'stocks'\]\.map\(bookOf\)/.test(js) && /const SIDE = \['arbs', 'maker', 'snipe', 'converge'\]/.test(js) && /Retired on \$\{ymd\(RETIRED_ON\)\}/.test(js) && /RETIRED_ON = '2026-10-17'/.test(js));

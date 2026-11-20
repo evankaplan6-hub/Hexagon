@@ -561,8 +561,8 @@
     const sha = S.build && S.build.sha ? String(S.build.sha).slice(0, 7) : 'dev';
     return [
       { k: 'crypto', ok: M.cryptoOk ? 'ok' : 'warn', name: M.cryptoOk ? `Crypto prices live${at ? `, ${ago(at)}` : ''}` : 'Crypto prices stale', detail: `${coins.length} coins from Coinbase` },
-      { k: 'spy', ok: M.spyOk ? 'ok' : 'warn', name: !M.spyOk ? 'SPY prices stale' : M.open ? 'SPY prices about 15 minutes late, as always' : 'SPY prices fine; the market is closed',
-        detail: `From Cboe's free feed · the stock market ${M.says ? `${M.open ? 'is ' : ''}${M.says}` : M.open ? 'is open' : 'is closed'}` },
+      { k: 'spy', ok: M.spyOk ? 'ok' : 'warn', name: !M.spyOk ? 'SPY prices stale' : M.open ? 'SPY prices up to 5 minutes old, as always' : 'SPY prices fine; the market is closed',
+        detail: `From Yahoo's chart feed, read every 5 minutes · the stock market ${M.says ? `${M.open ? 'is ' : ''}${M.says}` : M.open ? 'is open' : 'is closed'}` },
       { k: 'loop', ok: stale() || stalled() ? 'bad' : 'ok', name: stale() ? 'No signal from the desk' : stalled() ? `No round since ${ET_HM.format(new Date(S.beat))} ET` : S.beat ? `Last round ${ago(S.beat)}` : 'Waiting for the first round',
         detail: `Running since ${ET_DAY.format(new Date(S.startedAt))}, ${ET_HM.format(new Date(S.startedAt))} · build ${sha}` },
       { k: 'buying', ok: S.halt ? 'warn' : 'ok', name: S.halt ? `Not buying: ${S.halt}` : `Loss limit: ${down ? `down ${(down * 100).toFixed(2)}% today` : 'nothing lost today'}${C.maxDailyDdPct ? `; buying stops at ${(C.maxDailyDdPct * 100).toFixed(0)}%` : ''}`,
@@ -896,11 +896,12 @@
   function marketBits() {
     const mk = S.market || {};
     const cryptoOk = !(mk.stale && mk.stale.crypto), spyOk = !(mk.stale && mk.stale.stocks);
-    // Amber means look. A quarter of an hour late is how SPY's free feed always is, so its dot is the plain
+    // Amber means look. A few minutes old is how SPY's free feed always is (Yahoo's, read every five minutes, since
+    // 2026-11-20; Cboe's ran a quarter of an hour late), so its dot is the plain
     // one, and it turns amber only when TESS finds the feed has stopped. Out of hours nothing is late (it
     // said "15 min late" all weekend), and in the first minutes of a session the late tape has no trade
     // from today yet, so the delay is the feed's usual one rather than the hours since yesterday's close.
-    const spy = !spyOk ? 'SPY stale' : !mk.open ? 'SPY closed' : mk.delayMin != null && mk.delayMin <= 30 ? `SPY ${mk.delayMin} min late` : 'SPY about 15 min late';
+    const spy = !spyOk ? 'SPY stale' : !mk.open ? 'SPY closed' : mk.delayMin != null && mk.delayMin <= 30 ? `SPY ${mk.delayMin} min old` : 'SPY up to 5 min old';
     return { open: !!mk.open, says: mk.says || '', cryptoOk, spyOk, spy };
   }
   // A desk starts all cash, level with its capital, and records its first minute just after its first buys,
@@ -942,6 +943,8 @@
     const bits = [`<span>${r.qty > 0 ? `${qtyTxt(r.qty, b.key, r.sym)} held` : 'not held yet'}</span>`];
     if (Number.isFinite(r.vol)) bits.push(`<span title="${SWINGS}">swings ${pct(r.vol)}</span>`);
     if (Number.isFinite(want)) bits.push(`<span title="${TARGET}">wants ${pct(want)}</span>`);
+    // SPY's price is read every few minutes and out of hours is the close: it says when it is from
+    if (b.key === 'stocks' && r.at > 0) bits.push(`<span>priced ${esc(whenAt(r.at))} ET</span>`);
     const worth = r.qty > 0 ? `<td class="v">${money(r.value || 0, 0)}</td><td>${Number.isFinite(r.pnl) ? figure(r.pnl) : '—'}</td>` : '<td class="v"></td><td></td>';
     return `<tr data-k="${esc(r.sym)}"><th><span class="tk">${esc(r.name)}</span><span class="mk">${b.key === 'crypto' ? coinPx(last) : px(last)}${chg == null ? '' : ` ${change(chg)}`}</span>` +
       `<small>${bits.join(' · ')}</small></th>${worth}</tr>`;

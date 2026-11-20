@@ -658,6 +658,155 @@ async function auditTests() {
   const mkDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'hexagon-audit-desk-'));
   const settles = (dir) => { try { return fs.readFileSync(path.join(dir, 'desk', `journal-${D0}.jsonl`), 'utf8').split('\n').filter((l) => /"SETTLE"/.test(l)).map((l) => JSON.parse(l)); } catch { return []; } };
 
+  // ---- SPY from Yahoo's chart feed (2026-11-20; Cboe's delayed feed answered 403 from 2026-11-19)
+  // The sample is a real answer, trimmed to its last 40 days: asked 2026-11-19 at 8:53 PM Eastern, after the close.
+  {
+    const SAMPLE = fs.readFileSync(path.join(__dirname, 'fixtures', 'yahoo', 'spy-chart-after-close.json'), 'utf8');
+    const sample = () => JSON.parse(SAMPLE);
+    const edit = (f) => { const j = sample(); f(j.chart.result[0], j); return j; };
+    const NIGHT = Date.parse('2026-11-20T01:53:00Z'), CLOSE = Date.parse('2026-11-19T21:00:00Z');
+    const q = F.parseYahooQuote(sample(), 'SPY');
+    eq('a Yahoo quote: the regular session\'s last price, stamped with that trade\'s own time', [q.sym, q.last, q.at, q.src], ['SPY', 715.87, CLOSE, 'yahoo']);
+    eq('...with no bid or ask (the chart has none), so the book is marked and filled at the last trade', [q.bid, q.ask], [null, null]);
+    eq('...and the close before it from the price\'s own change, not the range\'s first close', q.prevClose, 730.2);
+    const night = F.parseYahooDaily(sample(), NIGHT);
+    eq('daily bars in the engine\'s shape, oldest first', [night.length, Object.keys(night[0]).join(), night[0].day < night[1].day], [40, 'day,o,h,l,c,v', true]);
+    eq('the day just closed has no close in Yahoo\'s row for hours: the quote stamped at the bell stands in', [night[39].day, night[39].c, night[38].day], ['2026-11-19', 715.87, '2026-11-18']);
+    // the same answer read while the session is still on: today is not a finished day
+    const open = edit((r) => { r.meta.regularMarketTime = Date.parse('2026-11-19T18:30:00Z') / 1000; r.indicators.quote[0].close[39] = 720.5; });
+    const mid = F.parseYahooDaily(open, Date.parse('2026-11-19T18:31:00Z'));
+    eq('in the session the day still trading is not a daily bar, whatever "close" its row carries', mid[mid.length - 1].day, '2026-11-18');
+    eq('...and is one once the bell has gone, from its own row', F.parseYahooDaily(open, NIGHT).slice(-1).map((b) => [b.day, b.c]), [['2026-11-19', 720.5]]);
+    eq('the quote of a session under way: its own time, and yesterday\'s close before it', [F.parseYahooQuote(open, 'SPY').at, F.parseYahooQuote(open, 'SPY').prevClose], [Date.parse('2026-11-19T18:30:00Z'), 730.2]);
+    // each way an answer goes wrong
+    eq('pre-market and after-hours prices are not read: the regular price only', F.parseYahooQuote(edit((r) => { r.meta.postMarketPrice = 701.11; r.meta.preMarketPrice = 699.5; r.meta.postMarketTime = 1795130000; }), 'SPY').last, 715.87);
+    eq('no price is no quote', F.parseYahooQuote(edit((r) => { r.meta.regularMarketPrice = null; }), 'SPY'), null);
+    eq('a price with no time is no quote: its age could not be told', F.parseYahooQuote(edit((r) => { delete r.meta.regularMarketTime; }), 'SPY'), null);
+    eq('another symbol\'s answer is no quote', F.parseYahooQuote(edit((r) => { r.meta.symbol = 'SPYG'; }), 'SPY'), null);
+    eq('with no change in the answer the close before comes from the bars', F.parseYahooQuote(edit((r) => { delete r.meta.regularMarketChangePercent; }), 'SPY').prevClose, sample().chart.result[0].indicators.quote[0].close[38]);
+    let threw = '';
+    try { F.parseYahooQuote({ chart: { result: null, error: { code: 'Not Found', description: 'No data found, symbol may be delisted' } } }, 'SPY'); } catch (e) { threw = e.message; }
+    eq('an error body says what Yahoo said', threw, 'Not Found: No data found, symbol may be delisted');
+    const twice = edit((r) => { r.timestamp[38] = r.timestamp[37] + 3600; });
+    eq('a day that comes twice keeps its later row', F.parseYahooDaily(twice, NIGHT).filter((b) => b.day === '2026-11-17').map((b) => b.c), [twice.chart.result[0].indicators.quote[0].close[38]]);
+    const holes = edit((r) => { r.indicators.quote[0].close[30] = null; });
+    eq('a day with no close is left out, never guessed', F.parseYahooDaily(holes, NIGHT).length, 39);
+    // a split rescales every bar alike, so the swing the rule reads is the same
+    const split = edit((r) => { const c = r.indicators.quote[0].close; for (let i = 0; i < c.length; i++) if (c[i]) c[i] /= 4; r.meta.regularMarketPrice /= 4; });
+    near('a split-adjusted series swings as the unadjusted one does', F.realizedVol(F.parseYahooDaily(split, NIGHT).map((b) => b.c), 20, 252), F.realizedVol(night.map((b) => b.c), 20, 252), 1e-9);
+    // the network half, on a fetch that answers from the sample
+    const net = (answer) => { const calls = []; const feeds = F.makeFeeds({ fetchImpl: async (url, o) => { calls.push({ url, ua: o.headers['user-agent'] }); return answer(calls.length); } }); return { feeds, calls }; };
+    const okRes = (text, status = 200) => ({ status, text: async () => text });
+    {
+      const { feeds, calls } = net(() => okRes(SAMPLE));
+      const [qq, dd] = await Promise.all([feeds.quote('SPY', NIGHT), feeds.daily('SPY', NIGHT)]);
+      ok('the quote and the daily bars asked for in one round are one request', calls.length === 1 && qq.last === 715.87 && dd.length === 40, calls.length);
+      ok('...to Yahoo\'s chart feed, not Cboe\'s, under the project\'s own name', /^https:\/\/query1\.finance\.yahoo\.com\/v8\/finance\/chart\/SPY\?range=6mo&interval=1d&includePrePost=false$/.test(calls[0].url) && calls[0].ua === 'the-hexagon/1.0', calls[0]);
+      await feeds.quote('SPY', NIGHT + 5 * 60000);
+      ok('...and five minutes on it is asked again', calls.length === 2, calls.length);
+    }
+    const fails = async (answer, now = NIGHT) => { const { feeds, calls } = net(answer); let m = ''; try { await feeds.quote('SPY', now); } catch (e) { m = e.message; } return { m, feeds, calls }; };
+    eq('a 429 is a failure that names its host', (await fails(() => okRes('Too Many Requests\n', 429))).m, 'HTTP 429 from query1.finance.yahoo.com');
+    eq('a page of HTML with a 200 is a failure, in words', (await fails(() => okRes('<!DOCTYPE html><html><title>Yahoo</title></html>'))).m, 'not JSON from query1.finance.yahoo.com');
+    eq('an answer with no price is a failure, not a quiet nothing', (await fails(() => okRes(JSON.stringify(edit((r) => { r.meta.regularMarketPrice = null; }))))).m, "no price in Yahoo's answer");
+    {
+      const { feeds, calls } = await fails((n) => (n === 1 ? okRes('nope', 429) : okRes(SAMPLE)));
+      const again = await feeds.quote('SPY', NIGHT + 1000);
+      ok('a failed answer is not kept: the next try asks again', calls.length === 2 && again.last === 715.87, calls.length);
+    }
+    {
+      const { feeds } = net(() => okRes(JSON.stringify(edit((r) => { r.indicators.quote[0].close = r.indicators.quote[0].close.map(() => null); r.meta.regularMarketTime = Date.parse('2026-11-19T18:30:00Z') / 1000; }))));
+      let m = ''; try { await feeds.daily('SPY', Date.parse('2026-11-19T18:31:00Z')); } catch (e) { m = e.message; }
+      eq('no daily bar at all is a failure too', m, "no daily bars in Yahoo's answer");
+    }
+  }
+  // the engine on that feed: asked every five minutes in the session, and stale by the price's own time
+  {
+    const dir = mkDir();
+    let T = atT('12:31');
+    const M = fakeMarket(() => T); M.setMinutes(12 * 60 + 30);
+    let calls = 0;
+    const fresh = () => ({ ...M.W.quote, bid: null, ask: null, at: T - 20000 });   // Yahoo's shape: no touch, seconds old
+    M.feeds.quote = async () => { calls++; return fresh(); };
+    const desk = new Desk(deskConfig(dir), { feeds: M.feeds, now: () => T }); desk.quiet = true;
+    await desk.step();
+    const spy = desk.state.books.stocks.sleeves.SPY;
+    ok('with no bid or ask the SPY rule still trades, at the last price', spy.qty > 0 && Math.abs(spy.cost / spy.qty - M.W.quote.last) < 0.005, [spy.qty, spy.cost]);
+    calls = 0;
+    let staleRounds = 0;
+    for (let i = 0; i < 90; i++) { T += 10000; await desk.step(); if (desk.stale.stocks) staleRounds++; }   // fifteen minutes of rounds
+    ok('fifteen minutes of the session: the quote is asked three times, not thirty', calls === 3, calls);
+    ok('...and SPY is never stale between two asks', staleRounds === 0, staleRounds);
+    // the feed goes on answering with a price that has stopped: stale by the price's own time
+    const stuck = T;
+    M.feeds.quote = async () => ({ ...M.W.quote, bid: null, ask: null, at: stuck });
+    for (let i = 0; i < 6 * 24; i++) { T += 10000; await desk.step(); }               // 24 minutes on
+    ok('a price 24 minutes old in the session is not yet stale', desk.stale.stocks === false, (T - stuck) / 60000);
+    for (let i = 0; i < 6 * 7; i++) { T += 10000; await desk.step(); }                // 31 minutes on
+    ok('...and past 25 it is', desk.stale.stocks === true, (T - desk.mkt.spy.quote.at) / 60000);
+    // the feed stops answering: stale once three of its turns have gone by with nothing
+    M.feeds.quote = async () => fresh();
+    T += 300000; await desk.step(); await desk.step();
+    ok('a fresh price clears it', desk.stale.stocks === false);
+    M.feeds.quote = async () => { throw new Error('HTTP 429 from query1.finance.yahoo.com'); };
+    const lastGood = desk.mkt.spy.quoteAt;
+    while (T - lastGood < 14 * 60000) { T += 10000; await desk.step(); }
+    ok('a feed that has not answered for 14 minutes is not yet stale', desk.stale.stocks === false);
+    while (T - lastGood < 16 * 60000) { T += 10000; await desk.step(); }
+    ok('...and after 15 it is', desk.stale.stocks === true);
+    // out of the session the same old quote is not stale: its price is the close
+    T = atT('18:30'); await desk.step();
+    ok('out of the session a quote is not stale, however old', desk.stale.stocks === false && T - desk.mkt.spy.quote.at > 3 * 3600e3);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  // a refused feed is asked less and less: 10 s, 20 s, 40 s ... and at most every ten minutes
+  {
+    const dir = mkDir();
+    let T = atT('12:31');
+    const M = fakeMarket(() => T); M.setMinutes(12 * 60 + 30);
+    const desk = new Desk(deskConfig(dir), { feeds: M.feeds, now: () => T }); desk.quiet = true;
+    await desk.step();
+    let calls = 0;
+    M.feeds.quote = async () => { calls++; throw new Error('HTTP 429 from query1.finance.yahoo.com'); };
+    desk.mkt.spy.quoteAt = 0;
+    for (let i = 0; i < 6 * 60; i++) { T += 10000; await desk.step(); }               // an hour of refusals
+    ok('an hour of 429s: about a dozen tries, not 360', calls >= 9 && calls <= 13, calls);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  // After a restart with no SPY quote (2026-11-19, the night Cboe's feed went): what the desk does, and what the first
+  // quote puts right. These are the rules as they stand; this branch does not change them.
+  {
+    const dir = mkDir();
+    let T = atT('12:31');
+    const M = fakeMarket(() => T); M.setMinutes(12 * 60 + 30);
+    const first = new Desk(deskConfig(dir), { feeds: M.feeds, now: () => T }); first.quiet = true;
+    for (let i = 0; i < 7; i++) { await first.step(); T += 10000; }
+    first.save();
+    const held = first.state.books.stocks.sleeves.SPY, atMarket = first.bookValue('stocks');
+    ok('before the restart the book holds SPY', held.qty > 0 && atMarket > 0);
+    // the restart: the crypto feed is fine, SPY's is refused; and SPY has since fallen 5%
+    T += 3600e3;
+    const fall = { ...M.W.quote, bid: null, ask: null, last: r2(M.W.quote.last * 0.95) };
+    M.feeds.quote = async () => { throw new Error('HTTP 403 from cdn.cboe.com'); };
+    const desk = new Desk(deskConfig(dir), { feeds: M.feeds, now: () => T }); desk.quiet = true;
+    const n0 = desk.state.history.length;
+    desk.state.dayKey = '2026-09-22'; desk.state.dayStart = desk.equity();            // a new day to start, as at the first mark
+    for (let i = 0; i < 12; i++) { await desk.step(); T += 10000; }
+    ok('no quote since the restart: SPY is counted at what it cost', desk.priced() === false && desk.bookValue('stocks') === r2(held.cash + held.cost), [desk.bookValue('stocks'), held.cash + held.cost]);
+    ok('...the chart gets no new point, crypto\'s included', desk.state.history.length === n0, [n0, desk.state.history.length]);
+    ok('...the day does not start, so the daily stop has nothing to measure from', desk.state.dayKey === '2026-09-22' && !desk.halt);
+    ok('...and the light\'s flag is up', desk.stale.stocks === true);
+    // the first quote from the new feed
+    M.feeds.quote = async () => ({ ...fall, at: T - 20000 });
+    T += 600000; await desk.step(); T += 60000; await desk.step();
+    const mkt = r2(held.cash + held.qty * fall.last);
+    ok('the first quote: SPY is counted at the market again', desk.priced() === true && Math.abs(desk.bookValue('stocks') - mkt) < 0.02, [desk.bookValue('stocks'), mkt]);
+    ok('...the chart records again', desk.state.history.length > n0, desk.state.history.length);
+    ok('...the day starts from that figure, so the stop is armed from there', desk.state.dayKey === clock.et(T).day && Math.abs(desk.state.dayStart - desk.equity()) < 1, [desk.state.dayStart, desk.equity()]);
+    ok('...and the flag is down', desk.stale.stocks === false);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
   // a sub-cent coin's average price was rounded to 6 decimals: BONK at 3.70e-6 came back as 4e-6
   {
     const f = broker.fill({ kind: 'crypto', side: 'buy', qty: 1e9, step: 1 }, { bid: 3.69e-6, ask: 3.70e-6 }, { cryptoBps: 40 });

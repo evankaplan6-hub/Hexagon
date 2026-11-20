@@ -54,29 +54,8 @@ const DIR = 'data/stocks/bars';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const fileFor = (sym, dir = DIR) => path.join(dir, `${sym.replace(/[^A-Za-z0-9]/g, '_')}.json`);
 
-// Yahoo's chart JSON → bars. Pure, so it is tested without the network.
-function parseChart(json) {
-  const r = json && json.chart && json.chart.result && json.chart.result[0];
-  if (!r) {
-    const e = json && json.chart && json.chart.error;
-    throw new Error(e ? `${e.code}: ${e.description}` : 'no chart result');
-  }
-  const ts = r.timestamp || [];
-  const q = (r.indicators && r.indicators.quote && r.indicators.quote[0]) || {};
-  const adj = (r.indicators && r.indicators.adjclose && r.indicators.adjclose[0] && r.indicators.adjclose[0].adjclose) || null;
-  const off = (r.meta && r.meta.gmtoffset) || 0;
-  const bars = [];
-  for (let i = 0; i < ts.length; i++) {
-    const c = q.close && q.close[i];
-    if (!(c > 0)) continue;
-    const d = new Date((ts[i] + off) * 1000).toISOString().slice(0, 10);
-    const num = (a) => (a && a[i] > 0 ? a[i] : null);
-    const bar = { d, o: num(q.open), h: num(q.high), l: num(q.low), c, ac: adj && adj[i] > 0 ? adj[i] : c, v: (q.volume && q.volume[i]) || 0 };
-    if (bars.length && bars[bars.length - 1].d === d) bars[bars.length - 1] = bar;   // the live day can repeat
-    else bars.push(bar);
-  }
-  return { symbol: r.meta && r.meta.symbol, currency: r.meta && r.meta.currency, bars };
-}
+// Yahoo's chart JSON → bars: the desk's own reader (src/desk/feeds.js), so there is one of them.
+const { parseYahooChart: parseChart } = require('../src/desk/feeds');
 
 // Cboe history CSV (DATE,BXM or DATE,OPEN,HIGH,LOW,CLOSE; dates MM/DD/YYYY) → bars, keeping only the
 // unbroken daily run after the last gap of more than MAX_GAP_DAYS calendar days. Pure.
